@@ -1114,10 +1114,26 @@ namespace gamescope::ui
 	// =====================================================================
 	//  Rail order & groups -- presentation, not registry structure
 	// =====================================================================
-	// requests-2026-09-06.md item 1: "Reorder the left sidebar: DISPLAY
-	// (General, Resolution, Upscaling, Frame limiter, HDR, Shaders); MISC
-	// (HUD, Mixer, Crosshair); SETTINGS (Profiles, System, Appearance);
-	// OTHER (Log, Changelog)."
+	// requests-2026-09-06.md item 1 first shaped this into four groups:
+	// "Reorder the left sidebar: DISPLAY (General, Resolution, Upscaling,
+	// Frame limiter, HDR, Shaders); MISC (HUD, Mixer, Crosshair); SETTINGS
+	// (Profiles, System, Appearance); OTHER (Log, Changelog)." REGROUPED to
+	// six groups 2026-09-27 (I7, rail regroup task), the user's own table:
+	// "Display: General, Resolution, Upscaling [+ the pre-existing Frame
+	// limiter, HDR, Shaders, kept in their relative order -- the user said
+	// 'reorder SOME of the categories', naming only the first three].
+	// Overlay: HUD, Crosshair, Zoom, Cursor. Input: General [new, added by
+	// a sibling task -- Force grab cursor/keyboard], Autoclicker, Null
+	// binds. Misc: Friends, Mixer. Settings: Profiles, System, Appearance,
+	// Keybinds [unchanged except Cursor left for Overlay]." Why a sixth and
+	// seventh group instead of folding into MISC/SETTINGS: MISC had grown
+	// to seven areas (HUD, Mixer, Crosshair, Zoom, Autoclicker, Null
+	// binds, Friends) spanning three unrelated concerns -- things drawn
+	// over the game (HUD/Crosshair/Zoom/Cursor), things that intercept
+	// input (Autoclicker/Null binds, soon General's grab toggles too) and
+	// one unrelated social feature (Friends) -- so OVERLAY and INPUT split
+	// those two concerns out into their own tabs, leaving MISC as the true
+	// leftover (Friends, Mixer -- two areas with nothing else in common).
 	//
 	// Deliberately NOT Section above (see that enum's own comment) and NOT
 	// derived from registration order -- this is its own fixed, hand-
@@ -1130,10 +1146,14 @@ namespace gamescope::ui
 	// reg.Add() call already takes, keeps the one other rail-ordering
 	// concept in the same file.
 	//
-	// setup.cursor is not named by the request's four groups. It keeps its
-	// former Section::Setup neighbours (Profiles, Appearance) here under
-	// Settings, at the end, rather than inventing a placement the request
-	// never specified.
+	// input.general does not exist as a registered Area yet -- a sibling
+	// task adds it (the Force grab cursor/keyboard toggles, moved out of
+	// display.general). Its slot is in the table below anyway:
+	// Registry::RailAreas() already tolerates a slot whose id FindArea()
+	// cannot resolve (skipped, not a crash -- see that function and the
+	// "falls back to Other"/"RailAreas() follows the fixed order" tests),
+	// which is exactly the property that lets the rail table and the area
+	// that fills it land in separate commits without either one breaking.
 	//
 	// `Nothing` was added 2026-09-27 for the rail accordion (I2, D2/D6): it
 	// is never an area's group (RailGroupForId() never returns it) -- it is
@@ -1144,7 +1164,7 @@ namespace gamescope::ui
 	// `#define None 0L`, so `RailGroup::None` failed to compile there even
 	// though this header alone never sees an X11 include. See the
 	// accordion section below.
-	enum class RailGroup : uint8_t { Display, Misc, Settings, Other, Nothing };
+	enum class RailGroup : uint8_t { Display, Overlay, Input, Misc, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 
@@ -1334,6 +1354,92 @@ namespace gamescope::ui
 		const float flRemaining = flRowsBlockH - (float)nRowIndexInGroup * flItemH;
 		return std::clamp( flRemaining, 0.0f, flItemH );
 	}
+
+	// =====================================================================
+	//  The rail accordion's TWO independent heights (2026-09-27, I7)
+	// =====================================================================
+	// `Why:` the user -- "When i open a category above the currently open
+	// one, it animates nicely, but when i open one below, it doesnt." I5's
+	// design (see RailContentHeightPx()'s own comment just above) shared
+	// ONE animated height across whichever group's rows were "currently
+	// displayed", reusing it as a single physical slot that both shrank
+	// (the closing group) and grew (the opening group) in one motion. That
+	// slot always relocated to sit right under the NEWLY opened group's own
+	// header, and the group that had just closed vanished from the y-walk
+	// INSTANTLY, not eased -- there was no second height left to animate it
+	// with. Whether that instant collapse was visible depended on table
+	// order: a group below the newly-opened one collapsing is off-screen
+	// from where the eye is looking (nothing between the top of the rail
+	// and the just-opened header changed), so "opening above" read as a
+	// clean reveal. A group ABOVE the newly-opened one collapsing shifts
+	// every header AFTER it -- including the one you just clicked -- up by
+	// the old group's full height in the very same frame the click lands,
+	// so "opening below" read as the clicked header teleporting before
+	// anything animated at all.
+	//
+	// The fix is exactly what the brief's own fallback describes: two
+	// independent heights instead of one shared slot. `RailAccordionAnim`
+	// tracks an OPENING group (always eases 0 -> its own rest height) and,
+	// separately, a CLOSING group (whatever was open a moment ago, eases
+	// its own last height -> 0) at once. Neither one's arithmetic knows or
+	// cares where the other sits in the table -- DrawRail()'s own Walk()
+	// (Shell.cpp) just asks, for every group it visits in top-down order,
+	// "is this the opening one, the closing one, or neither", so a closing
+	// group ABOVE the opening one shrinks in place exactly like a closing
+	// group below it does: both push or pull every header after them by
+	// their own currently-animated height, symmetrically, regardless of
+	// which side of the newly-clicked header they happen to be on.
+	//
+	// Pure and ImGui-free like every other rail helper here, so the state
+	// machine itself -- "a switch starts the old group shrinking from
+	// wherever it was and the new group growing from zero, concurrently" --
+	// is unit-tested without needing Shell.cpp's own DrawRail() or an ImGui
+	// context (tests/test_overlay_ui.cpp). What that test CANNOT prove is
+	// the on-screen consequence (a header's own y no longer jumping) --
+	// that needs a real capture, which this task's own screenshots provide
+	// (mid-transition, both directions).
+	//
+	// KNOWN TRADEOFF: only one closing slot exists. A THIRD header click
+	// landing while an earlier switch's closing group has not yet reached
+	// 0 (i.e. two switches inside one ~160 ms window) makes the group that
+	// was still shrinking give up its slot to the group being superseded,
+	// snapping the first one shut rather than letting it finish easing.
+	// This is not a new limitation -- the OLD single-slot design already
+	// re-targeted its one slot on every rapid re-click, discarding
+	// whatever the previous target had eased toward -- it is just now
+	// visible on the (separate) closing side too. A human re-clicking two
+	// DIFFERENT headers inside one animation's duration is the only way to
+	// see it, and it never produces a stuck or negative height (the
+	// superseded group's row space is simply not drawn from the next frame
+	// on, the same "not currently tracked -> 0 height" rule every group
+	// outside both slots already follows).
+	struct RailAccordionAnim
+	{
+		RailGroup eOpenGroup    = RailGroup::Nothing;   // the commanded-open group; Nothing = fully closed
+		float     flOpenH       = 0.0f;                 // its row block's height, eases toward its rest height
+		RailGroup eClosingGroup = RailGroup::Nothing;    // the group easing shut, if any
+		float     flClosingH    = 0.0f;                  // its row block's height, eases toward 0
+	};
+
+	// Advances `s` by one frame toward `eNewOpen` (RailGroup::Nothing legally
+	// closes everything) whose REST row-block height is `flNewOpenTargetH`
+	// (ignored, effectively 0, when eNewOpen is Nothing -- VisibleRailAreas()
+	// already returns empty for it, so a caller can pass either 0 or the
+	// stale previous value with the same result). `flDurationSeconds` is
+	// normally tok::kDurRegion, passed rather than read from Tokens.h
+	// directly so a caller (or a test, or a debug convar slowing the
+	// animation down for a verification capture) can override it.
+	//
+	// On a CHANGE of which group is commanded open, the group that WAS open
+	// (if any) takes over the closing slot at whatever height it had
+	// already reached -- so clicking a header shut before it finished
+	// opening reverses smoothly from wherever it was, rather than jumping
+	// to its full rest height first. The newly-commanded group always
+	// starts its own grow from 0, symmetric with the closing group's own
+	// shrink to 0 -- see this struct's own comment for why that symmetry is
+	// the whole fix.
+	void StepRailAccordionAnim( RailAccordionAnim &s, RailGroup eNewOpen, float flNewOpenTargetH,
+	                             float flDurationSeconds, float flDeltaTime );
 
 	// =====================================================================
 	//  Adjustable -- "step this declaration's value by one"

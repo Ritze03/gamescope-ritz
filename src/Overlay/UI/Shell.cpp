@@ -115,8 +115,9 @@ namespace gamescope::ui::shell
 		// replaces.
 		Registry     *s_pRegistry       = nullptr;
 		std::string   s_sSelectedArea;
-		// I2 (2026-09-27): which of the rail's four groups is open right
-		// now. Not persisted -- like s_sSelectedArea, an in-process static
+		// I2 (2026-09-27): which of the rail's groups (six since I7's own
+		// regroup) is open right now. Not persisted -- like s_sSelectedArea,
+		// an in-process static
 		// -- and does not need to be: the rule is "the group holding the
 		// current area opens by itself", so SetSelectedArea() below derives
 		// it fresh every time the selection changes, and ResetTransient()
@@ -228,19 +229,18 @@ namespace gamescope::ui::shell
 		float s_flRailAnim = shelltok::kRailFull;
 
 		// I5 (2026-09-27): the rail accordion's own open/close animation --
-		// see DrawRail()'s own comment on both of these for the full
-		// mechanism. s_flRowsBlockAnim is an ABSOLUTE pixel height (not a
-		// fraction), so switching groups mid-animation eases continuously
-		// from whatever height was already on screen. s_eDisplayedRowsGroup
-		// is which group's rows that height currently belongs to, which can
-		// lag s_eOpenRailGroup (above) by design while a group is shrinking
-		// closed. Both start at RailGroup::Other's own rest state, matching
-		// s_eOpenRailGroup's own default just above -- the very first draw
-		// of the rail animates OTHER's rows in from nothing, the same as
-		// every later open does, rather than needing a special first-frame
-		// case.
-		float     s_flRowsBlockAnim     = 0.0f;
-		RailGroup s_eDisplayedRowsGroup = RailGroup::Nothing;
+		// see DrawRail()'s own comment for the full mechanism.
+		// REDESIGNED I7 (2026-09-27): a single shared "displayed rows"
+		// height/group pair (the I5 shape, one line above this comment in
+		// every prior revision) made the group that had just closed vanish
+		// from the rail's y-walk INSTANTLY rather than easing -- see
+		// Registry.h's own RailAccordionAnim comment for the full bug and
+		// fix. Now two independent heights, one per role (opening/closing),
+		// both starting at RailGroup::Nothing/0 -- the very first draw
+		// animates whatever group SetSelectedArea()/ResetTransient() opens
+		// in from nothing, the same as every later open does, rather than
+		// needing a special first-frame case.
+		RailAccordionAnim s_railAccordionAnim;
 
 		enum class Region : unsigned char { Rail, Sheet, Inspector };
 		Region s_eFocusRegion = Region::Sheet;
@@ -657,6 +657,20 @@ namespace gamescope::ui::shell
 			"Scroll the E2 Inspector body to this pixel offset; a negative value scrolls to the "
 			"bottom. Exists so the Inspector's scrolling is verifiable without pointer input." );
 		float s_flScrollApplied = 0.0f;
+
+		// I7 (2026-09-27, rail regroup): a debug multiplier on the rail
+		// accordion's own animation duration (tok::kDurRegion), 1.0 (no
+		// change) by default. Exists so a mid-transition frame is
+		// reliably catchable by a screenshot for verification -- the real
+		// 160 ms duration against the async screenshot pipeline's own
+		// latency landed on the settled frame both times I5 tried to catch
+		// one (see ui-design-guide.md's own note on that). Never read
+		// outside DrawRail(); not a config field, same reasoning as
+		// cv_overlay_e2_host/cv_overlay_e2_scroll above.
+		ConVar<float> cv_overlay_e2_rail_anim_scale(
+			"overlay_e2_rail_anim_scale", 1.0f,
+			"Multiplies the rail accordion's open/close animation duration (normally 0.16s). "
+			"Set above 1 to slow it down for a screenshot mid-transition; 1 restores normal speed." );
 
 		void SelectById( std::span<std::string_view> args );
 		void SetById( std::span<std::string_view> args );
@@ -1932,10 +1946,15 @@ namespace gamescope::ui::shell
 		// accordion's header pills, the guide's own "chip/badge" allowance
 		// for a 1-2px radius against its otherwise-hard "controls are square"
 		// rule (see ui-design-guide.md's Component styling section).
-		void Fill( const Rect &r, ImU32 col, float flRounding = 0.0f )
+		// `eFlags` defaults to 0 (ImGui's own "round every corner" default
+		// when flRounding > 0) -- I7 (2026-09-27) added it for the open rail
+		// header's own accent bar, which needs ONLY its left two corners
+		// rounded to trace the pill's own curve rather than all four (see
+		// that call site's comment).
+		void Fill( const Rect &r, ImU32 col, float flRounding = 0.0f, ImDrawFlags eFlags = 0 )
 		{
 			if ( !r.Empty() )
-				ImGui::GetWindowDrawList()->AddRectFilled( ImVec2( r.x0, r.y0 ), ImVec2( r.x1, r.y1 ), col, flRounding );
+				ImGui::GetWindowDrawList()->AddRectFilled( ImVec2( r.x0, r.y0 ), ImVec2( r.x1, r.y1 ), col, flRounding, eFlags );
 		}
 
 		// A stroked (unfilled) rect at the same rounding -- Controls.cpp's
@@ -2038,38 +2057,44 @@ namespace gamescope::ui::shell
 			// group, see fnSection below), not the old bare divider rule --
 			// so it takes a full item slot, same as an icon-mode area row.
 			//
-			// I5 (2026-09-27, animation + spacing): the walk now takes the
-			// group whose ROWS are being shown (`eRowsGroup`) and that
-			// group's current row-BLOCK height in px (`flRowsBlockH`) as
-			// explicit parameters, instead of reading s_eOpenRailGroup and
-			// a fixed `count * flItemH` directly. One arithmetic, two
-			// callers:
+			// I5 (2026-09-27, animation + spacing): the walk takes the
+			// group(s) whose ROWS are being shown and their current row-
+			// BLOCK height(s) in px as explicit parameters, instead of
+			// reading s_eOpenRailGroup and a fixed `count * flItemH`
+			// directly. One arithmetic, two callers:
 			//   - the REST calls just below (content height, active-item Y)
 			//     pass s_eOpenRailGroup and ITS FULL rest height (every row
-			//     open) -- exactly what this function always computed
-			//     before I5, unchanged, which is what keeps
-			//     selection-follow scrolling jitter-free while the
-			//     accordion is mid-animation (see this task's own
+			//     open), and RailGroup::Nothing/0 for the closing slot --
+			//     nothing is ever "closing" at rest -- exactly what this
+			//     function always computed before I5, unchanged, which is
+			//     what keeps selection-follow scrolling jitter-free while
+			//     the accordion is mid-animation (see this task's own
 			//     ui-design-guide.md entry and Registry.h's
 			//     RailContentHeightPx() comment).
-			//   - the DRAW call at the bottom of this function passes
-			//     s_eDisplayedRowsGroup (which lags s_eOpenRailGroup while
-			//     a group is shrinking closed) and the ANIMATED height
-			//     (s_flRowsBlockAnim), so headers after the animating
-			//     group visibly slide as it grows or shrinks.
-			// A row beyond the block's current height is not drawn at all
+			//   - the DRAW call at the bottom of this function passes BOTH
+			//     of s_railAccordionAnim's groups/heights, one opening
+			//     (growing 0 -> its rest height) and one closing (shrinking
+			//     its own last height -> 0), so BOTH visibly slide as they
+			//     grow or shrink -- REDESIGNED I7 (2026-09-27) from a
+			//     single shared slot; see Registry.h's own
+			//     RailAccordionAnim comment for the bug that fixed and why
+			//     a lone slot could not animate a group closing ABOVE the
+			//     one opening.
+			// A row beyond its block's current height is not drawn at all
 			// (RowVisibleHeightPx() returns 0 for it); a row straddling it
 			// is drawn but reports a PARTIAL visible height back to
 			// fnItem() for the draw pass to clip and to gate hit-testing
 			// with ("hit-testing only for fully visible rows" -- the
 			// simpler of the two options this task's brief offered).
-			const auto Walk = [ & ]( RailGroup eRowsGroup, float flRowsBlockH,
+			const auto Walk = [ & ]( RailGroup eOpenRowsGroup, float flOpenRowsH,
+			                         RailGroup eClosingRowsGroup, float flClosingRowsH,
 			                         auto &&fnSection, auto &&fnItem ) -> float
 			{
 				float     y               = rc.y0 + Px( railmetrics::kPad );
 				RailGroup eLastGroup      = RailGroup::Other;
 				bool      bFirst          = true;
 				bool      bPrevShowedRows = false;
+				float     flPrevRowsH     = 0.0f;
 				int       nRowIndex       = 0;
 				float     yRowsStart      = 0.0f;
 
@@ -2088,24 +2113,28 @@ namespace gamescope::ui::shell
 						// advance untouched (bIcons guards below).
 						if ( !bFirst && bPrevShowedRows )
 						{
-							y += flRowsBlockH;
+							y += flPrevRowsH;
 							y += bIcons ? 0.0f : flHdrGapOpen;
 						}
 						eLastGroup = eGroup;
 						bFirst = false;
 						fnSection( eGroup, y );
 
-						const bool bThisShowsRows = ( eGroup == eRowsGroup );
+						const bool bThisIsOpen    = ( eGroup == eOpenRowsGroup );
+						const bool bThisIsClosing = ( eGroup == eClosingRowsGroup );
+						const bool bThisShowsRows = bThisIsOpen || bThisIsClosing;
 						y += bIcons ? flItemH
 						            : ( flSecH + ( bThisShowsRows ? flHdrGapOpen : flHdrGapShut ) );
 						bPrevShowedRows = bThisShowsRows;
+						flPrevRowsH     = bThisIsOpen ? flOpenRowsH : ( bThisIsClosing ? flClosingRowsH : 0.0f );
 						nRowIndex  = 0;
 						yRowsStart = y;
 					}
 
-					if ( eGroup == eRowsGroup )
+					if ( eGroup == eOpenRowsGroup || eGroup == eClosingRowsGroup )
 					{
-						const float flVisibleH = RowVisibleHeightPx( flRowsBlockH, nRowIndex, flItemH );
+						const float flBlockH   = ( eGroup == eOpenRowsGroup ) ? flOpenRowsH : flClosingRowsH;
+						const float flVisibleH = RowVisibleHeightPx( flBlockH, nRowIndex, flItemH );
 						if ( flVisibleH > 0.0f )
 							fnItem( i, area, yRowsStart + (float)nRowIndex * flItemH, flVisibleH );
 						++nRowIndex;
@@ -2117,7 +2146,7 @@ namespace gamescope::ui::shell
 				// above -- earns no trailing gap since there is no next
 				// header to space it from.
 				if ( bPrevShowedRows )
-					y += flRowsBlockH;
+					y += flPrevRowsH;
 				return y;
 			};
 
@@ -2135,7 +2164,10 @@ namespace gamescope::ui::shell
 			// Measure, then decide the scroll offset. Content height carries
 			// the same top pad at the bottom so the last item does not sit
 			// flush against the edge when the rail is scrolled fully down.
-			const float flContentH  = ( Walk( s_eOpenRailGroup, flOpenGroupRestRowsH, NoSection, NoItem )
+			// RailGroup::Nothing/0 for the closing slot -- rest state never
+			// has one (see Walk()'s own comment).
+			const float flContentH  = ( Walk( s_eOpenRailGroup, flOpenGroupRestRowsH,
+			                                  RailGroup::Nothing, 0.0f, NoSection, NoItem )
 			                             - rc.y0 ) + Px( railmetrics::kPad );
 			const float flMaxScroll = std::max( 0.0f, flContentH - rc.Height() );
 
@@ -2149,7 +2181,7 @@ namespace gamescope::ui::shell
 				s_flRailScroll -= ImGui::GetIO().MouseWheel * flItemH;
 
 			float flActiveTop = -1.0f;
-			Walk( s_eOpenRailGroup, flOpenGroupRestRowsH, NoSection,
+			Walk( s_eOpenRailGroup, flOpenGroupRestRowsH, RailGroup::Nothing, 0.0f, NoSection,
 			      [ & ]( size_t, const Area &area, float y, float ) {
 				if ( &area == SelectedArea() )
 					flActiveTop = y - rc.y0;      // RailScroll() works rail-relative
@@ -2160,52 +2192,57 @@ namespace gamescope::ui::shell
 
 			// =============================================================
 			//  I5 (2026-09-27): the accordion's own open/close ANIMATION.
+			//  REDESIGNED I7 (2026-09-27): two independent heights -- see
+			//  Registry.h's own RailAccordionAnim comment for the bug this
+			//  fixes (a group closing ABOVE the one opening did not
+			//  animate) and StepRailAccordionAnim() for the state machine.
 			// =============================================================
-			// One absolute pixel height (not a 0..1 fraction -- see
-			// Registry.h's RowVisibleHeightPx() comment) that Approach()es
-			// whichever group's rows are meant to be showing, every frame,
-			// using the SAME motion system (tok::kDurRegion, 160 ms --
-			// SPEC §8.4 already names this exact duration for "rail
-			// collapse" -- and the Approach()/Ease() pair) s_flRailAnim
+			// Two absolute pixel heights (not 0..1 fractions -- see
+			// Registry.h's RowVisibleHeightPx() comment), one growing
+			// toward the newly-opened group's rest height and one
+			// independently shrinking the just-closed group's own last
+			// height to 0, using the SAME motion system (tok::kDurRegion,
+			// 160 ms -- SPEC §8.4 already names this exact duration for
+			// "rail collapse" -- and the Approach()/Ease() pair) s_flRailAnim
 			// above already drives the rail's own WIDTH with. Reused, not
 			// reinvented, per this task's own brief ("check ... for an
 			// existing motion token ... and reuse it").
 			//
-			// s_eDisplayedRowsGroup can lag s_eOpenRailGroup on purpose:
-			// closing a group (s_eOpenRailGroup -> Nothing) must not blank
-			// its rows on the SAME frame the click lands -- they still have
-			// to shrink to nothing on screen first, so the group whose rows
-			// are DRAWN stays put until the animated height actually
-			// reaches 0. Switching from one open group straight to another
-			// (A -> B, never through Nothing) swaps the displayed rows to
-			// B immediately; only the animated HEIGHT keeps easing from A's
-			// old value toward B's, so the same physical "slot" both
-			// shrinks and grows in one motion instead of drawing two
-			// independently-positioned row blocks at once.
-			if ( s_eOpenRailGroup != RailGroup::Nothing )
-				s_eDisplayedRowsGroup = s_eOpenRailGroup;
+			// cv_overlay_e2_rail_anim_scale multiplies the duration -- a
+			// debug aid for catching a mid-transition frame on purpose
+			// (this task's own verification), 1.0 (no change) by default.
+			StepRailAccordionAnim( s_railAccordionAnim, s_eOpenRailGroup, flOpenGroupRestRowsH,
+			                       tok::kDurRegion * cv_overlay_e2_rail_anim_scale.Get(),
+			                       ImGui::GetIO().DeltaTime );
 
-			const float flTargetRowsH = flOpenGroupRestRowsH;   // 0 when Nothing is open
-			s_flRowsBlockAnim = Approach( s_flRowsBlockAnim, flTargetRowsH, tok::kDurRegion,
-			                              ImGui::GetIO().DeltaTime );
-			// Snap once the remainder is under a physical pixel -- the same
-			// idiom s_flRailAnim's own snap uses just below this function,
-			// for the same reason: an exponential approach never arrives on
-			// its own, and a row block forever 0.3 units short keeps
-			// force_repaint()ing (next line) and keeps its last row on a
-			// fractional-pixel clip forever.
-			if ( std::abs( s_flRowsBlockAnim - flTargetRowsH ) < 1.0f / std::max( Scale(), 0.01f ) )
-				s_flRowsBlockAnim = flTargetRowsH;
-			if ( s_flRowsBlockAnim <= 0.0f )
-				s_eDisplayedRowsGroup = RailGroup::Nothing;   // fully collapsed -- nothing left to lag
+			// Snap each height once its remainder is under a physical pixel
+			// -- the same idiom s_flRailAnim's own snap uses just below
+			// this function, for the same reason: an exponential approach
+			// never arrives on its own, and a row block forever 0.3 units
+			// short keeps force_repaint()ing (below) and keeps its last row
+			// on a fractional-pixel clip forever. Applied to BOTH heights
+			// now, independently.
+			const float flSnapEps      = 1.0f / std::max( Scale(), 0.01f );
+			const float flOpenTargetNow = ( s_railAccordionAnim.eOpenGroup != RailGroup::Nothing )
+			                              ? flOpenGroupRestRowsH : 0.0f;
+			if ( std::abs( s_railAccordionAnim.flOpenH - flOpenTargetNow ) < flSnapEps )
+				s_railAccordionAnim.flOpenH = flOpenTargetNow;
+			if ( s_railAccordionAnim.eClosingGroup != RailGroup::Nothing
+			  && s_railAccordionAnim.flClosingH < flSnapEps )
+			{
+				s_railAccordionAnim.flClosingH    = 0.0f;
+				s_railAccordionAnim.eClosingGroup = RailGroup::Nothing;
+			}
 
 			// Issue #100's own idiom (SettingsOverlay.cpp's UpdateFadeAlpha):
 			// an in-flight animation has to keep asking for its own next
 			// frame, self-terminating the instant it lands exactly on the
 			// snap above -- gamescope does not free-run, so nothing else
 			// here would ever ask for the frames this animation needs while
-			// the game itself sits idle.
-			if ( s_flRowsBlockAnim != flTargetRowsH )
+			// the game itself sits idle. Either height still in flight is
+			// enough to keep asking.
+			if ( s_railAccordionAnim.flOpenH != flOpenTargetNow
+			  || s_railAccordionAnim.eClosingGroup != RailGroup::Nothing )
 				force_repaint();
 
 			// Clip so an off-screen item is neither painted over the sheet
@@ -2213,7 +2250,8 @@ namespace gamescope::ui::shell
 			// window clip rect, which is exactly the wanted hit-test.
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
-			Walk( s_eDisplayedRowsGroup, s_flRowsBlockAnim,
+			Walk( s_railAccordionAnim.eOpenGroup, s_railAccordionAnim.flOpenH,
+			      s_railAccordionAnim.eClosingGroup, s_railAccordionAnim.flClosingH,
 				// I2 (2026-09-27): the group header is now a real tab/button,
 				// not a static label -- SPEC's old bare section divider. A
 				// press toggles the accordion (AccordionOnHeaderClicked --
@@ -2309,7 +2347,6 @@ namespace gamescope::ui::shell
 					// NOT meant to click. A closed header is a button, so it
 					// now draws the button's boundary -- that alone is most
 					// of why the resting pill stops dissolving into the rail.
-					const float flBarInset = Px( tok::kXS );
 					if ( bOpen )
 					{
 						// Fill + a full outline, not fill alone: exactly the
@@ -2334,11 +2371,29 @@ namespace gamescope::ui::shell
 						// left edge) -- so "the open category" and "the
 						// selected module inside it" read as one continuous
 						// accent column down the rail instead of as two
-						// unrelated marks. Shortened by kXS top and bottom
-						// so it never fights the pill's rounded corners.
-						Fill( { rcPill.x0, rcPill.y0 + flBarInset,
-						        rcPill.x0 + Px( 3.0f ), rcPill.y1 - flBarInset },
-						      Col( Role::AccentBase ) );
+						// unrelated marks.
+						//
+						// I7 (2026-09-27): the user -- "the active indicator
+						// on the left (colored vertical line) doesnt span
+						// the full width of the category box" (their "width"
+						// means the pill's own vertical extent, top to
+						// bottom -- the line's own long axis). I6's bar was
+						// inset by kXS top AND bottom "so it never fights
+						// the pill's rounded corners", which is exactly what
+						// made it read as cut short: an 8px gap at each end
+						// of a 30px-tall pill is a third of the bar simply
+						// missing. Fixed properly instead of removing the
+						// inset outright (a flush 90-degree corner sitting
+						// inside a ROUNDED pill corner draws a small square
+						// nub poking past the pill's own curve): the bar now
+						// runs the pill's full y0..y1 with its own left two
+						// corners rounded at the SAME flHdrRound the pill
+						// itself uses, so it traces the pill's rounding
+						// exactly instead of stopping short of it. Right
+						// corners stay square -- the bar's right edge is
+						// 3px inside the pill, nowhere near a curve to match.
+						Fill( { rcPill.x0, rcPill.y0, rcPill.x0 + Px( 3.0f ), rcPill.y1 },
+						      Col( Role::AccentBase ), flHdrRound, ImDrawFlags_RoundCornersLeft );
 					}
 					else
 					{

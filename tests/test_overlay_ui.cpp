@@ -1963,19 +1963,21 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 	}
 }
 
-// I2 (2026-09-27): the icon-collapsed rail's four accordion group buttons.
-// A SEPARATE table from kIcons[] (IconForRailGroup(), not IconFor()) --
-// see Icons.h's own comment -- so this is a separate small census rather
-// than folding into the "every registered area has one" test above, which
-// must stay a strict area<->icon bijection.
+// I2 (2026-09-27): the icon-collapsed rail's accordion group buttons (four
+// then, six since I7's 2026-09-27 regroup). A SEPARATE table from kIcons[]
+// (IconForRailGroup(), not IconFor()) -- see Icons.h's own comment -- so
+// this is a separate small census rather than folding into the "every
+// registered area has one" test above, which must stay a strict
+// area<->icon bijection.
 TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing", "[overlay_ui]" )
 {
 	using ui::RailGroup;
-	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Misc,
-	                              RailGroup::Settings, RailGroup::Other };
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Overlay, RailGroup::Input,
+	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
+	const size_t nGroups = sizeof( eGroups ) / sizeof( eGroups[ 0 ] );
 
-	const ui::Icon *pIcons[ 4 ];
-	for ( size_t i = 0; i < 4; ++i )
+	const ui::Icon *pIcons[ 6 ];
+	for ( size_t i = 0; i < nGroups; ++i )
 	{
 		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
 		pIcons[ i ] = ui::IconForRailGroup( eGroups[ i ] );
@@ -2008,9 +2010,9 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 	// THE ANTI-COLLISION ASSERTION, the icon census's own shape, applied to
 	// this much smaller table: no two group buttons may draw the same
 	// silhouette (that would be the letters bug again, one level up).
-	for ( size_t i = 0; i < 4; ++i )
+	for ( size_t i = 0; i < nGroups; ++i )
 	{
-		for ( size_t j = i + 1; j < 4; ++j )
+		for ( size_t j = i + 1; j < nGroups; ++j )
 		{
 			INFO( ui::RailGroupName( eGroups[ i ] ) << " vs " << ui::RailGroupName( eGroups[ j ] ) );
 			bool bIdentical = ( pIcons[ i ]->nShapes == pIcons[ j ]->nShapes );
@@ -2030,17 +2032,31 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 }
 
 // =========================================================================
-//  Rail order & groups -- requests-2026-09-06.md item 1
+//  Rail order & groups -- requests-2026-09-06.md item 1, REGROUPED to six
+//  groups 2026-09-27 (I7, rail regroup task)
 // =========================================================================
-// "Reorder the left sidebar: DISPLAY (General, Resolution, Upscaling, Frame
-// limiter, HDR, Shaders); MISC (HUD, Mixer, Crosshair); SETTINGS (Profiles,
-// System, Appearance); OTHER (Log, Changelog)." A pinned list, the same
-// shape as the icon census above: written out rather than walked off
-// RegisterAll() (which this test binary does not link -- see that test's
-// own comment), so this is the test's own statement of what the rail must
-// draw, and the one place a future edit to Registry.cpp's kRailOrder has to
-// agree with.
-TEST_CASE( "rail: the four groups are in the order the request named", "[overlay_ui]" )
+// The ORIGINAL request: "Reorder the left sidebar: DISPLAY (General,
+// Resolution, Upscaling, Frame limiter, HDR, Shaders); MISC (HUD, Mixer,
+// Crosshair); SETTINGS (Profiles, System, Appearance); OTHER (Log,
+// Changelog)." The user's I7 table, verbatim: "Display: General,
+// Resolution, Upscaling [+ the pre-existing three, kept in order --
+// 'reorder SOME of the categories']. Overlay: HUD, Crosshair, Zoom, Cursor.
+// Input: General [new], Autoclicker, Null binds. Misc: Friends, Mixer.
+// Settings: Profiles, System, Appearance, Keybinds [Cursor left]." A pinned
+// list, the same shape as the icon census above: written out rather than
+// walked off RegisterAll() (which this test binary does not link -- see
+// that test's own comment), so this is the test's own statement of what
+// the rail must draw, and the one place a future edit to Registry.cpp's
+// kRailOrder has to agree with.
+//
+// input.general is not a registered Area yet (a sibling task adds it) --
+// its SLOT is still named here, since this test pins the TABLE
+// (ui::RailOrder(), Registry.cpp's raw kRailOrder), not which of its ids
+// FindArea() can currently resolve. See Registry.h's own comment on the
+// RailGroup enum and Registry::RailAreas() for the "a slot with no
+// registered area is skipped, not a crash" contract that makes landing the
+// table and the area in separate commits safe.
+TEST_CASE( "rail: the six groups are in the order the request named", "[overlay_ui]" )
 {
 	struct Expected { const char *pszId; ui::RailGroup eGroup; };
 	const Expected expected[] = {
@@ -2050,17 +2066,18 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "display.frame_limiter", ui::RailGroup::Display },
 		{ "display.hdr",           ui::RailGroup::Display },
 		{ "image.shaders",         ui::RailGroup::Display },
-		{ "system.hud",            ui::RailGroup::Misc },
-		{ "audio.mixer",           ui::RailGroup::Misc },
-		{ "system.crosshair",      ui::RailGroup::Misc },
-		{ "system.zoom",           ui::RailGroup::Misc },
-		{ "system.autoclicker",    ui::RailGroup::Misc },
-		{ "system.null_binds",     ui::RailGroup::Misc },
+		{ "system.hud",            ui::RailGroup::Overlay },
+		{ "system.crosshair",      ui::RailGroup::Overlay },
+		{ "system.zoom",           ui::RailGroup::Overlay },
+		{ "setup.cursor",          ui::RailGroup::Overlay },
+		{ "input.general",         ui::RailGroup::Input },
+		{ "system.autoclicker",    ui::RailGroup::Input },
+		{ "system.null_binds",     ui::RailGroup::Input },
 		{ "system.friends",        ui::RailGroup::Misc },
+		{ "audio.mixer",           ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
-		{ "setup.cursor",          ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
@@ -2090,6 +2107,8 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" )
 {
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Display ) )  == "DISPLAY" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Overlay ) )  == "OVERLAY" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Input ) )    == "INPUT" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Settings ) ) == "SETTINGS" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Other ) )    == "OTHER" );
@@ -2158,7 +2177,7 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	reg.Add( "display.general",    "General",    ui::Section::Display );
 	reg.Add( "display.upscaling",  "Upscaling",  ui::Section::Display );
 	reg.Add( "audio.mixer",        "Mixer",      ui::Section::System );
-	reg.Add( "system.crosshair",   "Crosshair",  ui::Section::System );
+	reg.Add( "system.friends",     "Friends",    ui::Section::System );
 	reg.Add( "setup.profiles",     "Profiles",   ui::Section::Setup );
 	reg.Add( "system.log",         "Log",        ui::Section::System );
 
@@ -2172,11 +2191,13 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	REQUIRE( display[ 0 ]->Id() == "display.general" );
 	REQUIRE( display[ 1 ]->Id() == "display.upscaling" );
 
-	// Misc open: its two, likewise nothing else.
+	// Misc open: its two -- I7 (2026-09-27) narrowed Misc down to Friends
+	// and Mixer (Crosshair moved to Overlay; see the rail-order test just
+	// above) -- likewise nothing else leaks in.
 	const std::vector<const ui::Area *> misc = ui::VisibleRailAreas( railAreas, RailGroup::Misc );
 	REQUIRE( misc.size() == 2 );
-	REQUIRE( misc[ 0 ]->Id() == "audio.mixer" );
-	REQUIRE( misc[ 1 ]->Id() == "system.crosshair" );
+	REQUIRE( misc[ 0 ]->Id() == "system.friends" );
+	REQUIRE( misc[ 1 ]->Id() == "audio.mixer" );
 
 	// RailGroup::Nothing -- every group collapsed -- lists nothing at all.
 	REQUIRE( ui::VisibleRailAreas( railAreas, RailGroup::Nothing ).empty() );
@@ -2187,19 +2208,24 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	// This is the whole reason the accordion exists: 19 areas in 4 fixed
 	// groups already overflow the rail at 1080p/scale 1 as a flat list
 	// (content ~= 896px against ~= 878px available -- see this task's own
-	// brief), and MISC has since gained a 20th area (Null binds, 2026-09-27).
-	// Every real area, registered under its own real id
+	// brief). I7 (2026-09-27) split those into six groups, so DISPLAY (6
+	// areas, unchanged) is now the busiest instead of the old MISC. Every
+	// real area plus input.general's slot (not a registered Area yet -- a
+	// sibling task adds it; this synthetic registry adds it anyway so
+	// railAreas.size() matches RailOrderCount() below, same as the real
+	// rail will once it lands), registered under its own real id
 	// (RailContentHeightPx() keys off RailGroupFor(), which reads the id),
-	// the same 20 test_overlay_ui.cpp's icon census and rail-order tests
+	// the same ids test_overlay_ui.cpp's icon census and rail-order tests
 	// above pin.
 	ui::Registry reg;
 	const char *pszAllAreas[] = {
 		"display.general", "display.resolution", "display.upscaling",
 		"display.frame_limiter", "display.hdr", "image.shaders",
-		"system.hud", "audio.mixer", "system.crosshair", "system.zoom",
-		"system.autoclicker", "system.null_binds", "system.friends",
+		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
+		"input.general", "system.autoclicker", "system.null_binds",
+		"system.friends", "audio.mixer",
 		"setup.profiles", "system.general", "setup.appearance",
-		"setup.cursor", "setup.keybinds",
+		"setup.keybinds",
 		"system.log", "system.changelog",
 	};
 	for ( const char *pszId : pszAllAreas )
@@ -2218,8 +2244,8 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	const float flAvailableHeight = flSurfaceH * 0.85f - flSlabBarH;
 
 	using ui::RailGroup;
-	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Misc,
-	                              RailGroup::Settings, RailGroup::Other };
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Overlay, RailGroup::Input,
+	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	for ( RailGroup eGroup : eGroups )
 	{
 		INFO( "group " << ui::RailGroupName( eGroup ) );
@@ -2227,11 +2253,11 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		REQUIRE( flHeight <= flAvailableHeight );
 	}
 
-	// Every group closed is the shortest state of all -- just the four
+	// Every group closed is the shortest state of all -- just the six
 	// headers -- so it fits too, trivially, but is worth pinning since a
-	// future edit could add a fifth header advance somewhere and this would
-	// catch it before the "any one group open" case above got anywhere
-	// near the limit.
+	// future edit could add a seventh header advance somewhere and this
+	// would catch it before the "any one group open" case above got
+	// anywhere near the limit.
 	REQUIRE( ui::RailContentHeightPx( railAreas, RailGroup::Nothing ) <= flAvailableHeight );
 }
 
@@ -2358,6 +2384,107 @@ TEST_CASE( "rail accordion: I5 spacing splits the open group's gap top/bottom, t
 	// belonging to the header above them rather than as a separate band
 	// (QC's "a slightly tighter gap under the open header").
 	REQUIRE( kHeaderGapOpen < kHeaderGap );
+}
+
+// =========================================================================
+//  The rail accordion's TWO independent heights -- I7 (2026-09-27)
+// =========================================================================
+// The user: "When i open a category above the currently open one, it
+// animates nicely, but when i open one below, it doesnt." Root cause and
+// fix are both in Registry.h's own RailAccordionAnim comment. These pin the
+// pure STATE MACHINE -- that a switch starts the old group shrinking from
+// wherever it was and the new group growing from zero, CONCURRENTLY, and
+// that both eventually reach their targets -- which is symmetric by
+// construction (the struct carries no notion of table position at all, so
+// it cannot itself distinguish "opening above" from "opening below"; that
+// distinction lived entirely in the OLD single-slot bug). The on-screen
+// consequence (a header's y no longer jumping) needs Shell.cpp's own
+// Walk() and an ImGui context, which this test binary does not link -- see
+// this task's own verification captures for that half.
+TEST_CASE( "rail accordion: opening a group starts it growing from 0 and the old one shrinking from its own height", "[overlay_ui]" )
+{
+	using ui::RailGroup;
+	using ui::RailAccordionAnim;
+
+	RailAccordionAnim s;
+	REQUIRE( s.eOpenGroup == RailGroup::Nothing );
+	REQUIRE( s.eClosingGroup == RailGroup::Nothing );
+
+	// Nothing -> Display, target 240: one small step starts it growing but
+	// does not finish it; nothing is closing (there was nothing open).
+	ui::StepRailAccordionAnim( s, RailGroup::Display, 240.0f, 0.16f, 0.02f );
+	REQUIRE( s.eOpenGroup == RailGroup::Display );
+	REQUIRE( s.flOpenH > 0.0f );
+	REQUIRE( s.flOpenH < 240.0f );
+	REQUIRE( s.eClosingGroup == RailGroup::Nothing );
+
+	// A big enough step (dt >= duration) lands exactly on the target --
+	// Approach()'s own contract (t clamps to 1, Ease(1) == 1).
+	ui::StepRailAccordionAnim( s, RailGroup::Display, 240.0f, 0.16f, 1.0f );
+	REQUIRE( s.flOpenH == 240.0f );
+	REQUIRE( s.eClosingGroup == RailGroup::Nothing );
+
+	// Display (settled open, 240) -> Misc (target 80): the SAME call that
+	// commands the new group ALSO starts the old one closing, in the same
+	// frame -- no frame where only one of the two is in motion.
+	ui::StepRailAccordionAnim( s, RailGroup::Misc, 80.0f, 0.16f, 0.02f );
+	REQUIRE( s.eOpenGroup == RailGroup::Misc );
+	REQUIRE( s.flOpenH > 0.0f );          // growing from 0 ...
+	REQUIRE( s.flOpenH < 80.0f );         // ... toward its own target
+	REQUIRE( s.eClosingGroup == RailGroup::Display );
+	REQUIRE( s.flClosingH > 0.0f );       // shrinking from 240 ...
+	REQUIRE( s.flClosingH < 240.0f );     // ... toward 0, CONCURRENTLY with the open above
+
+	// Enough time for both to finish: the opening group lands on its
+	// target and the closing one clears itself back to Nothing/0.
+	ui::StepRailAccordionAnim( s, RailGroup::Misc, 80.0f, 0.16f, 1.0f );
+	REQUIRE( s.eOpenGroup == RailGroup::Misc );
+	REQUIRE( s.flOpenH == 80.0f );
+	REQUIRE( s.eClosingGroup == RailGroup::Nothing );
+	REQUIRE( s.flClosingH == 0.0f );
+
+	// The SAME transition run with the group labels swapped (Misc settled
+	// open -> Display) behaves identically in shape -- growing-from-0 and
+	// shrinking-from-its-own-height, concurrently -- proving the struct
+	// itself treats "which logical group is being superseded" symmetrically
+	// regardless of which one a caller later happens to draw above or below
+	// the other (that positional question is Shell.cpp's alone).
+	RailAccordionAnim t;
+	ui::StepRailAccordionAnim( t, RailGroup::Misc, 80.0f, 0.16f, 1.0f );      // settle Misc open
+	ui::StepRailAccordionAnim( t, RailGroup::Display, 240.0f, 0.16f, 0.02f ); // switch to Display
+	REQUIRE( t.eOpenGroup == RailGroup::Display );
+	REQUIRE( t.flOpenH > 0.0f );
+	REQUIRE( t.flOpenH < 240.0f );
+	REQUIRE( t.eClosingGroup == RailGroup::Misc );
+	REQUIRE( t.flClosingH > 0.0f );
+	REQUIRE( t.flClosingH < 80.0f );
+}
+
+TEST_CASE( "rail accordion: clicking a group shut before it finishes opening reverses from its current height", "[overlay_ui]" )
+{
+	using ui::RailGroup;
+	using ui::RailAccordionAnim;
+
+	RailAccordionAnim s;
+	ui::StepRailAccordionAnim( s, RailGroup::Settings, 200.0f, 0.16f, 0.02f );
+	const float flPartial = s.flOpenH;
+	REQUIRE( flPartial > 0.0f );
+	REQUIRE( flPartial < 200.0f );
+
+	// Clicked shut (AccordionOnHeaderClicked would return Nothing here) --
+	// the closing slot starts from the PARTIAL height just reached, not
+	// from 200 (which it never reached) and not from 0 (which would jump).
+	// A tiny positive dt (not exactly 0 -- Approach()'s own dt<=0 contract
+	// is "jump straight to target", which would defeat this assertion) so
+	// the closing height has barely eased yet, staying close to flPartial
+	// rather than landing on it exactly.
+	ui::StepRailAccordionAnim( s, RailGroup::Nothing, 0.0f, 0.16f, 0.001f );
+	REQUIRE( s.eOpenGroup == RailGroup::Nothing );
+	REQUIRE( s.flOpenH == 0.0f );
+	REQUIRE( s.eClosingGroup == RailGroup::Settings );
+	REQUIRE( s.flClosingH > 0.0f );
+	REQUIRE( s.flClosingH < flPartial );
+	REQUIRE_THAT( s.flClosingH, Catch::Matchers::WithinAbs( flPartial, flPartial * 0.05f ) );
 }
 
 // =========================================================================

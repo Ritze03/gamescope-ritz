@@ -408,14 +408,15 @@ namespace gamescope::ui
 		constexpr size_t kIconN = sizeof( kIcons ) / sizeof( kIcons[ 0 ] );
 
 		// =================================================================
-		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3, 2026-09-27 post-QC)
+		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3; regrouped to six, I7)
 		// =================================================================
-		// Four glyphs, one per RailGroup (Display/Misc/Settings/Other, in
-		// that order -- see the switch in IconForRailGroup() below, which is
-		// what actually binds each entry to its group rather than array
-		// position). Freehand, like every icon added after index.html: there
-		// is no group tab in the mockup to transcribe, because the mockup
-		// predates the accordion entirely.
+		// Six glyphs, one per RailGroup (Display/Overlay/Input/Misc/
+		// Settings/Other, in that order -- see the switch in
+		// IconForRailGroup() below, which is what actually binds each entry
+		// to its group rather than array position). Freehand, like every
+		// icon added after index.html: there is no group tab in the mockup
+		// to transcribe, because the mockup predates the accordion
+		// entirely.
 		//
 		// Kept in a SEPARATE table from kIcons[] above -- these are group
 		// buttons, not areas, and mixing them in would break
@@ -433,20 +434,45 @@ namespace gamescope::ui
 		// open Misc group's Crosshair row). Other's box-with-tab was judged
 		// legible enough as a shape but not as "everything left over" --
 		// QC's plainer "a card" read was closer to setup.profiles' own two-
-		// offset-cards glyph than intended. Each is a new silhouette,
-		// distinct from every glyph in kIcons[] and from the other three
-		// here:
+		// offset-cards glyph than intended.
+		//
+		// I7 (2026-09-27, rail regroup): MISC split into three groups
+		// (Overlay/Input/Misc -- see Registry.h's own comment on the
+		// RailGroup enum for why), so two new silhouettes joined the four
+		// above. Every one of the six is distinct from every glyph in
+		// kIcons[] and from the other five here:
 		//   Display  a monitor on a stand -- one rect with a neck and base
 		//            below it, unlike display.resolution's two CONCENTRIC
 		//            rects (nothing else in the set draws a rect with legs).
-		//            Unchanged by the I3 redraw -- QC did not flag it.
+		//            Unchanged since I2 -- QC never flagged it.
+		//   Overlay  a frame with a small reticle mark at its centre -- a
+		//            LARGE square outline (nearly the whole grid, "the
+		//            screen") with a short plain "+" (two crossing lines,
+		//            not a ring) sitting inside it, unconnected to the
+		//            frame's own edges. Read against system.crosshair's own
+		//            AREA icon (a ring with four arms crossing ITS edge)
+		//            and against Misc's asterisk below (three DIAGONAL
+		//            lines with no frame at all): this is the only glyph in
+		//            either table that draws a rectangle enclosing a
+		//            separate crossing mark -- "something drawn ON TOP of
+		//            the screen" is exactly the Overlay group's own
+		//            identity (HUD, Crosshair, Zoom, Cursor).
+		//   Input    one wide keycap (a single rounded rectangle) with a
+		//            small filled legend mark low on its face -- distinct
+		//            from setup.keybinds' AREA icon (a wide body with THREE
+		//            outlined caps plus a spacebar, five shapes) and from
+		//            system.null_binds' AREA icon (TWO separate square
+		//            keycaps joined by a priority chevron, four shapes): no
+		//            other glyph in either table is a single keycap shape.
 		//   Misc     a six-ray asterisk (three lines crossing through one
 		//            centre point) -- the plain "extras/sparkle" mark. No
-		//            other glyph in either table draws crossing diameters;
-		//            three SEPARATE same-size dots (the I2 shape) is the
-		//            standard overflow-menu glyph almost everywhere else,
-		//            which is exactly the wrong association for a group
-		//            that opens INLINE, not into a hidden menu.
+		//            other glyph in either table draws crossing diameters
+		//            with no enclosing frame (Overlay's "+" above always
+		//            sits inside its own rect); three SEPARATE same-size
+		//            dots (the I2 shape) is the standard overflow-menu
+		//            glyph almost everywhere else, which is exactly the
+		//            wrong association for a group that opens INLINE, not
+		//            into a hidden menu.
 		//   Settings a hex-nut: a six-sided outline with a round hole at
 		//            its centre -- the bolt-head/mechanism read "settings"
 		//            already carries elsewhere in this app's own iconography
@@ -470,6 +496,15 @@ namespace gamescope::ui
 				Rect( 3.5f, 4.5f, 20.5f, 15.5f ),
 				Line( { 12.0f, 15.5f }, { 12.0f, 18.5f } ),
 				Line( { 7.5f, 19.5f }, { 16.5f, 19.5f } ) } },
+
+			{ "railgroup.overlay", 3, {
+				Rect( 3.5f, 3.5f, 20.5f, 20.5f ),
+				Line( { 8.5f, 12.0f }, { 15.5f, 12.0f } ),
+				Line( { 12.0f, 8.5f }, { 12.0f, 15.5f } ) } },
+
+			{ "railgroup.input", 2, {
+				RoundRect( 4.5f, 8.0f, 19.5f, 16.0f, 2.5f ),
+				Bar( 9.5f, 12.0f, 14.5f, 13.8f ) } },
 
 			{ "railgroup.misc", 3, {
 				Line( { 5.0f, 12.0f }, { 19.0f, 12.0f } ),
@@ -506,9 +541,11 @@ namespace gamescope::ui
 		switch ( eGroup )
 		{
 			case RailGroup::Display:  return &kGroupIcons[ 0 ];
-			case RailGroup::Misc:     return &kGroupIcons[ 1 ];
-			case RailGroup::Settings: return &kGroupIcons[ 2 ];
-			case RailGroup::Other:    return &kGroupIcons[ 3 ];
+			case RailGroup::Overlay:  return &kGroupIcons[ 1 ];
+			case RailGroup::Input:    return &kGroupIcons[ 2 ];
+			case RailGroup::Misc:     return &kGroupIcons[ 3 ];
+			case RailGroup::Settings: return &kGroupIcons[ 4 ];
+			case RailGroup::Other:    return &kGroupIcons[ 5 ];
 			case RailGroup::Nothing:     return nullptr;
 		}
 		return nullptr;
