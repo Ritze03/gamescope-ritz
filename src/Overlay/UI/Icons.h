@@ -38,6 +38,8 @@
 
 #include <cstddef>
 
+#include "Registry.h"   // ui::RailGroup, for IconForRailGroup() below
+
 namespace gamescope::ui
 {
 	// A point on the 24-unit grid. Deliberately not ImVec2 -- see the header
@@ -100,6 +102,19 @@ namespace gamescope::ui
 	// what the whole rail did before this file existed -- so the failure mode
 	// of a forgotten icon is the old behaviour for one item, not a blank rail.
 	const Icon *IconFor( const char *pszAreaId );
+
+	// The icon-collapsed rail's accordion header buttons (I2, 2026-09-27):
+	// one glyph per RailGroup, for the 60px icon rail where a group's
+	// header collapses to a single icon button rather than a labelled tab.
+	// A SEPARATE table from the one IconFor() reads, on purpose: these are
+	// group buttons, not areas, and must never count against
+	// test_overlay_ui.cpp's "every registered area has exactly one icon"
+	// bijection -- mixing them into kIcons[] would make IconCount() count
+	// four things that are not areas.
+	//
+	// RailGroup::Nothing (the accordion's own "nothing open" value -- see
+	// Registry.h) has no glyph; every real group does.
+	const Icon *IconForRailGroup( RailGroup eGroup );
 
 	// SPEC §8.0's grid. Every coordinate above is in [0, 24].
 	inline constexpr float kIconGrid   = 24.0f;

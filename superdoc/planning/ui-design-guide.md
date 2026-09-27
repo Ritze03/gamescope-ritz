@@ -591,6 +591,83 @@ actually drawn) so a plain unit test can pin it without an ImGui context -- see
 groups; it kept its former `Setup` neighbours (Profiles, Appearance) under SETTINGS rather
 than a placement the request never specified.
 
+### Rail accordion (2026-09-27, I2, D2/D6)
+
+The four groups above are unchanged; what changed is how the rail draws them. The section
+"### Rail groups" above describes a flat list -- every group's header always visible, every
+group's areas always drawn beneath it. That overflows the rail: 19 areas in 4 fixed groups
+already total ~896px of content (four 30px headers plus nineteen 40px rows plus the rail's
+own top/bottom pad) against ~878px available at 1080p/scale 1 (`0.85 x 1080` for the slab,
+minus the slab bar's 40px), and a 20th area (Null binds, MISC) landed the same week. The
+user, dictating the fix: *"make the categories that we have now look like tabs and when one
+of them is pressed, it extends the options for the category like tabs below it. This would
+allow us to make the category smaller too."* Offered a plain tab strip as the alternative;
+the user picked the accordion.
+
+**The rule.** Each group header is now a clickable tab. Only one group's areas are ever drawn
+at once; opening a group closes whichever other group was open. Clicking the OPEN group's own
+header collapses it -- every group closed (`RailGroup::Nothing`) is a legal state, not just an
+intermediate one. A collapsed group's area rows are not drawn and take no height at all (they
+are skipped inside `DrawRail()`'s own measuring/drawing walk, not merely hidden by a clip
+rect), which is the entire saving: with one group open the rail's content height is a handful
+of headers plus that one group's rows, comfortably inside the available height regardless of
+how many areas pile up in the *other* three groups.
+
+**The open group always matches the selection.** Selecting an area -- from anywhere: a rail
+click, a command-palette/launcher jump, `StepArea()` (both Up/Down in the rail and
+Ctrl+Left/Right), the `overlay_e2_select` console command, or wlserver's area-request path
+(the friends binding) -- opens that area's group, closing whatever else was open. Every one of
+those call sites now routes through one function, `Shell.cpp`'s `SetSelectedArea()`, so this
+cannot be forgotten at a future seventh call site. On the Shell's own opening edge
+(`ResetTransient()`) the open group is likewise re-derived from the current selection rather
+than restored from whatever a header click had last left it at -- the open-group state is not
+persisted across a close, by design (see that function's own comment): the next open should
+land on the area you were last looking at, not on whichever group you happened to be poking at
+before you closed the overlay.
+
+**Look.** A header is a pill/button, visually distinct from an area row: a `▸`/`▾` chevron
+(the same drawn-disclosure convention an inline-expandable Sheet row already uses -- right
+while closed, down while open), the group's own name, a flat `Role::SurfaceRaised` tint at
+rest (the same "control box, inactive segment" tone Controls.h already uses, so a closed
+header reads as pressable even before you notice the chevron), and the SAME accent
+wash-plus-2px-left-bar an active area row gets when it is the OPEN one -- one "this is the
+active thing" convention, not two. The icon-collapsed (60px) rail replaces its old bare
+divider rule with one icon BUTTON per group, sized like an area's own icon-mode row (a full
+40px item slot, not the old 20px gap) so its glyph sits in the same box an area icon does;
+`Icons.h`'s `IconForRailGroup()` is a new, separate four-entry table (monitor-on-a-stand for
+DISPLAY, three dots for MISC, a four-spoke dial for SETTINGS, a two-compartment archive box
+for OTHER) rather than being folded into the area icon table, because these are group buttons,
+not areas, and mixing them in would break `test_overlay_ui.cpp`'s "every registered area has
+exactly one icon" bijection.
+
+**Keyboard.** Up/Down in the rail and Ctrl+Left/Right both still call the one `StepArea()`
+they always did, walking every area in `RailOrder()`'s order (not just the open group's) --
+unchanged from before the accordion. What is new is a single line inside `StepArea()`'s
+selection write: landing on a new area now opens ITS group the same way a click does. That is
+what lets stepping off the last area of an open group spill into the next group's first area
+and open it, rather than stopping dead at a boundary the accordion happens to have collapsed
+-- "moving onto another group's area opens that group" falls out of the one shared write, not
+out of a second keyboard-specific rule. **Deliberately not built:** keyboard focus ON a
+header itself (so Enter/Space could toggle it without a mouse). The existing focus model never
+gave a header focus -- only areas ever received it -- and every header is already reachable by
+mouse, so adding a second, header-only focus state for one keystroke's worth of convenience
+was judged not worth the new state; a future pass can add it if it is missed in practice.
+
+**Pure logic, no ImGui.** Exactly like `RailOrder()`/`RailGroupFor()` before it, the accordion's
+actual rule lives in `Registry.h`/`.cpp`, not in `Shell.cpp` where the rail is drawn --
+`AccordionOnHeaderClicked()` (the toggle), `VisibleRailAreas()` (which rows a given open group
+draws) and `RailContentHeightPx()` (the fits-the-rail arithmetic, reading the same
+`railmetrics::` constants `DrawRail()` itself does, so the two can never silently disagree) are
+all plain functions over `RailGroup`/`Area*`, callable from `test_overlay_ui.cpp` with no
+ImGui context and no live registry. See that file's "rail accordion:" test cases, including one
+that builds all 19 real areas and asserts every group's own content height fits the rail at
+1080p/scale 1 -- the property this whole feature exists to guarantee.
+
+**Naming note:** the sentinel for "every group closed" is `RailGroup::Nothing`, not `None` --
+`None` collides with X11's `#define None 0L` (`Xlib.h`), which a translation unit that
+transitively includes this header (`steamcompmgr.cpp`) pulls in; `Registry.h` already avoids
+the same trap for `PreviewKind` and `InheritState`, and this follows the same convention.
+
 ### Selection follows edit (2026-09-06/07/08, requests-2026-09-07.md item 8, requests-2026-09-08.md item 2)
 
 **The rule:** any press that lands on a Sheet row's own control selects that row, the

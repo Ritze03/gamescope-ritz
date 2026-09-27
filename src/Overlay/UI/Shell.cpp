@@ -106,6 +106,15 @@ namespace gamescope::ui::shell
 		// replaces.
 		Registry     *s_pRegistry       = nullptr;
 		std::string   s_sSelectedArea;
+		// I2 (2026-09-27): which of the rail's four groups is open right
+		// now. Not persisted -- like s_sSelectedArea, an in-process static
+		// -- and does not need to be: the rule is "the group holding the
+		// current area opens by itself", so SetSelectedArea() below derives
+		// it fresh every time the selection changes, and ResetTransient()
+		// (the opening edge) derives it fresh every time the shell opens.
+		// A manual header click (DrawRail) is the one write that does NOT
+		// go through SetSelectedArea -- see AccordionOnHeaderClicked().
+		RailGroup     s_eOpenRailGroup  = RailGroup::Other;
 		std::string   s_sSelectedEntry;   // empty => Overview (SPEC §5.5)
 		// The Inspector host preference lives in cv_overlay_e2_host below --
 		// ONE storage, so the console, Ctrl+I, the spine and the close glyph
@@ -896,6 +905,7 @@ namespace gamescope::ui::shell
 				RegisterAll( *s_pRegistry );
 				s_pRegistry->SelfTest();
 				s_sSelectedArea = s_pRegistry->AreaCount() ? s_pRegistry->AreaAt( 0 ).Id() : std::string();
+				s_eOpenRailGroup = RailGroupForId( s_sSelectedArea );
 			}
 			return *s_pRegistry;
 		}
@@ -909,6 +919,24 @@ namespace gamescope::ui::shell
 				if ( Reg().AreaAt( i ).Available() )
 					return &Reg().AreaAt( i );
 			return nullptr;
+		}
+
+		// I2 (2026-09-27), D2/D6: the ONE place s_sSelectedArea is written.
+		// Every call site that changes the selected area -- a rail click, a
+		// palette/launcher jump, StepArea() (Up/Down in the rail and
+		// Ctrl+Left/Right both), the overlay_e2_select console command, and
+		// wlserver's area-request path (the friends binding) -- routes
+		// through this, so "the group holding the current area opens by
+		// itself" (closing whatever else was open) cannot be forgotten at a
+		// seventh call site later. The registry's own first-selection
+		// default (Reg(), just above) sets both fields directly instead of
+		// calling this, since it runs before this function is even in
+		// scope textually and it is establishing the initial state, not
+		// reacting to a change.
+		void SetSelectedArea( const std::string &sAreaId )
+		{
+			s_sSelectedArea  = sAreaId;
+			s_eOpenRailGroup = RailGroupForId( sAreaId );
 		}
 
 		const Entry *SelectedEntry()
@@ -1009,6 +1037,19 @@ namespace gamescope::ui::shell
 			s_sExpandedEntry.clear();
 			s_nInlineFocus    = -1;
 			s_bPaletteOpen    = false;
+
+			// I2: the rail accordion's open group is a THIRD category,
+			// neither transient (cleared) nor persisted (kept) -- it is
+			// DERIVED, fresh, from the selected area every time the shell
+			// opens. A header click can leave the open group disagreeing
+			// with the selection (D2/D6 allows browsing another group's
+			// header without losing your place, and allows every group
+			// closed) -- but that is a within-session browsing state, not
+			// an arrangement worth reopening on. The next open should show
+			// the area you last landed on, not whichever group you last
+			// happened to be poking at, so this recomputes it rather than
+			// leaving the last manual open/close state sitting there.
+			s_eOpenRailGroup = RailGroupForId( s_sSelectedArea );
 		}
 
 		// Esc's last rung, and the only place either surface closes itself --
@@ -1648,7 +1689,7 @@ namespace gamescope::ui::shell
 				console_log.errorf( "no such E2 area: %s", sArea.c_str() );
 				return;
 			}
-			s_sSelectedArea = sArea;
+			SetSelectedArea( sArea );
 
 			// Through Select(), never around it. This used to assign
 			// s_sSelectedEntry/s_eMode by hand -- a second selection path,
@@ -1917,9 +1958,16 @@ namespace gamescope::ui::shell
 			// selected row's divider read as "coloured according to the
 			// backdrop" (the user's report).
 
-			const float flItemH = Px( 40.0f );        // index.html's .ri
+			// These three read Registry.h's railmetrics namespace, not a
+			// local literal -- RailContentHeightPx() (Registry.cpp) has to
+			// compute EXACTLY this same number with no ImGui context at all
+			// (test_overlay_ui.cpp's own fits-the-rail test), and reading
+			// the same named constant in both places is what makes that
+			// true by construction instead of by two numbers happening to
+			// agree today.
+			const float flItemH = Px( railmetrics::kItemH );
 			const float flPadX  = Px( 16.0f );
-			const float flSecH  = Px( 26.0f );
+			const float flSecH  = Px( railmetrics::kHeaderH );
 
 			// ---- the rail's vertical walk, defined ONCE ------------------
 			//
@@ -1934,13 +1982,26 @@ namespace gamescope::ui::shell
 			// item sits and how tall the whole column is; the measure pass
 			// and the draw pass call it with different visitors rather than
 			// keeping two copies of the same arithmetic in step by hand.
-			const float flSecAdvance = bIcons ? Px( 20.0f ) : ( flSecH + Px( tok::kXS ) );
+			//
+			// I2: in icon mode a header is now a full icon BUTTON (one per
+			// group, see fnSection below), not the old bare divider rule --
+			// so it takes a full item slot, same as an icon-mode area row.
+			const float flSecAdvance = bIcons ? flItemH : ( flSecH + Px( railmetrics::kHeaderGap ) );
 
 			const std::vector<const Area *> railAreas = RailAreas();
 
+			// D2/D6, THE ACCORDION'S ONE ENFORCEMENT POINT: a header is
+			// drawn on every group change regardless of open state (every
+			// group's tab is always visible), but an ITEM only advances the
+			// walk -- and only gets drawn at all -- when its group is the
+			// open one. A collapsed group's rows are not drawn and take no
+			// height, which is the whole of D2/D6's "collapsed groups...
+			// take no height" and is also why RailContentHeightPx() in
+			// Registry.cpp mirrors this exact `eGroup == s_eOpenRailGroup`
+			// gate rather than the old "every item always" one.
 			const auto Walk = [ & ]( auto &&fnSection, auto &&fnItem ) -> float
 			{
-				float     y          = rc.y0 + Px( tok::kS );
+				float     y          = rc.y0 + Px( railmetrics::kPad );
 				RailGroup eLastGroup = RailGroup::Other;
 				bool      bFirst     = true;
 
@@ -1957,8 +2018,11 @@ namespace gamescope::ui::shell
 						y += flSecAdvance;
 					}
 
-					fnItem( i, area, y );
-					y += flItemH;
+					if ( eGroup == s_eOpenRailGroup )
+					{
+						fnItem( i, area, y );
+						y += flItemH;
+					}
 				}
 				return y;
 			};
@@ -1969,7 +2033,7 @@ namespace gamescope::ui::shell
 			// Measure, then decide the scroll offset. Content height carries
 			// the same top pad at the bottom so the last item does not sit
 			// flush against the edge when the rail is scrolled fully down.
-			const float flContentH  = ( Walk( NoSection, NoItem ) - rc.y0 ) + Px( tok::kS );
+			const float flContentH  = ( Walk( NoSection, NoItem ) - rc.y0 ) + Px( railmetrics::kPad );
 			const float flMaxScroll = std::max( 0.0f, flContentH - rc.Height() );
 
 			// Keep the ACTIVE item on screen. StepArea() moves the selection
@@ -1996,21 +2060,74 @@ namespace gamescope::ui::shell
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
 			Walk(
+				// I2 (2026-09-27): the group header is now a real tab/button,
+				// not a static label -- SPEC's old bare section divider. A
+				// press toggles the accordion (AccordionOnHeaderClicked --
+				// Registry.h): closes it if it was open, opens it (closing
+				// whatever else was) otherwise. This replaces the icon rail's
+				// old bare HLine divider too -- each group is now ONE icon
+				// button there (D2/D6's "each group becomes one icon
+				// button"), the same size as an item row so its glyph has
+				// the item icons' own box to sit in.
 				[ & ]( RailGroup eGroup, float yRaw )
 				{
-					const float y = yRaw - s_flRailScroll;
-					if ( bIcons )
+					const float y      = yRaw - s_flRailScroll;
+					const float flHdrH = bIcons ? flItemH : flSecH;
+					const Rect  rcHdr  { rc.x0, y, rc.x1, y + flHdrH };
+					const bool  bOpen  = ( eGroup == s_eOpenRailGroup );
+
+					ImGui::SetCursorScreenPos( ImVec2( rcHdr.x0, rcHdr.y0 ) );
+					ImGui::PushID( (int)eGroup );
+					if ( ImGui::InvisibleButton( "##railhdr", ImVec2( rcHdr.Width(), rcHdr.Height() ) ) )
+						s_eOpenRailGroup = AccordionOnHeaderClicked( s_eOpenRailGroup, eGroup );
+					const bool bHovered = ImGui::IsItemHovered();
+					ImGui::PopID();
+
+					// Same wash/left-bar language an active ITEM gets
+					// (below) -- "the accent/active look marks the open
+					// group" is one convention, not a second one invented
+					// for headers. Inset short of rc.x1 for the same reason
+					// an item's wash is: that column is the divider's.
+					const Rect rcWash { rcHdr.x0, rcHdr.y0, rc.x1 - Hairline(), rcHdr.y1 };
+					if ( bOpen )
 					{
-						// The icon rail keeps the section BREAK but drops
-						// the word: a divider rule, not a heading. SPEC
-						// §8.0's collapse is about width, and a heading is
-						// the one thing that cannot survive it.
-						HLine( rc.x0 + Px( tok::kM ), rc.x1 - Px( tok::kM ), y + Px( 10.0f ), Col( Role::Line ) );
+						Fill( rcWash, Accent( 0.10f ) );
+						Fill( { rcHdr.x0, rcHdr.y0, rcHdr.x0 + Px( 2.0f ), rcHdr.y1 }, Col( Role::AccentBase ) );
 					}
 					else
 					{
-						Label( { rc.x0 + flPadX, y + Px( tok::kM ), rc.x1, y + flSecH },
-						       TypeRole::Section, Col( Role::TextMeta ), RailGroupName( eGroup ) );
+						// A flat "control box" tint at rest -- SPEC's own
+						// Role::SurfaceRaised ("control boxes, inactive
+						// segments") -- is what makes a closed header read
+						// as a pressable tab rather than as plain text, even
+						// before the chevron/icon gives it away.
+						Fill( rcWash, Col( Role::SurfaceRaised ) );
+						if ( bHovered )
+							Fill( rcWash, IM_COL32( 255, 255, 255, 13 ) );
+					}
+
+					const ImU32 colHdr = bOpen ? Col( Role::AccentIcon ) : Col( Role::TextMeta );
+
+					if ( bIcons )
+					{
+						const Icon *pGroupIcon = IconForRailGroup( eGroup );
+						if ( pGroupIcon )
+							glyph::RailIcon( *pGroupIcon,
+								ImVec2( ( rcHdr.x0 + rcHdr.x1 ) * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
+								Px( tok::kIconBox ), colHdr );
+					}
+					else
+					{
+						// ▸ collapsed / ▾ open -- the same drawn-chevron
+						// disclosure convention DrawAffordance() already
+						// uses for an inline-expandable row (D20.3): right
+						// while closed, down while open.
+						const float flChevron = Px( 10.0f );
+						glyph::Chevron( ImVec2( rcHdr.x0 + flPadX * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
+						                flChevron, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
+						Label( { rcHdr.x0 + flPadX, rcHdr.y0, rcHdr.x1 - Px( tok::kM ), rcHdr.y1 },
+						       TypeRole::Section, bOpen ? Col( Role::TextPrimary ) : colHdr,
+						       RailGroupName( eGroup ) );
 					}
 				},
 				[ & ]( size_t i, const Area &area, float yRaw )
@@ -2023,7 +2140,7 @@ namespace gamescope::ui::shell
 				ImGui::PushID( (int)i );
 				if ( ImGui::InvisibleButton( "##railitem", ImVec2( rcItem.Width(), rcItem.Height() ) ) )
 				{
-					s_sSelectedArea = area.Id();
+					SetSelectedArea( area.Id() );
 					Select( nullptr );          // a new category starts at Overview
 					s_eFocusRegion = Region::Sheet;
 				}
@@ -5137,7 +5254,7 @@ namespace gamescope::ui::shell
 			if ( !pArea )
 				return;
 
-			s_sSelectedArea = pArea->Id();
+			SetSelectedArea( pArea->Id() );
 			Select( pEntry );
 
 			// A param lives in Configure by definition (SPEC §5.1: "arriving
@@ -5994,10 +6111,18 @@ namespace gamescope::ui::shell
 		// =================================================================
 		//  Keyboard (SPEC §8.2)
 		// =================================================================
-		// The rail's visible items, in drawn order. The rail skips
-		// unavailable areas, so Ctrl+Left/Right must walk the same filtered
-		// list the eye sees -- stepping the registry's raw index would skip
-		// over a hidden area and look like a dropped keypress.
+		// The rail's items, in drawn order -- EVERY area, not just the open
+		// accordion group's (that filtered list is Registry.h's
+		// VisibleRailAreas(), used by DrawRail() for what it actually draws
+		// and by the fits-the-rail test; this is a different "visible",
+		// predating the accordion: which areas exist in the rail at all,
+		// skipping only an unavailable one). Both StepArea() callers --
+		// Up/Down in the rail and Ctrl+Left/Right -- deliberately walk this
+		// full list rather than the open group's alone: that is what lets
+		// stepping off the open group's last area spill into the next
+		// group's first one and open IT (I2, D2/D6's "moving onto another
+		// group's area opens that group"), instead of stopping dead at a
+		// group boundary the accordion happens to have collapsed.
 		std::vector<const Area *> VisibleAreas()
 		{
 			// The same fixed rail order DrawRail() draws (item 1,
@@ -6018,7 +6143,11 @@ namespace gamescope::ui::shell
 			const int nNext = std::clamp( nAt + nDir, 0, (int)areas.size() - 1 );
 			if ( nNext == nAt )
 				return;
-			s_sSelectedArea = areas[ (size_t)nNext ]->Id();
+			// SetSelectedArea() opens the landed-on area's group (I2) -- the
+			// one line that makes both of this function's callers (Up/Down
+			// in the rail, Ctrl+Left/Right) auto-open as they go, without
+			// either needing to know the accordion exists.
+			SetSelectedArea( areas[ (size_t)nNext ]->Id() );
 			// The selection cannot survive an area change (SelectedEntry()
 			// checks by identity against the current area), so clear it
 			// rather than leave a stale id behind.
@@ -7052,7 +7181,7 @@ namespace gamescope::ui::shell
 			const Area *pRequested = Reg().FindArea( pszArea );
 			if ( pRequested && pRequested->Available() )
 			{
-				s_sSelectedArea = pszArea;
+				SetSelectedArea( pszArea );
 				Select( nullptr );
 				s_eFocusRegion = Region::Sheet;
 				s_bPaletteOpen = false;

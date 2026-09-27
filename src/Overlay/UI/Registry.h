@@ -1133,7 +1133,17 @@ namespace gamescope::ui
 	// former Section::Setup neighbours (Profiles, Appearance) here under
 	// Settings, at the end, rather than inventing a placement the request
 	// never specified.
-	enum class RailGroup : uint8_t { Display, Misc, Settings, Other };
+	//
+	// `Nothing` was added 2026-09-27 for the rail accordion (I2, D2/D6): it
+	// is never an area's group (RailGroupForId() never returns it) -- it is
+	// the ACCORDION's own value, meaning "every group is closed right now".
+	// `Nothing`, not `None`: same reason PreviewKind and InheritState above
+	// both avoid it -- X11's headers, which a translation unit that
+	// includes this one (steamcompmgr.cpp) transitively pulls in,
+	// `#define None 0L`, so `RailGroup::None` failed to compile there even
+	// though this header alone never sees an X11 include. See the
+	// accordion section below.
+	enum class RailGroup : uint8_t { Display, Misc, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 
@@ -1150,6 +1160,74 @@ namespace gamescope::ui
 	// area gets when it reaches the rail at all.
 	RailGroup RailGroupForId( const std::string &sAreaId );
 	inline RailGroup RailGroupFor( const Area &area ) { return RailGroupForId( area.Id() ); }
+
+	// =====================================================================
+	//  The rail accordion (2026-09-27, I2 -- D2/D6)
+	// =====================================================================
+	// The user, dictating the request this implements: "make the categories
+	// that we have now look like tabs and when one of them is pressed, it
+	// extends the options for the category like tabs below it." Only one
+	// group open at a time; opening a group closes the others; the group
+	// does not have to stay open (clicking it again collapses it, and
+	// RailGroup::Nothing -- "every group closed" -- is a legal state).
+	//
+	// WHY THIS IS HERE AND NOT IN Shell.cpp, same reason RailOrder() is
+	// (see that table's own comment): the test binary that has to pin this
+	// rule links no ImGui and no Shell.cpp, so a rule that lived only in
+	// DrawRail() could not be pinned by a plain unit test. This is genuinely
+	// UI interaction state, not registration -- but it is PURE state, no
+	// ImGui, no registry instance required, so it belongs beside the other
+	// rail presentation logic rather than forcing a fourth file into scope.
+	//
+	// WHY "select an area -> open its group" HAS NO WRAPPER HERE: it is
+	// exactly RailGroupForId( sAreaId ) -- already declared, already tested
+	// above. Shell.cpp's own SetSelectedArea() helper (the one place every
+	// one of its selection-changing call sites routes through) calls that
+	// directly; a same-named forwarding function here would be a second
+	// name for one fact.
+
+	// A press on a group's OWN header. Closes it if it was the open one,
+	// opens it (implicitly closing whatever else was open, since there is
+	// only ever one RailGroup value) otherwise.
+	inline RailGroup AccordionOnHeaderClicked( RailGroup eCurrentlyOpen, RailGroup eClicked )
+	{
+		return ( eCurrentlyOpen == eClicked ) ? RailGroup::Nothing : eClicked;
+	}
+
+	// The rows DrawRail() actually draws (and Up/Down actually reaches) for
+	// a given open group: every area in `railAreas` (RailOrder() order,
+	// already filtered to Available() -- Registry::RailAreas()'s own
+	// return) whose group is `eOpen`. RailGroup::Nothing -> empty: every group
+	// collapsed. Every group's HEADER is still always drawn regardless of
+	// this list -- only the AREA rows underneath a closed header vanish.
+	std::vector<const Area *> VisibleRailAreas( const std::vector<const Area *> &railAreas,
+	                                             RailGroup eOpen );
+
+	// The rail's row-height constants, named here rather than left as
+	// literals inside Shell.cpp's DrawRail(), for one reason: RailContentHeightPx()
+	// below has to compute EXACTLY the number DrawRail()'s own Walk() does, and
+	// duplicating the three magic numbers by hand in two files is exactly the kind
+	// of thing that silently drifts. Both read these same constants, so they
+	// cannot disagree. Base units (scale 1.0) -- Shell.cpp's own Px() is the
+	// identity there, which is what lets a test call this with no ImGui context
+	// and no display_scale at all.
+	namespace railmetrics
+	{
+		inline constexpr float kItemH     = 40.0f;   // index.html's .ri
+		inline constexpr float kHeaderH   = 26.0f;   // the group header/tab
+		inline constexpr float kHeaderGap = 4.0f;    // tok::kXS, after a header
+		inline constexpr float kPad       = 8.0f;    // tok::kS, top and bottom of the rail
+	}
+
+	// The rail's total content height, full-width mode, with `eOpen` the
+	// open group (RailGroup::Nothing -> every group collapsed, just the
+	// headers) -- the same arithmetic DrawRail()'s own measuring Walk()
+	// does (rc.y0 + pad, then a header advance on every group change, then
+	// an item advance for every VISIBLE row), factored out so a test can
+	// ask "does the busiest group still fit the rail at 1080p" without an
+	// ImGui context. `railAreas` is RailOrder() order, already filtered to
+	// Available() -- pass Registry::RailAreas()'s own return.
+	float RailContentHeightPx( const std::vector<const Area *> &railAreas, RailGroup eOpen );
 
 	// =====================================================================
 	//  Adjustable -- "step this declaration's value by one"

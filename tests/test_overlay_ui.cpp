@@ -1960,6 +1960,72 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 	}
 }
 
+// I2 (2026-09-27): the icon-collapsed rail's four accordion group buttons.
+// A SEPARATE table from kIcons[] (IconForRailGroup(), not IconFor()) --
+// see Icons.h's own comment -- so this is a separate small census rather
+// than folding into the "every registered area has one" test above, which
+// must stay a strict area<->icon bijection.
+TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing", "[overlay_ui]" )
+{
+	using ui::RailGroup;
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Misc,
+	                              RailGroup::Settings, RailGroup::Other };
+
+	const ui::Icon *pIcons[ 4 ];
+	for ( size_t i = 0; i < 4; ++i )
+	{
+		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
+		pIcons[ i ] = ui::IconForRailGroup( eGroups[ i ] );
+		REQUIRE( pIcons[ i ] != nullptr );
+		REQUIRE( pIcons[ i ]->nShapes >= 1 );
+		REQUIRE( pIcons[ i ]->nShapes <= ui::kIconMaxShapes );
+
+		// Same in-grid bound the area glyphs are held to (SPEC §8.0's
+		// 24-unit grid) -- a coordinate outside it draws over the rail
+		// item above/below or clips at the rail's own edge.
+		for ( size_t s = 0; s < pIcons[ i ]->nShapes; ++s )
+		{
+			const ui::IconShape &sh = pIcons[ i ]->shapes[ s ];
+			const float r = ( sh.eOp == ui::IconOp::Circle || sh.eOp == ui::IconOp::HalfDisc ||
+			                  sh.eOp == ui::IconOp::Teardrop ) ? sh.flRadius : 0.0f;
+			for ( size_t p = 0; p < sh.nPoints; ++p )
+			{
+				REQUIRE( sh.pts[ p ].x - r >= 0.0f );
+				REQUIRE( sh.pts[ p ].y - r >= 0.0f );
+				REQUIRE( sh.pts[ p ].x + r <= ui::kIconGrid );
+				REQUIRE( sh.pts[ p ].y + r <= ui::kIconGrid );
+			}
+		}
+	}
+
+	// RailGroup::Nothing -- the accordion's "nothing open" value -- names no
+	// real group and has no glyph.
+	REQUIRE( ui::IconForRailGroup( RailGroup::Nothing ) == nullptr );
+
+	// THE ANTI-COLLISION ASSERTION, the icon census's own shape, applied to
+	// this much smaller table: no two group buttons may draw the same
+	// silhouette (that would be the letters bug again, one level up).
+	for ( size_t i = 0; i < 4; ++i )
+	{
+		for ( size_t j = i + 1; j < 4; ++j )
+		{
+			INFO( ui::RailGroupName( eGroups[ i ] ) << " vs " << ui::RailGroupName( eGroups[ j ] ) );
+			bool bIdentical = ( pIcons[ i ]->nShapes == pIcons[ j ]->nShapes );
+			for ( size_t s = 0; bIdentical && s < pIcons[ i ]->nShapes; ++s )
+			{
+				const ui::IconShape &x = pIcons[ i ]->shapes[ s ];
+				const ui::IconShape &y = pIcons[ j ]->shapes[ s ];
+				if ( x.eOp != y.eOp || x.nPoints != y.nPoints || x.flRadius != y.flRadius )
+					bIdentical = false;
+				for ( size_t p = 0; bIdentical && p < x.nPoints; ++p )
+					if ( x.pts[ p ].x != y.pts[ p ].x || x.pts[ p ].y != y.pts[ p ].y )
+						bIdentical = false;
+			}
+			REQUIRE( !bIdentical );
+		}
+	}
+}
+
 // =========================================================================
 //  Rail order & groups -- requests-2026-09-06.md item 1
 // =========================================================================
@@ -2053,6 +2119,116 @@ TEST_CASE( "rail: Registry::RailAreas() follows the fixed order, not registratio
 	REQUIRE( areas[ 2 ]->Id() == "setup.appearance" );
 	REQUIRE( areas[ 3 ]->Id() == "system.log" );
 	REQUIRE( areas[ 4 ]->Id() == "system.changelog" );
+}
+
+// =========================================================================
+//  The rail accordion -- I2 (2026-09-27), D2/D6
+// =========================================================================
+// The user's own request: "make the categories that we have now look like
+// tabs and when one of them is pressed, it extends the options for the
+// category like tabs below it." Only one group open at a time; opening one
+// closes the others; all-closed is legal. Pure state, no ImGui, exactly the
+// same reason RailOrder() above is pinned this way -- see Registry.h's own
+// comment on the accordion section.
+TEST_CASE( "rail accordion: a header click opens a closed group, closes an open one", "[overlay_ui]" )
+{
+	using ui::RailGroup;
+
+	// A closed group, clicked: opens (nothing else is tracked to "close" --
+	// RailGroup can only ever hold one value, so opening IS closing whatever
+	// else was open).
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Nothing, RailGroup::Misc ) == RailGroup::Misc );
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Display, RailGroup::Misc ) == RailGroup::Misc );
+
+	// The OPEN group's own header, clicked again: collapses to Nothing. All
+	// four groups closed is an explicitly legal state (D2/D6).
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Misc, RailGroup::Misc ) == RailGroup::Nothing );
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Other, RailGroup::Other ) == RailGroup::Nothing );
+}
+
+TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", "[overlay_ui]" )
+{
+	using ui::RailGroup;
+
+	ui::Registry reg;
+	reg.Add( "display.general",    "General",    ui::Section::Display );
+	reg.Add( "display.upscaling",  "Upscaling",  ui::Section::Display );
+	reg.Add( "audio.mixer",        "Mixer",      ui::Section::System );
+	reg.Add( "system.crosshair",   "Crosshair",  ui::Section::System );
+	reg.Add( "setup.profiles",     "Profiles",   ui::Section::Setup );
+	reg.Add( "system.log",         "Log",        ui::Section::System );
+
+	const std::vector<const ui::Area *> railAreas = reg.RailAreas();
+	REQUIRE( railAreas.size() == 6 );
+
+	// Display open: only its two rows, in RailOrder()'s order -- nothing
+	// from Misc, Settings or Other leaks in.
+	const std::vector<const ui::Area *> display = ui::VisibleRailAreas( railAreas, RailGroup::Display );
+	REQUIRE( display.size() == 2 );
+	REQUIRE( display[ 0 ]->Id() == "display.general" );
+	REQUIRE( display[ 1 ]->Id() == "display.upscaling" );
+
+	// Misc open: its two, likewise nothing else.
+	const std::vector<const ui::Area *> misc = ui::VisibleRailAreas( railAreas, RailGroup::Misc );
+	REQUIRE( misc.size() == 2 );
+	REQUIRE( misc[ 0 ]->Id() == "audio.mixer" );
+	REQUIRE( misc[ 1 ]->Id() == "system.crosshair" );
+
+	// RailGroup::Nothing -- every group collapsed -- lists nothing at all.
+	REQUIRE( ui::VisibleRailAreas( railAreas, RailGroup::Nothing ).empty() );
+}
+
+TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 1080p", "[overlay_ui]" )
+{
+	// This is the whole reason the accordion exists: 19 areas in 4 fixed
+	// groups already overflow the rail at 1080p/scale 1 as a flat list
+	// (content ~= 896px against ~= 878px available -- see this task's own
+	// brief), and MISC is about to gain a 20th area (Null binds, added by a
+	// later step) on top of that. Every real area, registered under its own
+	// real id (RailContentHeightPx() keys off RailGroupFor(), which reads
+	// the id), the same 19 test_overlay_ui.cpp's icon census and rail-order
+	// tests above pin.
+	ui::Registry reg;
+	const char *pszAllAreas[] = {
+		"display.general", "display.resolution", "display.upscaling",
+		"display.frame_limiter", "display.hdr", "image.shaders",
+		"system.hud", "audio.mixer", "system.crosshair", "system.zoom",
+		"system.autoclicker", "system.friends",
+		"setup.profiles", "system.general", "setup.appearance",
+		"setup.cursor", "setup.keybinds",
+		"system.log", "system.changelog",
+	};
+	for ( const char *pszId : pszAllAreas )
+		reg.Add( pszId, pszId, ui::Section::Display );
+
+	const std::vector<const ui::Area *> railAreas = reg.RailAreas();
+	REQUIRE( railAreas.size() == ui::RailOrderCount() );
+
+	// SPEC's own numbers, restated here rather than imported, so this test
+	// fails loudly if either the slab fraction or the slab bar height ever
+	// changes without someone re-checking this fits: rail height = 0.85 x
+	// surface height, minus the 40px slab bar (Layout.h's shelltok::kSurfFrac
+	// and Shell.cpp's own slab bar height).
+	const float flSurfaceH        = 1080.0f;
+	const float flSlabBarH        = 40.0f;
+	const float flAvailableHeight = flSurfaceH * 0.85f - flSlabBarH;
+
+	using ui::RailGroup;
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Misc,
+	                              RailGroup::Settings, RailGroup::Other };
+	for ( RailGroup eGroup : eGroups )
+	{
+		INFO( "group " << ui::RailGroupName( eGroup ) );
+		const float flHeight = ui::RailContentHeightPx( railAreas, eGroup );
+		REQUIRE( flHeight <= flAvailableHeight );
+	}
+
+	// Every group closed is the shortest state of all -- just the four
+	// headers -- so it fits too, trivially, but is worth pinning since a
+	// future edit could add a fifth header advance somewhere and this would
+	// catch it before the "any one group open" case above got anywhere
+	// near the limit.
+	REQUIRE( ui::RailContentHeightPx( railAreas, RailGroup::Nothing ) <= flAvailableHeight );
 }
 
 // =========================================================================

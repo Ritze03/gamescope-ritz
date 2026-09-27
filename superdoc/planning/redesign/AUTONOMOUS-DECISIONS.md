@@ -1857,6 +1857,24 @@ forming a fourth area with no theme. *Cost, stated plainly:* the rail grew from 
 > what the user objected to; VRR, Allow tearing and Force grab cursor now live in a new
 > `display.general` area instead.
 
+> **Overridden again, 2026-09-27, by the user directly, for the RAIL's groups (I2) — not
+> for this decision's actual holding.** D13.1's rejected alternative was one AREA with four
+> group bands *inside its sheet* — that stays rejected; `display.upscaling`,
+> `display.frame_limiter` and `display.hdr` are still three separate areas, and no sheet
+> anywhere grew group bands. What changed is one level up, at the RAIL: the rail's own
+> DISPLAY/MISC/SETTINGS/OTHER section headers (added independently, 2026-09-06, "Rail groups"
+> below) became a clickable accordion — "make the categories that we have now look like tabs
+> and when one of them is pressed, it extends the options for the category like tabs below
+> it" (the user's own dictation). That IS "a tab bar redrawn as headings", the exact shape
+> this decision's `Why:` rejected — but now by explicit request, and for a reason D13.1 never
+> had to weigh: 19 areas in 4 fixed rail groups already overflow the rail at 1080p/scale 1 as
+> a flat list (~896px of content against ~878px available — four 30px headers plus nineteen
+> 40px rows plus top/bottom pad), with a 20th (Null binds, MISC) landing the same week. D13.1
+> was refusing to compact SHEET content into a rail-style grouping; this is compacting the
+> RAIL itself, which is the one place in the product actually running out of room. See
+> `superdoc/planning/ui-design-guide.md`'s "Rail groups" section for the accordion's shape,
+> and `src/Overlay/UI/Registry.h`'s own comment on why the rule lives there.
+
 **D13.2 · `display.output` from the mockup was NOT created.** The mockup's fourth Display area
 holds resolution, refresh rate, colour range and rotation. **Why not:** gamescope-ritz has no
 config keys and no setters for any of them. Building the area would mean inventing four settings,
