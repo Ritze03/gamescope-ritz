@@ -263,10 +263,10 @@ namespace gamescope
 		cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
 		cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
 		cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
-		// Issue #68: routed through steamcompmgr_set_force_relative_mouse()
-		// rather than writing g_bForceRelativeMouse directly -- see that
-		// function's comment for why a direct write has no live effect.
-		steamcompmgr_set_force_relative_mouse( s_CachedSettings.gamescope.force_grab_cursor );
+		// force_grab_cursor's own push moved with its row to PanelInput.cpp
+		// (2026-09-27, input.general) -- that file's own EnsureConfigLoaded()
+		// re-pushes it now, and main.cpp's ritz_apply_config_live() already
+		// covers the profile-switch case centrally either way (issue #68).
 		steamcompmgr_set_force_windows_fullscreen( s_CachedSettings.gamescope.force_windows_fullscreen );
 
 		set_color_sdr_gamut_wideness( s_CachedSettings.gamescope.sdr_gamut_wideness );
@@ -495,6 +495,13 @@ namespace gamescope
 	// re-introducing exactly those two bugs, so nothing here writes a global
 	// directly that a Set*() already owns.
 	//
+	// Force grab cursor's OWN row moved out of this file on 2026-09-27, to
+	// input.general (PanelInput.cpp) -- the user asked for it removed from
+	// Display > General once an INPUT rail group existed to hold it. Issue
+	// #68's fix (route through steamcompmgr_set_force_relative_mouse(),
+	// never bind the global directly) moved with it unchanged; only the
+	// row's location and id did. See PanelInput.cpp's own header comment.
+	//
 	// THE TABS BECAME AREAS, NOT GROUPS. SPEC §8.1's rail is the product's
 	// only navigation, and it lists Upscaling, Frame limiter and HDR as
 	// separate rail items -- so does index.html, the tested reference. The
@@ -560,20 +567,23 @@ namespace gamescope
 	// user asked for these three to have. See AUTONOMOUS-DECISIONS.md's
 	// D13.1 correction note for why this disagrees with SPEC §8.1 and
 	// index.html (neither names a General area; both predate this feedback).
+	// Force grab cursor itself moved on again, 2026-09-27, to input.general
+	// once an INPUT rail group existed -- see this function's own header
+	// comment and PanelInput.cpp. VRR and tearing stayed; only cursor grab
+	// left.
 	//
 	// Every binding below is moved, not re-derived: same Set*()/QueueSave()
-	// calls this file already used for these three settings, so the bug
-	// classes issues #25 and #68 came from (a control that renders and does
+	// calls this file already used for these settings, so the bug classes
+	// issues #25 and #68 came from (a control that renders and does
 	// nothing) cannot reappear here.
 	static void RegisterGeneral( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
-		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing cursor grab "
+		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing "
 		            "maximize fullscreen nested window" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
-			s += g_bForceRelativeMouse ? " · cursor grabbed" : " · cursor free";
 			s += steamcompmgr_get_force_windows_fullscreen() ? " · nested windows maximized" : "";
 			return s;
 		} );
@@ -608,29 +618,20 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "immediate flip vsync latency tear seam" );
 
-		// Issue #68. Routed through steamcompmgr_set_force_relative_mouse()
-		// and NOT by writing g_bForceRelativeMouse, which has no live effect
-		// -- the flag's two real consumers only read it once at backend
-		// startup. This is the fix that made the legacy toggle actually do
-		// something; binding the global here would silently undo it. Moving
-		// areas does not touch this call, so the fix survives the move.
-		a.Switch( "display.force_grab_cursor", "Force grab cursor",
-			ui::AnyBind::Of<bool>(
-				[]{ return g_bForceRelativeMouse; },
-				[]( bool b ) {
-					ApplyEdit(
-						[ b ]( config::Settings &cfg ) { cfg.gamescope.force_grab_cursor = b; },
-						[ b ] { steamcompmgr_set_force_relative_mouse( b ); } );
-				} ) )
-			.Key( "gamescope.force_grab_cursor" )
-			.Help( "Keeps your mouse locked to the game at all times, not just when the cursor is "
-			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
-			.Default( false )
-			.Keywords( "mouse pointer capture confine grab relative" );
+		// Force grab cursor MOVED to input.general (PanelInput.cpp) on
+		// 2026-09-27 -- the user: "Input: General - Force grab cursor
+		// (Remove from Display>General) - Force grab keyboard - Autoclicker
+		// - Null binds." Same config field (gamescope.force_grab_cursor)
+		// and same live path (steamcompmgr_set_force_relative_mouse(),
+		// issue #68) as before; only the row's id changed,
+		// display.force_grab_cursor -> input.force_grab_cursor -- see that
+		// file for the row itself and why the rename is safe.
 
 		// --force-windows-fullscreen (upstream flag; xwayland_ctx_t::
-		// force_windows_fullscreen). Genuinely live, same shape as Force
-		// grab cursor just above: routed through
+		// force_windows_fullscreen). Genuinely live, the same shape Force
+		// grab cursor used before its 2026-09-27 move to input.general
+		// (issue #68's fix: route through the entry point the compositor
+		// actually reads, never bind the global directly): routed through
 		// steamcompmgr_set_force_windows_fullscreen(), which sets every
 		// live Xwayland ctx and marks focus dirty so
 		// determine_and_apply_focus() force-resizes the focused window on

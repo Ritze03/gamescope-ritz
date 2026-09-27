@@ -53,6 +53,7 @@
 #include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
+#include "Overlay/PanelInput.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Crosshair.h"
 #include "Overlay/Zoom.h"
@@ -903,15 +904,24 @@ namespace gamescope::ui::shell
 			// The zoom (2026-09-14): drawn inside vulkan_composite() as its
 			// own layer, declared here as its own MISC area. See Overlay/Zoom.h.
 			Zoom_RegisterArea( reg );
+			// ---- INPUT ---------------------------------------------------
+			// input.general (2026-09-27): force grab cursor (moved out of
+			// display.general above -- the user asked for it removed from
+			// Display > General) and force grab keyboard (new). Registered
+			// first so it leads INPUT's rail order, the same "general leads
+			// its section" shape display.general and system.general
+			// already use. See PanelInput.h/.cpp.
+			PanelInput_RegisterArea( reg );
 			// The autoclicker (2026-09-18): a click train on a chord, its
-			// own MISC area next to the zoom because both are things a
-			// hotkey does to the game. See Overlay/Autoclicker.h.
+			// own INPUT area next to input.general because both are things
+			// that change what the game receives via input, not a drawn
+			// surface. See Overlay/Autoclicker.h.
 			Autoclicker_RegisterArea( reg );
 			// Null binds / WASD SOCD cleaning (2026-09-27): no layer, no
 			// hotkey chord of its own -- it acts on the raw A/D/W/S keys
 			// directly at wlserver_key()/wlserver_handle_key(). Grouped
-			// here with the zoom and the autoclicker anyway: all three are
-			// MISC areas that change what the game receives without a
+			// here with input.general and the autoclicker: all three are
+			// INPUT areas that change what the game receives without a
 			// visible surface of their own. See Overlay/NullBinds.h.
 			NullBinds_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );

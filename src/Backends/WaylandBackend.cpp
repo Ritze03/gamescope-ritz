@@ -1435,6 +1435,14 @@ namespace gamescope
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
         std::string szTitle = pAppTitle ? *pAppTitle : "gamescope";
+        // g_bGrabbed (-g/--grab, and input.general's "Force grab keyboard"
+        // row, PanelInput.cpp) only ever reaches this title suffix on the
+        // Wayland backend -- unlike SDLBackend.cpp, this file binds no
+        // zwp_keyboard_shortcuts_inhibit_manager_v1 (or any other protocol),
+        // so there is no actual host-shortcut inhibition here, only the
+        // label below. Wiring the real protocol needs a client-protocol XML
+        // added to protocol/meson.build, outside this change's scope -- see
+        // superdoc/features/input-general.md's "Wayland backend" section.
         if ( g_bGrabbed )
             szTitle += " (grabbed)";
         libdecor_frame_set_title( m_Planes[0].GetFrame(), szTitle.c_str() );

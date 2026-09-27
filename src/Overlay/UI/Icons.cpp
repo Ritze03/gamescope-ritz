@@ -241,6 +241,32 @@ namespace gamescope::ui
 			Circ( 10.0f, 10.0f, 6.5f ),
 			Line( { 14.8f, 14.8f }, { 21.0f, 21.0f } ) } },
 
+		{ "input.general", 4, {
+			// A KEYCAP AND A MOUSE, SIDE BY SIDE: the twenty-first glyph
+			// (2026-09-27), for input.general -- the two things this area's
+			// switches force-grab. Freehand, later than every mockup.
+			// Distinct from railgroup.input just above IconForRailGroup()
+			// below (a single rounded body with a bar -- read as a
+			// controller/pad), from system.autoclicker below (one TALL
+			// rounded body with a filled corner) and from system.null_binds
+			// further down (two SQUARE keycaps joined by a chevron): this
+			// is the only glyph pairing a small plain keycap with a small
+			// plain mouse body, neither filled, side by side rather than
+			// stacked or joined.
+			//
+			// Left: a small stroked keycap. Right: a small stroked mouse
+			// body with the classic top-view two-button split -- a
+			// vertical line down the centre of its upper third, a
+			// horizontal line closing that third off from the lower body --
+			// deliberately the plainest possible "mouse" reading, since the
+			// fill this set reserves for meaning already went to
+			// system.autoclicker's held button; this glyph draws capture,
+			// not a click.
+			RoundRect( 2.5f, 7.5f, 10.0f, 16.5f, 1.4f ),
+			RoundRect( 13.5f, 4.0f, 21.0f, 19.5f, 3.7f ),
+			Line( { 17.25f, 4.0f }, { 17.25f, 10.0f } ),
+			Line( { 13.5f, 10.0f }, { 21.0f, 10.0f } ) } },
+
 		{ "system.autoclicker", 3, {
 			// A MOUSE SEEN FROM ABOVE with its left button held down: a
 			// rounded vertical body, a line across under the two buttons,

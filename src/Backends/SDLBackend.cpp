@@ -21,6 +21,8 @@
 #include "Utils/Defer.h"
 #include "refresh_rate.h"
 #include "Clipboard/ClipboardSync.h"
+#include "backend.h"
+#include "Config/ConfigManager.h"
 
 #include "sdlscancodetable.hpp"
 
@@ -57,6 +59,14 @@ namespace gamescope
 		GAMESCOPE_SDL_EVENT_ICON,
 		GAMESCOPE_SDL_EVENT_VISIBLE,
 		GAMESCOPE_SDL_EVENT_GRAB,
+		// input.general's "Force grab keyboard" row (PanelInput.cpp), via
+		// SDLBackend_SetKeyboardGrabbed() below -- distinct from
+		// GAMESCOPE_SDL_EVENT_GRAB just above, which is the MOUSE relative-
+		// mode grab CSDLConnector::SetRelativeMouseMode() (force_grab_cursor)
+		// drives through INestedHints. This one is the KEYBOARD grab, g_bGrabbed
+		// (main.hpp), the same flag -g/--grab and the in-window Super+G
+		// toggle (this file's SDL_KEYUP handler, KEY_G) already use.
+		GAMESCOPE_SDL_EVENT_KEYBOARD_GRAB,
 		GAMESCOPE_SDL_EVENT_CURSOR,
 		// INestedHints::RequestOutputSize(): SDL_SetWindowSize() must run on
 		// the SDL thread, so the request crosses over as an event with the
@@ -200,6 +210,15 @@ namespace gamescope
         void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection );
         void RequestOutputSize( uint32_t uWidth, uint32_t uHeight );
         void OnNestedRefreshChanged( int nRefreshmHz );
+
+        // input.general's "Force grab keyboard" row (2026-09-27) -- see
+        // SDLBackend_SetKeyboardGrabbed() below, the free function
+        // PanelInput.cpp actually calls. SDL_SetWindowKeyboardGrab() must run
+        // on the SDL thread (same rule RequestOutputSize()'s own comment
+        // states for SDL_SetWindowSize()), so this parks the value and
+        // crosses over as a user event, exactly like SetRelativeMouseMode()
+        // just above does for the mouse-grab case.
+        void SetKeyboardGrabbed( bool bGrabbed );
 	protected:
 		virtual void OnBackendBlobDestroyed( BackendBlob *pBlob ) override;
 	private:
@@ -228,6 +247,10 @@ namespace gamescope
 		// showing it whenever the overlay is active the way it did before
 		// "Use everywhere" needed a way to say no to that.
 		std::atomic<bool> m_bOverlayHostCursorUsable = { false };
+		// SetKeyboardGrabbed()'s own parked value -- see that method's
+		// comment for why this crosses to the SDL thread as an event
+		// instead of calling SDL_SetWindowKeyboardGrab() inline.
+		std::atomic<bool> m_bKeyboardGrabbed = { false };
 		std::atomic<std::shared_ptr<INestedHints::CursorInfo>> m_pApplicationCursor;
 		// Physical pixels asked for by RequestOutputSize(); consumed by the
 		// GAMESCOPE_SDL_EVENT_RESIZE handler on the SDL thread.
@@ -282,6 +305,19 @@ namespace gamescope
 
 		if ( g_bFullscreen == true )
 			uSDLWindowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+
+		// Config seeds g_bGrabbed here, at backend Init() time, when the CLI
+		// (-g/--grab, main.cpp's getopt loop) didn't already set it true --
+		// the same "config seeds, an explicit CLI flag still wins" ordering
+		// force_grab_cursor's startup seed uses in main.cpp's
+		// apply_ritz_config_to_startup_state(), just done locally here
+		// instead: this backend's Init() runs after both of main.cpp's
+		// getopt passes, so g_bGrabbed already reflects an explicit -g by
+		// the time this line runs. See input.general's "Force grab
+		// keyboard" row, PanelInput.cpp, and
+		// superdoc/features/input-general.md.
+		if ( !g_bGrabbed && gamescope::config::ResolvedSettings().gamescope.force_grab_keyboard )
+			g_bGrabbed = true;
 
 		if ( g_bGrabbed == true )
 			uSDLWindowFlags |= SDL_WINDOW_KEYBOARD_GRABBED;
@@ -591,6 +627,11 @@ namespace gamescope
 	{
 		m_bApplicationGrabbed = bRelative;
 		PushUserEvent( GAMESCOPE_SDL_EVENT_GRAB );
+	}
+	void CSDLBackend::SetKeyboardGrabbed( bool bGrabbed )
+	{
+		m_bKeyboardGrabbed = bGrabbed;
+		PushUserEvent( GAMESCOPE_SDL_EVENT_KEYBOARD_GRAB );
 	}
 	void CSDLBackend::SetVisible( bool bVisible )
 	{
@@ -1054,6 +1095,14 @@ namespace gamescope
 					{
 						SDL_SetRelativeMouseMode( m_bApplicationGrabbed ? SDL_TRUE : SDL_FALSE );
 					}
+					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_KEYBOARD_GRAB ) )
+					{
+						SDL_SetWindowKeyboardGrab( m_Connector.GetSDLWindow(), m_bKeyboardGrabbed ? SDL_TRUE : SDL_FALSE );
+						// Refreshes the "(grabbed)" title suffix the same way
+						// the in-window Super+G toggle (KEY_G, below) does
+						// right after its own SDL_SetWindowKeyboardGrab() call.
+						PushUserEvent( GAMESCOPE_SDL_EVENT_TITLE );
+					}
 					else if ( event.type == GetUserEventIndex( GAMESCOPE_SDL_EVENT_RESIZE ) )
 					{
 						const uint32_t uWidth = m_uRequestedOutputWidth;
@@ -1183,6 +1232,21 @@ namespace gamescope
 			},
 		};
 		SDL_PushEvent( &event );
+	}
+
+	// input.general's "Force grab keyboard" row (PanelInput.cpp) calls this
+	// -- CSDLBackend is only visible within this translation unit, so a free
+	// wrapper (declared ad hoc, no shared header, the same convention
+	// PanelDisplay.cpp already uses for e.g. set_color_sdr_gamut_wideness())
+	// is the seam PanelInput.cpp reaches through. A no-op on every other
+	// backend (GetBackend() isn't a CSDLBackend, the cast fails) -- on
+	// those, only the config field and g_bGrabbed itself (set by the row's
+	// caller) change; see superdoc/features/input-general.md for what that
+	// means per backend.
+	void SDLBackend_SetKeyboardGrabbed( bool bGrabbed )
+	{
+		if ( CSDLBackend *pSDLBackend = dynamic_cast<CSDLBackend *>( GetBackend() ) )
+			pSDLBackend->SetKeyboardGrabbed( bGrabbed );
 	}
 
 	/////////////////////////

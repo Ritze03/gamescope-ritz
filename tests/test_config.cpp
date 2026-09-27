@@ -896,7 +896,9 @@ TEST_CASE( "gamescope.force_grab_cursor round-trips and defaults to off", "[conf
     // force_windows_fullscreen case above states: main.cpp is not linked
     // into this binary and there is no argv or CLI concept at this layer.
     // The seed itself is measured end-to-end by scripts/settings-audit.sh's
-    // survives-restart column on `display.force_grab_cursor`, which
+    // survives-restart column on the row this field backs -- input.
+    // force_grab_cursor since 2026-09-27 (PanelInput.cpp; the row moved out
+    // of display.general, this field and its startup seed did not), which
     // relaunches the real binary in all three routing situations.
     TempConfigHome home;
 
@@ -908,6 +910,28 @@ TEST_CASE( "gamescope.force_grab_cursor round-trips and defaults to off", "[conf
 
     Settings loaded = LoadSections();
     REQUIRE( loaded.gamescope.force_grab_cursor );
+}
+
+TEST_CASE( "gamescope.force_grab_keyboard round-trips and defaults to off", "[config]" )
+{
+    // input.general's second row (2026-09-27, PanelInput.cpp): mirrors
+    // -g/--grab's runtime effect on main.hpp's g_bGrabbed, the same
+    // relationship force_grab_cursor above has to g_bForceRelativeMouse.
+    // Only the config-layer round-trip is pinned here -- main.cpp (the CLI
+    // flag) and SDLBackend.cpp/WaylandBackend.cpp (the live/backend-startup
+    // paths) are not linked into this binary; see PanelInput.cpp's own
+    // header comment for what "live" means per backend and
+    // superdoc/features/input-general.md.
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE_FALSE( s.gamescope.force_grab_keyboard );
+
+    s.gamescope.force_grab_keyboard = true;
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.gamescope.force_grab_keyboard );
 }
 
 TEST_CASE( "gamescope.nested_lock_aspect round-trips and defaults to on", "[config]" )

@@ -1852,6 +1852,10 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twentieth (2026-09-27): null binds / WASD SOCD cleaning. See
 		// NullBinds.cpp and Icons.cpp.
 		"system.null_binds",
+		// The twenty-first (2026-09-27): input.general -- force grab cursor
+		// (moved out of display.general) and force grab keyboard, INPUT's
+		// own General area. See PanelInput.cpp and Icons.cpp.
+		"input.general",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2049,10 +2053,11 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // the rail must draw, and the one place a future edit to Registry.cpp's
 // kRailOrder has to agree with.
 //
-// input.general is not a registered Area yet (a sibling task adds it) --
-// its SLOT is still named here, since this test pins the TABLE
-// (ui::RailOrder(), Registry.cpp's raw kRailOrder), not which of its ids
-// FindArea() can currently resolve. See Registry.h's own comment on the
+// input.general is now a registered Area too (PanelInput.cpp, landed
+// 2026-09-27, the sibling task this comment used to be waiting on) -- its
+// SLOT was already named here before that landed, since this test pins the
+// TABLE (ui::RailOrder(), Registry.cpp's raw kRailOrder), not which of its
+// ids FindArea() can currently resolve. See Registry.h's own comment on the
 // RailGroup enum and Registry::RailAreas() for the "a slot with no
 // registered area is skipped, not a crash" contract that makes landing the
 // table and the area in separate commits safe.
@@ -2210,10 +2215,11 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	// (content ~= 896px against ~= 878px available -- see this task's own
 	// brief). I7 (2026-09-27) split those into six groups, so DISPLAY (6
 	// areas, unchanged) is now the busiest instead of the old MISC. Every
-	// real area plus input.general's slot (not a registered Area yet -- a
-	// sibling task adds it; this synthetic registry adds it anyway so
-	// railAreas.size() matches RailOrderCount() below, same as the real
-	// rail will once it lands), registered under its own real id
+	// real area, including input.general (PanelInput.cpp, landed
+	// 2026-09-27) -- this synthetic registry still builds its own Area for
+	// each id rather than linking the real panel files, so
+	// railAreas.size() matches RailOrderCount() below the same way it
+	// always has, registered under its own real id
 	// (RailContentHeightPx() keys off RailGroupFor(), which reads the id),
 	// the same ids test_overlay_ui.cpp's icon census and rail-order tests
 	// above pin.

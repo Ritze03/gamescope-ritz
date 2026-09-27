@@ -136,9 +136,12 @@ getopt passes) seeds a small bridge global, `g_bForceWindowsFullscreenStartup`, 
 still starts the probe client maximized.
 
 Also live-applied on every non-startup config reload path that already carries
-`force_grab_cursor` (`ritz_apply_config_live()` in `main.cpp`, and
-`PanelDisplay.cpp`'s `PushCachedSettingsToLiveState()`), so a profile switch or a
-per-game config swap while running picks it up immediately, not only at the next
+`force_grab_cursor` (`ritz_apply_config_live()` in `main.cpp`, and, since 2026-09-27,
+`PanelInput.cpp`'s own `EnsureConfigLoaded()` — the row moved out of `display.general`
+to `input.general`/`PanelDisplay.cpp` to `PanelInput.cpp`, see
+[input-general.md](input-general.md), and `PanelDisplay.cpp`'s
+`PushCachedSettingsToLiveState()` no longer carries this field), so a profile switch or
+a per-game config swap while running picks it up immediately, not only at the next
 launch.
 
 ### The pointer follows the change
