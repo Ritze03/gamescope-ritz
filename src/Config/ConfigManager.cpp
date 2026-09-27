@@ -254,6 +254,21 @@ namespace gamescope::config
                 a.button = JGetString( *pAuto, "button", a.button );
             }
 
+            // Null binds (2026-09-27). Same shape as the autoclicker above;
+            // additive, so an older config has no section and keeps the
+            // compiled-in defaults. Delay/jitter are clamped here so a
+            // hand-edited or stale config can never hand the engine an
+            // out-of-range value.
+            if ( const nlohmann::json *pNullBinds = JGetObject( j, "null_binds" ) )
+            {
+                auto &n = s.null_binds;
+                n.enabled = JGetBool( *pNullBinds, "enabled", n.enabled );
+                n.pair_ad = JGetBool( *pNullBinds, "pair_ad", n.pair_ad );
+                n.pair_ws = JGetBool( *pNullBinds, "pair_ws", n.pair_ws );
+                n.delay_ms = std::clamp( JGetInt( *pNullBinds, "delay_ms", n.delay_ms ), 0, 50 );
+                n.jitter_ms = std::clamp( JGetInt( *pNullBinds, "jitter_ms", n.jitter_ms ), 0, 20 );
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -628,6 +643,14 @@ namespace gamescope::config
             jAutoclicker[ "mode" ] = ac.mode;
             jAutoclicker[ "button" ] = ac.button;
 
+            const auto &nb = s.null_binds;
+            nlohmann::json jNullBinds = nlohmann::json::object();
+            jNullBinds[ "enabled" ] = nb.enabled;
+            jNullBinds[ "pair_ad" ] = nb.pair_ad;
+            jNullBinds[ "pair_ws" ] = nb.pair_ws;
+            jNullBinds[ "delay_ms" ] = nb.delay_ms;
+            jNullBinds[ "jitter_ms" ] = nb.jitter_ms;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -718,6 +741,7 @@ namespace gamescope::config
             j[ "crosshair" ] = std::move( jCross );
             j[ "zoom" ] = std::move( jZoom );
             j[ "autoclicker" ] = std::move( jAutoclicker );
+            j[ "null_binds" ] = std::move( jNullBinds );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

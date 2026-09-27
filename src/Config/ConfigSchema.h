@@ -397,6 +397,41 @@ namespace gamescope::config
         std::string button = "left";
     };
 
+    // WASD null binds / SOCD cleaning (2026-09-27, this fork's own addition
+    // -- see Overlay/NullBinds.h): while enabled, at most one key of each
+    // fixed pair (A/D, W/S) is ever let through to the game at a time --
+    // "last-input priority", the same rule the user's own reference,
+    // wasiejen/Free-Snap-Tap, uses. ADDITIVE, so no schema bump: every field
+    // has a compiled-in default, an older config simply has no "null_binds"
+    // object and resolves to them -- the same precedent ZoomSettings and
+    // AutoclickerSettings above already set.
+    //
+    // `Why delay + jitter:` the user's own request, quoting Free-Snap-Tap,
+    // was for a delay between the old key's release and the new key's press
+    // "plus the small randomizer just to make it feel a little more
+    // natural" -- Free-Snap-Tap documents that delay existing so the input
+    // still passes anti-cheat "if delays are not set too short". Separately,
+    // Valve said (August 2024) it kicks players from VAC-secured CS2 servers
+    // whose input looks like snap-tap/SOCD cleaning regardless of delay --
+    // Overlay/NullBinds.cpp's settings-area help text says so and points at
+    // this fork's own per-game profiles as the way to keep it off just for a
+    // game that enforces that.
+    struct NullBindsSettings
+    {
+        bool enabled = false;  // master switch, default off
+        bool pair_ad = true;   // apply to A/D while the master switch is on
+        bool pair_ws = true;   // apply to W/S while the master switch is on
+        // Milliseconds between the old key's synthetic release and the new
+        // key's synthetic press on a real switch (0..50,
+        // Overlay/NullBinds.h's kMinDelayMs/kMaxDelayMs). 0 switches
+        // instantly.
+        int delay_ms = 5;
+        // Plus/minus jitter added to delay_ms, 0..20
+        // (kMinJitterMs/kMaxJitterMs); the actual gap is
+        // clamp(delay_ms + uniform(-jitter_ms, jitter_ms), 0, 50+20).
+        int jitter_ms = 3;
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -1139,6 +1174,7 @@ namespace gamescope::config
         CrosshairSettings crosshair;
         ZoomSettings zoom;
         AutoclickerSettings autoclicker;
+        NullBindsSettings null_binds;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;
