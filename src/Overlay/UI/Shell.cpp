@@ -2532,9 +2532,15 @@ namespace gamescope::ui::shell
 						// against an area row's 24px tok::kIconBox, so two
 						// glyphs whose BOXES started at the same x had
 						// centres 3px apart and labels 6px apart; kHeaderH
-						// is now 30 (Registry.h) precisely so the header can
-						// afford the rows' own box. (b) the chevron sat
-						// BEFORE the icon and ate part of the left pad.
+						// was raised (Registry.h) precisely so the header can
+						// afford the rows' own box -- I6 to 30, I8
+						// (2026-09-27) on to kItemH itself (40) so the pill
+						// is not just tall enough to fit the icon box but
+						// exactly as tall as the row it sits above (the
+						// user: "the individual categories seem kind of
+						// small, tallness-wise, compared to the actual tabs
+						// below them"). (b) the chevron sat BEFORE the icon
+						// and ate part of the left pad.
 						//
 						// So: the header's icon box is now literally the
 						// same arithmetic the item lambda below runs --

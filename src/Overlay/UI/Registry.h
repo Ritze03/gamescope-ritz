@@ -1250,7 +1250,36 @@ namespace gamescope::ui
 		// The fit budget is nowhere near this: the busiest real group (MISC,
 		// 7 areas) lands at ~472px against 878px at 1080p/scale 1 -- see the
 		// "busiest group still fits" test, which is what pins that claim.
-		inline constexpr float kHeaderH   = 30.0f;   // the group header/tab
+		// I8 (2026-09-27, post-I7): 30 -> kItemH (40). The user: "The
+		// individual categories seem kind of small, tallness-wise, compared
+		// to the actual tabs below them, which looks kind of off." I6's own
+		// 30px was sized to fit the module rows' 24px icon box with margin
+		// to spare, not to MATCH the rows' own 40px height -- so even after
+		// I6 fixed the icon/label column alignment (QC finding 3), the pill
+		// itself stayed visibly shorter than the rows it sits above, which
+		// is exactly what read as "off". Derived from kItemH rather than a
+		// second literal, so the header and the rows it owns can never
+		// drift apart again the way 26 -> 30 -> ? already did once. Every
+		// draw inside the header pill (icon, chevron, the open pill's own
+		// accent bar) is already positioned off rcHdr's own y0/y1 or its
+		// vertical centre, and Label()/DrawText() already centres text
+		// vertically in whatever rect it is given (Controls.cpp's DrawText,
+		// `rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f`) -- so
+		// raising this one constant re-centres everything with it; nothing
+		// else needed a coordinate change. TypeRole::Title (Mono 600 14.5)
+		// is kept, not stepped up: a module row's OWN 40px-tall rcItem
+		// already carries its Label text (Sans 400 16) with the same kind
+		// of vertical headroom, so a header pill with visible space above
+		// and below its (smaller, by design -- see I6's own comment) Title
+		// text at 40px matches the rows' existing rhythm rather than
+		// looking empty; stepping the role up would also blur the
+		// deliberate header/row type distinction I6 built (bold mono
+		// upper-case vs plain sans) for no gain on the actual complaint,
+		// which was tallness, not smallness of the glyphs. The fit budget
+		// is nowhere near this either: the busiest real group (DISPLAY, 6
+		// areas) lands at ~568px against 878px at 1080p/scale 1 -- see the
+		// "busiest group still fits" test.
+		inline constexpr float kHeaderH   = kItemH;   // the group header/tab -- same height as a module row
 		// I3 (2026-09-27, post-QC): 4 -> 8 (tok::kXS -> tok::kS). At 4px a
 		// closed header's own SurfaceRaised tint sat close enough to the next
 		// header's that the QC pass ("Open and closed headers barely differ

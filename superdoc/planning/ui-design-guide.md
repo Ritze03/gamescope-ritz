@@ -849,7 +849,9 @@ new colour:
   13.5) — heavier *and* larger, the role SPEC already assigns to "slab title, region titles".
 - **Height**: `railmetrics::kHeaderH` 26 → 30, which is what buys the Title size its margin and
   lets the header carry the module rows' own 24px icon box (see 3). The "busiest group still fits
-  at 1080p" test pins the cost: MISC's 7 areas land at ~472px against 878px available.
+  at 1080p" test pins the cost: MISC's 7 areas land at ~472px against 878px available. (I8,
+  2026-09-27, raised this again to `= kItemH` (40) — 30 fit the icon box but still read shorter
+  than the rows themselves; see that section below.)
 
 **2. Fills and states that survive a glance.** Every rung of the state ladder used to differ from
 the last by a few percent of **white**, which on a near-black rail is invisible without a colour
@@ -1027,6 +1029,70 @@ assertions pass (`tests/gamescope_tests`), including two new pure state-machine 
 `StepRailAccordionAnim()` and all 118 `[overlay_ui]` cases; one run this task also saw 13
 `test_steam_friends.cpp` failures on an unrelated subprocess-capture race (that file is
 untouched by this diff, and a clean re-run passed all 579).
+
+### Rail category headers as tall as the module rows (2026-09-27, I8)
+
+`Why:` the user, verbatim: *"The individual categories seem kind of small, tallness-wise,
+compared to the actual tabs below them, which looks kind of off."*
+
+I6 raised `railmetrics::kHeaderH` 26 → 30, sized to fit the module rows' own 24px
+`tok::kIconBox` glyph with a little margin — not to *match* `kItemH` (40), the height of the
+row underneath it. That closed the icon/label alignment gap QC had measured (finding 3) but
+left the pill itself visibly shorter than the rows it sits above, which is exactly the
+"off" the user is describing here: not a misalignment, a height mismatch between the tab and
+the page under it.
+
+Fix: `kHeaderH` is now `= kItemH` (Registry.h), a derived constant rather than a second
+literal, so header and row height cannot drift apart a third time the way 26 → 30 → ? already
+did once. Nothing else needed a coordinate change — every draw inside the header pill in
+`Shell.cpp`'s `DrawRail()` (the icon, the chevron, the open pill's own left accent bar) is
+already positioned off `rcHdr`'s own `y0`/`y1` or its vertical centre, and `Label()`/
+`DrawText()` (`Controls.cpp`) already vertically centres text in whatever rect it is given
+(`rcClip.Min.y + ( rcClip.GetHeight() - size.y ) * 0.5f`). Raising one constant re-centres the
+whole pill with it. `TypeRole::Title` (Mono 600 14.5) is kept, not stepped up to `Label`
+(Sans 400 16, what the rows themselves use): a module row's own 40px `rcItem` already carries
+its (smaller) Label text with generous headroom above and below, so a header pill with the
+same kind of headroom around its (smaller, by design — I6's own deliberate header/row type
+distinction) Title text matches the rail's existing rhythm rather than reading as empty.
+Stepping the role up would also blur that bold-mono-uppercase-vs-plain-sans distinction for
+no gain on the actual complaint, which was tallness, not glyph size.
+
+The icon-only rail (60px, forced below ~1100px width or similar) needed no change: its own
+header cell already used `flItemH` directly (`const float flHdrH = bIcons ? flItemH :
+flSecH;`, `Shell.cpp`), never `kHeaderH` — so a category cell there was already exactly as
+tall as a module icon row, the visible pill inside it inset by `tok::kXS` on every side
+either way.
+
+**Fit budget.** The "busiest group still fits at 1080p" test's own arithmetic changes with
+the constant (it reads `railmetrics::kHeaderH` directly, so no test file needed a numeric
+edit) — DISPLAY (now the busiest group at 6 areas, since I7's regroup) opened lands at
+`kPad + (kHeaderH+kHeaderGapOpen) + 6*kItemH + kHeaderGapOpen + 5*(kHeaderH+kHeaderGap) + kPad`
+= 8 + 46 + 240 + 6 + 260 + 8 = **568px** against 878px available at 1080p/scale 1 — well
+inside budget even with every header now 10px taller than before.
+
+**Verification.** A private headless sway (`WLR_BACKENDS=headless`) plus a nested `--backend
+wayland` gamescope (`build-release/verify-rail-tall-headers.sh`, this task's own script,
+modelled on `verify-rail-regroup.sh`'s recipe — two full sway+gamescope sessions rather than
+one, since sway TILES a single toplevel to fill its own output regardless of the client's
+`-W`/`-H` request, so forcing the icon rail needs the *output* itself at ~1100 wide, not just
+the gamescope window), captured under
+`build-release/verify-shots/rail-tall-headers-2026-09-27/`:
+- **`a-overlay-open-1920x1080.png`**: OVERLAY open. Pixel-sampled (not eyeballed): the open
+  header pill's own accent outline runs from screen row **y=181 to y=220** (40 rows
+  inclusive, both edges the pill's own 1px ring), and the HUD row's active-wash directly below
+  it runs **y=227 to y=266** (also exactly 40 rows) — the pill and the row it owns measure
+  **identically 40px**, matching `kHeaderH == kItemH == 40` to the pixel. The 6-7px gap between
+  them (220 → 227) is `kHeaderGapOpen` (6, at this capture's ~1.0 scale).
+- **`crops/b-header-vs-row-3x.png`**: a 3x nearest-neighbour crop of the OVERLAY pill directly
+  over the HUD row, at the same left edge — same height, icon columns and label columns both
+  line up exactly, no stagger.
+- **`c-icon-rail-1100x900.png`**: the icon-only rail at 1100x900. DISPLAY (closed) and OVERLAY
+  (open, boxed pill with its own accent outline) sit above the bare HUD/Crosshair/Zoom icon
+  rows — boxed-vs-bare hierarchy intact, same cell height throughout (icon mode was already
+  correct, `flHdrH = bIcons ? flItemH : flSecH`, untouched by this fix).
+- 585 test cases / 15,953,511 assertions pass (`tests/gamescope_tests`) — no test pinned a
+  literal `kHeaderH` value, so none needed editing; the arithmetic tests that reference
+  `railmetrics::kHeaderH` by name picked the new constant up automatically.
 
 ### Sheet body: the mouse wheel now scrolls it (2026-09-27, I3, found via rail-polish finding 4)
 

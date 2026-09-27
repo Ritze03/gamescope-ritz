@@ -40,6 +40,9 @@ The newest version below is the one this build reports.
   same way opening one above it always has, instead of jumping straight open.
 - **Rail: the open category's accent bar runs its full height**: it no longer stops
   short of the category's own rounded corners.
+- **Rail: category headers are as tall as the pages under them**: the DISPLAY /
+  OVERLAY / etc tabs match the height of the rows they contain, instead of reading
+  smaller.
 - **Mixer shows the detected stream's name**: while Stream is set to Automatic, the
   volume row is now titled after the stream it found instead of always reading "Game
   volume".
