@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "Audio/Volume.h"
+#include "Overlay/PanelAudio.h"
 
 using namespace gamescope::Audio;
 
@@ -319,6 +320,42 @@ TEST_CASE( "SelectCandidate: manual override matching several nodes by identity 
 	std::vector<int> vecActual = result.vecMatchedNodeIds;
 	std::sort( vecActual.begin(), vecActual.end() );
 	REQUIRE( vecActual == vecExpected );
+}
+
+// ---- AudioMixerPrimaryRowLabel (PanelAudio.h) -- the "Game volume" row's
+// dynamic title, 2026-09-27. The user's own words: "if the window doesnt
+// have a fixed audio stream, show the audio stream name instead of 'Game
+// volume'. Just so the user can quickly confirm, that it was detected
+// correctly."
+
+TEST_CASE( "AudioMixerPrimaryRowLabel: Automatic with a detected name shows that name", "[audio_volume]" )
+{
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( false, "Half-Life 2", 0 ) == "Half-Life 2" );
+}
+
+TEST_CASE( "AudioMixerPrimaryRowLabel: a manual pick always keeps the plain title, even with a name in hand", "[audio_volume]" )
+{
+	// The user already knows which stream it is once they've picked one
+	// by hand -- the title must not still show the (irrelevant) detected
+	// name.
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( true, "Half-Life 2", 0 ) == "Game volume" );
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( true, "", 0 ) == "Game volume" );
+}
+
+TEST_CASE( "AudioMixerPrimaryRowLabel: Automatic with no usable name falls back to the plain title", "[audio_volume]" )
+{
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( false, "", 0 ) == "Game volume" );
+}
+
+TEST_CASE( "AudioMixerPrimaryRowLabel: several nodes sharing the winning identity append a (+N) count", "[audio_volume]" )
+{
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( false, "Half-Life 2", 1 ) == "Half-Life 2  (+1)" );
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( false, "Half-Life 2", 3 ) == "Half-Life 2  (+3)" );
+}
+
+TEST_CASE( "AudioMixerPrimaryRowLabel: a single matched node (the common case) appends nothing", "[audio_volume]" )
+{
+	REQUIRE( gamescope::AudioMixerPrimaryRowLabel( false, "Half-Life 2", 0 ) == "Half-Life 2" );
 }
 
 TEST_CASE( "StreamCandidate carries its own live volume/mute snapshot, defaulted sanely", "[audio_volume]" )

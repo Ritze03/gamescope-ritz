@@ -232,6 +232,25 @@ namespace gamescope
 			       != s_AreaState.vecMatchedNodeIds.end();
 		}
 
+		// The matched node the "Game volume" row's dynamic label is named
+		// after, when there is more than one (see PrimaryStreamRowLabel()
+		// below). s_vecAreaStreams is already sorted ascending by node id
+		// (AudioGeneration() above), so "the first one found here" is the
+		// LOWEST node id among the matched set -- stable across a poll tick
+		// for a fixed candidate set, unlike the push order
+		// SelectCandidate() builds vecMatchedNodeIds in (Volume.cpp), which
+		// is not sorted at all. Several matched nodes always share one
+		// winning IDENTITY (same application.process.binary/application.name
+		// -- see SelectCandidate()), so in practice they carry the same
+		// name anyway; which one stands in for the group barely matters.
+		const Audio::StreamCandidate *PrimaryMatchedStream()
+		{
+			for ( const Audio::StreamCandidate &c : s_vecAreaStreams )
+				if ( IsPrimaryNode( c.nNodeId ) )
+					return &c;
+			return nullptr;
+		}
+
 		// The name a row is titled with. candidate.sLabel is ALREADY issue
 		// #63's precedence chain -- application.name, then media.name, then
 		// whatever `wpctl status` printed -- assembled in Volume.cpp's poll
@@ -410,6 +429,29 @@ namespace gamescope
 			return DetectionMethodLabel( s_AreaState.eMethod );
 		}
 
+		// The "Game volume" row's own title -- threads the live state
+		// (s_sManualNode, the detected primary stream, how many other
+		// nodes moved with it) into the pure decision in PanelAudio.h's
+		// AudioMixerPrimaryRowLabel(), which is what tests/
+		// test_audio_volume.cpp exercises directly. See that function's
+		// own doc comment for the reasoning and what each case means.
+		//
+		// Entry::Emit() copies pszTitle into its own std::string
+		// immediately (Registry.h's m_sTitle), so the string returned
+		// here only has to live for the .Slider() call itself -- no
+		// persistent/static storage needed, unlike the deque of C strings
+		// RebuildStreamOptions() keeps for ui::Option (which DOES hold a
+		// bare const char* across the frame).
+		std::string PrimaryStreamRowLabel()
+		{
+			const Audio::StreamCandidate *pPrimary = s_sManualNode.empty() ? PrimaryMatchedStream() : nullptr;
+			const std::string sPrimaryName = pPrimary ? pPrimary->sLabel : std::string();
+			const size_t nOtherMatched = s_AreaState.vecMatchedNodeIds.empty()
+				? 0 : s_AreaState.vecMatchedNodeIds.size() - 1;
+
+			return AudioMixerPrimaryRowLabel( !s_sManualNode.empty(), sPrimaryName, nOtherMatched );
+		}
+
 		// ---- the builder -----------------------------------------------
 		void BuildAudioArea( ui::Area &a )
 		{
@@ -449,7 +491,9 @@ namespace gamescope
 				// express.
 				if ( s_AreaState.bDetected )
 				{
-					a.Slider( "audio.stream.volume", "Game volume",
+					const std::string sPrimaryLabel = PrimaryStreamRowLabel();
+
+					a.Slider( "audio.stream.volume", sPrimaryLabel.c_str(),
 						ui::AnyBind::Of<int>(
 							[]{
 								return (int)std::lround(
@@ -465,7 +509,10 @@ namespace gamescope
 							} ) )
 						.Help( "The game's volume. Going above 100% is a real boost that can distort "
 						       "the sound, not just extra headroom, and moves every one of the game's "
-						       "sounds together." )
+						       "sounds together. While Automatic detection is picking the stream (the "
+						       "Stream row above reads \"Automatic\"), this row is titled with the "
+						       "detected stream's own name so you can confirm it found the right app; "
+						       "picking a stream by hand reverts the title to plain \"Game volume\"." )
 						.Range( 0.0f, 150.0f )
 						// The binding is an int percent, so the range is 151 discrete
 						// values -- over the 100-position budget on its own. 5% is
@@ -474,7 +521,15 @@ namespace gamescope
 						.Step( 5.0f )    // 31 positions
 						.Default( 100 )
 						.Unit( "%" )
-						.Keywords( "volume gain level loudness game audio" )
+						// "game volume" kept as a literal keyword (not just
+						// the two words separately) because the row's own
+						// TITLE -- which the palette also searches -- isn't
+						// always "Game volume" any more (see
+						// PrimaryStreamRowLabel() above): while Automatic
+						// detection is showing a stream's own name instead,
+						// a search for "game volume" would otherwise find
+						// nothing here.
+						.Keywords( "volume gain level loudness game audio game volume stream mixer detected" )
 						.Param( "mute", "Mute",
 							ui::AnyBind::Of<bool>(
 								[]{ return ResolveDisplayMute( s_PendingPrimary, s_AreaState.bMuted ); },
