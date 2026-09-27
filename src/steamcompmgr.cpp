@@ -104,6 +104,7 @@
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
+#include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
@@ -3350,6 +3351,18 @@ paint_all( global_focus_t *pFocus, bool async )
 		// has to be the base AFTER the effects pre-pass, which only exists
 		// in there. Beneath everything pushed in this block by construction.
 		gamescope::Zoom_FillRequest( &frameInfo );
+
+		// Null binds (Overlay/NullBinds.h): no layer of its own -- this is
+		// the once-a-frame tick that (a) loads/refreshes its config mirror
+		// the same way Zoom/Autoclicker do, so a profile with
+		// null_binds.enabled=true takes effect from process start and
+		// follows a profile switch live without the Shell ever having to be
+		// opened, and (b) reconciles the engine across the settings
+		// overlay's own keyboard-capture window (see NullBinds_Tick()'s own
+		// comment). Called here, not from wlserver_key() itself, because
+		// both jobs need to run every frame regardless of whether any key
+		// event happens at all.
+		gamescope::NullBinds_Tick();
 
 		// Toast notifications: same independent-lifetime reasoning as the FPS
 		// display above (see Overlay/Notifications.h) -- drawn above the HUD

@@ -9,15 +9,28 @@
 #include <mutex>
 #include <thread>
 
+#include "log.hpp"
 #include "steamcompmgr.hpp"
 #include "wlserver.hpp"
 #include "Config/ConfigManager.h"
+#include "SettingsOverlay.h"
 #include "UI/Registry.h"
 
 namespace gamescope
 {
 	namespace
 	{
+		// Opt-in trace (log_nullbinds=debug, or `gamescopectl log_nullbinds
+		// debug`): one line per physical event this module consumes and one
+		// per synthetic emit it sends, from whichever of the three producers
+		// (NullBinds_OnKey()'s own immediate emits, the worker thread's
+		// delayed press, OnCaptureStart()'s reconcile) -- EmitOne() is the
+		// one place all three funnel through, so logging there covers all
+		// of them. Off by default (LOG_INFO), matching log_binding's own
+		// convention (Keybinds.cpp) for the same kind of per-keystroke trace
+		// that would otherwise be noise during ordinary play.
+		LogScope log_nullbinds( "nullbinds" );
+
 		using Clock = std::chrono::steady_clock;
 
 		uint64_t NowMs()
@@ -32,13 +45,17 @@ namespace gamescope
 		}
 
 		// Config: the same lazy, generation-keyed cache Autoclicker.cpp and
-		// Zoom.cpp keep. Read ONLY from the settings-area's own callbacks
-		// (getters/setters/Summary) -- NEVER from NullBinds_OnKey(), which
-		// runs on the wlserver thread and must touch atomics only, exactly
-		// as Zoom_OnChord()/Autoclicker_OnChord() do (see those files'
-		// threading notes): ConfigManager's own state is not safe to read
-		// from that thread, and a profile load is not something a real-time
-		// input path should ever be able to block on.
+		// Zoom.cpp keep. Read from the settings-area's own callbacks
+		// (getters/setters/Summary) AND from NullBinds_Tick() (2026-09-27,
+		// see NullBinds.h) -- both run on the steamcompmgr thread (the
+		// settings-overlay ImGui pass and Zoom_FillRequest()/NullBinds_Tick()
+		// are all called from the same paint_all(), never concurrently with
+		// each other), so this needs no lock of its own. NEVER from
+		// NullBinds_OnKey(), which runs on the wlserver thread and must
+		// touch atomics only, exactly as Zoom_OnChord()/Autoclicker_OnChord()
+		// do (see those files' threading notes): ConfigManager's own state
+		// is not safe to read from that thread, and a profile load is not
+		// something a real-time input path should ever be able to block on.
 		bool s_bConfigLoaded = false;
 		uint64_t s_ulLoadedGeneration = 0;
 		config::Settings s_Settings;
@@ -72,6 +89,7 @@ namespace gamescope
 
 		void EmitOne( const nullbinds::Emit &e, uint32_t uTime )
 		{
+			log_nullbinds.debugf( "emit key=%u press=%d time=%u", e.key, (int)e.press, uTime );
 			s_bInjecting.store( true, std::memory_order_relaxed );
 			wlserver_key( e.key, e.press, uTime );
 			s_bInjecting.store( false, std::memory_order_relaxed );
@@ -196,6 +214,13 @@ namespace gamescope
 			force_repaint();
 		}
 
+		// steamcompmgr thread only (NullBinds_Tick() is only ever called
+		// from there) -- the edge NullBinds_Tick() watches for. Starts
+		// false so a Shell already open at process start (not possible
+		// today, but cheap to be correct about) is treated as "already
+		// capturing", not as a fresh edge.
+		bool s_bWasCapturingKeyboard = false;
+
 	}
 
 	bool NullBinds_OnKey( uint32_t key, bool press, uint32_t time )
@@ -217,6 +242,9 @@ namespace gamescope
 		if ( !r.consumed )
 			return false;
 
+		log_nullbinds.debugf( "physical key=%u press=%d consumed, %zu emit(s), %s",
+			key, (int)press, r.emits.size(), r.has_deadline ? "press scheduled" : "no pending press" );
+
 		// wlserver_lock() is ALREADY held by wlserver_key()'s own caller --
 		// do NOT lock it again here. `time` is the original event's own
 		// timestamp, reused for every immediate emit this same physical
@@ -236,6 +264,37 @@ namespace gamescope
 	bool NullBinds_IsInjecting()
 	{
 		return s_bInjecting.load( std::memory_order_relaxed );
+	}
+
+	// Called once a frame from steamcompmgr.cpp -- see NullBinds.h's own
+	// comment for why the two jobs below share this one call. Runs on the
+	// steamcompmgr thread, so it is free to take s_Mutex and wlserver_lock()
+	// at disjoint times exactly like a settings row's own setter (the SAME
+	// lock-order rule NullBinds_OnKey()'s file comment states).
+	void NullBinds_Tick()
+	{
+		EnsureConfigLoaded();
+
+		const bool bCapturingNow = SettingsOverlay_IsCapturingKeyboard();
+		if ( bCapturingNow && !s_bWasCapturingKeyboard )
+		{
+			// The edge: capturing just started. Reconcile the engine (see
+			// Engine::OnCaptureStart()'s own comment) and send any release
+			// it asks for right now, before the overlay has a chance to
+			// steal any more key events out from under an in-flight
+			// scheduled press.
+			nullbinds::Result r;
+			{
+				std::lock_guard<std::mutex> lock( s_Mutex );
+				r = s_Engine.OnCaptureStart();
+				UpdateDeadline( r );
+			}
+			EmitAllLocking( r.emits );
+			// No has_deadline check needed: OnCaptureStart() never leaves
+			// one pending (it cancels any in-flight press outright), so the
+			// worker has nothing new to wait for.
+		}
+		s_bWasCapturingKeyboard = bCapturingNow;
 	}
 
 	void NullBinds_RegisterArea( ui::Registry &reg )

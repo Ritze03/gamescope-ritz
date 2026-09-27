@@ -57,6 +57,7 @@
 #include "Overlay/Crosshair.h"
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
+#include "Overlay/NullBinds.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
@@ -869,6 +870,13 @@ namespace gamescope::ui::shell
 			// own MISC area next to the zoom because both are things a
 			// hotkey does to the game. See Overlay/Autoclicker.h.
 			Autoclicker_RegisterArea( reg );
+			// Null binds / WASD SOCD cleaning (2026-09-27): no layer, no
+			// hotkey chord of its own -- it acts on the raw A/D/W/S keys
+			// directly at wlserver_key()/wlserver_handle_key(). Grouped
+			// here with the zoom and the autoclicker anyway: all three are
+			// MISC areas that change what the game receives without a
+			// visible surface of their own. See Overlay/NullBinds.h.
+			NullBinds_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question

@@ -287,3 +287,79 @@ TEST_CASE( "nullbinds: disabling one pair only affects that pair", "[nullbinds]"
 	REQUIRE( rWS.consumed == true );  // W/S is still handled
 	REQUIRE( rWS.emits.size() == 1 );
 }
+
+// ---- the settings overlay's keyboard capture (2026-09-27) -----------------
+// NullBinds_OnKey() is never called at all while the overlay captures the
+// keyboard (the caller's own guard in wlserver.cpp/wlserver_handle_key()),
+// so this engine never sees the physical events that happen during that
+// window. OnCaptureStart() is what the glue (NullBinds_Tick()) calls on the
+// edge where capturing BEGINS -- these tests drive it directly, exactly
+// like every other Engine entry point above.
+
+TEST_CASE( "nullbinds: OnCaptureStart releases the sent key and resets the pair to idle", "[nullbinds]" )
+{
+	Engine e;
+	e.SetJitterSource( FixedJitter( 0 ) );
+	e.SetSettings( MakeSettings( true, true, 5, 0 ) );
+
+	e.OnPhysical( KEY_A, true, 0 ); // idle -> immediate A (sent)
+
+	Result r = e.OnCaptureStart();
+	REQUIRE( r.emits.size() == 1 );
+	REQUIRE( r.emits[ 0 ].key == (uint32_t)KEY_A );
+	REQUIRE( r.emits[ 0 ].press == false );
+	REQUIRE( r.has_deadline == false );
+
+	// The pair is a clean idle slate now: a fresh press is treated exactly
+	// like the very first press on a never-touched engine (immediate, no
+	// debounce), not like a "switch away from A" -- OnCaptureStart() forgot
+	// A was ever involved.
+	Result r2 = e.OnPhysical( KEY_D, true, 100 );
+	REQUIRE( r2.consumed == true );
+	REQUIRE( r2.emits.size() == 1 );
+	REQUIRE( r2.emits[ 0 ].key == (uint32_t)KEY_D );
+	REQUIRE( r2.emits[ 0 ].press == true );
+}
+
+TEST_CASE( "nullbinds: OnCaptureStart cancels a pending press without firing it", "[nullbinds]" )
+{
+	Engine e;
+	e.SetJitterSource( FixedJitter( 0 ) );
+	e.SetSettings( MakeSettings( true, true, 5, 0 ) );
+
+	e.OnPhysical( KEY_A, true, 0 );             // idle -> immediate A (sent)
+	Result r1 = e.OnPhysical( KEY_D, true, 1 ); // switch -> release A, schedule D
+	REQUIRE( r1.has_deadline == true );
+
+	// Capture starts before D's scheduled press ever fires: the pending
+	// press must be cancelled outright (never emitted), because if the
+	// worker fired it mid-capture it would be routed to the OVERLAY instead
+	// of the game (wlserver_dispatch_key() decides that at delivery time),
+	// i.e. a stray "d" landing in whatever the user is typing.
+	Result r2 = e.OnCaptureStart();
+	REQUIRE( r2.has_deadline == false );
+	// A was released by the earlier switch and never re-sent, so
+	// OnCaptureStart() has nothing left to release either -- only D's
+	// pending press is discarded, silently.
+	REQUIRE( r2.emits.empty() );
+
+	// Even well past the old deadline, nothing fires: there is no OnTimer()
+	// call in this test at all, which is the point -- the worker thread
+	// would have nothing to wait for (has_deadline was false above), so it
+	// simply never wakes up for this pair again until a fresh OnPhysical()
+	// schedules something new.
+	Result r3 = e.OnPhysical( KEY_S, true, 200 );
+	REQUIRE( r3.consumed == true );
+	REQUIRE( r3.emits.size() == 1 ); // W/S pair, untouched by A/D's capture reconcile
+	REQUIRE( r3.emits[ 0 ].key == (uint32_t)KEY_S );
+}
+
+TEST_CASE( "nullbinds: OnCaptureStart with nothing held or sent is a no-op", "[nullbinds]" )
+{
+	Engine e;
+	e.SetSettings( MakeSettings() );
+
+	Result r = e.OnCaptureStart();
+	REQUIRE( r.emits.empty() );
+	REQUIRE( r.has_deadline == false );
+}

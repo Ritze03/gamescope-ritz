@@ -15,13 +15,12 @@ area, the `wlserver_key()` hook and its worker thread). Config
 settings area `system.null_binds` ("Null binds", rail MISC group). Default
 **off**, and both pairs default **on** once the master switch is.
 
-> **Status as landed (2026-09-27): the engine, config and settings area only
-> — NOT YET WIRED into `wlserver_key()`.** `NullBinds_OnKey()` exists and is
-> fully tested, but nothing in `src/wlserver.cpp` calls it yet; a later step
-> adds the guarded call at the top of `wlserver_key()` (see "The hook
-> contract" below) and registers the area from `Shell.cpp`. Until that
-> lands, turning the switch on in a build that has it changes nothing a game
-> sees.
+> **Status (2026-09-27): wired end to end.** `NullBinds_OnKey()` is called
+> from the top of both `wlserver_key()` and `wlserver_handle_key()`
+> (`src/wlserver.cpp`), the area is registered from `Shell.cpp`, and it sits
+> in the rail's MISC group after the autoclicker. Turning the switch on in
+> the settings, or shipping it on in a profile, now actually changes what
+> the game receives.
 
 ## Why this exists, and why a delay and jitter at all
 
@@ -123,20 +122,22 @@ round-trip (every field, including the off-by-default master switch) and
 that a stale/out-of-range `delay_ms`/`jitter_ms` is clamped to the slider's
 range on load.
 
-## The hook contract
+## The hook contract, as wired
 
 ```cpp
 bool NullBinds_OnKey( uint32_t key, bool press, uint32_t time );
 bool NullBinds_IsInjecting();
 ```
 
-The wiring step must call this from the very **top** of `wlserver_key()`
-(`src/wlserver.cpp`), on the wlserver thread, with `wlserver_lock()`
-**already held** (`wlserver_key()` itself asserts that), and only when
-`!NullBinds_IsInjecting()`:
+Called from the very **top** of `wlserver_key()` **and** of
+`wlserver_handle_key()` (both in `src/wlserver.cpp`), on the wlserver
+thread, with `wlserver_lock()` **already held** (both callers hold it before
+either function's own body runs), and only when `!NullBinds_IsInjecting()`
+**and** the settings overlay is not currently capturing the keyboard:
 
 ```cpp
 if ( !gamescope::NullBinds_IsInjecting()
+  && !gamescope::SettingsOverlay_IsCapturingKeyboard()
   && gamescope::NullBinds_OnKey( key, press, time ) )
     return;
 ```
@@ -151,14 +152,112 @@ synthetic call runs that whole normal path on its own, so the client's
 keyboard state stays consistent — the game sees clean, individually
 dispatched press/release events, never a physical event that silently did
 two things at once. Returning `false` means either the key is not part of an
-enabled pair or the feature is off; `wlserver_key()` must process the
-physical event exactly as if the hook did not exist.
+enabled pair, the feature is off, or the overlay is capturing the keyboard;
+the caller must process the physical event exactly as if the hook did not
+exist.
 
 `Why the guard is checked by the caller, not inside `NullBinds_OnKey()``:
 the same shape as `Autoclicker_IsInjecting()`/`wlserver_ritz_mouse_hotkey()`
 — a synthetic event re-entering this same hook would be reinterpreted as a
 second physical press, so the check has to happen before the hook is even
 called, at the one call site that matters.
+
+### Two call sites, not one
+
+`wlserver_key()` is not the only physical-keyboard entry point. The real
+hardware keyboard group behind wlroots' **own** libinput backend (DRM/
+embedded mode — gamescope owning the display directly with a real keyboard
+attached; `wlserver_new_input()` groups every such device into
+`wlserver.keyboard_group`) fires `wlserver_handle_key()`, which calls
+straight into `wlserver_process_hotkeys()`/`wlserver_dispatch_key()` and
+never through `wlserver_key()` at all. Without the same guarded call at its
+own top, null binds would work nested (SDL/Wayland backend, the standalone
+`LibInputHandler.cpp` context OpenVR/headless use, `InputEmulation.cpp`)
+but silently do nothing for a real keyboard in embedded mode — the Steam
+Deck's actual own usecase. Consuming there is safe even though it skips
+that function's own xkb/hotkey/dispatch work for the real event: the GROUP
+keyboard's `xkb_state` is already advanced by wlroots itself before the
+listener runs (unlike the virtual keyboard device `wlserver_key()` advances
+by hand), and every synthetic emit `NullBinds_OnKey()` produces goes out
+through `wlserver_key()` on that same virtual device regardless of which
+physical path saw the real key — one consistent synthetic-output path no
+matter which entry point triggered it.
+
+## The settings overlay's keyboard capture
+
+Typing "ad" into the palette/Shell must never be delayed or reordered by
+this module — the `!SettingsOverlay_IsCapturingKeyboard()` half of the
+guard above is what keeps that true: while the overlay owns the keyboard,
+A/D/W/S fall through to `wlserver_dispatch_key()` exactly like any other
+key, and `NullBinds_OnKey()` is never called at all.
+
+That leaves the engine's own internal model (which keys are physically
+held, which are currently sent to the game) stale for whatever happened
+during the capture window, and a `Delay` press that was already scheduled
+before capture began could otherwise fire *during* it — the worker thread
+doesn't know or care that the overlay is now open, and
+`wlserver_dispatch_key()` decides overlay-vs-game at **delivery** time, not
+at schedule time, so a late-firing synthetic "d" would land as a stray
+character in whatever the user is typing.
+
+`NullBinds_Tick()` (below) detects the **edge** where capturing starts and
+calls `nullbinds::Engine::OnCaptureStart()`, which:
+
+- releases (emits) any key this engine currently has sent to the game —
+  "reconcile the game's sent state" — since the game will not receive any
+  further physical event for it until capture ends;
+- cancels any in-flight scheduled press outright, without firing it;
+- resets both pairs to a clean idle slate (held, sent, desired all
+  forgotten).
+
+There is no matching "capture ended" action, and none is needed: the state
+`OnCaptureStart()` leaves behind is already the correct starting point, so
+the very next real physical press after capture ends is treated exactly
+like any other "engine was idle" press (immediate, no debounce) — this is
+"resume cleanly" for free. The one documented simplification this does not
+chase: a key still physically held **through** the whole capture window
+(the user opened the Shell while already holding a movement key and never
+let go) has its eventual physical release, after capture ends, silently
+swallowed as a no-op (the engine already believes it isn't held) — which
+matches the eager release already issued, so the game never ends up with a
+key stuck down, only a movement key held into a menu opening stops the
+character moving a little early. `tests/test_nullbinds.cpp` covers
+`OnCaptureStart()` releasing a sent key and resetting to idle, cancelling a
+pending press without ever firing it, and being a no-op with nothing held
+or sent.
+
+## Settings loading, without ever opening the Shell
+
+Like Zoom and Autoclicker before it, this module's hot path
+(`NullBinds_OnKey()`) never touches `config::` directly — it reads only the
+mirrored atomics `EnsureConfigLoaded()`/`Mirror()` keep current. Those two
+functions used to run **only** from the settings area's own row callbacks
+(getters/setters/`Summary()`), which meant a profile with
+`null_binds.enabled=true` did nothing until the Shell was opened at least
+once, and a profile switch (a game profile auto-selected at launch, say)
+never reached the module at all unless the Shell happened to be redrawn
+afterward.
+
+`NullBinds_Tick()` closes that gap: called once a frame from
+`steamcompmgr.cpp`, right next to `Zoom_FillRequest()` (same "every frame,
+steamcompmgr thread, regardless of whether the Shell has ever been drawn"
+cadence Zoom already established for exactly this problem), it calls
+`EnsureConfigLoaded()` unconditionally and then checks the capture-edge
+described above. `EnsureConfigLoaded()`'s own generation-keyed cache means
+this is cheap on every frame where nothing changed (Zoom.cpp/
+Autoclicker.cpp's own `config::ConfigGeneration()` comparison) — the actual
+config read only happens on the frame a profile load or live edit actually
+bumped the generation. The headless end-to-end check below drives this
+directly: a profile with `null_binds.enabled=true` written into the config
+**before** the process ever starts, with the Shell never opened, and the
+very first physical A press is already cleaned.
+
+Threading note: `NullBinds_Tick()` runs on the steamcompmgr thread, the
+same thread the settings-overlay ImGui pass (and therefore every settings
+row's own getter/setter) already runs on within `paint_all()` — so reading
+and writing `s_Settings`/`s_bConfigLoaded` from both places needs no lock of
+its own, the same reasoning `Zoom.cpp`'s own comment gives for its identical
+setup.
 
 ## Threading and locking
 
@@ -204,15 +303,13 @@ load is not something a real-time keyboard-input path should ever be able to
 block on, and `config::`'s own state is not designed to be read from the
 wlserver thread. The settings the engine needs are mirrored from
 `config::ResolvedSettings()` into the engine (and `s_bEnabled`) by
-`EnsureConfigLoaded()`/`Mirror()`, called only from the settings area's own
-row callbacks (getters, setters, `Summary()`) on the UI/render thread —
-exactly the same generation-keyed caching `Autoclicker.cpp`/`Zoom.cpp` use,
-and it shares their same limitation: a profile switch made while the shell
-has never been drawn does not reach this module until something touches its
-area again. This was not solved here because neither Autoclicker nor Zoom
-solve it either; if it needs fixing, it needs fixing for all three at once
-(e.g. wiring into `config::SetLiveApplyHook()`), which is out of this
-module's own scope.
+`EnsureConfigLoaded()`/`Mirror()`, called both from the settings area's own
+row callbacks (getters, setters, `Summary()`) on the steamcompmgr thread
+**and**, since 2026-09-27, once a frame from `NullBinds_Tick()` — see
+"Settings loading, without ever opening the Shell" above for why the
+per-frame call was added (this module no longer shares Autoclicker/Zoom's
+"the Shell must be opened first" limitation; those two still do, and fixing
+them the same way is future work outside this module's own scope).
 
 ## The settings
 

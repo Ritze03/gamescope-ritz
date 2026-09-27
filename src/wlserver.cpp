@@ -85,6 +85,7 @@
 #include "Overlay/Crosshair.h"
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
+#include "Overlay/NullBinds.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -1224,6 +1225,31 @@ static void wlserver_handle_key(struct wl_listener *listener, void *data)
 {
 	struct wlr_keyboard *keyboard = &wlserver.keyboard_group->keyboard;
 	struct wlr_keyboard_key_event *event = (struct wlr_keyboard_key_event *) data;
+
+	// Null binds (Overlay/NullBinds.h): the OTHER physical-keyboard entry
+	// point wlserver_key() does not cover -- the real hardware keyboard
+	// group behind wlroots' OWN libinput backend (DRM/embedded mode, i.e.
+	// gamescope owning the display directly with a real keyboard attached;
+	// wlserver_new_input() groups every such device into
+	// wlserver.keyboard_group and this listener fires on its events.key).
+	// This path calls straight into wlserver_process_hotkeys()/
+	// wlserver_dispatch_key() below and never through wlserver_key() at
+	// all, so without this it would be a silent gap: null binds would work
+	// nested (SDL/Wayland backend, LibInputHandler.cpp's own headless/VR
+	// libinput context, InputEmulation.cpp) but do nothing for a real
+	// keyboard in embedded mode. Safe to consume here even though it skips
+	// this function's own xkb/hotkey/dispatch work for the real event: the
+	// GROUP keyboard's xkb_state is already advanced by wlroots itself
+	// before this listener ever runs (unlike the virtual keyboard device
+	// wlserver_key() advances by hand), and every synthetic emit
+	// NullBinds_OnKey() produces goes out through wlserver_key() on that
+	// same virtual device regardless of which physical path saw the real
+	// key -- one consistent synthetic-output path no matter which entry
+	// point triggered it.
+	if ( !gamescope::NullBinds_IsInjecting()
+	  && !gamescope::SettingsOverlay_IsCapturingKeyboard()
+	  && gamescope::NullBinds_OnKey( event->keycode, event->state == WL_KEYBOARD_KEY_STATE_PRESSED, event->time_msec ) )
+		return;
 
 	xkb_keycode_t keycode = event->keycode + 8;
 	xkb_keysym_t keysym = xkb_state_key_get_one_sym(keyboard->xkb_state, keycode);
@@ -3667,6 +3693,22 @@ bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press 
 void wlserver_key( uint32_t key, bool press, uint32_t time )
 {
 	assert( wlserver_is_lock_held() );
+
+	// Null binds (WASD SOCD cleaning, Overlay/NullBinds.h): checked before
+	// anything else in this function, exactly as the header's hook contract
+	// requires. The SettingsOverlay_IsCapturingKeyboard() guard is what
+	// keeps typing "ad" into the palette/Shell from ever reaching this --
+	// while the overlay owns the keyboard, A/D/W/S fall through to the
+	// normal path below like any other key (NullBinds_Tick(), called once a
+	// frame from steamcompmgr.cpp, is what reconciles the module across
+	// that window -- see its own comment). Consumed means NullBinds_OnKey()
+	// has already, from inside this same call and under this same held
+	// lock, recursively called wlserver_key() for every synthetic key event
+	// it produced -- nothing further to do with the real one.
+	if ( !gamescope::NullBinds_IsInjecting()
+	  && !gamescope::SettingsOverlay_IsCapturingKeyboard()
+	  && gamescope::NullBinds_OnKey( key, press, time ) )
+		return;
 
 	wlr_keyboard *keyboard = wlserver.wlr.virtual_keyboard_device;
 

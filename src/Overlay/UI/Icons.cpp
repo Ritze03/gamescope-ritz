@@ -281,6 +281,28 @@ namespace gamescope::ui
 				  { 7.97f, 5.68f }, { 9.68f, 3.97f }, { 12.0f, 3.35f } } },
 			Line( { 7.35f, 10.0f }, { 16.65f, 10.0f } ) } },
 
+		{ "system.null_binds", 4, {
+			// TWO KEYCAPS with a priority arrow between them: the SOCD-
+			// cleaning identity in one glyph -- of a pair of keys, only one
+			// is ever "down" in the game at a time, and priority moves to
+			// whichever was pressed last. Freehand (2026-09-27), later than
+			// the mockup like every glyph after system.zoom.
+			//
+			// Left keycap is a plain stroked square (not currently the
+			// winner); right keycap is the same square with a smaller
+			// FillRect inset (the current winner, "held down"); the chevron
+			// between them is priority handing off left-to-right, the same
+			// three-point Poly() the accordion's own chevrons use elsewhere
+			// in this file's style, just rotated to point right instead of
+			// down. Read against its nearest neighbours: system.autoclicker
+			// is one TALL rounded body with a filled CORNER, and no other
+			// glyph in the set is two SEPARATE square outlines joined by a
+			// chevron.
+			RoundRect( 2.0f, 8.0f, 10.0f, 16.0f, 1.6f ),
+			RoundRect( 14.0f, 8.0f, 22.0f, 16.0f, 1.6f ),
+			Bar( 16.0f, 10.0f, 20.0f, 14.0f ),
+			Poly( { 10.8f, 10.2f }, { 13.2f, 12.0f }, { 10.8f, 13.8f } ) } },
+
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
 			// (2026-09-08), like the crosshair and resolution glyphs before

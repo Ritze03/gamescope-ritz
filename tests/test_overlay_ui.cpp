@@ -1849,6 +1849,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The nineteenth (2026-09-18): the autoclicker. See Autoclicker.cpp
 		// and Icons.cpp.
 		"system.autoclicker",
+		// The twentieth (2026-09-27): null binds / WASD SOCD cleaning. See
+		// NullBinds.cpp and Icons.cpp.
+		"system.null_binds",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2052,6 +2055,7 @@ TEST_CASE( "rail: the four groups are in the order the request named", "[overlay
 		{ "system.crosshair",      ui::RailGroup::Misc },
 		{ "system.zoom",           ui::RailGroup::Misc },
 		{ "system.autoclicker",    ui::RailGroup::Misc },
+		{ "system.null_binds",     ui::RailGroup::Misc },
 		{ "system.friends",        ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
@@ -2183,17 +2187,17 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	// This is the whole reason the accordion exists: 19 areas in 4 fixed
 	// groups already overflow the rail at 1080p/scale 1 as a flat list
 	// (content ~= 896px against ~= 878px available -- see this task's own
-	// brief), and MISC is about to gain a 20th area (Null binds, added by a
-	// later step) on top of that. Every real area, registered under its own
-	// real id (RailContentHeightPx() keys off RailGroupFor(), which reads
-	// the id), the same 19 test_overlay_ui.cpp's icon census and rail-order
-	// tests above pin.
+	// brief), and MISC has since gained a 20th area (Null binds, 2026-09-27).
+	// Every real area, registered under its own real id
+	// (RailContentHeightPx() keys off RailGroupFor(), which reads the id),
+	// the same 20 test_overlay_ui.cpp's icon census and rail-order tests
+	// above pin.
 	ui::Registry reg;
 	const char *pszAllAreas[] = {
 		"display.general", "display.resolution", "display.upscaling",
 		"display.frame_limiter", "display.hdr", "image.shaders",
 		"system.hud", "audio.mixer", "system.crosshair", "system.zoom",
-		"system.autoclicker", "system.friends",
+		"system.autoclicker", "system.null_binds", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.cursor", "setup.keybinds",
 		"system.log", "system.changelog",

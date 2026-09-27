@@ -36,15 +36,36 @@
 // config::NullBindsSettings, per-profile), the settings area
 // (`system.null_binds`, MISC), and the wlserver_key() hook contract below.
 //
-// THE HOOK CONTRACT (for whichever step wires it into wlserver.cpp):
+// THE HOOK CONTRACT (wired 2026-09-27):
 //   bool NullBinds_OnKey( uint32_t key, bool press, uint32_t time );
-// Call this from the very TOP of wlserver_key() (src/wlserver.cpp), on the
+// Called from the very TOP of wlserver_key() (src/wlserver.cpp), on the
 // wlserver thread, with wlserver_lock() ALREADY held (wlserver_key() itself
-// asserts that), and ONLY when `!NullBinds_IsInjecting()`:
+// asserts that), and ONLY when `!NullBinds_IsInjecting()` AND the settings
+// overlay is not currently capturing the keyboard:
 //
 //     if ( !gamescope::NullBinds_IsInjecting()
+//       && !gamescope::SettingsOverlay_IsCapturingKeyboard()
 //       && gamescope::NullBinds_OnKey( key, press, time ) )
 //         return;
+//
+// The SettingsOverlay_IsCapturingKeyboard() guard is what keeps typing "ad"
+// into the palette/Shell from being delayed or reordered -- while it is
+// true, A/D/W/S go straight to wlserver_dispatch_key() like any other key
+// and this module is not consulted at all. NullBinds_Tick() (called once a
+// frame from steamcompmgr.cpp, alongside Zoom_FillRequest()) detects the
+// edge where capturing STARTS and calls Engine::OnCaptureStart() (see that
+// method's own comment for why "capture starts" needs active reconciliation
+// and "capture ends" does not).
+//
+// THE SAME GUARDED CALL ALSO SITS AT THE TOP OF wlserver_handle_key()
+// (src/wlserver.cpp): wlserver_key() is NOT the only physical-keyboard
+// entry point -- the real hardware keyboard group behind wlroots' OWN
+// libinput backend (DRM/embedded mode) calls
+// wlserver_process_hotkeys()/wlserver_dispatch_key() directly and never
+// through wlserver_key() at all. Both call sites use the identical guard
+// and both feed the one engine; every synthetic emit still goes out through
+// wlserver_key() on the virtual keyboard device regardless of which
+// physical path the real key came in on.
 //
 // Returning true means the physical event was fully handled here (consumed)
 // and wlserver_key() must do nothing further with it -- NullBinds_OnKey()
@@ -85,6 +106,21 @@ namespace gamescope
 	namespace ui { class Registry; }
 
 	void NullBinds_RegisterArea( ui::Registry &reg );
+
+	// Called once a frame from the steamcompmgr thread (steamcompmgr.cpp,
+	// next to Zoom_FillRequest()) -- NOT from the wlserver thread. Two
+	// unrelated jobs share this one per-frame call because both need the
+	// same "run every frame regardless of whether the Shell has ever been
+	// opened" cadence, exactly the pattern Zoom.cpp/Autoclicker.cpp already
+	// use for their own config mirroring:
+	//   - loads/refreshes the config mirror (EnsureConfigLoaded()) so a
+	//     profile with null_binds.enabled=true takes effect from process
+	//     start and follows a profile switch live, without needing the
+	//     settings area's own row callbacks to run first;
+	//   - detects the edge where SettingsOverlay_IsCapturingKeyboard() turns
+	//     true and reconciles the engine for it (Engine::OnCaptureStart()).
+	// See NullBinds.cpp's own comment on NullBinds_Tick() for the locking.
+	void NullBinds_Tick();
 
 	// See "THE HOOK CONTRACT" above.
 	bool NullBinds_OnKey( uint32_t key, bool press, uint32_t time );
@@ -345,6 +381,54 @@ namespace gamescope
 				return result;
 			}
 
+			// Called once, on the edge where the settings overlay STARTS
+			// capturing the keyboard (typing into the palette/Shell) -- see
+			// NullBinds.cpp's NullBinds_Tick() for where this is detected
+			// and driven. From this instant OnPhysical() is never called at
+			// all for as long as capturing lasts (the wlserver_key() hook's
+			// own guard skips it -- see the hook contract at the top of this
+			// file), so:
+			//   - any key this engine currently has sent to the game is
+			//     released right now -- "reconcile the game's sent state",
+			//     the same instinct as ReconcileDeactivate, but NOT that
+			//     function: going inactive also PRESSES a held-but-unsent
+			//     loser (a real "the feature is off, pass both through"
+			//     guarantee), which is wrong here -- capturing does not mean
+			//     "stop cleaning", it means "this engine is not being asked
+			//     about these keys at all right now", so nothing should be
+			//     freshly pressed;
+			//   - any in-flight scheduled press is cancelled WITHOUT firing
+			//     -- if it were left pending, the worker thread could still
+			//     fire it mid-capture, and wlserver_dispatch_key() decides
+			//     overlay-vs-game AT DELIVERY time, not at schedule time, so
+			//     a stray "a" or "d" keydown would land in whatever the user
+			//     is typing into right then;
+			//   - both pairs are reset to a clean idle slate (held, sent,
+			//     desired all forgotten).
+			// There is no matching "capture ended" call: the state left
+			// behind here is already the correct starting point -- the very
+			// next real OnPhysical() after capture ends is treated exactly
+			// like any other "engine was idle" press (immediate, no
+			// debounce), which is "resume cleanly" for free. A key still
+			// physically held THROUGH the whole capture window (rare: it
+			// means the user opened the Shell while already holding a
+			// movement key and never let go) is a documented simplification
+			// this does not chase: its eventual physical release, after
+			// capture ends, is swallowed as a no-op (the engine already
+			// believes it isn't held), which matches the eager release just
+			// issued -- the game does not end up with a key stuck down
+			// either way, only a movement key held into a menu opening
+			// stopping the character early, which is the price of the
+			// eager-release guarantee.
+			Result OnCaptureStart()
+			{
+				Result result;
+				ReleaseSentAndReset( m_AD, 0, result );
+				ReleaseSentAndReset( m_WS, 1, result );
+				FillDeadline( result );
+				return result;
+			}
+
 		private:
 			struct PairState
 			{
@@ -403,6 +487,24 @@ namespace gamescope
 					p.sent[ p.pending_target ] = true;
 					p.pending_active = false;
 				}
+			}
+
+			// OnCaptureStart()'s own per-pair half: emit a release for any
+			// currently-sent key, then discard the whole pair state (held,
+			// sent, desired, any pending press) back to a blank idle slate.
+			// Deliberately NOT ReconcileDeactivate: that also presses a
+			// held-but-unsent loser, which is the "feature switched off,
+			// pass both through raw" guarantee -- wrong here, since
+			// capturing does not disable cleaning, it just stops feeding
+			// this engine events for a while.
+			static void ReleaseSentAndReset( PairState &p, int pairIdx, Result &result )
+			{
+				for ( int i = 0; i < 2; i++ )
+				{
+					if ( p.sent[ i ] )
+						result.emits.push_back( { KeyOf( pairIdx, i ), false } );
+				}
+				p = PairState{};
 			}
 
 			// bWasActive -> bWillBeActive for one pair. Only the two
