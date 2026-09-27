@@ -55,7 +55,7 @@ rather than at an arbitrary round figure.
 
 ## The chord: a held action on `Mouse4`
 
-`keybinds::Action::Autoclicker` (`autoclicker`, "Toggle autoclicker", default
+`keybinds::Action::Autoclicker` (`autoclicker`, "Autoclicker", default
 `Mouse4`) is flagged `bHeld`, the same held-action rule the zoom introduced
 ([keybinds.md](keybinds.md)): it fires on the press that completes the chord as
 a *subset* of the held keys (so it works mid-movement), only when not already

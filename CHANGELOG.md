@@ -30,6 +30,8 @@ The newest version below is the one this build reports.
   badge on a collapsed/expanded group icon no longer looks clipped against the
   rail edge, and hovering a group now shows its name in a properly padded label
   instead of an unstyled sliver.
+- **Keybinds: the autoclicker's hotkey is just "Autoclicker"**: it no longer says
+  "toggle", since the autoclicker can be set to hold or toggle.
 
 ### Info
 - **Settings rail groups are now expandable tabs**: DISPLAY/MISC/SETTINGS/OTHER open

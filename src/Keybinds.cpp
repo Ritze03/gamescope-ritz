@@ -213,7 +213,7 @@ namespace gamescope::keybinds
 			// LCtrl+RShift, Ctrl+Shift+Tab, RMB) nor with the reserved
 			// Ctrl+Alt+Shift+O. `Mouse4` is the spelling kButtons above
 			// accepts (XKB_KEY_Pointer_Button4 / BTN_SIDE).
-			{ "autoclicker", "Toggle autoclicker", "Mouse4",
+			{ "autoclicker", "Autoclicker", "Mouse4",
 			  "The key or mouse button that makes the autoclicker click (Settings > Autoclicker "
 			  "decides the rate, hold-or-toggle and which button is clicked). Fires while other "
 			  "keys are held, so it works mid-movement, and a mouse button is never taken away "
