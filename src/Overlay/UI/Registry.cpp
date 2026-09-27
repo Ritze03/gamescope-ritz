@@ -1,4 +1,5 @@
 #include "Registry.h"
+#include "Tokens.h"   // Approach() -- StepRailAccordionAnim()'s own motion, I7
 
 #include <algorithm>
 #include <cmath>
@@ -888,6 +889,8 @@ namespace gamescope::ui
 		switch ( eGroup )
 		{
 			case RailGroup::Display:  return "DISPLAY";
+			case RailGroup::Overlay:  return "OVERLAY";
+			case RailGroup::Input:    return "INPUT";
 			case RailGroup::Misc:     return "MISC";
 			case RailGroup::Settings: return "SETTINGS";
 			case RailGroup::Other:    return "OTHER";
@@ -901,28 +904,46 @@ namespace gamescope::ui
 
 	namespace
 	{
+		// Six groups since 2026-09-27 (I7) -- see the section comment above
+		// the RailGroup enum in Registry.h for the user's own table and the
+		// reasoning behind the split. input.general is not a registered
+		// Area yet (a sibling task adds it); its slot sits here anyway --
+		// RailAreas() below tolerates a slot FindArea() cannot resolve.
 		constexpr RailSlot kRailOrder[] = {
+			// ---- DISPLAY -- unchanged by I7; the user named only the
+			// first three ("reorder SOME of the categories"), and the
+			// other three were already in this relative order.
 			{ "display.general",       RailGroup::Display },
 			{ "display.resolution",    RailGroup::Display },
 			{ "display.upscaling",     RailGroup::Display },
 			{ "display.frame_limiter", RailGroup::Display },
 			{ "display.hdr",           RailGroup::Display },
 			{ "image.shaders",         RailGroup::Display },
-			{ "system.hud",            RailGroup::Misc },
-			{ "audio.mixer",           RailGroup::Misc },
-			{ "system.crosshair",      RailGroup::Misc },
-			{ "system.zoom",           RailGroup::Misc },
-			{ "system.autoclicker",    RailGroup::Misc },
-			{ "system.null_binds",     RailGroup::Misc },
-			// The friends list sits with the other things that appear OVER
-			// the game on a hotkey rather than with the configuration pages;
-			// it is a surface you use mid-match, not a page you set up once.
+			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
+			// moves here from Settings (it is the pointer's own on-screen
+			// appearance, the same "drawn over the game" concern as the
+			// HUD/Crosshair/Zoom it now sits beside).
+			{ "system.hud",            RailGroup::Overlay },
+			{ "system.crosshair",      RailGroup::Overlay },
+			{ "system.zoom",           RailGroup::Overlay },
+			{ "setup.cursor",          RailGroup::Overlay },
+			// ---- INPUT -- I7: things that intercept or rewrite input.
+			// input.general carries Force grab cursor (moved out of
+			// display.general by the sibling task) and Force grab keyboard.
+			{ "input.general",         RailGroup::Input },
+			{ "system.autoclicker",    RailGroup::Input },
+			{ "system.null_binds",     RailGroup::Input },
+			// ---- MISC -- I7: the true leftover once Overlay and Input
+			// took their own concerns out -- two areas with nothing else
+			// in common besides "neither of the above".
 			{ "system.friends",        RailGroup::Misc },
+			{ "audio.mixer",           RailGroup::Misc },
+			// ---- SETTINGS -- unchanged by I7 except Cursor's departure.
 			{ "setup.profiles",        RailGroup::Settings },
 			{ "system.general",        RailGroup::Settings },
 			{ "setup.appearance",      RailGroup::Settings },
-			{ "setup.cursor",          RailGroup::Settings },
 			{ "setup.keybinds",        RailGroup::Settings },
+			// ---- OTHER -- unchanged.
 			{ "system.log",            RailGroup::Other },
 			{ "system.changelog",      RailGroup::Other },
 		};
@@ -1012,6 +1033,44 @@ namespace gamescope::ui
 			y += (float)nRowsInPrevGroup * kItemH;
 
 		return y + kPad;
+	}
+
+	// =========================================================================
+	//  The rail accordion's two independent heights -- see the declarations'
+	//  own comment in Registry.h (I7, 2026-09-27) for the bug this fixes.
+	// =========================================================================
+	void StepRailAccordionAnim( RailAccordionAnim &s, RailGroup eNewOpen, float flNewOpenTargetH,
+	                             float flDurationSeconds, float flDeltaTime )
+	{
+		if ( eNewOpen != s.eOpenGroup )
+		{
+			// The group that WAS commanded open takes the closing slot,
+			// starting from whatever height it had already reached -- a
+			// group clicked shut before it finished opening reverses
+			// smoothly instead of jumping to full height first. See the
+			// struct's own "KNOWN TRADEOFF" comment for what happens when
+			// the closing slot is already occupied by an earlier switch.
+			if ( s.eOpenGroup != RailGroup::Nothing )
+			{
+				s.eClosingGroup = s.eOpenGroup;
+				s.flClosingH    = s.flOpenH;
+			}
+			s.eOpenGroup = eNewOpen;
+			s.flOpenH    = 0.0f;   // the newly opening group always grows from 0
+		}
+
+		const float flOpenTarget = ( s.eOpenGroup != RailGroup::Nothing ) ? flNewOpenTargetH : 0.0f;
+		s.flOpenH = Approach( s.flOpenH, flOpenTarget, flDurationSeconds, flDeltaTime );
+
+		if ( s.eClosingGroup != RailGroup::Nothing )
+		{
+			s.flClosingH = Approach( s.flClosingH, 0.0f, flDurationSeconds, flDeltaTime );
+			if ( s.flClosingH <= 0.0f )
+			{
+				s.flClosingH    = 0.0f;
+				s.eClosingGroup = RailGroup::Nothing;
+			}
+		}
 	}
 
 	bool Registry::ClaimId( const std::string &sId )

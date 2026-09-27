@@ -570,26 +570,38 @@ Inherited rows draw nothing -- the parent's values are the baseline, and marking
 would bury the deviations the dot exists to show. The words (`inherited from Comp`,
 `overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
 
-### Rail groups (2026-09-06)
+### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7)
 
-The rail's small uppercase section dividers (`TypeRole::Section`, `Col(Role::TextMeta)` --
-the same label vocabulary the group/section headers elsewhere in this guide use) mark four
-fixed groups, in this order (requests-2026-09-06.md item 4): **DISPLAY** (General, Resolution,
-Upscaling, Frame limiter, HDR, Shaders), **MISC** (HUD, Mixer, Crosshair), **SETTINGS**
-(Profiles, System, Appearance, Cursor), **OTHER** (Log, Changelog). The icon-collapsed rail
-keeps the divider as a bare rule (§8.0's collapse is about width, and a heading is the one
-thing that cannot survive it) exactly as the section dividers already did.
+The rail's group headers mark **six** fixed groups today, in this order: **DISPLAY**
+(General, Resolution, Upscaling, Frame limiter, HDR, Shaders), **OVERLAY** (HUD, Crosshair,
+Zoom, Cursor), **INPUT** (General, Autoclicker, Null binds), **MISC** (Friends, Mixer),
+**SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
+icon-collapsed rail draws one icon button per group (see "Rail accordion" below) rather than
+a bare divider now, since I2's own accordion rework.
 
-This replaced an earlier three-way `DISPLAY` / `SYSTEM` / `SETUP` grouping keyed off each
-area's own `Section` at registration -- that enum (`Registry.h`) still exists (every
-`reg.Add()` call still takes one) but nothing draws from it any more. The four groups above
-are their own fixed table (`RailGroup`, `RailOrder()`, `RailGroupFor()` in `Registry.h`/`.cpp`,
+`Why:` (I7) the user's own table (lightly reflowed from its original bulleted form): *"lets
+reorder some of the categories: Display: General, Resolution, Upscaling. Overlay: HUD,
+Crosshair, Zoom, Cursor. Input: General (Force grab cursor [remove from Display > General],
+Force grab keyboard), Autoclicker, Null binds. Misc: Friends, Mixer."* MISC had grown to seven
+areas spanning three unrelated concerns --
+things drawn over the game (HUD/Crosshair/Zoom/Cursor), things that intercept or rewrite input
+(Autoclicker/Null binds, soon General's own grab toggles), and one unrelated social feature
+(Friends) -- so OVERLAY and INPUT split those two concerns into their own tabs, leaving MISC
+as the true two-item leftover. `input.general` is a NEW area a sibling task adds (this task
+only reserved its rail slot); until it lands, INPUT shows Autoclicker and Null binds only --
+`Registry::RailAreas()` skips a slot whose id `FindArea()` cannot resolve rather than
+crashing or leaving a gap, which is what let the table and the area land in separate commits.
+
+**Originally** (2026-09-06, requests-2026-09-06.md item 4): four groups -- DISPLAY (as
+above), MISC (HUD, Mixer, Crosshair), SETTINGS (Profiles, System, Appearance, Cursor), OTHER
+(Log, Changelog) -- which itself replaced an earlier three-way `DISPLAY` / `SYSTEM` / `SETUP`
+grouping keyed off each area's own `Section` at registration. That enum (`Registry.h`) still
+exists (every `reg.Add()` call still takes one) but nothing draws from it. The groups are
+their own fixed table (`RailGroup`, `RailOrder()`, `RailGroupFor()` in `Registry.h`/`.cpp`,
 walked by `Registry::RailAreas()`), independent of both `Section` and each area's own
 registration order, and kept in `Registry.cpp` rather than `Shell.cpp` (where the rail is
 actually drawn) so a plain unit test can pin it without an ImGui context -- see
-`test_overlay_ui.cpp`'s "rail:" test cases. `setup.cursor` is not named by the request's four
-groups; it kept its former `Setup` neighbours (Profiles, Appearance) under SETTINGS rather
-than a placement the request never specified.
+`test_overlay_ui.cpp`'s "rail:" test cases.
 
 ### Rail accordion (2026-09-27, I2, D2/D6)
 
@@ -911,6 +923,110 @@ claims above are *measured* off those captures, not eyeballed:
 - 577 test cases / 15,953,243 assertions pass, including this pass's two new pins
   (`kHeaderGapOpen >= 5.0f` and `kHeaderGapOpen < kHeaderGap`) and the unchanged
   "busiest group still fits at 1080p" test.
+
+### Rail regroup, animation fix, full-height indicator (2026-09-27, I7)
+
+Three independent fixes to the rail accordion, all in `Shell.cpp`'s `DrawRail()` plus
+`Registry.h`/`.cpp` and `Icons.cpp`, landed together.
+
+**1. The animation only worked in one direction.** `Why:` the user, verbatim: *"When i open a
+category above the currently open one, it animates nicely, but when i open one below, it
+doesnt. Fix that."*
+
+Root cause: I5's design (see its own section above) shared ONE animated height across
+whichever group's rows were "currently displayed" (`s_flRowsBlockAnim`/
+`s_eDisplayedRowsGroup`), reused as a single physical slot that both shrank (the closing
+group) and grew (the opening group) in one motion, always relocating to sit under the
+NEWLY-opened header. The group that had just closed vanished from `DrawRail()`'s own y-walk
+**instantly** on the very next frame — there was no second height left to animate it with.
+Whether that instant collapse was visible depended on table order: a group **below** the
+newly-opened one collapsing is off-screen from where the eye is looking (nothing between the
+top of the rail and the just-opened header changed), so "opening above" read as a clean
+reveal. A group **above** the newly-opened one collapsing shifts every header after it —
+including the one just clicked — up by the old group's full height in the very same frame the
+click lands, so "opening below" read as the clicked header teleporting before anything had a
+chance to animate.
+
+Fix: `Registry.h`'s new `RailAccordionAnim` struct tracks an **opening** group (always eases
+0 → its own rest height) and, separately, a **closing** group (whatever was open a moment
+ago, eases its own last height → 0) **concurrently**. `StepRailAccordionAnim()` (pure,
+unit-tested, `Registry.cpp`) is the whole state machine: on a change of which group is
+commanded open, the group that WAS open takes the closing slot at whatever height it had
+already reached (so clicking a header shut before it finishes opening reverses smoothly
+rather than jumping to full height first), and the newly-commanded group always starts its
+own grow from 0. Neither height's arithmetic knows or cares where the other sits in the
+table — `DrawRail()`'s `Walk()` lambda now takes both an opening `(group, height)` pair and a
+closing `(group, height)` pair, and for every group it visits top-down it just asks "is this
+the opening one, the closing one, or neither", so a closing group above the opening one
+shrinks in place exactly like a closing group below it does. Both independently push or pull
+every header after them by their own currently-animated height. `RowVisibleHeightPx()` (the
+per-row clip/reveal arithmetic) is unchanged and reused for both roles.
+
+Known tradeoff (documented in `RailAccordionAnim`'s own comment): only one closing slot
+exists. A third header click landing while an earlier switch's closing group has not yet
+reached 0 (two switches inside one ~160ms window) makes the still-shrinking group snap shut
+rather than finish easing — not a new limitation, the old single-slot design already
+re-targeted its one slot on rapid re-clicks; it is just now visible on the closing side too.
+Requires two DIFFERENT headers clicked inside one animation's duration to see at all.
+
+**2. The open header's accent bar was cut short.** `Why:` the user, verbatim: *"when a
+category is expanded, the active indicator on the left (colored vertical line) doesnt span
+the full width of the category box, fix that"* — by "width" they mean the bar's own long
+axis (vertical), i.e. the pill's full height top to bottom, not its horizontal extent.
+
+I6's bar was inset by `tok::kXS` at both the top and bottom "so it never fights the pill's
+rounded corners" — at an 8px inset on a 30px-tall pill, that is a third of the bar simply
+missing, which is exactly what read as "cut short". Fixed properly instead of just deleting
+the inset (a flush 90° corner sitting inside a ROUNDED pill corner would poke a small square
+nub past the pill's own curve): the bar now runs the pill's full `y0..y1`, with its own left
+two corners rounded at the SAME radius (`flHdrRound`) the pill itself uses via a new `eFlags`
+parameter on `Shell.cpp`'s `Fill()` helper (`ImDrawFlags_RoundCornersLeft`) — so it traces the
+pill's own rounding exactly rather than stopping short of it or poking past it. Verified by
+sampling pixel columns off a real capture: the bar's colour is present at the pill's very
+first and very last row, softened only by the shared corner's own anti-aliasing curve, not by
+a hard 8px gap (`build-release/verify-shots/rail-regroup-2026-09-27/crops/
+d-accent-bar-full-height-4x.png`).
+
+**3. The regroup.** Six groups now, DISPLAY / OVERLAY / INPUT / MISC / SETTINGS / OTHER --
+see "Rail groups" above for the full membership and the user's own words. `RailGroup` gained
+`Overlay` and `Input` (kept as `Nothing`, not `None` — Xlib's own `#define None 0L` still
+applies to this enum, same reason noted where it was first added). `IconForRailGroup()`
+gained two new freehand glyphs in the same style as the other four: OVERLAY is a large square
+frame ("the screen") with a small plain "+" reticle inside it, unconnected to the frame's own
+edges — distinct from `system.crosshair`'s own AREA glyph (a ring with arms crossing ITS
+edge) and from MISC's asterisk (diagonal lines with no enclosing frame at all). INPUT is a
+single wide keycap (one rounded rectangle) with a small filled legend mark low on its face —
+distinct from `setup.keybinds`' AREA glyph (three keycaps plus a spacebar, five shapes) and
+`system.null_binds`' AREA glyph (two separate keycaps joined by a chevron, four shapes).
+
+A debug-only ConVar, `overlay_e2_rail_anim_scale` (default 1.0, multiplies
+`tok::kDurRegion`), was added for this task's own verification — slows the 160ms accordion
+animation down enough that a screenshot reliably lands mid-transition instead of racing the
+async screenshot pipeline's own latency (I5's own attempt at this landed on the settled frame
+both times it tried, with no debug aid). Kept rather than removed: it is a small, clearly
+documented, always-1.0-by-default knob, useful for the next person who needs to catch this
+animation on camera again.
+
+**Verification.** A private headless sway plus a nested `--backend wayland` gamescope
+(`build-release/verify-rail-regroup.sh`, this task's own script, modelled on
+`scripts/pixel-regression.sh`'s recipe), captured under
+`build-release/verify-shots/rail-regroup-2026-09-27/`: DISPLAY open (`a-display-open.png`,
+6 rows: General/Resolution/Upscaling/Frame limiter/HDR/Shaders), OVERLAY open
+(`b-overlay-open.png`, 4 rows: HUD/Crosshair/Zoom/Cursor), INPUT open (`c-input-open.png`,
+Autoclicker/Null binds — `input.general` not yet registered, confirmed NOT to break the rail),
+the 4x accent-bar crop above, and — at `overlay_e2_rail_anim_scale 12` — genuine
+mid-transition frames in BOTH directions: `e-anim-opening-below-mid.png` (Display → Overlay,
+the direction that was broken) shows DISPLAY's own header already closed-styled while its
+General/Resolution rows are STILL ON SCREEN (mid-shrink, not yet vanished) at the same moment
+OVERLAY is showing only HUD/Crosshair/Zoom — Cursor not yet revealed (mid-grow) — the two
+animating concurrently, proving the fix; `g-anim-opening-above-mid.png` (Other → Display, the
+direction that already worked) shows the symmetric case: DISPLAY (opening, at the top of the
+table) mid-grow at 4 of 6 rows while OTHER (closing, at the bottom) still shows its own Log
+row mid-shrink. `e2`/`g2` show both pairs fully settled. 579 test cases / 15,953,365
+assertions pass (`tests/gamescope_tests`), including two new pure state-machine tests for
+`StepRailAccordionAnim()` and all 118 `[overlay_ui]` cases; one run this task also saw 13
+`test_steam_friends.cpp` failures on an unrelated subprocess-capture race (that file is
+untouched by this diff, and a clean re-run passed all 579).
 
 ### Sheet body: the mouse wheel now scrolls it (2026-09-27, I3, found via rail-polish finding 4)
 
