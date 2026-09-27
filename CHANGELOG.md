@@ -9,6 +9,26 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.10.0] – 2026-09-27
+
+### Added
+- **Null binds for WASD**: a new Null binds area (MISC) makes only the most recently
+  pressed key of A/D and W/S reach the game, with an adjustable delay and
+  randomization between switches, off by default since some anti-cheat may flag it.
+
+### Fixed
+- **Zoom: clicks land on what the projector shows**: while the zoom is up and the
+  game's own cursor is visible, clicking now selects what the projector shows under
+  the arrow, not whatever sits at the arrow's unmagnified position.
+- **HUD: Inverted text colour follows the scene**: the FPS number's Inverted colour
+  now samples the game underneath it and shows the plain inverse, instead of staying
+  white.
+
+### Info
+- **Settings rail groups are now expandable tabs**: DISPLAY/MISC/SETTINGS/OTHER open
+  one at a time, with the group holding the current page opening automatically, so
+  the rail no longer overflows.
+
 ## [0.9.2] – 2026-09-25
 
 ### Added

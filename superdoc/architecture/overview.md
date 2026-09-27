@@ -80,6 +80,15 @@ one place that wires all of it together at startup.
   runtime-tunable-variable and debug-command system used throughout the codebase,
   optionally bound into an embedded Lua console (`CScriptManager`,
   `src/Script/Script.h:37`). See [scripting-convars](../features/scripting-convars.md).
+- **Null binds (WASD SOCD cleaning)** — `gamescope::nullbinds::Engine`
+  (`src/Overlay/NullBinds.{h,cpp}`), a pure engine hooked from the **top** of both
+  `wlserver_key()` and `wlserver_handle_key()` (`src/wlserver.cpp`, under
+  `wlserver_lock()`, guarded by `!NullBinds_IsInjecting()` so its own synthetic
+  key events don't re-enter it) — the second call site exists because a real
+  keyboard under DRM/embedded mode never goes through `wlserver_key()` at all.
+  `NullBinds_Tick()`, called once a frame from `steamcompmgr.cpp` next to
+  `Zoom_FillRequest()`, keeps a profile's setting live even if the Shell is never
+  opened. See [null-binds](../features/null-binds.md).
 - **Latent/unwired code** — `gamescope::CLibInputHandler` (`src/LibInputHandler.h:11`)
   is a fully-implemented `IWaitable` for driving raw `libinput` events without a seat
   (intended for a VR global-input path) but has **no call site anywhere in the
@@ -249,6 +258,9 @@ covered in depth on their own pages rather than repeated here:
   [clipboard-sync](../features/clipboard-sync.md): four separate clipboard holders
   funnelled through `gamescope_broadcast_clipboard()` (`src/steamcompmgr.cpp`), fed by
   the data-control protocols in `src/Backends/WaylandBackend.cpp`.
+- **"A/D or W/S aren't behaving like normal keys"** —
+  [null-binds](../features/null-binds.md): the hook sits at the top of both
+  `wlserver_key()` and `wlserver_handle_key()` in `src/wlserver.cpp`.
 - **"Where does a new build/feature flag get wired up?"** —
   [build-and-tooling](../features/build-and-tooling.md)'s Meson options table.
 - New to the codebase entirely: read this page top to bottom, then

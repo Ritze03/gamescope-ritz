@@ -57,6 +57,12 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   absolute-deadline worker thread rather than the frame loop or a Wayland timer, the
   feedback-loop guard that keeps a synthetic click out of the keybind engine, and the
   RAII release that makes a stuck button unreachable.
+- [Null binds](features/null-binds.md) — the WASD SOCD-cleaning module (A/D, W/S,
+  independently switchable, last-input priority, Delay + Randomize jitter between a
+  real switch's synthetic release and press): the pure engine, the two call sites in
+  `wlserver_key()`/`wlserver_handle_key()`, the settings-overlay keyboard-capture
+  guard, and the per-frame `NullBinds_Tick()` that keeps a profile's setting live
+  without ever opening the Shell.
 
 ### Settings & config
 
