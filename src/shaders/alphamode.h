@@ -49,6 +49,31 @@ uint get_layer_alphamode(uint layerIdx) {
 // steady over a static patch of chrome.
 vec3 g_hudInvertColor = vec3(0.0);
 
+// CORRECTED 2026-09-27 (same day as the redesign above): the sample must be
+// inverted in ENCODED (sRGB-ish, "what the pixel looks like on screen")
+// space, not linear light. A plain `1.0 - linearColor` is a LINEAR invert,
+// and for the dark-to-mid scenes that dominate real gameplay (CS2 included)
+// that lands very close to white: encoded 51 -> linear ~0.03 -> 1-0.03 =
+// 0.97 -> re-encoded ~251; encoded 148 -> ~218. Verified live (this file's
+// own measurements): every one of three test backgrounds inverted to
+// within a few counts of white or near-white under the first cut of this
+// redesign, reproducing the exact "it just stays white" complaint the
+// whole redesign exists to fix -- just for a different reason than the
+// per-pixel invert's bugs (see the Root Cause note above). The user's own
+// words were "just invert it ... it's more like an OLED thingy", which
+// means the plain, everyday sense of "invert a pixel": what you'd get from
+// `255 - x` on the number actually on screen. That IS what a naive
+// `1.0 - c` gives for encoded values, so encode the linear sample first,
+// invert THAT, then decode back to linear for BlendLayer's own blend
+// space -- for SDR output the final composited channel value is exactly
+// `255 - bg` (encoded 51 -> 204, 148 -> 107, verified against
+// superdoc/features/fps-display.md's own measured table).
+vec3 InvertEncodedSample( vec3 linearColor )
+{
+    vec3 encoded = linearToSrgb( linearColor );
+    return srgbToLinear( clamp( 1.0f - encoded, 0.0f, 1.0f ) );
+}
+
 vec4 BlendLayer( uint layerIdx, vec4 outputValue, vec4 layerColor, float opacity )
 {
     float layerAlpha = opacity * layerColor.a;

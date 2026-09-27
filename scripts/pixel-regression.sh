@@ -58,10 +58,13 @@
 # WHAT EACH CHECK VERIFIES (see the header comment above each check_* function
 # for the exact assertion and superdoc/features/fps-display.md /
 # crosshair.md for the feature's own spec):
-#   inversion            -- HUD digit inverts a dark background
-#   inversion-midtone     -- HUD digit still discriminates at a mid-tone
-#                            background (the perceptual-floor push, the exact
-#                            band a past regression silently broke)
+#   inversion            -- HUD digit inverts a dark background (encoded
+#                            255-bg, single sample of the box centre)
+#   inversion-midtone     -- HUD digit still inverts correctly at a mid-tone
+#                            background -- no contrast guard runs any more
+#                            (retired 2026-09-27 with the per-pixel invert it
+#                            belonged to), so this is a plain 255-bg check
+#                            now, not a push-away-from-background one
 #   inversion-crosshair    -- Inverted HUD + crosshair in ONE layer: digit
 #                            still inverts AND the crosshair keeps its own
 #                            colour AND its outline stays black, all at once
@@ -190,12 +193,24 @@ BG_SAMPLE_X=$((OUT_W / 2))
 BG_SAMPLE_Y=$((OUT_H - 20))
 
 DIFF_THRESH=20      # "is this pixel not the flat background" chebyshev distance
-BLACK_THRESH=15     # "is this pixel near-black" -- separates a pushed-dark
-                    # inverted digit (e.g. 46,46,46) from a true black outline
-DIGIT_TOL=10        # per-channel tolerance vs the reference inversion values
-MIN_ENCODED_SEPARATION=90   # floor is 0.40*255=102 (alphamode.h's
-                            # kMinEncodedSeparation); a few counts of slack
-                            # for cross-driver pow() rounding
+BLACK_THRESH=15     # "is this pixel near-black" -- separates a true black
+                    # outline/AA-fringe pixel from real digit content
+DIGIT_TOL=4         # per-channel tolerance vs the reference inversion values
+                    # (2026-09-27: tightened from 10 -- the single-sample,
+                    # encoded-space invert is one clean sRGB round-trip with
+                    # no guard maths, and measured exactly on every test run)
+DIGIT_MIN_GAP=0     # 2026-09-27: the 2026-09-05 perceptual contrast guard
+                    # this used to require a floor for (encoded gap >= 0.40,
+                    # alphamode.h's kMinEncodedSeparation) was retired the
+                    # same day as the per-pixel invert it belonged to -- the
+                    # single-sample redesign inverts in plain encoded space
+                    # (255 - bg per channel for SDR) with no floor at all, so
+                    # a background near perceptual mid-grey now genuinely has
+                    # a small gap, on purpose (superdoc/features/
+                    # fps-display.md's "History: the retired contrast
+                    # guard"). Kept at 0 (rather than deleting cmd_digit's
+                    # min_gap parameter) so this stays a no-op check instead
+                    # of silently asserting a floor that no longer exists.
 
 FIXED_COLOR_HEX=0x40C0FF   # arbitrary, distinct-from-everything digit colour
 FIXED_COLOR_TOL=2          # task spec: "within ±2"
@@ -285,16 +300,26 @@ HUD_MARGIN_DIFF_EDGE_OUTLINE=16   # visible-per-floor outline-ring ink -- see de
 HUD_MARGIN_TOL_EXACT=0            # the visible-per-floor pixel sits exactly on the margin, by construction
 HUD_MARGIN_TOL_INK=1              # the solid ink, one AA fringe pixel further in -- see fps-display.md
 
-# Dark and mid-tone backgrounds, and the reference digit values measured
-# 2026-09-05 (superdoc/features/fps-display.md, "Verifying Inverted mode").
+# Dark and mid-tone backgrounds, and the reference digit values.
+# RE-MEASURED 2026-09-27 for the single-sample, encoded-space redesign
+# (superdoc/features/fps-display.md, "Verifying Inverted mode" and "Root
+# cause: why it 'just stayed white'"): a LINEAR-light invert of a dark or
+# mid background lands close to white (bg 51 -> 251, bg 148 -> 218), which
+# is what made the readout look permanently white over the mostly dark-to-
+# mid scenes real games show -- the actual bug this whole redesign traces
+# back to. Inverting in ENCODED space instead gives the plain, expected
+# 255 - bg per channel for SDR output: bg 51 -> 204, bg 148 -> 107. Both
+# measured exactly (headless, private sway + nested gamescope, this
+# script's own recipe) with no slack needed beyond DIGIT_TOL.
 BG_DARK_HEX="#333333"; BG_DARK_R=51;  BG_DARK_G=51;  BG_DARK_B=51
-EXP_DARK_R=251; EXP_DARK_G=251; EXP_DARK_B=251
+EXP_DARK_R=204; EXP_DARK_G=204; EXP_DARK_B=204
 
 BG_MID_HEX="#949494";  BG_MID_R=148; BG_MID_G=148; BG_MID_B=148
-EXP_MID_R=46;  EXP_MID_G=46;  EXP_MID_B=46
-MID_TOL=20   # the pushed-dark value is more sensitive to exact pow()
-             # rounding than a plain true-invert; a real regression (the
-             # 2026-09-05 bug) landed ~170 counts off, nowhere near this
+EXP_MID_R=107; EXP_MID_G=107; EXP_MID_B=107
+MID_TOL=4    # 2026-09-27: tightened from 20 -- the old value's sensitivity
+             # was specific to the retired contrast guard's push maths,
+             # which no longer runs; measured exactly (107,107,107) every
+             # run, same as DIGIT_TOL's own reasoning above
 
 # Crosshair geometry (apply_scaling off -- exact pixel path).
 CH_LINE_LENGTH=12
@@ -917,15 +942,17 @@ skip_check() {
 # ---------------------------------------------------------------------------
 
 # Inversion: HUD text mode Inverted, crosshair off. Digit core vs the
-# background pixel beside the box; dark bg expects a near-total invert,
-# mid-tone bg expects the perceptual-floor push (fps-display.md's
-# "Text colour: Fixed vs. Inverted" contrast guard).
+# background pixel beside the box; single sample of the readout box's own
+# centre, inverted in ENCODED space -- both dark and mid-tone backgrounds
+# expect plain 255-bg per channel, no push (fps-display.md's "Text colour:
+# Fixed vs. Inverted"; the 2026-09-05 contrast guard this once needed a
+# push for was retired 2026-09-27 with the per-pixel invert it belonged to).
 check_inversion() {
 	should_run inversion || { skip_check inversion "--only excluded it"; return; }
 	local shot; shot="$(take_screenshot 01-inversion-dark)"
 	run_sampler digit "$shot" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
 		"$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$DIFF_THRESH" "$BLACK_THRESH" \
-		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$MIN_ENCODED_SEPARATION" \
+		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$DIGIT_MIN_GAP" \
 		"inversion-dark"
 }
 
@@ -936,7 +963,7 @@ check_inversion_midtone() {
 	local shot; shot="$(take_screenshot 06-inversion-midtone)"
 	run_sampler digit "$shot" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
 		"$BG_MID_R" "$BG_MID_G" "$BG_MID_B" "$DIFF_THRESH" "$BLACK_THRESH" \
-		"$EXP_MID_R" "$EXP_MID_G" "$EXP_MID_B" "$MID_TOL" "$MIN_ENCODED_SEPARATION" \
+		"$EXP_MID_R" "$EXP_MID_G" "$EXP_MID_B" "$MID_TOL" "$DIGIT_MIN_GAP" \
 		"inversion-midtone"
 }
 
@@ -949,7 +976,7 @@ check_inversion_crosshair() {
 	local shot; shot="$(take_screenshot 02-inversion-crosshair)"
 	run_sampler digit "$shot" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
 		"$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$DIFF_THRESH" "$BLACK_THRESH" \
-		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$MIN_ENCODED_SEPARATION" \
+		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$DIGIT_MIN_GAP" \
 		"inversion-crosshair-digit"
 
 	local ch_r ch_g ch_b
@@ -979,7 +1006,7 @@ check_inversion_crosshair_alpha() {
 	# The digit must still invert with a translucent crosshair in the layer.
 	run_sampler digit "$shot" "$DIGIT_BOX_X0" "$DIGIT_BOX_Y0" "$DIGIT_BOX_X1" "$DIGIT_BOX_Y1" \
 		"$BG_DARK_R" "$BG_DARK_G" "$BG_DARK_B" "$DIFF_THRESH" "$BLACK_THRESH" \
-		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$MIN_ENCODED_SEPARATION" \
+		"$EXP_DARK_R" "$EXP_DARK_G" "$EXP_DARK_B" "$DIGIT_TOL" "$DIGIT_MIN_GAP" \
 		"inversion-crosshair-alpha-digit"
 	set_val "crosshair.line_opacity" 1.0
 	set_val "crosshair.enabled" 0

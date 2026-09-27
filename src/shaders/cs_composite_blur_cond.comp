@@ -49,7 +49,7 @@ void main() {
     // colour to sample.
     if (c_layerCount > 0 && u_hasInvertSample != 0u) {
         vec3 invertSample = clamp(textureLod(s_samplers[VKR_BLUR_EXTRA_SLOT], u_invertSamplePos, 0.0f).rgb, 0.0f, 1.0f);
-        g_hudInvertColor = 1.0f - invertSample;
+        g_hudInvertColor = InvertEncodedSample(invertSample);
     }
 
     for (int i = c_blur_layer_count; i < c_layerCount; i++) {

@@ -287,7 +287,8 @@ rather than in this file's own ImGui draw pass, same as before:
   own sampler at `u_invertSamplePos` (the box centre, in the SAME uniform
   block as `u_scale`/`u_offset`/`u_alphaMode` — `blit_push_data.h`, plus a
   `u_hasInvertSample` flag so a frame with no Inverted-mode HUD layer pays
-  nothing extra) — `1.0 - clamp(sample, 0, 1)`. `BlendLayer()`'s
+  nothing extra), then `InvertEncodedSample(clamp(sample, 0, 1))` — see the
+  next bullet for what that function does and why. `BlendLayer()`'s
   `alpha_mode_invert` branch then just reads that one value for every digit
   pixel it colours, weighted by the digit coverage `d` the marker recovers
   (below): `outputValue.rgb = bg * (1 - layerAlpha) + g_hudInvertColor * d`.
@@ -303,25 +304,35 @@ rather than in this file's own ImGui draw pass, same as before:
   `texelFetch()` in place of the sharpen filter. Fully-transparent
   HUD-texture pixels (`layerAlpha == 0`) pass the background through
   completely unchanged, as before.
-- **No contrast guard, on purpose.** The old per-pixel invert had
+- **No contrast guard, on purpose — and inverted in ENCODED space, not
+  linear (corrected 2026-09-27, same day).** The old per-pixel invert had
   a perceptual floor (2026-09-05, kept below in
   [History: the retired contrast guard](#history-the-retired-contrast-guard)
   for the record) that pushed a too-close inversion away from the
-  background. This redesign has none: the user's own ask was a plain
-  invert of one sampled pixel ("It should capture a single pixel of the
-  color below it and just invert it and use that color") — a mid-grey
-  background inverting to a close, mid-grey-ish digit is the honest
-  OLED-style behaviour that was asked for, not a defect. The inversion
-  itself is still done in **linear light** (`BlendLayer()` runs after
-  `apply_layer_color_mgmt()`, before `encodeOutputColor()` — the same
-  blend-space the pre-redesign per-pixel invert used), so the *encoded*
-  result is not a naive `255 - x`: encoded 51 inverts to encoded 251,
-  encoded 148 to encoded 218 (previously pushed to 46 by the retired
-  guard) — see the measured table under
-  [Verifying Inverted mode](#verifying-inverted-mode-pixel-recipe). Under
-  HDR/PQ the sampled colour is clamped to `[0, 1]` before inverting, same
-  reasoning as before: an out-of-range HDR value could otherwise hand
-  `1.0 - c` a negative or wildly out-of-range result.
+  background; this redesign has none, on the user's own ask: *"It should
+  capture a single pixel of the color below it and just invert it and use
+  that color ... it's more like an OLED thingy."* The FIRST cut of this
+  redesign kept the pre-existing blend's **linear-light** invert
+  (`BlendLayer()` runs after `apply_layer_color_mgmt()`, in linear-light
+  blend space) with the guard simply removed — which measured correctly
+  as "an honest invert" but turned out to be the wrong honest invert for
+  what the user meant: a linear invert of a DARK-to-MID scene (most of
+  CS2, most games) lands very close to WHITE (encoded 51 → linear invert
+  → encoded ~251; encoded 148 → ~218), reproducing the exact "it just
+  stays white" complaint the whole redesign exists to fix, just for a
+  different reason than the per-pixel invert's own bugs. "Just invert it"
+  in the user's own, everyday sense means inverting the pixel **as seen on
+  screen** — plain `255 − x` on each encoded channel — which requires
+  encoding the linear sample first, inverting THAT, then decoding back to
+  linear for `BlendLayer()`'s own blend space (`alphamode.h`'s
+  `InvertEncodedSample()`): encoded 51 → 204, encoded 148 → 107, a
+  per-channel colour (64,128,192) → (191,127,63) — exact `255 − x` per
+  channel for SDR output, measured and matched exactly (see
+  [Verifying Inverted mode](#verifying-inverted-mode-pixel-recipe)). Under
+  HDR/PQ the sampled colour is clamped to `[0, 1]` before this whole
+  encode/invert/decode round-trip, same reasoning as before: an
+  out-of-range HDR value could otherwise hand either transfer-function
+  call a negative or wildly out-of-range result.
 - **What it inverts against**: no longer "whatever has already been folded
   into `outputValue`" (the old per-pixel invert's own destination read) —
   the single sample is layer 0 alone (the game, plus the Shaders effects
@@ -413,16 +424,29 @@ verification rules for this task ruled out disturbing:
    uniform inverted colour by construction. That is not a bug in the old
    mechanism, but it looks exactly like "stays the same colour" to a
    player whose corner of the screen happens to be visually static.
+3. **A genuine bug in the FIRST cut of this very redesign** (found and
+   fixed the same day, before the user ever saw it, via this doc's own
+   measured table): the first cut kept the old mechanism's **linear-light**
+   invert, just with the destination-read replaced by the single sample.
+   Measured live, that made the symptom WORSE, not better — a linear
+   invert of a dark-to-mid scene (most of CS2, most games) lands very
+   close to white (encoded 51 → ~251, encoded 148 → ~218), which is the
+   "always white" complaint all over again, from a third, unrelated cause.
+   Inverting in **encoded** space instead (see the "No contrast guard"
+   bullet above) gives the plain `255 − x` per channel a player actually
+   means by "invert the pixel". This is the version shipped.
 
-This redesign (single sample of the box centre, above) structurally rules
-out both: it never reads the composited destination at all, so cause (1)
-cannot reproduce through it, and by sampling once and inverting rather than
-inverting many independent per-pixel local backgrounds, it changes exactly
-when the ONE sampled point changes — which is also just a more literal
-reading of what the user actually asked for. See
+This redesign (single sample of the box centre, inverted in encoded space)
+structurally rules out causes (1) and (2): it never reads the composited
+destination at all, so cause (1) cannot reproduce through it, and by
+sampling once and inverting rather than inverting many independent
+per-pixel local backgrounds, it changes exactly when the ONE sampled point
+changes — which is also just a more literal reading of what the user
+actually asked for. Cause (3) was this redesign's own, and is fixed by the
+encoded-space correction above. See
 [Verifying Inverted mode](#verifying-inverted-mode-pixel-recipe) for the
-measurements confirming the new behaviour tracks the sampled background,
-not a fixed colour.
+measurements confirming the shipped behaviour tracks the sampled
+background, not a fixed colour, and matches plain `255 − bg`.
 
 **Inverted mode has no lag-spike indication (2026-09-09).** It can't
 "invert" already-inverted text to signal a spike — doing that would show
@@ -569,16 +593,17 @@ colour (`g_hudInvertColor`) regardless of how thick the outline is.
 
 ### Verifying Inverted mode (pixel recipe)
 
-**Re-verified 2026-09-27 for the single-sample redesign** (headless: a
-private, invisible sway hosting a nested `--backend wayland` gamescope, no
-laptop round trip — the same recipe `scripts/pixel-regression.sh` automates,
-see that script's own header for why this is how pixel truth is captured
-in this sandbox). Config: `fps_display.color_mode = "inverted"`,
-`outline_strength 0`, `font_size 48`, anchor `top-left`, margin 24,
-`fps_display_force 60`, crosshair off. A flat-colour `kitty` client
-(`-o background=X -o foreground=X -o cursor=X`, matching
-`pixel-regression.sh`'s own substitute for `xterm`, which is not installed
-on this sandbox) stands in for the game, one solid colour at a time:
+**Re-verified 2026-09-27 for the single-sample, encoded-space redesign**
+(headless: a private, invisible sway hosting a nested `--backend wayland`
+gamescope, no laptop round trip — the same recipe
+`scripts/pixel-regression.sh` automates, see that script's own header for
+why this is how pixel truth is captured in this sandbox). Config:
+`fps_display.color_mode = "inverted"`, `outline_strength 0`, `font_size
+48`, anchor `top-left`, margin 24, `fps_display_force 60`, crosshair off.
+A flat-colour `kitty` client (`-o background=X -o foreground=X -o
+cursor=X`, matching `pixel-regression.sh`'s own substitute for `xterm`,
+which is not installed on this sandbox) stands in for the game, one solid
+colour at a time:
 
 ```
 gamescope --backend wayland -w 1280 -h 720 -W 1280 -H 720 \
@@ -590,27 +615,29 @@ gamescopectl screenshot "/path/shot.png 4"      # one quoted argument
 
 then sample the digit core (the most common non-background colour inside
 the digit box) and compare it to the box centre's own background colour,
-**inverted in linear light** — `1 − srgbToLinear(bg)`, re-encoded — since
-`BlendLayer()` still inverts in the same linear-light blend space the
-pre-redesign per-pixel invert used (see the "no contrast guard" bullet
-above); it is not a naive `255 − bg`. Three backgrounds, captured under
-`build-release/verify-shots/hud-invert-2026-09-27/`:
+inverted in **ENCODED** space — plain `255 − bg` per channel for SDR (see
+the "No contrast guard ... encoded, not linear" bullet above for why this
+replaced a linear-light invert within the same day). Three backgrounds,
+captured under `build-release/verify-shots/hud-invert-2026-09-27/`:
 
-| background (encoded) | digit core (measured) | expected (linear invert, computed) |
+| background (encoded) | digit core (measured) | expected (`255 − bg`) |
 |---|---|---|
-| `(51,51,51)` `#333333` | `(251,251,251)`, n=440 | `(251,251,251)` |
-| `(148,148,148)` `#949494` | `(218,218,218)`, n=450 | `(218,218,218)` |
-| `(64,128,192)` `#4080C0` | `(249,229,183)`, n=440 | `(249,229,183)` |
+| `(51,51,51)` `#333333` | `(204,204,204)`, n=440 | `(204,204,204)` |
+| `(148,148,148)` `#949494` | `(107,107,107)`, n=450 | `(107,107,107)` |
+| `(64,128,192)` `#4080C0` | `(191,127,63)`, n=439 | `(191,127,63)` |
 
-All three landed **exactly** on the computed linear-invert value (tol ±3,
-the same per-channel tolerance the pre-redesign table used for driver
-`pow()` rounding — no slack was needed here). Three things this confirms
-at once: the digit is no longer stuck white regardless of background (the
-reported bug); the retired contrast guard is genuinely gone (`148` gives
-the honest `218`, not the old guard's pushed `46` — see
-[History: the retired contrast guard](#history-the-retired-contrast-guard));
-and the per-channel colour case (`#4080C0`) shows the sample preserves hue,
-not just luma. A **second background swap mid-session** (`#333333` →
+All three landed **exactly** on plain `255 − bg` (tol ±3; no slack was
+needed in practice). Four things this confirms at once: the digit is no
+longer stuck white regardless of background (the reported bug); the
+retired contrast guard is genuinely gone (`148` gives `107`, not the old
+guard's pushed `46`, and not even the redesign's own short-lived
+linear-invert `218` — see
+[History: the retired contrast guard](#history-the-retired-contrast-guard)
+and [Root cause](#root-cause-why-it-just-stayed-white)'s cause 3); the
+per-channel colour case (`#4080C0`) shows the sample preserves hue, not
+just luma; and every dark-to-mid background now reads as a genuinely
+different, non-white colour, the specific thing a linear invert got wrong
+for real gameplay. A **second background swap mid-session** (`#333333` →
 `#949494` → `#4080C0`, one nested gamescope instance per colour) is the
 "it constantly changes" half of the user's ask: the digit colour tracked
 each new background's inversion across every relaunch. `n=` is the pixel
@@ -629,17 +656,26 @@ measured `(64, 192, 255)` against the configured `(64, 192, 255)` exactly —
 unaffected by this redesign, as expected (Fixed mode never touches
 `alphamode.h`'s invert branch).
 
-**`scripts/pixel-regression.sh`'s own Inverted-mode checks (`inversion`,
-`inversion-midtone`, `inversion-crosshair`, `inversion-crosshair-alpha`) are
-now STALE against this redesign** — they assert the OLD per-pixel
-mechanism's exact values, including the retired contrast guard's pushed
-`46`/`90`/`147` at `EXP_MID_R` etc. (that script is outside this change's
-scope; a future pass should update its `EXP_*`/`MIN_ENCODED_SEPARATION`
-constants for the single-sample behaviour above, or drop the
-now-inapplicable contrast-guard assertions). `layer-budget`,
-`fixed`, `outline`, `hud-margin` and every crosshair check are unaffected
-(none of them exercise the invert branch's colour, only its marker/coverage
-and layer-count behaviour, which this redesign did not touch).
+**`scripts/pixel-regression.sh`'s own Inverted-mode checks** (`inversion`,
+`inversion-midtone`, `inversion-crosshair`, `inversion-crosshair-alpha`)
+were updated the same day for this redesign: `EXP_DARK_*` 51→204 (was the
+retired guard's 251), `EXP_MID_*` 107 (was 46), `MID_TOL` loosened only to
+4 (was 20 — that slack was specific to the retired guard's push maths,
+which no longer runs), and the old `MIN_ENCODED_SEPARATION` floor is now
+`DIGIT_MIN_GAP=0` (a documented no-op — asserting a minimum gap would be
+re-imposing a guard that no longer exists). Re-run headlessly (this
+task's own rules: private sway, isolated `XDG_*` dirs, this session's own
+gamescope socket, `nice -n 19 ionice -c 3`) via `--only <check>` per
+check: `inversion`, `inversion-midtone`, `inversion-crosshair-digit`,
+`inversion-crosshair-alpha-digit`, `fixed-color` and `layer-budget` all
+PASS with the numbers above. One unrelated, pre-existing failure surfaced
+incidentally: `inversion-crosshair-outline-black` (the crosshair's OWN
+outline colour/position check, nothing to do with the HUD digit's invert
+colour) — `git diff` between this redesign's two commits and the base
+they started from shows `Crosshair.cpp`, `Crosshair.h` and this script's
+crosshair constants byte-identical throughout, so this predates and is
+unrelated to this change; not investigated further here (crosshair
+geometry is outside this task's scope), flagged for a separate look.
 
 ## Outline
 

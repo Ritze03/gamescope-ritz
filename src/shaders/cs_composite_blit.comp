@@ -45,7 +45,7 @@ void main() {
     // nothing extra.
     if (c_layerCount > 0 && u_hasInvertSample != 0u) {
         vec3 invertSample = clamp(sampleLayer(0, u_invertSamplePos).rgb * u_opacity[0], 0.0f, 1.0f);
-        g_hudInvertColor = 1.0f - invertSample;
+        g_hudInvertColor = InvertEncodedSample(invertSample);
     }
 
     for (int i = 1; i < c_layerCount; i++) {

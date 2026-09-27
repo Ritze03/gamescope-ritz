@@ -3661,12 +3661,14 @@ namespace gamescope
 			bool bNeedsFullComposite = false;
 			bNeedsFullComposite |= cv_composite_force;
 			bNeedsFullComposite |= bWasFirstFrame;
-			// True per-pixel invert (the FPS HUD's Inverted colour mode)
-			// reads the actual composited game colour under each glyph
-			// pixel -- DRM's partial-composition shortcut below removes the
-			// base game layer and composites overlays alone onto a plane
-			// ABOVE the game, which would invert transparent black instead.
-			// Scoped to only-when-actually-on: see FrameInfo_t's own comment.
+			// The FPS HUD's single-sample Inverted colour mode needs a real
+			// compute-composite dispatch to sample layer 0's own texture --
+			// DRM's partial-composition shortcut below removes the base
+			// game layer and composites overlays alone onto a plane ABOVE
+			// the game, which would sample transparent black instead.
+			// Scoped to only-when-actually-on: see FrameInfo_t's own
+			// comment (name kept from when this was a true per-pixel
+			// invert of the destination).
 			bNeedsFullComposite |= pFrameInfo->bNeedsDestinationBlend;
 			bNeedsFullComposite |= pFrameInfo->useFSRLayer0;
 			bNeedsFullComposite |= pFrameInfo->useNISLayer0;

@@ -138,7 +138,7 @@ void SetHudInvertSample()
     raw = apply_layer_color_mgmt(raw, 0, colorspace);
     raw *= u_opacity[0];
 
-    g_hudInvertColor = 1.0f - clamp(raw, 0.0f, 1.0f);
+    g_hudInvertColor = InvertEncodedSample(clamp(raw, 0.0f, 1.0f));
 }
 
 void main()
