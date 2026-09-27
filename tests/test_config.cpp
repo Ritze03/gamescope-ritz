@@ -1410,6 +1410,7 @@ namespace
         c.hide_mode = "shrink";
         c.hide_time_ms = 450;
         c.hide_animate_back = false;
+        c.hide_when_cursor_visible = true;
         c.apply_scaling = true;
         return c;
     }
@@ -1435,6 +1436,7 @@ namespace
         REQUIRE( a.hide_mode == b.hide_mode );
         REQUIRE( a.hide_time_ms == b.hide_time_ms );
         REQUIRE( a.hide_animate_back == b.hide_animate_back );
+        REQUIRE( a.hide_when_cursor_visible == b.hide_when_cursor_visible );
         REQUIRE( a.apply_scaling == b.apply_scaling );
     }
 }
@@ -1462,6 +1464,35 @@ TEST_CASE( "crosshair: the defaults round-trip too, and the master switch defaul
     Settings s{};
     REQUIRE( SaveSections( s ) );
     RequireCrosshairEquals( LoadGlobal().crosshair, CrosshairSettings{} );
+}
+
+// "Hide when cursor visible" (2026-09-28, superdoc/features/crosshair.md):
+// a separate switch from hide_on_right_click, off by default so nobody's
+// crosshair starts disappearing in menus they never asked it to.
+TEST_CASE( "crosshair.hide_when_cursor_visible defaults to off and round-trips independently of hide_on_right_click", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( CrosshairSettings{}.hide_when_cursor_visible == false );
+
+    Settings s{};
+    s.crosshair.enabled = true;
+    s.crosshair.hide_on_right_click = false;    // the OTHER hide, left off
+    s.crosshair.hide_when_cursor_visible = true; // only this one on
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.crosshair.hide_when_cursor_visible == true );
+    REQUIRE( loaded.crosshair.hide_on_right_click == false );
+
+    // And the reverse combination, to prove neither field leaks into the
+    // other on save/load.
+    s.crosshair.hide_on_right_click = true;
+    s.crosshair.hide_when_cursor_visible = false;
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.crosshair.hide_when_cursor_visible == false );
+    REQUIRE( loaded.crosshair.hide_on_right_click == true );
 }
 
 // ---------------------------------------------------------------------

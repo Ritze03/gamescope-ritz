@@ -21,6 +21,7 @@
 #include "CrosshairMath.h"
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
+#include "wlserver.hpp"
 #include "log.hpp"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
@@ -413,7 +414,21 @@ namespace gamescope
 	{
 		EnsureConfigLoaded();
 		const config::CrosshairSettings &c = s_Settings.crosshair;
-		if ( !c.enabled || !pDrawList )
+		if ( !pDrawList )
+			return false;
+
+		// "Hide when cursor visible": wlserver.bCursorHasImage && !locked --
+		// the same signal Zoom's mouse_scale_hidden_only reads, deliberately
+		// NOT wlserver.bCursorHidden (see ConfigSchema.h's own comment and
+		// superdoc/features/crosshair.md). bCursorHasImage is read here
+		// unguarded because it is written from THIS thread (steamcompmgr's
+		// MouseCursor::updateCursorFeedback(), called from paint()/
+		// getTexture()), never wlserver's; bMouseConstraintLocked is the
+		// atomic wlserver.cpp publishes for exactly this cross-thread read
+		// (wlserver.hpp), since dereferencing GetCursorConstraint()'s own
+		// pointer from this thread would not be safe.
+		const bool bCursorVisible = wlserver.bCursorHasImage && !wlserver.bMouseConstraintLocked.load( std::memory_order_relaxed );
+		if ( !crosshair::ShouldDraw( c.enabled, c.hide_when_cursor_visible, bCursorVisible ) )
 			return false;
 
 		s_bOutThisFrame = false;
@@ -613,7 +628,8 @@ namespace gamescope
 		// lands in. So the six groups below are declared Crosshair, Outline,
 		// Line, Auto-hide, Dot, Scaling -- an order chosen by hand-simulating
 		// the packer against each group's row count (Crosshair 1, Outline 4,
-		// Line 6, Auto-hide 4, Dot 4, Scaling 1 rows; a Composite colour row
+		// Line 6, Auto-hide 5 (2026-09-28: "Hide when cursor visible" added
+		// a fifth row), Dot 4, Scaling 1 rows; a Composite colour row
 		// counts as 2) so it lands Crosshair/Line/Dot in column 0 and
 		// Outline/Auto-hide/Scaling in column 1, each in the requested
 		// top-to-bottom order. This is fragile to future row-count changes
@@ -764,6 +780,18 @@ namespace gamescope
 			.Default( S{}.hide_animate_back )
 			.Keywords( "hide animate back reverse release restore pop" )
 			.DisabledUnless( HideOn, kHideOffReason );
+
+		// A separate switch from the right-click hide above -- the two may
+		// both apply at once, and this one has no fade of its own (see
+		// crosshair::ShouldDraw in CrosshairMath.h): while it's on, the
+		// crosshair simply isn't drawn any frame the game's own cursor is
+		// visible, and comes back the instant it isn't.
+		a.Switch( "crosshair.hide_when_cursor_visible", "Hide when cursor visible", CROSSHAIR_BIND( bool, hide_when_cursor_visible ) )
+			.Help( "Hides the crosshair whenever the game shows a mouse cursor, such as in menus, "
+			       "and brings it back as soon as the game hides its cursor again." )
+			.Default( S{}.hide_when_cursor_visible )
+			.Keywords( "hide cursor visible menu mouse pointer" )
+			.DisabledUnless( On, kOffReason );
 
 		// =================================================================
 		//  Dot

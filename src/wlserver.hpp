@@ -142,6 +142,20 @@ struct wlserver_t {
 	pixman_region32_t confine;
 	std::atomic<struct wlr_pointer_constraint_v1 *> mouse_constraint = { nullptr };
 
+	// Mirrors "is mouse_constraint currently LOCKED (not merely CONFINED, or
+	// absent)?" alongside mouse_constraint itself, set by wlserver.cpp's own
+	// wlserver_constrain_cursor()/handle_constraint_destroy() at the same
+	// two sites that call SetMouseConstraint() -- kept as a plain second
+	// atomic, rather than exposed by dereferencing GetCursorConstraint()'s
+	// pointer, precisely because that pointer is wlserver-thread-owned and
+	// can be destroyed by it; GetCursorConstraint() itself asserts the
+	// wlserver lock for that reason. Read from the steamcompmgr thread by
+	// the Crosshair's "Hide when cursor visible" (Overlay/Crosshair.cpp,
+	// superdoc/features/crosshair.md), the same `bCursorHasImage && !locked`
+	// signal Zoom's `mouse_scale_hidden_only` already computes inline on
+	// this (the wlserver) thread -- see wlserver_mousemotion().
+	std::atomic<bool> bMouseConstraintLocked = { false };
+
 	void SetMouseConstraint( struct wlr_pointer_constraint_v1 *pConstraint )
 	{
 		assert( wlserver_is_lock_held() );

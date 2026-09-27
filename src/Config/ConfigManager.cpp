@@ -222,6 +222,7 @@ namespace gamescope::config
                 c.hide_mode = JGetString( *pCross, "hide_mode", c.hide_mode );
                 c.hide_time_ms = JGetInt( *pCross, "hide_time_ms", c.hide_time_ms );
                 c.hide_animate_back = JGetBool( *pCross, "hide_animate_back", c.hide_animate_back );
+                c.hide_when_cursor_visible = JGetBool( *pCross, "hide_when_cursor_visible", c.hide_when_cursor_visible );
                 c.apply_scaling = JGetBool( *pCross, "apply_scaling", c.apply_scaling );
             }
 
@@ -620,6 +621,7 @@ namespace gamescope::config
             jCross[ "hide_mode" ] = c.hide_mode;
             jCross[ "hide_time_ms" ] = c.hide_time_ms;
             jCross[ "hide_animate_back" ] = c.hide_animate_back;
+            jCross[ "hide_when_cursor_visible" ] = c.hide_when_cursor_visible;
             jCross[ "apply_scaling" ] = c.apply_scaling;
 
             const auto &z = s.zoom;

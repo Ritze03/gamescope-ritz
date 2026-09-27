@@ -4040,6 +4040,7 @@ static void wlserver_constrain_cursor( struct wlr_pointer_constraint_v1 *pNewCon
 	}
 
 	wlserver.SetMouseConstraint( pNewConstraint );
+	wlserver.bMouseConstraintLocked.store( pNewConstraint && pNewConstraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED, std::memory_order_relaxed );
 
 	if ( !pNewConstraint )
 		return;
@@ -4072,6 +4073,7 @@ void handle_constraint_destroy(struct wl_listener *listener, void *data)
 		wlserver_warp_to_constraint_hint();
 
 		wlserver.SetMouseConstraint( nullptr );
+		wlserver.bMouseConstraintLocked.store( false, std::memory_order_relaxed );
 	}
 
 	delete pGamescopeConstraint;

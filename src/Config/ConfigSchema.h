@@ -313,6 +313,20 @@ namespace gamescope::config
         int hide_time_ms = 200;
         bool hide_animate_back = true;
 
+        // Hide while the game's own mouse cursor is visible -- a separate
+        // switch from hide_on_right_click above, off by default (2026-09-28).
+        // "Visible" is `wlserver.bCursorHasImage && !locked`, the same signal
+        // Zoom's `mouse_scale_hidden_only` reads (Overlay/Zoom.cpp) and for
+        // the same reason: it deliberately ignores `wlserver.bCursorHidden`,
+        // which also covers gamescope's own idle auto-hide and would
+        // wrongly bring the crosshair back over a menu whose cursor just sat
+        // still for a few seconds. Binary, not animated, unlike the
+        // right-click hide above -- see superdoc/features/crosshair.md.
+        // ADDITIVE (like every other field in this struct), so no schema
+        // bump: an older config simply has no "hide_when_cursor_visible" key
+        // and resolves to false.
+        bool hide_when_cursor_visible = false;
+
         // Off: every size above is in output pixels and the crosshair is
         // drawn square whatever the game's aspect. On: sizes are GAME
         // pixels, multiplied per axis by how gamescope stretches the game

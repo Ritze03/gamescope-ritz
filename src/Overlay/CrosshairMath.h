@@ -158,6 +158,26 @@ namespace gamescope::crosshair
 		return a.bHeld ? a.f < 1.0f : a.f > 0.0f;
 	}
 
+	// The static "is the crosshair eligible to draw at all this frame?"
+	// gate -- the master switch, and "Hide when cursor visible"
+	// (crosshair.hide_when_cursor_visible, superdoc/features/crosshair.md).
+	// Deliberately does NOT take the right-click auto-hide's own
+	// held/hide_on_right_click state: that hide is a continuous fade
+	// (HideState/AdvanceHide above), not a hard on/off, so folding "is RMB
+	// held" in here would either lie about the fade or force this predicate
+	// to reproduce AdvanceHide's own timing -- two different jobs. "Hide
+	// when cursor visible" has no fade of its own (a binary gate, unlike the
+	// right-click hide -- the two may both apply to the same frame), so it
+	// belongs here.
+	inline bool ShouldDraw( bool bEnabled, bool bHideWhenCursorVisible, bool bCursorVisible )
+	{
+		if ( !bEnabled )
+			return false;
+		if ( bHideWhenCursorVisible && bCursorVisible )
+			return false;
+		return true;
+	}
+
 	// Multipliers applied to the Style before Build(): flAlpha scales every
 	// element's opacity (outline included), flGap the arms' gap, flLength
 	// the arms' length AND the dot's size (Shrink's second half shrinks the

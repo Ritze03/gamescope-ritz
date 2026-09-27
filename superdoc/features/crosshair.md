@@ -2,13 +2,16 @@
 
 A crosshair gamescope draws over the game: four arms, an optional centre
 dot, an optional outline, an optional auto-hide while the right mouse
-button is held (animated both ways), and an optional per-axis stretch to
-match a stretched game. `src/Overlay/Crosshair.{h,cpp}` (config, settings area, right-click
-state, the draw), `src/Overlay/CrosshairMath.h` (the geometry and the hide
-animation, pure and unit-tested in `tests/test_crosshair.cpp`), config in
-`config::CrosshairSettings` (`src/Config/ConfigSchema.h`, JSON key
-`crosshair`), settings area `system.crosshair` ("Crosshair" in the rail,
-right after the HUD). Default **off**.
+button is held (animated both ways), an optional (separate) hide while the
+game's own cursor is visible (2026-09-28, see
+[Hide when cursor visible](#hide-when-cursor-visible)), and an optional
+per-axis stretch to match a stretched game. `src/Overlay/Crosshair.{h,cpp}`
+(config, settings area, right-click state, the draw), `src/Overlay/CrosshairMath.h`
+(the geometry and the hide animation, pure and unit-tested in
+`tests/test_crosshair.cpp`), config in `config::CrosshairSettings`
+(`src/Config/ConfigSchema.h`, JSON key `crosshair`), settings area
+`system.crosshair` ("Crosshair" in the rail, right after the HUD). Default
+**off**.
 
 > **Why (2026-09-05):** the user runs frame generation externally —
 > `lsfg-vk` as a Vulkan layer inside the game's own process. It
@@ -63,6 +66,7 @@ dot is off", and so on).
 | | Right | Hide mode | `hide_mode` | Choice. **Stored** in config as a stable string key (`"fade"` / `"focus"` / `"shrink"`, `CrosshairSettings::hide_mode`); the **row is int-backed** like every registry Choice, so `overlay_e2_set crosshair.hide_mode N` takes the option index -- `0` fade, `1` focus, `2` shrink -- and a word is parsed as 0 (fade). `Crosshair.cpp`'s `HideModeToInt()`/`HideModeFromInt()` are the two-way map. |
 | | Right | Time to hide | `hide_time_ms` | ms, 0–2000; 0 hides (and comes back) at once |
 | | Right | Animate back | `hide_animate_back` | Default **on** (2026-09-06, request #13). Release plays the hide backwards from wherever it was; off restores instantly. See [Auto-hide](#auto-hide-while-holding-right-click). |
+| | Right | Hide when cursor visible | `hide_when_cursor_visible` | Default **off** (2026-09-28). A separate switch from "Hide while holding right-click" above — both may apply at once. See [Hide when cursor visible](#hide-when-cursor-visible). |
 | Scaling | Right | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
 
 Pixel sizes are **ints**, not floats: the whole point of the 1px mode is
@@ -547,6 +551,83 @@ the rest its timestamp; only the first press of a hold is recorded) plus
 `force_repaint()`; it never reads the config cache — what a release
 *means* (reverse, or instant) is the render side's decision, which reads
 the atomic and the config together.
+
+## Hide when cursor visible
+
+`crosshair.hide_when_cursor_visible` (`config::CrosshairSettings`, default
+**off**), 2026-09-28. A separate switch from "Hide while holding
+right-click" above — both may apply to the same frame, and this one has no
+fade of its own: `crosshair::ShouldDraw()` (`CrosshairMath.h`) is a plain
+three-input gate (master switch, this switch, is-the-cursor-visible-right-now),
+tested as its own truth table in `tests/test_crosshair.cpp` rather than
+folded into `AdvanceHide`'s animation tests. While it is on, the crosshair
+simply is not drawn any frame the game shows its own mouse cursor, and
+reappears the instant it hides it again.
+
+> **Why (the user, verbatim):** *"For the crosshair, implement a setting
+> with a separate switch that basically auto-hides the crosshair as soon as
+> the cursor is visible. This is basically something like an inventory
+> detection, but don't mention that in the UI. Just call it something like
+> hide when cursor visible."* The row's label and help text ("Hides the
+> crosshair whenever the game shows a mouse cursor, such as in menus, and
+> brings it back as soon as the game hides its cursor again.") say nothing
+> about inventories on purpose — the mechanism generalises to any menu, not
+> just an inventory screen, and naming the one motivating case in the UI
+> would undersell what it actually does.
+
+**The signal: `wlserver.bCursorHasImage && !locked`, not
+`wlserver.bCursorHidden`.** Identical to the one Zoom's own
+`mouse_scale_hidden_only` already reads (`wlserver.cpp`'s
+`wlserver_mousemotion()`, superdoc's own cursor-pipeline.md) — this feature
+reuses the exact formula rather than inventing a second one.
+`wlserver.bCursorHidden` also covers gamescope's **own idle auto-hide**
+(`wlserver_check_cursor_dirty`/timeout): a menu cursor that has simply sat
+still for a few seconds sets it too, which would wrongly bring the
+crosshair back over a menu that is still open. `bCursorHasImage` (from
+`MouseCursor`'s alpha scan of `XFixesGetCursorImage()`, `steamcompmgr.cpp`)
+answers the narrower, correct question — did the game itself set an empty
+cursor image? — and the `!locked` term covers a game that has grabbed the
+pointer (`zwp_locked_pointer_v1`, an FPS's gameplay grab) a frame or two
+before its own cursor-image update lands.
+
+**Crossing threads.** `Crosshair_Draw()` runs on the steamcompmgr thread
+(`Crosshair.cpp`'s own threading note at the top of the file); computing
+`wlserver_pointer_is_locked()` needs `wlserver.GetCursorConstraint()`,
+which asserts the wlserver lock and dereferences a wlserver-thread-owned
+pointer that can be destroyed by it — not safe to call from here. Rather
+than take the wlserver lock every frame from the render path, wlserver
+publishes its own answer: `wlserver.bMouseConstraintLocked`, a new
+`std::atomic<bool>` (`wlserver.hpp`) set alongside `mouse_constraint`
+itself at its only two writers, `wlserver_constrain_cursor()` and
+`handle_constraint_destroy()` (both in `wlserver.cpp`, both already running
+on the wlserver thread with the lock held). `Crosshair_Draw()` then reads
+`wlserver.bCursorHasImage && !wlserver.bMouseConstraintLocked.load(...)`
+directly — `bCursorHasImage` unguarded is safe here specifically because
+it is *written* from this same steamcompmgr thread
+(`MouseCursor::updateCursorFeedback()`, called from `paint()`/
+`getTexture()`), never from wlserver's, so there is no cross-thread read of
+it at all; only the lock state needed a new atomic to cross safely.
+
+**Does the settings overlay being open count as "cursor visible"?
+Deliberately no.** The Shell and the Launcher draw their own pointer
+(`Overlay/CursorArt.cpp`, `superdoc/features/cursor-pipeline.md`) into the
+overlay's own texture; opening either never touches `wlserver.bCursorHasImage`,
+which only reflects the **game's** X11 cursor image. So the rule falls out
+of what the signal already means, with no extra code needed to exclude the
+overlay: a right-first-person game with its own cursor hidden keeps its
+crosshair even while the Shell is open on top of it (drawn by a later,
+higher layer), which is the intended reading of "the game's own cursor" —
+the setting is about what the *game* is showing, not what the compositor's
+own settings UI happens to be showing at the moment.
+
+**No debounce.** `bCursorHasImage` is set once per frame from a full
+alpha-scan of the current cursor image (`MouseCursor::getTexture()`), the
+same signal Zoom's `mouse_scale_hidden_only` already trusts un-debounced;
+nothing about this feature's per-frame read makes it noisier than that
+existing consumer, so no extra hysteresis was added. If a real game is
+found to flicker its cursor image for single frames (as opposed to a
+one-time genuine state change), that would be a re-visitable decision — but
+it has no precedent to justify pre-emptively guarding against here.
 
 ## Verification
 

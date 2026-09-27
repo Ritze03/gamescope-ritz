@@ -804,6 +804,31 @@ TEST_CASE( "AdvanceHide climbs from the press like HideProgress, reverses from t
 	REQUIRE_FALSE( HideAnimating( e ) );
 }
 
+// "Hide when cursor visible" (crosshair.hide_when_cursor_visible,
+// 2026-09-28, superdoc/features/crosshair.md): a separate, binary gate from
+// the right-click auto-hide's own fade, so it is tested as its own
+// three-input truth table rather than folded into AdvanceHide's tests
+// above.
+TEST_CASE( "ShouldDraw: the master switch, then \"hide when cursor visible\", gate independently", "[crosshair]" )
+{
+	// Master switch off: never draws, whatever the other two say.
+	REQUIRE_FALSE( ShouldDraw( false, false, false ) );
+	REQUIRE_FALSE( ShouldDraw( false, false, true ) );
+	REQUIRE_FALSE( ShouldDraw( false, true, false ) );
+	REQUIRE_FALSE( ShouldDraw( false, true, true ) );
+
+	// Master switch on, "hide when cursor visible" OFF (its default):
+	// always draws regardless of the cursor.
+	REQUIRE( ShouldDraw( true, false, false ) );
+	REQUIRE( ShouldDraw( true, false, true ) );
+
+	// Master switch on, "hide when cursor visible" ON: hidden exactly while
+	// the cursor is visible, drawn the instant it isn't -- no fade, unlike
+	// the right-click hide.
+	REQUIRE( ShouldDraw( true, true, false ) );
+	REQUIRE_FALSE( ShouldDraw( true, true, true ) );
+}
+
 namespace
 {
 	// Straight-alpha channel helpers for OutputRaster texels.
