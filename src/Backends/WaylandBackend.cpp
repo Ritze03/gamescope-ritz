@@ -12,6 +12,7 @@
 #include "Utils/TempFiles.h"
 #include "Clipboard/ClipboardSync.h"
 #include "Clipboard/WaylandDataControl.h"
+#include "Config/ConfigManager.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -34,6 +35,7 @@
 #include <color-management-v1-client-protocol.h>
 #include <pointer-constraints-unstable-v1-client-protocol.h>
 #include <relative-pointer-unstable-v1-client-protocol.h>
+#include <keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h>
 #include <primary-selection-unstable-v1-client-protocol.h>
 #include <fractional-scale-v1-client-protocol.h>
 #include <xdg-toplevel-icon-v1-client-protocol.h>
@@ -484,6 +486,17 @@ namespace gamescope
         virtual void SetSelection( std::shared_ptr<std::string> szContents, GamescopeSelection eSelection ) override;
         virtual const char *GetClipboardSyncStatus() const override;
         virtual void RequestOutputSize( uint32_t uWidth, uint32_t uHeight ) override;
+
+        // input.general's "Force grab keyboard" row (PanelInput.cpp) -- not
+        // an INestedHints override (that interface has no keyboard-grab
+        // hook), just a plain method this connector's own surface + the
+        // backend's seat implement the request with. Called from Init()
+        // (startup) and from WaylandBackend_SetKeyboardGrabbed() (live,
+        // main.cpp's ritz_apply_config_live() and PanelInput.cpp). No-op if
+        // the host compositor never advertised
+        // zwp_keyboard_shortcuts_inhibit_manager_v1 -- see
+        // GetKeyboardGrabStatus() and superdoc/features/input-general.md.
+        void SetKeyboardGrabbed( bool bGrabbed );
     private:
 
         friend CWaylandPlane;
@@ -709,6 +722,24 @@ namespace gamescope
 
         virtual bool UsesVirtualConnectors() override;
         virtual std::shared_ptr<IBackendConnector> CreateVirtualConnector( uint64_t ulVirtualConnectorKey ) override;
+
+        // input.general's "Force grab keyboard" -- read by
+        // WaylandBackend_GetKeyboardGrabStatus() below (PanelInput.cpp's
+        // input.backend_grab_support Diagnostics fact), so public rather
+        // than protected like SetKeyboardGrabbed() below: never "applies at
+        // next launch" here the way it used to before this row had a real
+        // Wayland implementation -- this backend's grab is either live now,
+        // declined by the compositor, unsupported outright, or simply not
+        // requested.
+        enum class KeyboardGrabStatus
+        {
+            NotRequested,
+            Unsupported, // No zwp_keyboard_shortcuts_inhibit_manager_v1 global.
+            Requested,   // Inhibitor created, no `active` event yet (or a compositor that never sends one).
+            Active,      // Inhibitor confirmed active by the compositor.
+            Inactive,    // Compositor sent `inactive` -- shortcuts restored, e.g. user override.
+        };
+        KeyboardGrabStatus GetKeyboardGrabStatus() const;
     protected:
         virtual void OnBackendBlobDestroyed( BackendBlob *pBlob ) override;
 
@@ -721,6 +752,14 @@ namespace gamescope
         bool PresentOverlayCursor( bool bOverlayActive, bool bCursorEverywhere );
         bool HasUsableHostCursor() const;
         void UpdateCursor();
+
+        // input.general's "Force grab keyboard" row -- see
+        // CWaylandConnector::SetKeyboardGrabbed()'s own comment for the
+        // call chain. Creates/destroys a zwp_keyboard_shortcuts_inhibit_v1
+        // for pSurface against m_pSeat; a no-op (host-shortcut inhibition
+        // stays off) when m_pKeyboardShortcutsInhibitManager or m_pSeat is
+        // null, which GetKeyboardGrabStatus() reports as "unsupported".
+        void SetKeyboardGrabbed( wl_surface *pSurface, bool bGrabbed );
 
         friend CWaylandConnector;
         friend CWaylandPlane;
@@ -793,6 +832,18 @@ namespace gamescope
 		void Wayland_LockedPointer_Unlocked( zwp_locked_pointer_v1 *pLockedPointer );
 		static const zwp_locked_pointer_v1_listener s_LockedPointerListener;
 
+		// input.general's "Force grab keyboard" -- see SetKeyboardGrabbed()
+		// above. `active`/`inactive` are how the compositor tells us
+		// whether it's actually honouring the inhibitor right now (a user
+		// can disable it live via whatever mechanism the compositor offers,
+		// e.g. Hyprland's own bypass bind -- see
+		// superdoc/features/input-general.md's Hyprland section); logged at
+		// minimum, and folded into GetKeyboardGrabStatus() for the
+		// Diagnostics fact.
+		void Wayland_KeyboardShortcutsInhibitor_Active( zwp_keyboard_shortcuts_inhibitor_v1 *pInhibitor );
+		void Wayland_KeyboardShortcutsInhibitor_Inactive( zwp_keyboard_shortcuts_inhibitor_v1 *pInhibitor );
+		static const zwp_keyboard_shortcuts_inhibitor_v1_listener s_KeyboardShortcutsInhibitorListener;
+
         void Wayland_WPColorManager_SupportedIntent( wp_color_manager_v1 *pWPColorManager, uint32_t uRenderIntent );
         void Wayland_WPColorManager_SupportedFeature( wp_color_manager_v1 *pWPColorManager, uint32_t uFeature );
         void Wayland_WPColorManager_SupportedTFNamed( wp_color_manager_v1 *pWPColorManager, uint32_t uTF );
@@ -846,6 +897,10 @@ namespace gamescope
         wp_image_description_v1 *m_pWPImageDescriptions[ GamescopeAppTextureColorspace_Count ]{};
         zwp_pointer_constraints_v1 *m_pPointerConstraints = nullptr;
         zwp_relative_pointer_manager_v1 *m_pRelativePointerManager = nullptr;
+        // input.general's "Force grab keyboard" -- null on a host compositor
+        // that never advertises this global (GetKeyboardGrabStatus() reads
+        // this to report Unsupported rather than silently doing nothing).
+        zwp_keyboard_shortcuts_inhibit_manager_v1 *m_pKeyboardShortcutsInhibitManager = nullptr;
         wp_fractional_scale_manager_v1 *m_pFractionalScaleManager = nullptr;
         xdg_toplevel_icon_manager_v1 *m_pToplevelIconManager = nullptr;
 
@@ -908,6 +963,20 @@ namespace gamescope
 		bool m_bRelativeMouseRequested = false;
         wl_surface *m_pLockedSurface = nullptr;
         zwp_relative_pointer_v1 *m_pRelativePointer = nullptr;
+
+        // input.general's "Force grab keyboard" -- mirrors
+        // m_pLockedPointer/m_pLockedSurface's shape just above: the
+        // inhibitor object and the surface it was created for (so a second
+        // SetKeyboardGrabbed() call for a DIFFERENT surface tears down and
+        // recreates rather than hitting the protocol's own
+        // "already_inhibited" error).
+        zwp_keyboard_shortcuts_inhibitor_v1 *m_pKeyboardShortcutsInhibitor = nullptr;
+        wl_surface *m_pKeyboardShortcutsInhibitedSurface = nullptr;
+        // GetKeyboardGrabStatus()'s own state when an inhibitor exists --
+        // Requested until the FIRST active/inactive event arrives (some
+        // compositors may never send one), then tracks whichever of the two
+        // was last received.
+        KeyboardGrabStatus m_eKeyboardShortcutsInhibitorState = KeyboardGrabStatus::NotRequested;
 
         bool m_bCanUseModifiers = false;
         std::unordered_map<uint32_t, std::vector<uint64_t>> m_FormatModifiers;
@@ -984,6 +1053,12 @@ namespace gamescope
 	{
 		.locked        = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_LockedPointer_Locked ),
 		.unlocked      = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_LockedPointer_Unlocked ),
+	};
+
+	const zwp_keyboard_shortcuts_inhibitor_v1_listener CWaylandBackend::s_KeyboardShortcutsInhibitorListener =
+	{
+		.active        = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_KeyboardShortcutsInhibitor_Active ),
+		.inactive      = WAYLAND_USERDATA_TO_THIS( CWaylandBackend, Wayland_KeyboardShortcutsInhibitor_Inactive ),
 	};
 
     const wp_color_manager_v1_listener CWaylandBackend::s_WPColorManagerListener
@@ -1128,6 +1203,19 @@ namespace gamescope
 
         if ( g_bForceRelativeMouse )
             this->SetRelativeMouseMode( true );
+
+        // Config seeds g_bGrabbed here, at connector Init() time, when the
+        // CLI (-g/--grab, main.cpp's getopt loop) didn't already set it true
+        // -- the same "config seeds, an explicit CLI flag still wins"
+        // ordering SDLBackend.cpp's CSDLConnector::Init() uses for the same
+        // field (see that function's own comment): this runs after both of
+        // main.cpp's getopt passes, so g_bGrabbed already reflects an
+        // explicit -g by the time this line runs.
+        if ( !g_bGrabbed && gamescope::config::ResolvedSettings().gamescope.force_grab_keyboard )
+            g_bGrabbed = true;
+
+        if ( g_bGrabbed )
+            this->SetKeyboardGrabbed( true );
 
         return true;
     }
@@ -1436,16 +1524,25 @@ namespace gamescope
     {
         std::string szTitle = pAppTitle ? *pAppTitle : "gamescope";
         // g_bGrabbed (-g/--grab, and input.general's "Force grab keyboard"
-        // row, PanelInput.cpp) only ever reaches this title suffix on the
-        // Wayland backend -- unlike SDLBackend.cpp, this file binds no
-        // zwp_keyboard_shortcuts_inhibit_manager_v1 (or any other protocol),
-        // so there is no actual host-shortcut inhibition here, only the
-        // label below. Wiring the real protocol needs a client-protocol XML
-        // added to protocol/meson.build, outside this change's scope -- see
-        // superdoc/features/input-general.md's "Wayland backend" section.
+        // row, PanelInput.cpp) reaches this title suffix AND -- since
+        // 2026-09-27, via SetKeyboardGrabbed() below -- a real
+        // zwp_keyboard_shortcuts_inhibit_v1 for this surface, so "(grabbed)"
+        // now means the same thing here it does on the SDL backend: the
+        // suffix reflects the REQUEST (g_bGrabbed), not whether the
+        // compositor is actually honouring it -- that's
+        // GetKeyboardGrabStatus() below, read by the Diagnostics fact.
         if ( g_bGrabbed )
             szTitle += " (grabbed)";
         libdecor_frame_set_title( m_Planes[0].GetFrame(), szTitle.c_str() );
+    }
+
+    // See this method's own declaration for what it is. Delegates to the
+    // backend, which owns the seat and the bound manager -- same shape as
+    // CWaylandConnector::SetRelativeMouseMode() above delegating to
+    // CWaylandBackend::SetRelativeMouseMode( wl_surface *, bool ).
+    void CWaylandConnector::SetKeyboardGrabbed( bool bGrabbed )
+    {
+        m_pBackend->SetKeyboardGrabbed( m_Planes[0].GetSurface(), bGrabbed );
     }
     void CWaylandConnector::SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels )
     {
@@ -2727,6 +2824,86 @@ namespace gamescope
         }
     }
 
+    // input.general's "Force grab keyboard" -- same shape as
+    // SetRelativeMouseMode() just above: an early bookkeeping write (there
+    // is nothing here that needs "requested but not yet possible" tracking
+    // the way m_bRelativeMouseRequested does for the cursor rule, since
+    // GetKeyboardGrabStatus() derives its answer entirely from
+    // m_pKeyboardShortcutsInhibitManager/m_pKeyboardShortcutsInhibitor
+    // instead of a separate intent flag), then create-or-destroy the
+    // inhibitor to match.
+    //
+    // SAFETY: this only ever calls zwp_keyboard_shortcuts_inhibit_manager_v1
+    // _inhibit_shortcuts(), which per the protocol's own doc comment stops
+    // the HOST compositor's own shortcuts on pSurface+m_pSeat -- it has no
+    // effect at all on which wl_keyboard events THIS process receives, so
+    // gamescope's own keybind matching (wlserver's keyboard handling, RShift
+    // / the reserved Ctrl+Alt+Shift+O) is untouched regardless of this
+    // switch. See superdoc/features/input-general.md's Safety section.
+    void CWaylandBackend::SetKeyboardGrabbed( wl_surface *pSurface, bool bGrabbed )
+    {
+        // Unsupported by this compositor -- see GetKeyboardGrabStatus().
+        // g_bGrabbed/the config field still get written by the caller (same
+        // as every non-SDL backend before this), just nothing live happens.
+        if ( !m_pKeyboardShortcutsInhibitManager || !m_pSeat )
+            return;
+
+        if ( !!bGrabbed == !!m_pKeyboardShortcutsInhibitor && pSurface == m_pKeyboardShortcutsInhibitedSurface )
+            return;
+
+        if ( m_pKeyboardShortcutsInhibitor )
+        {
+            zwp_keyboard_shortcuts_inhibitor_v1_destroy( m_pKeyboardShortcutsInhibitor );
+            m_pKeyboardShortcutsInhibitor = nullptr;
+            m_pKeyboardShortcutsInhibitedSurface = nullptr;
+            m_eKeyboardShortcutsInhibitorState = KeyboardGrabStatus::NotRequested;
+        }
+
+        if ( bGrabbed )
+        {
+            // Raises the protocol's own "already_inhibited" error if called
+            // twice for the same surface+seat without a destroy between --
+            // the early-out and the unconditional destroy-before-create
+            // above both exist to keep that from ever happening here.
+            m_pKeyboardShortcutsInhibitor = zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts( m_pKeyboardShortcutsInhibitManager, pSurface, m_pSeat );
+            zwp_keyboard_shortcuts_inhibitor_v1_add_listener( m_pKeyboardShortcutsInhibitor, &s_KeyboardShortcutsInhibitorListener, this );
+            m_pKeyboardShortcutsInhibitedSurface = pSurface;
+            m_eKeyboardShortcutsInhibitorState = KeyboardGrabStatus::Requested;
+
+            xdg_log.infof( "input.force_grab_keyboard: requested a keyboard-shortcuts inhibitor" );
+        }
+        else
+        {
+            xdg_log.infof( "input.force_grab_keyboard: released the keyboard-shortcuts inhibitor" );
+        }
+    }
+
+    CWaylandBackend::KeyboardGrabStatus CWaylandBackend::GetKeyboardGrabStatus() const
+    {
+        if ( !m_pKeyboardShortcutsInhibitManager )
+            return KeyboardGrabStatus::Unsupported;
+        if ( !m_pKeyboardShortcutsInhibitor )
+            return KeyboardGrabStatus::NotRequested;
+        return m_eKeyboardShortcutsInhibitorState;
+    }
+
+    void CWaylandBackend::Wayland_KeyboardShortcutsInhibitor_Active( zwp_keyboard_shortcuts_inhibitor_v1 *pInhibitor )
+    {
+        m_eKeyboardShortcutsInhibitorState = KeyboardGrabStatus::Active;
+        xdg_log.infof( "input.force_grab_keyboard: compositor confirmed the inhibitor active" );
+    }
+    void CWaylandBackend::Wayland_KeyboardShortcutsInhibitor_Inactive( zwp_keyboard_shortcuts_inhibitor_v1 *pInhibitor )
+    {
+        m_eKeyboardShortcutsInhibitorState = KeyboardGrabStatus::Inactive;
+        // Per the protocol doc: the compositor restored its own shortcuts,
+        // typically the user invoking whatever escape it offers (Hyprland's
+        // bypass bind -- see superdoc/features/input-general.md). Not an
+        // error and not resent automatically; the switch itself is
+        // unaffected and a later re-toggle (or the compositor's own
+        // re-enable mechanism, which resends `active`) is how it comes back.
+        xdg_log.infof( "input.force_grab_keyboard: compositor reported the inhibitor inactive (shortcuts restored)" );
+    }
+
     // Can this backend put a real host cursor on screen right now, one that
     // follows the actual pointer? Two things can stop it: the pointer being
     // locked (a grabbed game -- the host pointer is pinned, so a host cursor
@@ -2894,6 +3071,16 @@ namespace gamescope
         else if ( !strcmp( pInterface, zwp_relative_pointer_manager_v1_interface.name ) )
         {
             m_pRelativePointerManager = (zwp_relative_pointer_manager_v1 *)wl_registry_bind( pRegistry, uName, &zwp_relative_pointer_manager_v1_interface, 1u );
+        }
+        else if ( !strcmp( pInterface, zwp_keyboard_shortcuts_inhibit_manager_v1_interface.name ) )
+        {
+            // Optional -- unlike the required-globals check in Init(), a
+            // host missing this one just leaves the switch unable to do
+            // anything live (GetKeyboardGrabStatus() -> Unsupported), same
+            // degrade-gracefully treatment force_grab_keyboard already gets
+            // on every OTHER backend that isn't SDL. See
+            // superdoc/features/input-general.md.
+            m_pKeyboardShortcutsInhibitManager = (zwp_keyboard_shortcuts_inhibit_manager_v1 *)wl_registry_bind( pRegistry, uName, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1u );
         }
         else if ( !strcmp( pInterface, wp_fractional_scale_manager_v1_interface.name ) )
         {
@@ -3846,6 +4033,62 @@ namespace gamescope
         wlserver_lock();
         wlserver_mousemotion( wl_fixed_to_double( fDxUnaccel ), wl_fixed_to_double( fDyUnaccel ), ++m_uFakeTimestamp );
         wlserver_unlock();
+    }
+
+    /////////////////////////////////////
+    // input.general's "Force grab keyboard"
+    /////////////////////////////////////
+
+    // Declared ad hoc, same convention SDLBackend.cpp's own
+    // SDLBackend_SetKeyboardGrabbed() uses (see that function's comment) and
+    // PanelInput.cpp already relies on for it -- no shared header, since
+    // CWaylandBackend is local to this translation unit. A no-op on every
+    // other backend (the dynamic_cast fails); on THIS backend, still a no-op
+    // if the host compositor never advertised
+    // zwp_keyboard_shortcuts_inhibit_manager_v1 (see SetKeyboardGrabbed()'s
+    // own comment) -- g_bGrabbed and the config field are written by the
+    // caller regardless, same as before this backend had a real
+    // implementation.
+    //
+    // Runs on whichever thread calls it -- the same "steamcompmgr thread"
+    // SetTitle()/RequestOutputSize() already call straight into libdecor
+    // from (see SetTitle()'s own comment); this file's ONLY separate
+    // dispatch thread is CWaylandInputThread, which owns nothing this
+    // function touches (m_pSeat, the inhibit manager, and the connector's
+    // own surface are all main-connection / steamcompmgr-thread state).
+    void WaylandBackend_SetKeyboardGrabbed( bool bGrabbed )
+    {
+        if ( CWaylandBackend *pWaylandBackend = dynamic_cast<CWaylandBackend *>( GetBackend() ) )
+        {
+            if ( CWaylandConnector *pConnector = dynamic_cast<CWaylandConnector *>( pWaylandBackend->GetCurrentConnector() ) )
+                pConnector->SetKeyboardGrabbed( bGrabbed );
+        }
+    }
+
+    // PanelInput.cpp's input.backend_grab_support Diagnostics fact. A plain
+    // literal C string, not the enum above -- same "no shared header, no
+    // shared type" ad hoc convention as the free function just above (the
+    // enum stays internal to this file; crossing a scoped enum between two
+    // independently-compiled ad hoc declarations would be its own hazard for
+    // no benefit over a string the row just prints verbatim). Returns
+    // "not applicable" when this isn't even the running backend, so the
+    // fact reads as "not this backend" rather than implying a request that
+    // was never made on it.
+    const char *WaylandBackend_GetKeyboardGrabStatus()
+    {
+        CWaylandBackend *pWaylandBackend = dynamic_cast<CWaylandBackend *>( GetBackend() );
+        if ( !pWaylandBackend )
+            return "not applicable";
+
+        switch ( pWaylandBackend->GetKeyboardGrabStatus() )
+        {
+            case CWaylandBackend::KeyboardGrabStatus::NotRequested: return "not requested";
+            case CWaylandBackend::KeyboardGrabStatus::Unsupported:  return "unsupported by this compositor (no keyboard-shortcuts-inhibit protocol)";
+            case CWaylandBackend::KeyboardGrabStatus::Requested:    return "requested; waiting for compositor confirmation";
+            case CWaylandBackend::KeyboardGrabStatus::Active:       return "live (compositor honouring it)";
+            case CWaylandBackend::KeyboardGrabStatus::Inactive:     return "requested; compositor declined";
+        }
+        return "not applicable";
     }
 
     /////////////////////////

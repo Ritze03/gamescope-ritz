@@ -16,42 +16,48 @@
 //   - Force grab cursor is live on every backend that has a host to grab
 //     from (steamcompmgr_set_force_relative_mouse() -> INestedHints, which
 //     both nested backends implement).
-//   - Force grab keyboard is live ONLY on the SDL backend
-//     (SDLBackend_SetKeyboardGrabbed(), SDLBackend.cpp, via
-//     SDL_SetWindowKeyboardGrab()). On every other backend the switch still
-//     writes the config field and g_bGrabbed (so it survives a restart and
-//     the "(grabbed)" window-title suffix on Wayland follows it), but there
-//     is no host-shortcut inhibition to turn on or off at runtime -- see
-//     WaylandBackend.cpp's own comment on CWaylandConnector::SetTitle() and
-//     superdoc/features/input-general.md's "Wayland backend" section for
-//     why (no zwp_keyboard_shortcuts_inhibit_manager_v1 binding exists in
-//     this build; wiring it needs a client-protocol XML added to
-//     protocol/meson.build, outside this change's scope).
+//   - Force grab keyboard is live on BOTH nested backends as of 2026-09-27:
+//     SDL (SDLBackend_SetKeyboardGrabbed(), SDL_SetWindowKeyboardGrab()) and
+//     Wayland (WaylandBackend_SetKeyboardGrabbed(), WaylandBackend.cpp's
+//     CWaylandBackend::SetKeyboardGrabbed() via a real
+//     zwp_keyboard_shortcuts_inhibit_v1 -- protocol/meson.build wires the
+//     XML, see that file's own comment). On DRM/OpenVR/Headless the switch
+//     still writes the config field and g_bGrabbed (so it survives a
+//     restart), but there is no host desktop to grab from at all, so
+//     nothing live happens there -- and on Wayland specifically, a host
+//     compositor that never advertises the inhibit-manager global degrades
+//     to the same "writes the field, nothing live" behaviour (the switch
+//     never errors or refuses). See superdoc/features/input-general.md's
+//     "Wayland backend" section for the full per-backend table and the
+//     inhibitor lifecycle (active/inactive events -> input.backend_grab_
+//     support's Diagnostics fact below).
 //
 // SAFETY: neither switch can lock the user out of gamescope's own hotkeys.
-// A host-level keyboard grab (SDL_WINDOW_KEYBOARD_GRABBED) stops the HOST
-// desktop's own global shortcuts from firing while gamescope has focus --
-// it does not touch which events gamescope's OWN SDL event loop receives,
-// so RShift (Open settings) and the reserved Ctrl+Alt+Shift+O still reach
-// wlserver's keybind matching exactly as before. The SDL backend's existing
-// release valve if a grab ever feels stuck is Super+G (LGUI+G, this file's
-// nearest neighbour in SDLBackend.cpp's SDL_KEYUP handler) -- NOT Ctrl+G;
-// this row's help text says so. See superdoc/features/input-general.md.
+// A host-level keyboard grab (SDL_WINDOW_KEYBOARD_GRABBED, or Wayland's
+// zwp_keyboard_shortcuts_inhibit_v1) stops the HOST compositor's own global
+// shortcuts from firing while gamescope has focus -- per the Wayland
+// protocol's own doc comment, it changes nothing about which wl_keyboard
+// events THIS process receives, so RShift (Open settings) and the reserved
+// Ctrl+Alt+Shift+O still reach wlserver's keybind matching exactly as
+// before, on both backends. Two independent escapes exist if a grab ever
+// feels stuck: SDL's is Super+G (LGUI+G, this file's nearest neighbour in
+// SDLBackend.cpp's SDL_KEYUP handler) -- NOT Ctrl+G; Wayland's is the HOST
+// compositor's own mechanism, since only it can lift its own inhibitor --
+// on Hyprland specifically, a bind flagged bypass ('p') still fires under an
+// inhibitor (see input-general.md's Hyprland section for the exact wording
+// and a link to the wiki). This row's help text says so.
 //
 // Modelled directly on PanelSystem.cpp's shape (own cached Settings, own
 // EnsureConfigLoaded()/generation check, config::ResolvedSettings() since
 // gamescope.* is per-profile/per-game, not overlay.*'s global-only) rather
 // than on PanelDisplay.cpp's larger Cfg()/PushCachedSettingsToLiveState()
 // machinery -- that machinery exists to serve SEVERAL rows' worth of
-// display.* fields at once; two rows in their own file don't need it, and
-// main.cpp's ritz_apply_config_live() already re-pushes force_grab_cursor
-// centrally on every profile switch regardless of which panel is open (see
-// that function's own comment). force_grab_keyboard has no such central
-// hook -- main.cpp is outside this change's scope -- so a profile switch
-// that changes it only takes effect once this area itself has drawn and
-// reloaded (the same staleness class issue #25/#68 were, before
-// PushCachedSettingsToLiveState() existed for Display's own fields); noted
-// in superdoc/features/input-general.md as a known follow-up.
+// display.* fields at once; two rows in their own file don't need it.
+// force_grab_keyboard is now re-applied centrally on every profile switch
+// too, the same as force_grab_cursor: see main.cpp's
+// ritz_apply_config_live() (both SDLBackend_SetKeyboardGrabbed() and
+// WaylandBackend_SetKeyboardGrabbed() are called from there, independent of
+// which Shell area is open).
 #include "PanelInput.h"
 
 #include <cstdint>
@@ -75,6 +81,13 @@ namespace gamescope
 	// (CSDLBackend is a type local to that translation unit).
 	extern void SDLBackend_SetKeyboardGrabbed( bool bGrabbed );
 
+	// WaylandBackend.cpp's own pair, same ad hoc convention, added
+	// 2026-09-27 alongside the real zwp_keyboard_shortcuts_inhibit_v1
+	// implementation (see superdoc/features/input-general.md). Both are
+	// no-ops when the Wayland backend isn't the one running.
+	extern void WaylandBackend_SetKeyboardGrabbed( bool bGrabbed );
+	extern const char *WaylandBackend_GetKeyboardGrabStatus();
+
 	namespace
 	{
 		// This file's own cached Settings -- PanelSystem.cpp's shape (see
@@ -94,15 +107,32 @@ namespace gamescope
 			s_ulLoadedGeneration = ulGeneration;
 			s_bConfigLoaded = true;
 
-			// Re-push on every reload (a profile Use, a per-game toggle),
-			// the same shape PanelSystem.cpp's own EnsureConfigLoaded()
-			// uses for g_bClipboardSyncEnabled -- see this file's header
-			// comment for force_grab_keyboard's own gap (no central
-			// main.cpp hook covers it the way ritz_apply_config_live()
-			// covers force_grab_cursor).
+			// Re-push force_grab_cursor on every reload (a profile Use, a
+			// per-game toggle), the same shape PanelSystem.cpp's own
+			// EnsureConfigLoaded() uses for g_bClipboardSyncEnabled.
+			//
+			// force_grab_keyboard does NOT get the same treatment here any
+			// more (removed 2026-09-27, live evidence:
+			// build-release/verify-shots/kbgrab-startup-*/evidence.txt) --
+			// it used to, as this exact "no central hook" workaround, but
+			// that push ran unconditionally on THIS FUNCTION's very FIRST
+			// call too (s_bConfigLoaded false, not just on a real reload),
+			// which fires the moment anything first touches the registry
+			// (the Shell's first draw, or a single gamescopectl
+			// overlay_e2_get/overlay_e2_dump_keys against ANY row) --
+			// stomping g_bGrabbed back to whatever the DISK config says
+			// regardless of an explicit `-g`/`--grab` CLI override or a
+			// live in-window toggle (SDL's Super+G) that had already run.
+			// Measured live: `-g` on the Wayland backend created and
+			// activated a real zwp_keyboard_shortcuts_inhibit_v1 at
+			// startup, then the FIRST overlay_e2_get of this session (for
+			// ANY row) destroyed it again a moment later. Now that
+			// main.cpp's ritz_apply_config_live() re-applies
+			// force_grab_keyboard centrally on every REAL profile switch
+			// (see that function), this push was pure duplication of a
+			// job something else now does correctly -- removing it fixes
+			// the stomp rather than trying to special-case "first load".
 			steamcompmgr_set_force_relative_mouse( s_Settings.gamescope.force_grab_cursor );
-			g_bGrabbed = s_Settings.gamescope.force_grab_keyboard;
-			SDLBackend_SetKeyboardGrabbed( s_Settings.gamescope.force_grab_keyboard );
 		}
 
 		void QueueSave()
@@ -121,6 +151,12 @@ namespace gamescope
 			IBackend *pBackend = GetBackend();
 			IBackendConnector *pConnector = pBackend ? pBackend->GetCurrentConnector() : nullptr;
 			return pConnector && std::string_view( pConnector->GetName() ) == "SDLWindow"sv;
+		}
+		bool CurrentBackendIsWayland()
+		{
+			IBackend *pBackend = GetBackend();
+			IBackendConnector *pConnector = pBackend ? pBackend->GetCurrentConnector() : nullptr;
+			return pConnector && std::string_view( pConnector->GetName() ) == "Wayland"sv;
 		}
 	}
 
@@ -167,17 +203,26 @@ namespace gamescope
 					EnsureConfigLoaded();
 					s_Settings.gamescope.force_grab_keyboard = b;
 					g_bGrabbed = b;
-					// No-op on every backend but SDL -- see this file's
-					// header comment for what "live" means per backend.
+					// Live on SDL and, since 2026-09-27, on Wayland -- see
+					// this file's header comment for what "live" means per
+					// backend. Both are no-ops on every OTHER backend
+					// (DRM/OpenVR/Headless), and WaylandBackend_
+					// SetKeyboardGrabbed() is itself a no-op if the host
+					// compositor never advertised
+					// zwp_keyboard_shortcuts_inhibit_manager_v1.
 					SDLBackend_SetKeyboardGrabbed( b );
+					WaylandBackend_SetKeyboardGrabbed( b );
 					QueueSave();
 				} ) )
 			.Key( "gamescope.force_grab_keyboard" )
 			.Help( "Stops your desktop's own shortcuts (Alt+Tab, a Meta-key launcher, ...) from "
 			       "stealing keys while gamescope is focused. Gamescope's own hotkeys (RShift to "
 			       "open Settings) always still work -- this never locks you out. Live on the "
-			       "SDL nested backend; on other backends it applies the next time gamescope "
-			       "starts. On SDL you can also flip it in-window with Super+G (not Ctrl+G)." )
+			       "SDL and Wayland nested backends; on DRM/OpenVR/Headless it applies the next "
+			       "time gamescope starts (there's no host desktop to grab from there). On SDL "
+			       "you can also flip it in-window with Super+G (not Ctrl+G). On Wayland, if the "
+			       "host compositor is Hyprland, its own escape is a bind flagged bypass ('p') -- "
+			       "see the Diagnostics fact below and input-general.md for details." )
 			.Default( false )
 			.Keywords( "keyboard grab capture host shortcuts alt-tab focus sdl wayland" );
 
@@ -185,12 +230,19 @@ namespace gamescope
 
 		a.Facts( "input.backend_grab_support", "Keyboard grab support",
 			[]{
-				return CurrentBackendIsSDL()
-					? std::string( "live on this backend (SDL)" )
-					: std::string( "applies at next launch on this backend" );
+				if ( CurrentBackendIsSDL() )
+					return std::string( "live on this backend (SDL)" );
+				if ( CurrentBackendIsWayland() )
+					return std::string( "on this backend (Wayland): " ) + WaylandBackend_GetKeyboardGrabStatus();
+				// DRM / OpenVR / Headless: no host desktop to grab from --
+				// g_bGrabbed/the config field still apply at the next
+				// launch (mirrors -g/--grab there already), but there is
+				// nothing to toggle live.
+				return std::string( "not applicable on this backend (embedded, no host to grab from)" );
 			} )
-			.Help( "Whether Force grab keyboard above takes effect immediately or only the next "
-			       "time gamescope starts, on the nested backend actually running right now." )
-			.Keywords( "keyboard grab backend sdl wayland support live startup" );
+			.Help( "Whether Force grab keyboard above is actually inhibiting your desktop's "
+			       "shortcuts right now, on the nested backend actually running this session. "
+			       "Never says 'applies at next launch' on a backend where it's really live." )
+			.Keywords( "keyboard grab backend sdl wayland support live startup inhibit shortcuts" );
 	}
 }

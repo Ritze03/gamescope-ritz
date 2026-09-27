@@ -491,6 +491,19 @@ extern bool set_color_sdr_gamut_wideness( float flVal );
 extern bool set_sdr_on_hdr_brightness( float flVal );
 extern bool set_hdr_input_gain( float flVal );
 extern bool set_sdr_input_gain( float flVal );
+// SDLBackend.cpp / WaylandBackend.cpp's own ad hoc free functions for
+// input.general's "Force grab keyboard" row (PanelInput.cpp uses the same
+// two, declared the same way, but from inside `namespace gamescope` --
+// this file isn't, so the declaration and every call site below are
+// explicitly gamescope::-qualified instead). See input-general.md's
+// "Known follow-up" section this call closes: force_grab_keyboard now
+// gets the same central profile-switch re-apply force_grab_cursor already
+// had.
+namespace gamescope
+{
+	extern void SDLBackend_SetKeyboardGrabbed( bool bGrabbed );
+	extern void WaylandBackend_SetKeyboardGrabbed( bool bGrabbed );
+}
 
 static void ritz_use_session_profile( const std::string &sName, bool bFromConsole )
 {
@@ -609,6 +622,15 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// PushCachedSettingsToLiveState() pushes when that area reloads (fps_limit
 	// deliberately not: it round-trips through an X11 property, see there).
 	steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
+	// input.general's "Force grab keyboard" -- mirrors force_grab_cursor
+	// just above: g_bGrabbed itself, plus both nested backends' own free
+	// functions (each a no-op unless it's the backend actually running).
+	// Closes the gap input-general.md's "Known follow-up" section
+	// described: before this, a profile switch that changed the field only
+	// took effect once input.general itself next drew and reloaded.
+	g_bGrabbed = config.gamescope.force_grab_keyboard;
+	gamescope::SDLBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
+	gamescope::WaylandBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
 	steamcompmgr_set_force_windows_fullscreen( config.gamescope.force_windows_fullscreen );
 	set_color_sdr_gamut_wideness( config.gamescope.sdr_gamut_wideness );
 	set_sdr_on_hdr_brightness( config.gamescope.sdr_on_hdr_brightness_nits );

@@ -56,6 +56,23 @@ initialize.
   `src/Backends/WaylandBackend.cpp:2440` `zwp_pointer_constraints_v1_lock_pointer`) —
   running pointer/relative-motion handling off the main protocol dispatch thread so input
   latency doesn't couple to compositing/frame-callback work.
+- **Host-shortcut inhibition** (Input › General's "Force grab keyboard", added
+  2026-09-27) goes through `zwp_keyboard_shortcuts_inhibit_manager_v1`, bound as an
+  **optional** global in `CWaylandBackend::Wayland_Registry_Global()` — unlike the
+  required-globals check `Init()` hard-fails on (see below), a host that never
+  advertises this one just leaves the switch unable to do anything live rather than
+  refusing to start. `CWaylandBackend::SetKeyboardGrabbed( wl_surface *, bool )` creates
+  or destroys a `zwp_keyboard_shortcuts_inhibitor_v1` for the connector's own toplevel
+  surface against `m_pSeat`, on whatever thread calls it — the same "steamcompmgr
+  thread" `SetTitle()`/`RequestOutputSize()` already call straight into libdecor from,
+  not `CWaylandInputThread`'s separate dispatch thread, which owns none of this state.
+  `CWaylandConnector::Init()` seeds `g_bGrabbed` from config and grabs at startup the
+  same "config seeds, CLI wins" way `-g`/`--grab` already worked on the SDL backend. The
+  inhibitor's `active`/`inactive` events are logged and drive
+  `CWaylandBackend::GetKeyboardGrabStatus()`, read by the Input › General row's own
+  Diagnostics fact. See [input-general.md](input-general.md)'s "Force grab keyboard"
+  section for the full lifecycle, the live evidence, and the Hyprland escape (a bind
+  flagged `p` still fires under this inhibitor).
 - Also wires up several optional protocols the DRM/SDL backends have no equivalent for:
   `wp_color_manager_v1` / `frog_color_management_factory_v1` (HDR/colorimetry
   negotiation with the host compositor — see
@@ -65,7 +82,9 @@ initialize.
   `ext_data_control_manager_v1` / `zwlr_data_control_manager_v1` with a
   `wl_data_device` fallback — see
   [clipboard-sync.md](clipboard-sync.md) for the fallback chain, the loop guard
-  and why every transfer runs on a worker thread.
+  and why every transfer runs on a worker thread — and
+  `zwp_keyboard_shortcuts_inhibit_manager_v1` (host-shortcut inhibition for Input ›
+  General's "Force grab keyboard", see the bullet below).
 - `SupportsExplicitSync()` is unconditionally `true`
   (`src/Backends/WaylandBackend.cpp:2306`) and `SupportsPlaneHardwareCursor()` is `false`
   (`src/Backends/WaylandBackend.cpp:2285`, same reasoning as SDL: cursor goes through
