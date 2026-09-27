@@ -768,6 +768,61 @@ styling" -- *"a string overflowing... reads as 'there is more' instead of stoppi
 doing exactly its documented job at a genuinely narrow lane. The QC finding's own wording named
 it alongside the clipping bug, but it is unrelated and working as designed.
 
+**Follow-up (2026-09-27, same day): the Inspector body got the identical fix.** This section's
+own "start from that convar's own existence as a clue" pointer above turned out right --
+`cv_overlay_e2_scroll` had been the Inspector body's *only* working scroll path (no wheel, no
+drag, same as the Sheet before this fix) because `##inspbody` has the exact same
+`BeginChild()`-relies-on-ImGui's-native-wheel-pass structure `##sheetrows` did. The hand-applied
+wheel check above is now `ApplyChildWheelScroll()`, a small shared helper (`Shell.cpp`, right
+before `DrawSheetBody()`) both bodies call -- D26 already made the Sheet and the Inspector share
+the LAYOUT half of this mechanism (`ScrollView`, `Layout.h`); this is the matching shared INPUT
+half, so a third scrolling body gets working wheel scroll by calling the helper rather than by a
+third hand-rolled copy. `IsWindowHovered()` is only ever true for whichever ImGui window
+currently owns the mouse, so calling the same helper from both bodies' `BeginChild` blocks can
+never apply one wheel event to two regions -- the two are mutually exclusive by construction,
+not by a flag guarding them.
+
+`Why:` (the native-pass diagnosis, revisited) -- a further **static** read of ImGui's own
+`UpdateMouseWheel()`/`FindBestWheelingWindow()` (`subprojects/imgui/imgui.cpp`) narrows, but does
+not close, the earlier "unproven" verdict. `FindBestWheelingWindow()` bubbles a wheel event from
+`g.HoveredWindow` UP to a parent only when the hovered window itself has `ScrollMax == 0` on
+that axis or carries `NoScrollWithMouse` itself -- neither is true here (the Sheet's own log had
+`scrollMaxY=421` on the exact frame the native pass still failed to move it, and neither
+`##sheetrows` nor `##inspbody` sets that flag), so the walk should select the child directly and
+never reach `##e2slab`'s own `NoScrollWithMouse` at all. That rules out the slab's own flag as
+the mechanism, contrary to what this section's own earlier phrasing suspected -- but it does not
+explain why `SetScrollY()` inside that native path still leaves `GetScrollY()` at `0.00` on a
+frame where every precondition the source reads (`hoveredWindow == this child`, nonzero wheel,
+nonzero `ScrollMax`) already holds. Confirming the remaining candidate -- whether `g.HoveredWindow`
+at the point `NewFrame()`'s `UpdateMouseWheel()` runs is genuinely this exact child pointer, or a
+stale one from this overlay's queued/drained (not per-real-input-event) frame timing -- needs a
+live instrumented build logging `g.HoveredWindow`'s identity at that exact point, not another
+static read; a next agent chasing this should start there rather than re-deriving the
+elimination above. The hand-applied helper does not depend on ever answering it.
+
+**Rail corner-chevron badge + group tooltip (2026-09-27, same commit, from a vision QC of I3's
+own captures).** Two follow-on polish fixes to the SAME icon-rail group header this section's
+neighbour ("Icon rail: `1e`/`1f`...") describes, found by looking at the rendered captures
+rather than the code: the corner chevron's fixed `flCorner * 0.7` inset only cleared
+`glyph::Chevron`'s SHORT half-extent (its 0.26-of-size axis); whichever axis carried the LONG
+half-extent (0.50-of-size) for a given direction -- height for the closed `▸`, width for the
+open `▾` -- ran past that inset and read as a clipped speck against the rail's own right edge or
+the row divider below it. `Why` an asymmetric glyph needs an asymmetric fix: insetting by the
+glyph's own longer half-extent (`flCorner * 0.5`) plus a real margin, instead of one arbitrary
+fraction of the corner size applied to both axes, is what clears BOTH chevron directions from
+the same one-line call site. Separately, the group tooltip (`ImGui::SetTooltip()`) rendered as
+an unpadded 1px box: this section's own earlier claim that "the guide's own Tooltips styling
+(`Widgets.cpp`) already sets up `ImGui::SetTooltip()`" was wrong in one specific way --
+`Widgets.cpp`'s `ApplyStyle()` does set `ImGuiCol_PopupBg`/`PopupBorderSize` globally, but the
+slab (`##e2slab`, `Shell.cpp`) pushes `ImGuiStyleVar_WindowPadding(0,0)` for its own chrome and
+does not pop it until after its own `ImGui::End()` -- so every tooltip drawn anywhere inside the
+slab, this being the first, inherited that zero padding from the still-open style-var scope.
+Fixed locally at the one call site (a real `BeginTooltip()`/`EndTooltip()` pair with its own
+scoped `WindowPadding`/`PopupBg`/`Border` push, positioned off the rail's own right edge via
+`SetNextWindowPos()` rather than following the mouse) rather than by reworking the slab's
+push/pop pairing, which is out of this fix's scope and would need its own audit of every other
+caller between that push and its pop.
+
 **Keyboard.** Up/Down in the rail and Ctrl+Left/Right both still call the one `StepArea()`
 they always did, walking every area in `RailOrder()`'s order (not just the open group's) --
 unchanged from before the accordion. What is new is a single line inside `StepArea()`'s

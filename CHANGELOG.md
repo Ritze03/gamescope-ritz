@@ -23,6 +23,13 @@ The newest version below is the one this build reports.
 - **HUD: Inverted text colour follows the scene**: the FPS number's Inverted colour
   now samples the game underneath it and shows the plain inverse, instead of staying
   white.
+- **Settings pages scroll with the mouse wheel**: long settings pages and the
+  inspector panel now scroll with the wheel instead of cutting off rows at small
+  window sizes.
+- **Icon rail: group corner badge and hover tooltip cleaned up**: the small arrow
+  badge on a collapsed/expanded group icon no longer looks clipped against the
+  rail edge, and hovering a group now shows its name in a properly padded label
+  instead of an unstyled sliver.
 
 ### Info
 - **Settings rail groups are now expandable tabs**: DISPLAY/MISC/SETTINGS/OTHER open

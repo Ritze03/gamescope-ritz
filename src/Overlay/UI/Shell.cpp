@@ -2175,17 +2175,59 @@ namespace gamescope::ui::shell
 						// asked for: an area's own icon-mode row (below)
 						// never draws one, so this corner mark alone says
 						// "this button opens a group" before the viewer has
-						// even registered which glyph is which. The
-						// tooltip is the same ImGui::SetTooltip() path the
-						// guide's own Tooltips section already styles
-						// (Widgets.cpp) -- no area icon in this rail uses a
-						// tooltip yet, so this is the mechanism's first
-						// caller, not a divergent second one.
+						// even registered which glyph is which.
 						const float flCorner = Px( 6.0f );
-						glyph::Chevron( ImVec2( rcHdr.x1 - flCorner * 0.7f, rcHdr.y1 - flCorner * 0.7f ),
+						// I4 (2026-09-27, post-QC finding 1): a single fixed
+						// inset (the old `flCorner * 0.7`) only clears
+						// Chevron()'s SHORT half-extent (its 0.26 axis) --
+						// whichever axis carries the LONG one (0.50) for a
+						// given direction (height for the sideways Right
+						// glyph, width for the downward Down one) ran past
+						// that inset and read as clipped against the rail's
+						// right edge / the row divider below it. Insetting
+						// by the glyph's own longer half-extent
+						// (flCorner * 0.5) plus a real margin -- rather
+						// than an arbitrary fraction of the corner size --
+						// is what keeps the WHOLE glyph inside the cell at
+						// BOTH chevron directions; it lands well clear of
+						// the centred icon glyph too (that one never
+						// reaches this far into the corner).
+						const float flChevronInset = flCorner * 0.5f + Px( 3.0f );
+						glyph::Chevron( ImVec2( rcHdr.x1 - flChevronInset, rcHdr.y1 - flChevronInset ),
 						                flCorner, bOpen ? glyph::Dir::Down : glyph::Dir::Right, colHdr );
 						if ( bHovered )
-							ImGui::SetTooltip( "%s", RailGroupName( eGroup ) );
+						{
+							// I4 (2026-09-27, post-QC finding 2): plain
+							// ImGui::SetTooltip() inherits whatever style
+							// vars are on the stack at the point it is
+							// called -- and the ##e2slab window below pushes
+							// WindowPadding(0,0) for its own chrome and does
+							// not pop it until after ImGui::End(), so this,
+							// the first tooltip caller anywhere inside the
+							// slab, rendered as an unpadded 1px box instead
+							// of the guide's own Tooltips spec ("solid panel
+							// rgba(6,8,10,.94), 1px rgba(255,255,255,.12)
+							// border"). Scoping real padding/colours here
+							// (rather than reworking the slab's push/pop
+							// pairing, out of this fix's scope) keeps the
+							// correction local to the one caller that needs
+							// it. SetNextWindowPos() anchored off `rc.x1`
+							// (the rail's own right edge, not rcHdr's)
+							// parks it clear of the rail entirely, vertically
+							// centred on the hovered icon, rather than
+							// following the mouse into the icon's own cell.
+							ImGui::SetNextWindowPos(
+								ImVec2( rc.x1 + Px( tok::kS ), ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
+								ImGuiCond_Always, ImVec2( 0.0f, 0.5f ) );
+							ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( Px( 8.0f ), Px( 6.0f ) ) );
+							ImGui::PushStyleColor( ImGuiCol_PopupBg, IM_COL32( 6, 8, 10, 240 ) );
+							ImGui::PushStyleColor( ImGuiCol_Border, IM_COL32( 255, 255, 255, 31 ) );
+							ImGui::BeginTooltip();
+							ImGui::TextUnformatted( RailGroupName( eGroup ) );
+							ImGui::EndTooltip();
+							ImGui::PopStyleColor( 2 );
+							ImGui::PopStyleVar();
+						}
 					}
 					else
 					{
@@ -4035,6 +4077,25 @@ namespace gamescope::ui::shell
 			ImGui::EndChild();
 		}
 
+		// I4 (2026-09-27, post rail-polish task finding 4 / this task): the
+		// sheet's own hand-applied wheel scroll (below), factored out so the
+		// Inspector body -- D26's OTHER half of the same shared ScrollView
+		// mechanism, and reported by that task as having "the identical
+		// structure and the same dead wheel" -- gets it by calling this
+		// rather than by a second hand-rolled copy. IsWindowHovered() is
+		// only ever true for whichever ImGui window currently owns the
+		// mouse, so calling this once from each of the sheet's and the
+		// Inspector's own child (they can never both be hovered at once)
+		// never double-applies one wheel event to two regions. See
+		// DrawSheetBody's own comment just below the one call site left
+		// inline for the diagnosis of WHY ImGui's native "apply wheel to
+		// the hovered scrollable window" pass does not do this on its own.
+		void ApplyChildWheelScroll()
+		{
+			if ( ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f )
+				ImGui::SetScrollY( ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * Px( tok::kRowH ) * 3.0f );
+		}
+
 		// flOccludedPx: how much of `rc`'s right side the Inspector drawer
 		// floats over, 0 when it does not (D17). The sheet's REGION is
 		// deliberately unchanged -- only the lane inside it gives way.
@@ -4077,9 +4138,10 @@ namespace gamescope::ui::shell
 				// whose rows come in 44px bands. `SetScrollY()` clamps to
 				// [0, ScrollMax] internally, so an initial 0-vs-stale
 				// ScrollMax race on the child's first frame cannot send this
-				// negative or past the bottom.
-				if ( ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f )
-					ImGui::SetScrollY( ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * Px( tok::kRowH ) * 3.0f );
+				// negative or past the bottom. ApplyChildWheelScroll() above
+				// is this same check, factored out so the Inspector body
+				// gets it too -- see that function's own comment.
+				ApplyChildWheelScroll();
 
 				// D26: THE SHEET SCROLLS BY THE SAME ONE MECHANISM THE
 				// INSPECTOR DOES -- see ScrollView in Layout.h.
@@ -5123,6 +5185,16 @@ namespace gamescope::ui::shell
 					// another in the Inspector, which is precisely the
 					// second path SPEC §5.3 exists to prevent (a promoted
 					// parameter has to land in the sheet unchanged).
+
+					// I4 (2026-09-27): the same hand-applied wheel the sheet
+					// uses (see DrawSheetBody / ApplyChildWheelScroll) --
+					// before this, cv_overlay_e2_scroll below was the
+					// Inspector body's ONLY working scroll path, since it
+					// has the identical BeginChild-relies-on-ImGui's-own-
+					// wheel-pass structure the sheet did. Applied BEFORE the
+					// console's request so that on the one frame both could
+					// fire, the deliberate debug override still wins.
+					ApplyChildWheelScroll();
 
 					// The console's scroll request, applied only on the frame
 					// it changes -- see cv_overlay_e2_scroll.
