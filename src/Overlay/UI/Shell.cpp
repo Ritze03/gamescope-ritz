@@ -7987,6 +7987,14 @@ namespace gamescope::ui::shell
 		// the region boundary on a fractional pixel.
 		if ( std::abs( s_flRailAnim - ladder.flRailBase ) < 1.0f / std::max( Scale(), 0.01f ) )
 			s_flRailAnim = ladder.flRailBase;
+		else
+			// Same idiom as the rail accordion's own force_repaint() (see
+			// StepRailAccordionAnim() below): with nothing else dirtying the
+			// frame, an Approach() that only advances when a frame gets
+			// drawn can stall mid-transition until the next input wakes the
+			// loop. Keep repainting while short of the snap epsilon above;
+			// the snap itself stops the keepalive.
+			force_repaint();
 		const LadderResult ladderDrawn = [ & ] {
 			LadderResult L = ladder;
 			L.flRailBase = s_flRailAnim;

@@ -414,6 +414,13 @@ toggle key). Given the source design specifies zero motion values, the safe inte
 with no animation** (instant state changes) rather than inventing timing values the design never asked
 for. If a later pass wants a toggle fade, treat it as a new decision, not a mockup requirement.
 
+**Every animated value must call `force_repaint()` until it lands** (2026-09-29). `Why:` the
+rail-width animation (`s_flRailAnim`, `Shell.cpp`) advanced its `Approach()` only on frames the
+loop happened to draw anyway and could stall mid-transition until the next input woke it — the
+same idiom the rail accordion's `StepRailAccordionAnim()` and `SettingsOverlay.cpp`'s
+`UpdateFadeAlpha()` already followed. Fixed by requesting a repaint whenever the value is still
+short of its target and stopping once it snaps.
+
 ## ImGui feasibility notes
 
 This is the most load-bearing section for implementers — what's achievable natively vs. needs custom

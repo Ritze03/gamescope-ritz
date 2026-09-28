@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.10.2] – 2026-09-29
+
+### Fixed
+- **Settings rail no longer freezes mid-animation**: switching between the full and
+  icon-only rail now always finishes its animation, instead of sometimes stopping
+  halfway until you move the mouse.
+
 ## [0.10.1] – 2026-09-28
 
 ### Added
