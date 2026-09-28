@@ -1158,49 +1158,13 @@ namespace gamescope
 		// centred), shift the digits by exactly enough to cancel that
 		// bearing gap, so the outermost drawn pixel -- ink, or the
 		// outline's ink-plus-radius when the outline is on and drawn
-		// instead -- lands exactly `margin` px out.
-		//
-		// 2026-09-28 fix: measured against the ACTUAL digits (`L.szNum`),
-		// not the pinned '0'-run (`szPadded`) this used until now. The
-		// "every digit shares this font's tabular bearings" assumption above
-		// turned out false: digits are tabular in ADVANCE (that's
-		// PixelSnapH, untouched, and is all the box-width pinning above
-		// needs), but NOT in their own ink -- a round glyph's cap-height/
-		// baseline overshoot genuinely differs, glyph by glyph, from a flat
-		// one's, and '0' is not even reliably the deepest: dumped for every
-		// digit at font size 22 (`RITZ_DUMP_DIGIT_INK=1`,
-		// `build-release/verify-shots/hud-flush-2026-09-27/digit-ink-22px.txt`),
-		// '0' sits in the SHALLOW group on the top axis (top=6, matching
-		// 1/3/4/5/7) while 2/6/8/9 overshoot one row further (top=5); on
-		// bottom, 8/9 overshoot one row past '0' (19 vs '0's 18). A reading
-		// using '0' as its stand-in therefore didn't just sometimes sit a
-		// pixel further IN than configured (the "known 1px case" this
-		// replaces, `superdoc/features/fps-display.md`'s old "One known 1px
-		// case" section) -- at sizes where '0' undershoots another digit's
-		// own overshoot, a reading using THAT digit poked a pixel PAST the
-		// margin instead, the opposite direction, silently breaking this
-		// section's own "never pokes outside" claim. Measuring the string
-		// that is actually on screen has neither failure mode, by
-		// construction, for any digit set at any size.
-		//
-		// This does not touch the box-WIDTH pin above (`L.numSize`, still
-		// measured off `szPadded`): the box never resizes or moves as the
-		// digit VALUE changes within one digit COUNT, so the horizontal
-		// jitter that pin exists to prevent is exactly as prevented as
-		// before. What changes is only the sub-pixel edge-hugging nudge
-		// below, already as small as a few px and already a function of the
-		// actual digits on the horizontal axis (`flTextOffsetX` above is
-		// `unpaddedSize`-based, i.e. real-content-based, already) -- this
-		// brings the vertical axis and the outline-geometry axis in line
-		// with that same, already-accepted precedent instead of leaving
-		// them on the older, occasionally-wrong proxy. The one accepted
-		// cost: the nudge can now change by up to 1px when the specific
-		// digit that sits outermost on an axis crosses from one overshoot
-		// class to the other (e.g. topmost digit going from a flat '1' to a
-		// round '6') -- at most once per displayed value, so at most once a
-		// second in the default Smoothing update mode, and imperceptible
-		// against the digits' own glide. See fps-display.md's "Margin"
-		// section, 2026-09-28 update, for the measured before/after.
+		// instead -- lands exactly `margin` px out. Measured with the
+		// glyph baked at '0' (MeasureInkExtent's own szPadded argument
+		// below): every digit shares this font's tabular bearings by
+		// design (the same property that makes the whole pinned-width
+		// scheme above jitter-free), so using '0' here is the same
+		// stability choice the box-sizing measurement already makes, not a
+		// new assumption.
 		//
 		// The outline's own outward reach is never less than 1px once it
 		// is drawn at all -- DrawFpsModuleContent()'s own sub-pixel-radius
@@ -1225,21 +1189,11 @@ namespace gamescope
 		// is this floor applied to the same bitmap: one measurement covers
 		// both, and EdgeShift() adds the radius as before.
 		const int nInkFloor = fpsmath::InkCoverageFloor( bInvertedMode, L.bDrawOutline );
-		// The actual drawn string, not the padded reference -- see this
-		// block's own 2026-09-28 comment above for why. `unpaddedSize` is
-		// this same string's own ADVANCE box (already computed above for
-		// flGap), so the right/bottom bearings below are relative to IT,
-		// not to the wider/taller padded box `L.numSize` sizes the box at.
-		// (`unpaddedSize.y == L.numSize.y` always in practice -- a single
-		// line's height is the nominal font size regardless of content,
-		// never the padded string's own glyph metrics -- but spelling it as
-		// `unpaddedSize.y` here keeps both bearings visibly relative to the
-		// same, actually-drawn string.)
-		const InkExtent inkActual = MeasureInkExtent( pFont, flFontSize, L.szNum, nInkFloor );
-		const float flBearingLeft   = std::round( inkActual.left );
-		const float flBearingRight  = std::round( unpaddedSize.x - inkActual.right );
-		const float flBearingTop    = std::round( inkActual.top );
-		const float flBearingBottom = std::round( unpaddedSize.y - inkActual.bottom );
+		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded, nInkFloor );
+		const float flBearingLeft   = std::round( inkPinned.left );
+		const float flBearingRight  = std::round( L.numSize.x - inkPinned.right );
+		const float flBearingTop    = std::round( inkPinned.top );
+		const float flBearingBottom = std::round( L.numSize.y - inkPinned.bottom );
 		const float flOutlineGeomRadius = L.bDrawOutline ? std::max( L.flOutlineRadius, 1.0f ) : 0.0f;
 
 		// fpsmath::EdgeShift (FpsDisplay.h) is the pure arithmetic under
@@ -1467,9 +1421,37 @@ namespace gamescope
 		const ImVec2 boxSize( L.flContentWidth, L.flContentHeight );
 		const ImVec2 origin = ResolveAnchoredOrigin( cfg.anchor, (float)cfg.margin_x, (float)cfg.margin_y, boxSize, io_display );
 
-		DrawFpsModuleContent( pDrawList, origin, boxSize, L );
+		// Bottom-anchored placements (bottom-left/-centre/-right) sat 1px
+		// above the true bottom edge at margin 0. 2026-09-28 first tried
+		// fixing this by re-measuring the ink bearing off the actual drawn
+		// digits every frame instead of the pinned '0'-run reference --
+		// reverted the same day (see MeasureFpsModule()'s bearing comment
+		// and fps-display.md's "Margin" section) because it made the
+		// readout's position change by a pixel whenever the displayed
+		// value changed, which the user called "definitely wrong". Their
+		// own fix, verbatim: "The way it was previously was almost right,
+		// you just had to add a single pixel offset, hardcoded, no logic
+		// changes needed." So: a constant, value-independent nudge, bottom
+		// anchors only.
+		//
+		// The gap is an EMPTY pixel row inside the box, below the ink --
+		// the box itself is exactly `boxSize.y` tall and already sits flush
+		// against ResolveAnchoredOrigin()'s own bound
+		// (`ioDisplay.y - boxSize.y`) at margin 0, so nudging `origin.y`
+		// down and then re-clamping to that SAME bound (as a first cut of
+		// this fix did) just clamps the nudge straight back out -- nothing
+		// moves. The fix has to widen the bound by the nudge amount, i.e.
+		// deliberately let the box's own bottom edge sit 1px past the
+		// screen edge, since it is that empty row -- not the box's
+		// position -- that needs to leave the visible area.
+		constexpr float kBottomAnchorNudgePx = 1.0f;
+		const ImVec2 nudgedOrigin = ( nVert == 2 )
+			? ImVec2( origin.x, std::min( origin.y + kBottomAnchorNudgePx, std::max( 0.0f, io_display.y - boxSize.y ) + kBottomAnchorNudgePx ) )
+			: origin;
 
-		return ImVec2( origin.x + boxSize.x * 0.5f, origin.y + boxSize.y * 0.5f );
+		DrawFpsModuleContent( pDrawList, nudgedOrigin, boxSize, L );
+
+		return ImVec2( nudgedOrigin.x + boxSize.x * 0.5f, nudgedOrigin.y + boxSize.y * 0.5f );
 	}
 
 	static bool RenderAndSubmit()
