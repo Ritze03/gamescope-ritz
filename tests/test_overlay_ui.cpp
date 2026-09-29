@@ -32,6 +32,7 @@
 #include "Overlay/UI/Registry.h"
 #include "Overlay/UI/Row.h"
 #include "Overlay/UI/Tokens.h"
+#include "LaunchOptions.h"
 #include "UpscaleFilterGate.h"
 
 #include <cstdio>
@@ -1017,6 +1018,90 @@ TEST_CASE( "law: DisabledUnless has no spelling without a reason", "[overlay_ui]
 	REQUIRE( e.DisabledReason() == "the backend has no VRR path" );
 	bAllowed = true;
 	REQUIRE( e.DisabledReason().empty() );
+}
+
+TEST_CASE( "law: LockedByLaunchOption has no spelling without a reason", "[overlay_ui]" )
+{
+	// Same law, same enforcement mechanism as DisabledUnless() just above --
+	// see Registry.h's LockedByLaunchOption() comment for why this is a
+	// second, independent call rather than a second overload of that one.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
+	bool b = false;
+
+	ui::LawRecorder rec;
+	area.Switch( "a.x", "X", ui::Bind( &b ) ).Help( "h" )
+		.LockedByLaunchOption( [] { return true; }, "" );
+	REQUIRE( rec.Caught( ui::Law::ReasonRequired ) );
+}
+
+TEST_CASE( "registry: LockedByLaunchOption is a second slot -- it never clobbers an existing DisabledUnless", "[overlay_ui]" )
+{
+	// superdoc/features/launch-option-lock.md. Several real rows
+	// (display.filter.sharpness, the Custom-resolution steppers, ...)
+	// already carry their own DisabledUnless() before this fork ever adds
+	// LockedByLaunchOption() to them -- registering the second must not
+	// silently drop the first's predicate or reason (the exact bug a
+	// single shared m_Enabled/m_sReason slot would have).
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "a", "A", ui::Section::Display );
+	bool b = false;
+
+	bool bGateOpen = true;     // the row's OWN, unrelated gate (e.g. "only FSR/NIS sharpen")
+	bool bFlagGiven = false;   // the launch-option lock
+
+	ui::Entry &e = area.Switch( "a.x", "X", ui::Bind( &b ) ).Help( "h" )
+		.DisabledUnless( [ &bGateOpen ] { return bGateOpen; }, "gate is closed" )
+		.LockedByLaunchOption( [ &bFlagGiven ] { return bFlagGiven; },
+			"Set by the launch option --example -- remove it from the launch "
+			"options to change this here." );
+
+	// Neither applies: enabled.
+	REQUIRE( e.DisabledReason().empty() );
+	REQUIRE_FALSE( e.IsLaunchLocked() );
+
+	// Only the row's own gate applies: its OWN reason still shows, proving
+	// DisabledUnless()'s predicate/reason survived the LockedByLaunchOption()
+	// call that came after it.
+	bGateOpen = false;
+	REQUIRE( e.DisabledReason() == "gate is closed" );
+	REQUIRE_FALSE( e.IsLaunchLocked() );
+	bGateOpen = true;
+
+	// Only the launch lock applies: the launch reason shows and contains
+	// the flag's own spelling, and IsLaunchLocked() -- the Shell's hook for
+	// the "LAUNCH OPTION" tag -- is true.
+	bFlagGiven = true;
+	REQUIRE( e.DisabledReason().find( "--example" ) != std::string::npos );
+	REQUIRE( e.IsLaunchLocked() );
+
+	// Both apply: the launch reason wins (it names an actual fix; the
+	// generic one usually does not -- see DisabledReason()'s own comment).
+	bGateOpen = false;
+	REQUIRE( e.DisabledReason().find( "--example" ) != std::string::npos );
+	REQUIRE( e.IsLaunchLocked() );
+}
+
+TEST_CASE( "LaunchOptions: MarkGiven flips Given() and records the spelling, per option", "[overlay_ui]" )
+{
+	// superdoc/features/launch-option-lock.md. Pure bookkeeping -- no
+	// getopt, no compositor -- exactly the "write once at startup, read
+	// forever after" contract LaunchOptions.h documents. Opt::Sharpness is
+	// dedicated to this test case; nothing else in this test binary touches
+	// LaunchOptions, so there is no cross-test ordering to worry about.
+	using namespace gamescope::LaunchOptions;
+
+	REQUIRE_FALSE( Given( Opt::Sharpness ) );
+	REQUIRE( std::string( Spelling( Opt::Sharpness ) ).empty() );
+
+	MarkGiven( Opt::Sharpness, "--fsr-sharpness" );
+
+	REQUIRE( Given( Opt::Sharpness ) );
+	REQUIRE( std::string( Spelling( Opt::Sharpness ) ) == "--fsr-sharpness" );
+
+	// A different option is untouched by that call -- one bit per Opt, not
+	// one shared flag.
+	REQUIRE_FALSE( Given( Opt::NestedHeight ) );
 }
 
 TEST_CASE( "registry: the Anchor declaration from API.md 7 registers as documented", "[overlay_ui]" )

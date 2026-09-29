@@ -83,6 +83,7 @@
 
 #include "main.hpp"
 #include "wlserver.hpp"
+#include "LaunchOptions.h"
 #include "PointerMapping.h"
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -9463,8 +9464,10 @@ steamcompmgr_main(int argc, char **argv)
 					g_FadeOutDuration = atoi(optarg);
 				} else if (strcmp(opt_name, "force-windows-fullscreen") == 0) {
 					bForceWindowsFullscreen = true;
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::ForceWindowsFullscreen, "--force-windows-fullscreen" );
 				} else if (strcmp(opt_name, "hdr-enabled") == 0 || strcmp(opt_name, "hdr-enable") == 0) {
 					cv_hdr_enabled = true;
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::HdrEnabled, ( std::string("--") + opt_name ).c_str() );
 				} else if (strcmp(opt_name, "hdr-debug-force-support") == 0) {
 					g_bForceHDRSupportDebug = true;
  				} else if (strcmp(opt_name, "hdr-debug-force-output") == 0) {
@@ -9481,6 +9484,7 @@ steamcompmgr_main(int argc, char **argv)
 					g_flHDRItmTargetNits = atof(optarg);
 				} else if (strcmp(opt_name, "framerate-limit") == 0) {
 					g_nSteamCompMgrTargetFPS = atoi(optarg);
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::FramerateLimit, "--framerate-limit" );
 				} else if (strcmp(opt_name, "reshade-effect") == 0) {
 					g_reshade_effect = optarg;
 				} else if (strcmp(opt_name, "reshade-technique-idx") == 0) {

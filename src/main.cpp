@@ -35,6 +35,7 @@
 #include "Utils/Defer.h"
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
+#include "LaunchOptions.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFriends.h"
@@ -596,9 +597,23 @@ static std::optional<std::string> ritz_prescan_profile_arg(int argc, char **argv
 // notifications) reload themselves and need nothing here.
 static void ritz_apply_config_live(const gamescope::config::Settings &config, bool bStartup)
 {
-	g_wantedUpscaleFilter = ritz_config_parse_filter(config.gamescope.filter);
-	g_wantedUpscaleScaler = ritz_config_parse_scaler(config.gamescope.scaler);
-	g_upscaleFilterSharpness = config.gamescope.sharpness;
+	// superdoc/features/launch-option-lock.md: every push below that has a
+	// matching launch flag is gated on `!Given(...)`, so a profile switch
+	// (this function is also the live-apply hook, installed after getopt
+	// has already run) can never quietly override a value the player set
+	// on the command line. Harmless at the true startup call (the one
+	// apply_ritz_config_to_startup_state() makes): that runs BEFORE getopt,
+	// so Given() is false for everything at that point and getopt's own
+	// assignments win afterwards exactly as before.
+	using gamescope::LaunchOptions::Given;
+	using gamescope::LaunchOptions::Opt;
+
+	if ( !Given( Opt::Filter ) )
+		g_wantedUpscaleFilter = ritz_config_parse_filter(config.gamescope.filter);
+	if ( !Given( Opt::Scaler ) )
+		g_wantedUpscaleScaler = ritz_config_parse_scaler(config.gamescope.scaler);
+	if ( !Given( Opt::Sharpness ) )
+		g_upscaleFilterSharpness = config.gamescope.sharpness;
 
 	// The Shaders area's effects (native compute pre-pass, rendervulkan.hpp's
 	// g_nativeEffects): saved effects are on from the first frame, not from
@@ -611,9 +626,12 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// shell is drawn -- the shell is the thing the binding OPENS.
 	gamescope::PanelKeybinds_SeedFromConfig( config );
 
-	cv_adaptive_sync = config.gamescope.vrr_enabled;
-	cv_hdr_enabled = config.gamescope.hdr_enabled;
-	cv_tearing_enabled = config.gamescope.tearing_enabled;
+	if ( !Given( Opt::AdaptiveSync ) )
+		cv_adaptive_sync = config.gamescope.vrr_enabled;
+	if ( !Given( Opt::HdrEnabled ) )
+		cv_hdr_enabled = config.gamescope.hdr_enabled;
+	if ( !Given( Opt::ImmediateFlips ) )
+		cv_tearing_enabled = config.gamescope.tearing_enabled;
 
 	if ( bStartup )
 		return;
@@ -621,17 +639,22 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// The rest needs a running compositor -- the same set PanelDisplay.cpp's
 	// PushCachedSettingsToLiveState() pushes when that area reloads (fps_limit
 	// deliberately not: it round-trips through an X11 property, see there).
-	steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
+	if ( !Given( Opt::GrabCursor ) )
+		steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
 	// input.general's "Force grab keyboard" -- mirrors force_grab_cursor
 	// just above: g_bGrabbed itself, plus both nested backends' own free
 	// functions (each a no-op unless it's the backend actually running).
 	// Closes the gap input-general.md's "Known follow-up" section
 	// described: before this, a profile switch that changed the field only
 	// took effect once input.general itself next drew and reloaded.
-	g_bGrabbed = config.gamescope.force_grab_keyboard;
-	gamescope::SDLBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
-	gamescope::WaylandBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
-	steamcompmgr_set_force_windows_fullscreen( config.gamescope.force_windows_fullscreen );
+	if ( !Given( Opt::GrabKeyboard ) )
+	{
+		g_bGrabbed = config.gamescope.force_grab_keyboard;
+		gamescope::SDLBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
+		gamescope::WaylandBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
+	}
+	if ( !Given( Opt::ForceWindowsFullscreen ) )
+		steamcompmgr_set_force_windows_fullscreen( config.gamescope.force_windows_fullscreen );
 	set_color_sdr_gamut_wideness( config.gamescope.sdr_gamut_wideness );
 	set_sdr_on_hdr_brightness( config.gamescope.sdr_on_hdr_brightness_nits );
 	set_hdr_input_gain( config.gamescope.hdr_input_gain );
@@ -656,12 +679,23 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	// below, so an explicit -w/-h/-r still overwrites whatever is set here --
 	// the CLI wins for free, it just has to run after this call, which it
 	// does (see main()'s call site above the getopt loop).
-	if ( config.gamescope.nested_width && config.gamescope.nested_height )
+	//
+	// The Given() guards below are consequently always-true no-ops AT THIS
+	// CALL SITE specifically (getopt hasn't run yet, so nothing can be
+	// Given() yet) -- kept anyway, at near-zero cost, so this function
+	// reads the same launch-option-lock contract every other write path in
+	// this file now follows rather than relying on a reader to notice "this
+	// one's safe because of WHEN it runs".
+	using gamescope::LaunchOptions::Given;
+	using gamescope::LaunchOptions::Opt;
+
+	if ( config.gamescope.nested_width && config.gamescope.nested_height &&
+	     !Given( Opt::NestedWidth ) && !Given( Opt::NestedHeight ) )
 	{
 		g_nNestedWidth = config.gamescope.nested_width;
 		g_nNestedHeight = config.gamescope.nested_height;
 	}
-	if ( config.gamescope.nested_refresh_hz )
+	if ( config.gamescope.nested_refresh_hz && !Given( Opt::NestedRefresh ) )
 		g_nNestedRefresh = gamescope::ConvertHztomHz( config.gamescope.nested_refresh_hz ); // g_nNestedRefresh is mHz
 
 	// --force-windows-fullscreen ("Force maximize nested window" in Quick
@@ -676,7 +710,8 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	// BOTH getopt loops (this file's own, and steamcompmgr_main()'s later
 	// one), so an explicit CLI flag still overwrites it unconditionally and
 	// wins, the same guarantee nested_width/height/refresh get above.
-	g_bForceWindowsFullscreenStartup = config.gamescope.force_windows_fullscreen;
+	if ( !Given( Opt::ForceWindowsFullscreen ) )
+		g_bForceWindowsFullscreenStartup = config.gamescope.force_windows_fullscreen;
 
 	// --force-grab-cursor ("Force grab cursor" in Quick toggles): the same
 	// seed-before-getopt shape. g_bForceRelativeMouse is read once by each
@@ -690,7 +725,8 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 	// saved `true` came back as off after a restart until some Display
 	// row's getter happened to reload the area and re-push it
 	// (settings-audit 2026-09-07, "late apply").
-	g_bForceRelativeMouse = config.gamescope.force_grab_cursor;
+	if ( !Given( Opt::GrabCursor ) )
+		g_bForceRelativeMouse = config.gamescope.force_grab_cursor;
 }
 
 static enum gamescope::GamescopeBackend parse_backend_name(const char *str)
@@ -1073,12 +1109,15 @@ int main(int argc, char **argv)
 		switch (o) {
 			case 'w':
 				g_nNestedWidth = parse_integer( optarg, "nested-width" );
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::NestedWidth, "-w/--nested-width" );
 				break;
 			case 'h':
 				g_nNestedHeight = parse_integer( optarg, "nested-height" );
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::NestedHeight, "-h/--nested-height" );
 				break;
 			case 'r':
 				g_nNestedRefresh = gamescope::ConvertHztomHz( parse_integer( optarg, "nested-refresh" ) );
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::NestedRefresh, "-r/--nested-refresh" );
 				break;
 			case 'W':
 				g_nPreferredOutputWidth = parse_integer( optarg, "output-width" );
@@ -1094,9 +1133,11 @@ int main(int argc, char **argv)
 				break;
 			case 'S':
 				g_wantedUpscaleScaler = parse_upscaler_scaler(optarg);
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::Scaler, "-S/--scaler" );
 				break;
 			case 'F':
 				g_wantedUpscaleFilter = parse_upscaler_filter(optarg);
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::Filter, "-F/--filter" );
 				break;
 			case 'b':
 				g_bBorderlessOutputWindow = true;
@@ -1109,6 +1150,7 @@ int main(int argc, char **argv)
 				break;
 			case 'g':
 				g_bGrabbed = true;
+				gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::GrabKeyboard, "-g/--grab" );
 				break;
 			case 's':
 				g_mouseSensitivity = parse_float( optarg, "mouse-sensitivity" );
@@ -1161,6 +1203,7 @@ int main(int argc, char **argv)
 				} else if (strcmp(opt_name, "sharpness") == 0 ||
 						   strcmp(opt_name, "fsr-sharpness") == 0) {
 					g_upscaleFilterSharpness = parse_integer( optarg, opt_name );
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::Sharpness, ( std::string("--") + opt_name ).c_str() );
 				} else if (strcmp(opt_name, "rt") == 0) {
 					g_bRt = true;
 				} else if (strcmp(opt_name, "prefer-vk-device") == 0) {
@@ -1171,12 +1214,15 @@ int main(int argc, char **argv)
 					g_preferDeviceID = deviceID;
 				} else if (strcmp(opt_name, "immediate-flips") == 0) {
 					cv_tearing_enabled = true;
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::ImmediateFlips, "--immediate-flips" );
 				} else if (strcmp(opt_name, "force-grab-cursor") == 0) {
 					g_bForceRelativeMouse = true;
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::GrabCursor, "--force-grab-cursor" );
 				} else if (strcmp(opt_name, "display-index") == 0) {
 					g_nNestedDisplayIndex = parse_integer( optarg, opt_name );
 				} else if (strcmp(opt_name, "adaptive-sync") == 0) {
 					cv_adaptive_sync = true;
+					gamescope::LaunchOptions::MarkGiven( gamescope::LaunchOptions::Opt::AdaptiveSync, "--adaptive-sync" );
 				} else if (strcmp(opt_name, "expose-wayland") == 0) {
 					g_bExposeWayland = true;
 				} else if (strcmp(opt_name, "backend") == 0) {

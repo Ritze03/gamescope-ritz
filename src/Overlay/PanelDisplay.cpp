@@ -62,6 +62,7 @@
 #include "convar.h"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
+#include "LaunchOptions.h"
 #include "Fonts.h"
 #include "Widgets.h"
 
@@ -553,6 +554,19 @@ namespace gamescope
 		{ (int)GamescopeUpscaleScaler::STRETCH, "stretch" },
 	};
 
+	// superdoc/features/launch-option-lock.md. One wording, reused at every
+	// LockedByLaunchOption() call site in this file, so a row whose flag is
+	// given reads consistently ("Set by the launch option -F/--filter --
+	// remove it from the launch options to change this here.") instead of
+	// each row inventing its own phrasing. The returned string is a
+	// temporary; LockedByLaunchOption() copies it before returning, the
+	// same contract DisabledUnless()'s pszReason already relies on.
+	static std::string LaunchLockReason( LaunchOptions::Opt eOpt )
+	{
+		return std::string( "Set by the launch option " ) + LaunchOptions::Spelling( eOpt ) +
+		       " -- remove it from the launch options to change this here.";
+	}
+
 	static bool SharpnessApplies()
 	{
 		return g_wantedUpscaleFilter == GamescopeUpscaleFilter::FSR
@@ -602,7 +616,9 @@ namespace gamescope
 			.Help( "Matches your screen's refresh rate to the game so motion looks smoother with "
 			       "less stutter. Needs a screen and cable that support VRR (FreeSync or G-Sync)." )
 			.Default( false )
-			.Keywords( "vrr freesync gsync adaptive sync refresh" );
+			.Keywords( "vrr freesync gsync adaptive sync refresh" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::AdaptiveSync ); },
+				LaunchLockReason( LaunchOptions::Opt::AdaptiveSync ).c_str() );
 
 		a.Switch( "display.allow_tearing", "Allow tearing",
 			ui::AnyBind::Of<bool>(
@@ -616,7 +632,9 @@ namespace gamescope
 			.Help( "Shows new frames the instant they're ready instead of waiting for the screen. "
 			       "Feels more responsive, but fast camera movement can show a faint horizontal line." )
 			.Default( false )
-			.Keywords( "immediate flip vsync latency tear seam" );
+			.Keywords( "immediate flip vsync latency tear seam" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ); },
+				LaunchLockReason( LaunchOptions::Opt::ImmediateFlips ).c_str() );
 
 		// Force grab cursor MOVED to input.general (PanelInput.cpp) on
 		// 2026-09-27 -- the user: "Input: General - Force grab cursor
@@ -653,7 +671,9 @@ namespace gamescope
 			       "display instead of using their own requested size. Takes effect immediately, "
 			       "even on windows already open." )
 			.Default( false )
-			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" );
+			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ForceWindowsFullscreen ); },
+				LaunchLockReason( LaunchOptions::Opt::ForceWindowsFullscreen ).c_str() );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )
@@ -681,7 +701,9 @@ namespace gamescope
 			       "also sharpen it afterward; Pixel stays blocky except at exact resolution "
 			       "multiples." )
 			.Default( (int)GamescopeUpscaleFilter::LINEAR )
-			.Keywords( "upscale scaling resample fsr nis pixel linear nearest" );
+			.Keywords( "upscale scaling resample fsr nis pixel linear nearest" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::Filter ); },
+				LaunchLockReason( LaunchOptions::Opt::Filter ).c_str() );
 
 		// The UI percent, not the raw 0..20 -- DECISIONS.md #11. The percent
 		// is always "higher = sharper"; the raw value it maps to flips
@@ -717,7 +739,9 @@ namespace gamescope
 			.Keywords( "sharpen sharpness rcas cas crisp clarity ringing" )
 			.DisabledUnless( SharpnessApplies,
 				"only FSR and NIS sharpen -- the Linear, Nearest and Pixel filters have no "
-				"sharpening pass, so this has no effect while one of them is selected" );
+				"sharpening pass, so this has no effect while one of them is selected" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::Sharpness ); },
+				LaunchLockReason( LaunchOptions::Opt::Sharpness ).c_str() );
 
 		a.Choice( "display.filter.scaler", "Scaler",
 			ui::AnyBind::Of<int>(
@@ -728,7 +752,9 @@ namespace gamescope
 			.Help( "Decides how the picture fits your screen when its shape doesn't match. Integer "
 			       "only resizes in whole-number steps, which stays sharp but can add black bars." )
 			.Default( (int)GamescopeUpscaleScaler::AUTO )
-			.Keywords( "aspect fit fill stretch integer letterbox" );
+			.Keywords( "aspect fit fill stretch integer letterbox" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::Scaler ); },
+				LaunchLockReason( LaunchOptions::Opt::Scaler ).c_str() );
 
 		// Allow tearing and Force grab cursor lived here as a "Presentation"
 		// group until the user corrected D13.1 (2026-08-24): both moved to
@@ -1438,7 +1464,15 @@ namespace gamescope
 			.Keywords( "resolution render internal nested preset size 16:9 4:3 16:10 21:9 "
 			           "1080p 1440p 4k 720p 1200p" )
 			.DisabledUnless( []{ return ListFor( CurrentAspect() ) != nullptr; },
-			                 "pick a shape (16:9, 4:3, 16:10, 21:9) in Aspect above to choose a size" );
+			                 "pick a shape (16:9, 4:3, 16:10, 21:9) in Aspect above to choose a size" )
+			// Sets BOTH width and height in one pick, so either -w or -h
+			// alone is enough to lock it -- see this file's own
+			// "Resolution rows" note in superdoc/features/launch-option-lock.md.
+			.LockedByLaunchOption(
+				[]{ return LaunchOptions::Given( LaunchOptions::Opt::NestedWidth )
+				        || LaunchOptions::Given( LaunchOptions::Opt::NestedHeight ); },
+				"Set by a launch option (-w/-h) -- remove it from the launch options to change "
+				"this here." );
 
 		static constexpr const char *kNotCustom =
 			"pick Custom in Aspect above to type your own size";
@@ -1456,6 +1490,8 @@ namespace gamescope
 			.Default( 1280 )
 			.Keywords( "width custom horizontal pixels" )
 			.DisabledUnless( ResolutionIsCustom, kNotCustom )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedWidth ); },
+				LaunchLockReason( LaunchOptions::Opt::NestedWidth ).c_str() )
 			.Param( "lock_aspect", "Lock aspect ratio",
 				ui::AnyBind::Of<bool>(
 					[]{ return LockAspect(); },
@@ -1478,7 +1514,9 @@ namespace gamescope
 			.Unit( "px" )
 			.Default( 720 )
 			.Keywords( "height custom vertical pixels" )
-			.DisabledUnless( ResolutionIsCustom, kNotCustom );
+			.DisabledUnless( ResolutionIsCustom, kNotCustom )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedHeight ); },
+				LaunchLockReason( LaunchOptions::Opt::NestedHeight ).c_str() );
 
 		a.Group( "Refresh" );
 
@@ -1492,7 +1530,9 @@ namespace gamescope
 			       "screen's own rate. Above the host's rate, frames are paced faster than the "
 			       "screen can show them -- this cannot change the monitor's real refresh." )
 			.Default( kRefreshFollowHost )
-			.Keywords( "refresh rate hz hertz vblank pacing follow host 60 120 144" );
+			.Keywords( "refresh rate hz hertz vblank pacing follow host 60 120 144" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedRefresh ); },
+				LaunchLockReason( LaunchOptions::Opt::NestedRefresh ).c_str() );
 
 		a.Stepper( "display.refresh.custom", "Custom refresh",
 			ui::AnyBind::Of<int>(
@@ -1506,7 +1546,9 @@ namespace gamescope
 			.Unit( "Hz" )
 			.Default( 60 )
 			.Keywords( "custom refresh hz hertz" )
-			.DisabledUnless( RefreshIsCustom, "pick Custom in Refresh rate above to use this number" );
+			.DisabledUnless( RefreshIsCustom, "pick Custom in Refresh rate above to use this number" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedRefresh ); },
+				LaunchLockReason( LaunchOptions::Opt::NestedRefresh ).c_str() );
 
 		a.Group( "Diagnostics" );
 
@@ -1613,7 +1655,9 @@ namespace gamescope
 			.Unit( "fps" )
 			.ZeroMeans( "Unlimited" )
 			.Default( 0 )
-			.Keywords( "fps frame rate cap limit limiter throttle unlimited" );
+			.Keywords( "fps frame rate cap limit limiter throttle unlimited" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::FramerateLimit ); },
+				LaunchLockReason( LaunchOptions::Opt::FramerateLimit ).c_str() );
 
 		// Adaptive sync (VRR) lived here until the user corrected D13.1
 		// (2026-08-24): "VRR shouldnt be placed in 'Frame Limiter'." It moved
@@ -1741,7 +1785,9 @@ namespace gamescope
 			.Help( "Turns on HDR for richer colour and brighter highlights, on a screen that "
 			       "supports it. Every other setting in this area only matters while this is on." )
 			.Default( false )
-			.Keywords( "hdr pq bt2020 wide gamut high dynamic range" );
+			.Keywords( "hdr pq bt2020 wide gamut high dynamic range" )
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::HdrEnabled ); },
+				LaunchLockReason( LaunchOptions::Opt::HdrEnabled ).c_str() );
 
 		// One predicate, declared once and reused, so the four gated rows
 		// cannot drift apart about what gates them.

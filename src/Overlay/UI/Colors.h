@@ -113,4 +113,23 @@ namespace gamescope::ui
 	private:
 		float m_flPrev;
 	};
+
+	// The inverse of ScopedDim: forces the dim factor back to 1.0 for its
+	// duration regardless of how many ScopedDims are already nested (a
+	// disabled Param inside a disabled Entry, say), restoring whatever it
+	// was on exit. For the launch-option lock tag (Shell.cpp's
+	// DrawLaunchLockTag()): the warning has to stay legible on a 0.55-alpha
+	// row -- it is explaining WHY the row is dim, so it must not itself
+	// fade into the thing it is explaining.
+	class ScopedUndim
+	{
+	public:
+		ScopedUndim();
+		~ScopedUndim();
+		ScopedUndim( const ScopedUndim & ) = delete;
+		ScopedUndim &operator=( const ScopedUndim & ) = delete;
+
+	private:
+		float m_flPrev;
+	};
 }

@@ -68,6 +68,7 @@
 #include "steamcompmgr.hpp"
 #include "backend.h"
 #include "Config/ConfigManager.h"
+#include "LaunchOptions.h"
 
 using namespace std::string_view_literals;
 
@@ -194,7 +195,15 @@ namespace gamescope
 			.Help( "Keeps your mouse locked to the game at all times, not just when the cursor is "
 			       "hidden. Turn this on if the mouse ever seems to escape the game window." )
 			.Default( false )
-			.Keywords( "mouse pointer capture confine grab relative" );
+			.Keywords( "mouse pointer capture confine grab relative" )
+			// superdoc/features/launch-option-lock.md. --force-grab-cursor
+			// seeds g_bForceRelativeMouse before this switch's binding can
+			// read it (main.cpp's apply_ritz_config_to_startup_state()); a
+			// profile switch that flips this back off would be silently
+			// fighting the flag for the rest of the session.
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::GrabCursor ); },
+				( std::string( "Set by the launch option " ) + LaunchOptions::Spelling( LaunchOptions::Opt::GrabCursor ) +
+				  " -- remove it from the launch options to change this here." ).c_str() );
 
 		a.Switch( "input.force_grab_keyboard", "Force grab keyboard",
 			ui::AnyBind::Of<bool>(
@@ -224,7 +233,13 @@ namespace gamescope
 			       "host compositor is Hyprland, its own escape is a bind flagged bypass ('p') -- "
 			       "see the Diagnostics fact below and input-general.md for details." )
 			.Default( false )
-			.Keywords( "keyboard grab capture host shortcuts alt-tab focus sdl wayland" );
+			.Keywords( "keyboard grab capture host shortcuts alt-tab focus sdl wayland" )
+			// -g/--grab sets g_bGrabbed directly in the getopt loop, which
+			// this switch's binding reads straight off -- same reasoning as
+			// Force grab cursor just above.
+			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::GrabKeyboard ); },
+				( std::string( "Set by the launch option " ) + LaunchOptions::Spelling( LaunchOptions::Opt::GrabKeyboard ) +
+				  " -- remove it from the launch options to change this here." ).c_str() );
 
 		a.Group( "Diagnostics" );
 

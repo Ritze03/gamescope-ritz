@@ -1802,6 +1802,28 @@ namespace gamescope::ui::shell
 				return;
 			}
 
+			// superdoc/features/launch-option-lock.md. Refuses ONLY the
+			// launch-option lock, not every DisabledUnless() reason a row
+			// might have (SharpnessApplies, ResolutionIsCustom, HdrOn, ...)
+			// -- scripts/settings_audit.py and effects-regression.sh both
+			// drive rows through this exact command with a "flip the gate,
+			// then set the row" sequence that depends on a merely-gated row
+			// staying writable here even while its gate reads false at the
+			// moment of the call (audited, not merely assumed: both scripts
+			// write a gate id immediately before the row id, relying on
+			// this). A launch-option lock is different in kind -- nothing
+			// this process does can turn it back off during the session, so
+			// there is no "flip the gate first" available at all, and
+			// refusing it here is what actually keeps the CLI value
+			// meaningful against a stray `overlay_e2_set` the way it
+			// already is against a profile switch (ritz_apply_config_live()).
+			if ( pEntry && pEntry->IsLaunchLocked() )
+			{
+				console_log.errorf( "'%s' is locked by a launch option: %s",
+					sId.c_str(), pEntry->DisabledReason().c_str() );
+				return;
+			}
+
 			// The TYPE comes from what the binding currently holds, never from
 			// the string's shape. Set() ignores a variant of the wrong
 			// alternative, so guessing here would fail silently -- the one
@@ -3405,6 +3427,69 @@ namespace gamescope::ui::shell
 				ImVec2( x, rcLabel.GetCenter().y ), flR, Col( Role::AccentBase ) );
 		}
 
+		// =================================================================
+		//  Launch-option lock: the "LAUNCH OPTION" warning tag
+		// =================================================================
+		// superdoc/features/launch-option-lock.md. Modelled directly on
+		// DrawInheritMark() just above -- same idea (a small mark placed
+		// right after the measured label, clamped to the label lane) for a
+		// different fact: this row's live value was pinned by a `gamescope`
+		// launch flag (Entry::IsLaunchLocked(), which Registry.h's own
+		// comment explains is a SEPARATE slot from the ordinary
+		// DisabledUnless() reason so neither clobbers the other), and it
+		// will not accept an edit again until that flag is gone from the
+		// launch options.
+		//
+		// Unlike the inherit dot, this draws a short filled badge rather
+		// than a dot: the point is to be READ, not just noticed, so a
+		// player who has never seen the row before still understands why
+		// it's greyed without opening the Inspector. Role::Warn (amber) is
+		// this kit's own "needs attention, not an error" hue (SPEC §7.5) --
+		// distinct from Role::Danger, which this is deliberately not: a
+		// launch-locked row isn't broken, it's just not editable here.
+		//
+		// ScopedUndim: the row this tag rides on is already inside a
+		// ScopedDim(bDisabled) (every launch-locked row IS disabled, by
+		// construction) at 0.55 alpha by the time this runs. A tag whose
+		// entire job is explaining WHY the row is dim would be defeating
+		// its own purpose if it faded into that same grey -- so it draws
+		// at full opacity, the one deliberate exception to "disabled means
+		// 0.55" in the whole kit.
+		void DrawLaunchLockTag( const Entry &entry, const ImRect &rcLabel, const char *pszTitle )
+		{
+			if ( !entry.IsLaunchLocked() )
+				return;
+
+			static constexpr const char *kTagText = "LAUNCH OPTION";
+
+			const ScopedUndim undim;
+
+			const ImVec2 vText = MeasureText( TypeRole::Meta, kTagText );
+			const float flPadX = Px( tok::kXS );        // 4
+			const float flPadY = Px( 2.0f );
+			const float flTagW = vText.x + flPadX * 2.0f;
+			const float flTagH = vText.y + flPadY * 2.0f;
+
+			// Same placement rule as DrawInheritMark: right after the
+			// measured label, clamped so it never spills past the label
+			// lane. When the row is ALSO profile-overridden (both marks can
+			// coexist -- e.g. a game profile stores its own value for a row
+			// that a launch flag then overrides live), the inherit dot's
+			// own footprint (a Px(2.5) circle plus its Px(kS) gap) is added
+			// first so the two marks don't draw on top of each other.
+			float x = rcLabel.Min.x + MeasureText( TypeRole::Label, pszTitle ).x + Px( tok::kS );
+			if ( Reg().KeyStateFor( entry ) == InheritState::Overridden )
+				x += Px( 2.5f ) * 2.0f + Px( tok::kS );
+			x = std::min( x, rcLabel.Max.x - flTagW );
+			x = std::max( x, rcLabel.Min.x );
+
+			const float y0 = rcLabel.GetCenter().y - flTagH * 0.5f;
+			const Rect rc{ x, y0, x + flTagW, y0 + flTagH };
+
+			Fill( rc, Col( Role::Warn ), Px( 2.0f ) );
+			Label( rc, TypeRole::Meta, Col( Role::WarnText ), kTagText, TextAlign::Center );
+		}
+
 		// One composite band. Structurally the same function as DrawEntryRow
 		// -- same selection fill, same hairline, same label/value split, same
 		// affordance column -- differing only in that its bounds are n rows
@@ -3566,6 +3651,7 @@ namespace gamescope::ui::shell
 				       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 				       entry.Title().c_str() );
 				DrawInheritMark( entry, rcLabel, entry.Title().c_str() );
+				DrawLaunchLockTag( entry, rcLabel, entry.Title().c_str() );
 				if ( flValueW > 0.0f )
 					Label( { rcValue.Min.x, rcValue.Min.y, rcValue.Max.x, rcValue.Max.y },
 					       TypeRole::Value, Col( Role::TextPrimary ), sValue.c_str(), TextAlign::Right );
@@ -3840,6 +3926,7 @@ namespace gamescope::ui::shell
 			       bSelected ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 			       entry.Title().c_str() );
 			DrawInheritMark( entry, rcLabel, entry.Title().c_str() );
+			DrawLaunchLockTag( entry, rcLabel, entry.Title().c_str() );
 
 			// The control. Every atom is right-bound by construction --
 			// RowCtx has no other kind of allocator (see Row.h).

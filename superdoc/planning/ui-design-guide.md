@@ -1431,3 +1431,51 @@ whole pixel inset from the border column at 1920x1080 centred), so the inset is 
 no-op here and a guard against the same defect at a geometry where the two do land on
 the same column.
 
+### The "LAUNCH OPTION" tag (2026-09-29)
+
+A small filled badge (`DrawLaunchLockTag()`, `Shell.cpp`), drawn after a row's label
+exactly where the inherited/overridden dot above sits, for a different fact: this row's
+live value was pinned by a `gamescope` launch flag and will not accept an edit again
+this session (`superdoc/features/launch-option-lock.md`). `Why:` the user, verbatim --
+*"Make sure that when a value is overwritten, as a startup argument ... that it can't be
+modified inside of the game anymore. Just to avoid confusion with the user, just add
+like a small red or yellow label behind it that warns the user about it being set
+through a launch argument."*
+
+Modelled directly on the inherited/overridden dot: same placement rule (right after the
+measured label, clamped to the label lane's own right edge so a long label cannot push
+it off-row), same "quiet, small mark" register -- but a short filled **badge** with
+text, not a dot, because the point here is to be *read*, not merely noticed: a player
+who has never opened this row's Inspector before still has to understand, at a glance,
+why it's greyed. `Role::Warn` fill / `Role::WarnText` text -- amber, this kit's "needs
+attention, not broken" hue (SPEC §7.5), deliberately not `Role::Danger`: a launch-locked
+row isn't in an error state, it's just not editable *here*. When both marks would apply
+to the same row (a game profile overriding a key a launch flag then locks live -- rare,
+but not unrepresentable), the tag's own x-offset adds the dot's footprint first so
+neither draws on top of the other.
+
+**Full opacity on a dimmed row, on purpose.** Every launch-locked row is, by
+construction, also a *disabled* row (`Entry::DisabledReason()` returns the launch
+wording), so by the time `DrawLaunchLockTag()` runs it is already inside that row's
+`ScopedDim(bDisabled)` at 0.55 alpha. A tag whose entire job is explaining *why* the row
+is dim would defeat itself by fading into the same grey it's explaining -- so this is
+the one deliberate exception to "disabled means 0.55" anywhere in the kit, made with a
+new `ui::ScopedUndim` (`Colors.h`/`.cpp`, `Colors.cpp`'s file-static dim factor pushed
+back to 1.0 for the tag's own draw and restored after), rather than by special-casing
+`Col()`/`Accent()` themselves.
+
+**Two independent disabled slots, on purpose.** `Entry::LockedByLaunchOption()` is a
+*second* predicate/reason pair, not folded into the existing `DisabledUnless()` --
+several real rows already carry their own gate (Sharpness's "only FSR/NIS sharpen",
+the Custom-resolution steppers' "pick Custom above", ...), and `DisabledUnless()`
+*overwrites* whatever predicate/reason a row already holds (a single `m_Enabled`/
+`m_sReason` slot). Registering the launch lock as a second call rather than combining
+it by hand at each of a dozen call sites is what keeps neither clobbering the other;
+`Entry::DisabledReason()` simply ORs the two and prefers the launch wording when both
+apply, since it names an actual fix ("remove it from the launch options") where a
+row's own gate reason usually just explains why the *control* is inert right now.
+`Entry::IsLaunchLocked()` is the narrower query `DrawLaunchLockTag()` actually asks --
+true only while the row is disabled *specifically* because of a flag, so a row
+disabled for an unrelated reason (HDR off, wrong filter, ...) still greys out but
+draws no tag.
+

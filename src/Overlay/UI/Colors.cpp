@@ -98,6 +98,9 @@ namespace gamescope::ui
 
 	ScopedDim::~ScopedDim() { s_flDim = m_flPrev; }
 
+	ScopedUndim::ScopedUndim() : m_flPrev( s_flDim ) { s_flDim = 1.0f; }
+	ScopedUndim::~ScopedUndim() { s_flDim = m_flPrev; }
+
 	ImU32 Col( Role eRole )
 	{
 		namespace pal = gamescope::palette;

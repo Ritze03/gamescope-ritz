@@ -412,6 +412,39 @@ namespace gamescope::ui
 		// (API.md §5). The reason renders in Configure; the row draws at 0.55.
 		Entry &DisabledUnless( std::function<bool()> pred, const char *pszReason );
 
+		// ---- launch-option lock (superdoc/features/launch-option-lock.md) --
+		// A SECOND, independent disabled mechanism, deliberately not folded
+		// into DisabledUnless() above: that call OVERWRITES whatever
+		// predicate/reason a row already carries (m_Enabled/m_sReason are a
+		// single slot), and several of the rows this locks already have
+		// their own DisabledUnless() for an unrelated reason (Sharpness's
+		// "only FSR/NIS sharpen", the Custom-resolution steppers' "pick
+		// Custom above", ...). Folding the launch-option check into that
+		// same slot would silently drop whichever of the two conditions
+		// registered first -- the exact bug a caller combining them by hand
+		// would hit. So this keeps its own predicate/reason and
+		// DisabledReason() ORs the two: the row is disabled if EITHER says
+		// so, and the launch-option wording wins when both are true, since
+		// it names an actual fix ("remove it from the launch options")
+		// where the generic reason usually does not.
+		//
+		// The predicate is caller-supplied rather than this header knowing
+		// about LaunchOptions.h/Opt -- keeps the registry (deliberately
+		// free of everything but ImGui-free data, see this file's own
+		// header) decoupled from a concrete flag enum. A call site passes
+		// `[]{ return LaunchOptions::Given( LaunchOptions::Opt::Filter ); }`
+		// and a reason built from LaunchOptions::Spelling() of that flag.
+		Entry &LockedByLaunchOption( std::function<bool()> pred, const char *pszReason );
+		// True only while the predicate above is both SET and currently
+		// true -- i.e. the row is disabled specifically because of a launch
+		// flag, as opposed to disabled for some other, unrelated reason.
+		// This is what the Shell asks to decide whether to paint the
+		// "LAUNCH OPTION" tag after the label (Shell.cpp's
+		// DrawLaunchLockTag()) -- a row disabled for the OTHER reason (HDR
+		// off, wrong filter, ...) still greys out via DisabledReason() but
+		// draws no tag, since nothing about it was pinned by a flag.
+		bool IsLaunchLocked() const;
+
 		Entry &Validate( std::function<std::string( const std::string & )> fn );
 
 		// ---- destructive actions (P3b) -----------------------------------
@@ -692,6 +725,8 @@ namespace gamescope::ui
 		mutable std::vector<Option> m_Options;                    // cache when m_OptionsFn is set
 		std::function<std::vector<Option>()> m_OptionsFn;         // OptionsFrom() -- a live option set
 		std::function<bool()> m_Enabled;
+		std::function<bool()> m_LaunchLockPred;   // LockedByLaunchOption()
+		std::string           m_sLaunchLockReason;
 		std::function<std::string( const std::string & )> m_Validate;
 		std::function<double()>      m_Scalar;    // Meter
 		std::function<std::string()> m_Summary;   // Facts

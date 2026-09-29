@@ -187,6 +187,7 @@ src = [
   'reshade_effect_manager.cpp',
   'SettingsOverlay.cpp',
   'Keybinds.cpp',
+  'LaunchOptions.cpp',
   'SteamFriends.cpp',
   'Overlay/Fonts.cpp',
   'Overlay/CursorArt.cpp',

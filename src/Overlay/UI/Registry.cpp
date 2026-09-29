@@ -552,6 +552,28 @@ namespace gamescope::ui
 		return *this;
 	}
 
+	// See the header comment: a SECOND, independent slot from DisabledUnless
+	// above, so registering this never clobbers a row's existing predicate
+	// (or vice versa -- a row can call these two calls in either order).
+	Entry &Entry::LockedByLaunchOption( std::function<bool()> pred, const char *pszReason )
+	{
+		if ( !pszReason || !*pszReason )
+		{
+			ReportViolation( Law::ReasonRequired, m_sId,
+				"LockedByLaunchOption() needs a reason string, exactly like "
+				"DisabledUnless() -- see that law's own message." );
+			return *this;
+		}
+		m_LaunchLockPred = std::move( pred );
+		m_sLaunchLockReason = pszReason;
+		return *this;
+	}
+
+	bool Entry::IsLaunchLocked() const
+	{
+		return m_LaunchLockPred && m_LaunchLockPred();
+	}
+
 	bool Entry::ReadOnly() const
 	{
 		// SPEC §5.1 also lists the frametime Graph composite as read-only.
@@ -562,6 +584,13 @@ namespace gamescope::ui
 
 	std::string Entry::DisabledReason() const
 	{
+		// The launch-option lock wins when both apply: it names an actual
+		// fix ("remove it from the launch options"), where the row's own
+		// DisabledUnless() reason usually just explains why the CONTROL is
+		// currently inert (wrong filter selected, HDR off, ...) -- not
+		// useful to show while the real blocker is the launch flag.
+		if ( IsLaunchLocked() )
+			return m_sLaunchLockReason;
 		if ( !m_Enabled || m_Enabled() )
 			return {};
 		return m_sReason;
