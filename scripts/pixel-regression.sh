@@ -468,10 +468,21 @@ CH_SCALED_SPAN=120
 CH_SCALED_GAP2=2
 CH_SCALED_GAP2_EXP_HOLE=$(( 2 * (CH_SCALED_GAP2 - 1) + CH_ANIM_LINE_WIDTH ))
 CH_SCALED_GAP2_EXP_SEP=$((CH_SCALED_GAP2_EXP_HOLE * CH_SCALED_SCALE))
-# At 2x the game's centre pixel column [320,321) lands on output [640,642): the
-# crosshair is centred on x = 641.0, so scan from pixel 641 / 361.
-CH_SCALED_CENTER_X=$((OUT_W / 2 + 1))
-CH_SCALED_CENTER_Y=$((OUT_H / 2 + 1))
+# e7d364f (2026-09-29): SnapCenter's odd-width branch now snaps to the
+# TOP-LEFT game pixel of an exact centre instead of the bottom-right one --
+# ONE GAME PIXEL, not one output pixel: this path snaps in GAME space
+# (GameFrame()'s centre, 320.0/180.0 here) and the raster is then stretched
+# by CH_SCALED_SCALE, so the shift lands in output space as a full
+# `scale`-sized jump, not a bare -1. Was: game column [320,321) -> output
+# [640,642), true centre edge 641.0 (CH_SCALED_CENTER_X = OUT_W/2+1). Now:
+# game column [319,320) -> output [638,640), true centre edge 639.0.
+# General derivation (origin cancels): true output centre =
+# frame_centre - 0.5*scale (was frame_centre + 0.5*scale pre-e7d364f) --
+# see tests/test_crosshair.cpp's "ResampleToOutput at 2x" case, whose
+# right-arm run (654..677) and CH_SCALED_EXP_SEP (30) place the hole's own
+# midpoint at exactly 638.5..639.5, i.e. this same 639/359.
+CH_SCALED_CENTER_X=$((OUT_W / 2 - CH_SCALED_SCALE / 2))
+CH_SCALED_CENTER_Y=$((OUT_H / 2 - CH_SCALED_SCALE / 2))
 
 # Apply Scaling's IDENTITY invariant (2026-09-07 bug fix, crosshair.md's
 # Apply Scaling section): nested == output, scaler auto -- no stretch at
@@ -511,8 +522,14 @@ CH_ANISO_EXP_SEP_X=$(python3 -c "print($CH_ANISO_EXP_HOLE * $CH_ANISO_SCALE_X)")
 CH_ANISO_EXP_SEP_Y=$(python3 -c "print($CH_ANISO_EXP_HOLE * $CH_ANISO_SCALE_Y)")
 CH_ANISO_TOL_PX=1.2
 CH_ANISO_SPAN=140
-CH_ANISO_CENTER_X=$((CH_ANISO_OUT_W / 2))
-CH_ANISO_CENTER_Y=$((CH_ANISO_OUT_H / 2))
+# e7d364f (2026-09-29, see CH_SCALED_CENTER_X's own comment above): true
+# output centre = frame_centre - 0.5*scale, per axis (was + 0.5*scale
+# pre-e7d364f). frame_centre here is this instance's own output centre
+# (CH_ANISO_OUT_W/2, CH_ANISO_OUT_H/2), not CH_CENTER_X/Y's 1280x720 rig.
+# X: 960 - 0.5*1.5 = 959.25 -> 959. Y: 540 - 0.5*1.125 = 539.4375 -> 539.
+# Well inside CH_ANISO_TOL_PX (1.2) of the exact value either way.
+CH_ANISO_CENTER_X=$(python3 -c "print(round($CH_ANISO_OUT_W / 2 - 0.5 * $CH_ANISO_SCALE_X))")
+CH_ANISO_CENTER_Y=$(python3 -c "print(round($CH_ANISO_OUT_H / 2 - 0.5 * $CH_ANISO_SCALE_Y))")
 
 # Apply Scaling, FIT/LETTERBOXED (case 4, 2026-09-07): a 640x160 game (4:1,
 # far wider than tall) fit onto the 1280x720 output -- fit scales by the
@@ -545,8 +562,14 @@ CH_FIT_EXP_HOLE=$(( 2 * (CH_LINE_GAP - 1) + CH_ANIM_LINE_WIDTH ))
 CH_FIT_EXP_SEP=$(python3 -c "print($CH_FIT_EXP_HOLE * $CH_FIT_SCALE)")
 CH_FIT_TOL_PX=1.2
 CH_FIT_SPAN=100
-CH_FIT_CENTER_X=$((OUT_W / 2))
-CH_FIT_CENTER_Y=$((OUT_H / 2))
+# e7d364f (2026-09-29, see CH_SCALED_CENTER_X's own comment above): true
+# output centre = frame_centre - 0.5*scale. frame_centre is this instance's
+# own output centre (OUT_W/2, OUT_H/2 -- the fit game rect shares the
+# output's centre on both axes, letterbox bars notwithstanding). Both axes
+# scale by CH_FIT_SCALE (2, uniform under `fit`): 640 - 1 = 639,
+# 360 - 1 = 359 (was 640, 360).
+CH_FIT_CENTER_X=$((OUT_W / 2 - CH_FIT_SCALE / 2))
+CH_FIT_CENTER_Y=$((OUT_H / 2 - CH_FIT_SCALE / 2))
 # A point well inside the top letterbox bar, on the crosshair's own
 # vertical axis -- must stay the flat background colour (nothing painted
 # there) at every gap/apply_scaling combination this check exercises.
