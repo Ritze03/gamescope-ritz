@@ -3440,13 +3440,37 @@ namespace gamescope::ui::shell
 		// will not accept an edit again until that flag is gone from the
 		// launch options.
 		//
-		// Unlike the inherit dot, this draws a short filled badge rather
-		// than a dot: the point is to be READ, not just noticed, so a
-		// player who has never seen the row before still understands why
-		// it's greyed without opening the Inspector. Role::Warn (amber) is
-		// this kit's own "needs attention, not an error" hue (SPEC §7.5) --
-		// distinct from Role::Danger, which this is deliberately not: a
+		// Unlike the inherit dot, this draws a short badge rather than a
+		// dot: the point is to be READ, not just noticed, so a player who
+		// has never seen the row before still understands why it's greyed
+		// without opening the Inspector. Role::Warn (amber) is this kit's
+		// own "needs attention, not an error" hue (SPEC §7.5) -- distinct
+		// from Role::Danger, which this is deliberately not: a
 		// launch-locked row isn't broken, it's just not editable here.
+		//
+		// COLOUR (live-QC fix, superdoc/features/launch-option-lock.md):
+		// the first cut filled the whole badge with Role::Warn and set
+		// Role::WarnText text on top -- #F7A85C text on #F3821D fill,
+		// measured 1.34:1, well under WCAG's 4.5:1 floor and hard to read
+		// live (run2's captures). Two ways to fix a fill/text pair that
+		// close in lightness: darken the text or darken the fill. Tried
+		// dark-text-on-amber-fill first (Role::Surface's near-black RGB
+		// opaque on Role::Warn) -- measures ~7.6:1, plenty -- but it
+		// introduces a text/background pairing that exists NOWHERE else in
+		// the kit (every other status role always draws its *Text variant
+		// on a dark surface, never inverted onto its own fill), and
+		// Role::WarnText already has a real, established job: this is
+		// exactly what the Inspector's own DisabledReason() line already
+		// draws in (see this function's own header comment on that reuse).
+		// Kept it that job instead: Role::Surface opaque fill (same near-
+		// black the row itself sits on) with a Role::Warn outline -- the
+		// same fill+outline pill shape DrawRail() already uses for the
+		// accordion header pill (Outline( rcPill, Col( Role::AccentBase ),
+		// ... ), ~2398/2454 above) -- and Role::WarnText text on TOP of
+		// that dark fill, its normal, already-used pairing. Measured
+		// #F7A85C on Role::Surface's ~#090A0C: ~10.1:1, higher than the
+		// dark-text alternative AND consistent with how WarnText is used
+		// everywhere else in the kit.
 		//
 		// ScopedUndim: the row this tag rides on is already inside a
 		// ScopedDim(bDisabled) (every launch-locked row IS disabled, by
@@ -3486,7 +3510,8 @@ namespace gamescope::ui::shell
 			const float y0 = rcLabel.GetCenter().y - flTagH * 0.5f;
 			const Rect rc{ x, y0, x + flTagW, y0 + flTagH };
 
-			Fill( rc, Col( Role::Warn ), Px( 2.0f ) );
+			Fill( rc, WithAlpha( Col( Role::Surface ), 1.0f ), Px( 2.0f ) );
+			Outline( rc, Col( Role::Warn ), Px( 2.0f ) );
 			Label( rc, TypeRole::Meta, Col( Role::WarnText ), kTagText, TextAlign::Center );
 		}
 
@@ -4954,6 +4979,24 @@ namespace gamescope::ui::shell
 						y = DrawWrapped( rcIn, TypeRole::Meta, Col( Role::TextMeta ), sLine.c_str(), y );
 						y += Px( tok::kS );
 					}
+					// Launch-option lock, live-QC fix #4: a launch-locked
+					// row's config value cannot change for the session
+					// through ANY door (SetById() refuses it, the row's own
+					// control is disabled) -- "Reset to inherited" is a
+					// third door, ResetKeyToInherited() by string key rather
+					// than through Entry::ResetToDefault(), so it needed
+					// its own guard rather than inheriting that function's.
+					// Hidden outright (entry.IsLaunchLocked() below) rather
+					// than shown-but-refused: the row is a plain Entry
+					// (LockedByLaunchOption() is Entry-only, per Registry.h),
+					// so `entry` itself is always the right thing to ask.
+					else if ( entry.IsLaunchLocked() )
+					{
+						const std::string sWord = vOverridden.size() > 1 && eOwn != InheritState::Overridden
+							? "overridden (parameters)" : "overridden";
+						y = DrawWrapped( rcIn, TypeRole::Meta, Col( Role::AccentValue ), sWord.c_str(), y );
+						y += Px( tok::kS );
+					}
 					else
 					{
 						// "overridden" and, on the same line, the verb. Chip
@@ -5057,8 +5100,13 @@ namespace gamescope::ui::shell
 			// is exactly the `UI scale` row plus its two params.
 			//
 			// It appears only when there is something to undo, so the
-			// Inspector does not carry a permanently-dead affordance.
-			if ( entry.HasDefault() && !entry.IsAtDefault() )
+			// Inspector does not carry a permanently-dead affordance --
+			// and, since the launch-option lock's live-QC fix #4, only
+			// when the row isn't launch-locked: Entry::ResetToDefault()
+			// itself is now a guarded no-op for a locked row (Registry.cpp),
+			// but showing a "reset" that silently does nothing is its own
+			// bug (run2/04's evidence), so it's hidden here too.
+			if ( entry.HasDefault() && !entry.IsAtDefault() && !entry.IsLaunchLocked() )
 			{
 				const char *pszReset = "reset";
 				const float flResetW = MeasureText( TypeRole::Meta, pszReset ).x + Px( tok::kS ) * 2.0f;
@@ -5500,7 +5548,10 @@ namespace gamescope::ui::shell
 						                 sReason.c_str(), y );
 					}
 
-					if ( pSel->HasDefault() && !pSel->IsAtDefault() )
+					// Same launch-option-lock hide as the VALUES-header
+					// reset above -- CONFIGURE's own reset is a second UI
+					// call site over the same guarded Entry::ResetToDefault().
+					if ( pSel->HasDefault() && !pSel->IsAtDefault() && !pSel->IsLaunchLocked() )
 					{
 						y += Px( tok::kS );
 						const char *pszReset = "reset";

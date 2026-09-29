@@ -133,7 +133,16 @@ namespace gamescope
 			// (see that function), this push was pure duplication of a
 			// job something else now does correctly -- removing it fixes
 			// the stomp rather than trying to special-case "first load".
-			steamcompmgr_set_force_relative_mouse( s_Settings.gamescope.force_grab_cursor );
+			//
+			// Gated on !Given( Opt::GrabCursor ) (launch-option lock live-QC
+			// fix -- superdoc/features/launch-option-lock.md's "What's
+			// gated" #4): this push runs on the SAME first-load path the
+			// comment above describes, so a `--force-grab-cursor` launch
+			// flag was silently overwritten by the profile's stored value
+			// the instant the registry first loaded, before ANY row's own
+			// LockedByLaunchOption() predicate could matter.
+			if ( !LaunchOptions::Given( LaunchOptions::Opt::GrabCursor ) )
+				steamcompmgr_set_force_relative_mouse( s_Settings.gamescope.force_grab_cursor );
 		}
 
 		void QueueSave()

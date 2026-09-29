@@ -503,6 +503,20 @@ namespace gamescope::ui
 
 	void Entry::ResetToDefault() const
 	{
+		// Launch-option lock, live-QC fix #4 (superdoc/features/
+		// launch-option-lock.md): a launch-locked row's value cannot
+		// change for the session no matter which door is used -- the
+		// row's own control was already refused by SetById() and by
+		// being disabled in the UI, but ResetToDefault() is a second
+		// door (the Inspector's VALUES-header "reset" link and
+		// CONFIGURE's own "reset") that wrote straight to m_Bind without
+		// asking. Guarded here, at the one choke point every reset call
+		// site already goes through, rather than only at each UI call
+		// site, so a future caller inherits the guard for free. The UI
+		// call sites ALSO hide the affordance on a locked row (Shell.cpp)
+		// so the player never sees a "reset" that silently does nothing.
+		if ( IsLaunchLocked() )
+			return;
 		if ( !std::holds_alternative<std::monostate>( m_Default ) && m_Bind.IsBound() )
 			m_Bind.Set( m_Default );
 		if ( !std::holds_alternative<std::monostate>( m_DefaultB ) && m_BindB.IsBound() )

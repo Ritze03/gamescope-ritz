@@ -107,8 +107,22 @@ of this task's scope; flagged here so it isn't lost.
 
 ## What's gated against a live override
 
-Three separate places can push a value into the running process after
-startup, and all three now respect the lock:
+`Why:` live QC (2026-09-29, `build-release/verify-launch-lock2.sh`'s first
+run, evidence under `build-release/verify-shots/launch-lock-2026-09-29/run2/`)
+caught this lock failing exactly the case it exists for: launched with
+`-F fsr --force-grab-cursor --adaptive-sync --force-windows-fullscreen` on a
+profile holding the opposite values, the Shell's very first draw silently
+replaced every one of the four live values with the profile's — before the
+player had touched anything — and the row then showed the PROFILE's value
+sitting right next to a LAUNCH OPTION tag naming the flag's value, i.e. the
+tag was actively lying about what was in effect. A `ritz_profile` switch
+reproduced the same stomp a second way. Root cause: two more push sites
+existed beyond the three below, both unconditional, both re-run on every
+config-generation bump (which includes the registry's very first load, not
+only a real profile switch) — see items 4 and 5.
+
+Five separate places can push a value into the running process after
+startup, and all five now respect the lock:
 
 1. **`ritz_apply_config_live()`** (`main.cpp`) — the live-apply hook fired on
    every profile switch (`gamescope::config::SetLiveApplyHook()`). Every
@@ -125,6 +139,40 @@ startup, and all three now respect the lock:
    symmetry and self-documentation, even though they are always no-ops at
    that specific call site (same reasoning as above: it runs before getopt).
 3. **`overlay_e2_set` (`SetById()`, `Shell.cpp`)** — see below.
+4. **`PanelDisplay.cpp`'s `PushCachedSettingsToLiveState()`** — the actual
+   bug. Called from that file's `EnsureConfigLoaded()`/`Cfg()` on every
+   config-generation bump, **including the registry's very first load**
+   (the Shell's first draw, or even a single `overlay_e2_get` against any
+   row) — not only a real profile switch, which is the path item 1 already
+   covered. It unconditionally pushed `g_wantedUpscaleFilter`,
+   `g_wantedUpscaleScaler`, `g_upscaleFilterSharpness`, `cv_adaptive_sync`,
+   `cv_hdr_enabled`, `cv_tearing_enabled`, and called
+   `steamcompmgr_set_force_windows_fullscreen()`. Each is now wrapped in the
+   same `if ( !LaunchOptions::Given( Opt::X ) )` guard as item 1.
+   `fps_limit` and nested width/height/refresh are deliberately NOT pushed
+   from here at all (see this file's own comment) and needed no guard.
+5. **`PanelInput.cpp`'s `EnsureConfigLoaded()`** — same shape as item 4, one
+   field: `steamcompmgr_set_force_relative_mouse( force_grab_cursor )`,
+   unconditional on the same "runs on the very first load too" schedule.
+   Now gated on `!LaunchOptions::Given( Opt::GrabCursor )`.
+
+**Found during the same audit, left alone (outside the settings overlay
+entirely, a different class of gap):** `steamcompmgr.cpp`'s X11
+`PropertyNotify` handler (`~line 7096` onward) applies `gamescopeScalingFilter`
+/ `gamescopeNewScalingFilter` / `gamescopeNewScalingScaler` /
+`gamescopeAllowTearing` / `gamescopeVRREnabled` / `gamescopeDisplayHDREnabled`
+root-window atoms straight onto `g_wantedUpscaleFilter` /
+`g_wantedUpscaleScaler` / `cv_tearing_enabled` / `cv_adaptive_sync` /
+`cv_hdr_enabled` with no `Given()` check — this is Steam's own legacy X11
+control surface (the same one `--force-windows-fullscreen`'s and similar
+flags' *own* getopt cases live beside, in that file's independent getopt
+pass), not the registry, and is the same class of gap as the ConVar console
+path below: an external client writing straight past the overlay. Also
+found: `SDLBackend.cpp`/`WaylandBackend.cpp`'s in-nested-window filter/
+scaler/sharpness hotkeys (Shift+F1..F4-style), upstream gamescope's own
+compositor-level shortcuts, likewise ungated and likewise outside the
+settings overlay. None of these three files are this task's own — noted
+here rather than edited.
 
 **Out of scope, noted rather than fixed:** a direct ConVar write from the
 debug console (`adaptive_sync 0`, `tearing_enabled 1`, `hdr_enabled 0`, ...)
@@ -152,16 +200,60 @@ above), so there is no equivalent "flip the gate first" available at all,
 and refusing it here is what makes the lock mean the same thing against a
 stray `overlay_e2_set` that it already means against a profile switch.
 
+## Reset: a launch-locked row's value cannot change through that door either
+
+`Why:` the same live QC run (item 4 of its findings) caught a "reset" link
+showing on a launch-locked row in the Inspector's VALUES header — a visible,
+clickable affordance for an edit the row's own control, and `overlay_e2_set`,
+both already refuse. `Entry::ResetToDefault()` (`Registry.cpp`) writes
+straight to `m_Bind` with no lock check at all — a **third** door, distinct
+from the row's own control and from `SetById()`.
+
+Fixed at two levels:
+
+- **`Entry::ResetToDefault()` itself now early-returns when
+  `IsLaunchLocked()`** — the one choke point every reset call site already
+  goes through (the row's own "reset" link, CONFIGURE's "reset", and any
+  future caller), so nothing can bypass it the way the tag-legibility bug
+  showed a UI-only fix would have left open.
+- **Every UI call site also hides the affordance** rather than leaving a
+  dead button behind: `Shell.cpp`'s VALUES-header "reset" link (`entry.
+  HasDefault() && !entry.IsAtDefault() && !entry.IsLaunchLocked()`),
+  CONFIGURE's own "reset" under the selected-row help (`pSel->HasDefault()
+  && !pSel->IsAtDefault() && !pSel->IsLaunchLocked()`), and the "Reset to
+  inherited" verb — a **separate** mechanism again (`Reg().
+  ResetKeyToInherited( sKey )`, by string key, not through `Entry::
+  ResetToDefault()` at all) — which now draws the plain word "overridden"
+  with no verb when `entry.IsLaunchLocked()`, instead of the verb strip.
+
 ## The tag
 
 `DrawLaunchLockTag()` (`Shell.cpp`), modelled on the existing
 inherited/overridden dot (`DrawInheritMark()`): drawn right after a row's
 measured label, clamped to the label lane's own right edge. Unlike the dot
-it is a short filled **badge** with text ("LAUNCH OPTION") rather than a
-plain mark, because the point is to be *read* on sight, not merely noticed.
-`Role::Warn` fill, `Role::WarnText` text — amber, this kit's "needs
-attention, not broken" hue, deliberately not `Role::Danger` (the row isn't
-in an error state, it's just not editable here).
+it is a short **badge** with text ("LAUNCH OPTION") rather than a plain
+mark, because the point is to be *read* on sight, not merely noticed.
+Amber, this kit's own "needs attention, not broken" hue (`Role::Warn`/
+`Role::WarnText`), deliberately not `Role::Danger` (the row isn't in an
+error state, it's just not editable here).
+
+**Colour, corrected 2026-09-29 (live QC):** the first cut filled the badge
+solid `Role::Warn` (`#F3821D`) and drew `Role::WarnText` (`#F7A85C`) text on
+top — measured **1.34:1**, well under WCAG's 4.5:1 floor, confirmed hard to
+read in the live capture. Fixed to a `Role::Surface`-opaque (near-black)
+fill with a `Role::Warn` outline, `Role::WarnText` text on top of the dark
+fill — the same fill+outline pill shape the rail accordion's own header
+already uses (`Shell.cpp`'s `DrawRail()`, `Outline( rcPill, Col( Role::
+AccentBase ), ... )`), and the same WarnText-on-dark-surface pairing the
+Inspector's own `DisabledReason()` line already uses elsewhere in this same
+function's family. Measured **~10.1:1**. A dark-text-on-amber-fill
+alternative (`Role::Surface`'s near-black RGB *on* `Role::Warn`, i.e. the
+inverse) was also measured — **~7.6:1**, also comfortably over the floor —
+but rejected: it is a text/fill pairing that appears nowhere else in the
+kit (every other status role always draws its own `*Text` variant on the
+dark surface, never inverted onto its own fill), where the chosen fix reuses
+an existing, already-established pairing and an already-established pill
+shape.
 
 Every launch-locked row is, by construction, also a *disabled* row, so by
 the time the tag draws it is already inside that row's

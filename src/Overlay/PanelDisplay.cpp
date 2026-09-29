@@ -258,17 +258,36 @@ namespace gamescope
 	// effect immediately rather than only on the next restart.
 	static void PushCachedSettingsToLiveState()
 	{
-		g_wantedUpscaleFilter = FilterFromString( s_CachedSettings.gamescope.filter );
-		g_wantedUpscaleScaler = ScalerFromString( s_CachedSettings.gamescope.scaler );
-		g_upscaleFilterSharpness = s_CachedSettings.gamescope.sharpness;
-		cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
-		cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
-		cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
+		// Every push below is gated on !Given( Opt::X ) (added for the
+		// launch-option lock's live-QC fix -- see
+		// superdoc/features/launch-option-lock.md's "What's gated" #4). This
+		// function runs unconditionally on EVERY config-generation bump,
+		// which includes the registry's very FIRST load (the Shell's first
+		// draw) -- not just a real profile switch -- so without the guard a
+		// launch flag's value was clobbered by the profile's stored value
+		// the instant the Shell (or even a single overlay_e2_get) first
+		// touched the registry, before the player ever opened a settings
+		// area. main.cpp's ritz_apply_config_live() gates the profile-switch
+		// path; this is the other, earlier path that was still open.
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::Filter ) )
+			g_wantedUpscaleFilter = FilterFromString( s_CachedSettings.gamescope.filter );
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::Scaler ) )
+			g_wantedUpscaleScaler = ScalerFromString( s_CachedSettings.gamescope.scaler );
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::Sharpness ) )
+			g_upscaleFilterSharpness = s_CachedSettings.gamescope.sharpness;
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::AdaptiveSync ) )
+			cv_adaptive_sync = s_CachedSettings.gamescope.vrr_enabled;
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::HdrEnabled ) )
+			cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ) )
+			cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
 		// force_grab_cursor's own push moved with its row to PanelInput.cpp
 		// (2026-09-27, input.general) -- that file's own EnsureConfigLoaded()
-		// re-pushes it now, and main.cpp's ritz_apply_config_live() already
-		// covers the profile-switch case centrally either way (issue #68).
-		steamcompmgr_set_force_windows_fullscreen( s_CachedSettings.gamescope.force_windows_fullscreen );
+		// re-pushes it now (and gates it the same way), and main.cpp's
+		// ritz_apply_config_live() already covers the profile-switch case
+		// centrally either way (issue #68).
+		if ( !LaunchOptions::Given( LaunchOptions::Opt::ForceWindowsFullscreen ) )
+			steamcompmgr_set_force_windows_fullscreen( s_CachedSettings.gamescope.force_windows_fullscreen );
 
 		set_color_sdr_gamut_wideness( s_CachedSettings.gamescope.sdr_gamut_wideness );
 		set_sdr_on_hdr_brightness( s_CachedSettings.gamescope.sdr_on_hdr_brightness_nits );
