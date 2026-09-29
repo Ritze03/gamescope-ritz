@@ -11,7 +11,16 @@ The newest version below is the one this build reports.
 
 ## [0.10.2] – 2026-09-29
 
+### Added
+- **Settings set by a launch option are locked**: a value you passed as a launch option
+  (filter, scaler, sharpness, resolution, refresh, VRR, tearing, HDR, cursor and
+  keyboard grab, force maximize) now shows a yellow "LAUNCH OPTION" tag and can't be
+  changed in the overlay or by a profile switch for that session.
+
 ### Fixed
+- **HUD sits flush at the left and right edges**: with the outline on, some font
+  sizes no longer leave a one-pixel gap at the side, and the number still never
+  shifts as the value changes.
 - **Settings rail no longer freezes mid-animation**: switching between the full and
   icon-only rail now always finishes its animation, instead of sometimes stopping
   halfway until you move the mouse.
