@@ -225,6 +225,30 @@ odd thickness centres on a pixel, an even one on a pixel edge, so every
 element is exactly its thickness and mirror-symmetric about the snapped
 centre.
 
+**Odd-thickness tie-break: top-left, not bottom-right** (2026-09-29). An
+odd thickness (a 1px dot, a 1px arm, any odd size) has no true centre
+pixel when the game rect's own centre falls exactly on a pixel edge — an
+even output or game dimension, e.g. 1920 → centre 960.0, between pixels
+959 and 960. `SnapCenter` picks the **top-left** neighbour (959) rather
+than the bottom-right one a plain `floor(c)` gives, via
+`floor(c - 0.5) + 0.5` in place of `floor(c) + 0.5`. This agrees
+bit-for-bit with the old formula on every centre that is NOT an exact
+tie (every real caller only ever produces an exact integer or an exact
+half-integer, never an arbitrary fraction — see the comment on
+`SnapCenter` itself), so a genuinely-centred odd size (an odd output
+dimension) is untouched; only the ambiguous case moves, and it moves the
+same way on both axes, so the arms and the outline (derived from the
+same snapped centre) stay exactly symmetric around the new pixel — an
+even thickness still centres on the pixel EDGE itself (`std::round`,
+unaffected).
+>
+> **Why** (the user, verbatim): *"a single pixel crosshair can't draw in
+> the middle, of course, like in the perfect center, I know that, but
+> most games decide to put it towards the top left of centered, and this
+> project now puts it at the bottom right. It would be cleaner if it was
+> the top left too, since this is basically the standard for all games
+> right now."*
+
 ### Gap
 
 **Each arm's own inset from the crossing is `(gap − 1)`, for BOTH arms of

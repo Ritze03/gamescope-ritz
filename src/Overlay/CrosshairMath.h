@@ -340,9 +340,35 @@ namespace gamescope::crosshair
 		// pixel (a half-integer coordinate), an even one on a pixel edge (an
 		// integer coordinate), so `c - t/2` is always a whole pixel and the
 		// element is exactly `t` pixels, symmetric about the snapped centre.
+		//
+		// An odd thickness has no true centre pixel when `c` itself lands
+		// exactly on a pixel edge (an even output/game dimension, e.g. width
+		// 1920 -> centre 960.0, between pixels 959 and 960) -- one of the two
+		// neighbours has to be picked. `floor(c) + 0.5` (the pre-2026-09-29
+		// formula) always picked the pixel to the right/below (960): most
+		// games instead put an odd-sized reticle towards the TOP-LEFT of
+		// centred, so this snaps to `floor(c - 0.5) + 0.5` instead, which
+		// picks 959. The user, verbatim: "a single pixel crosshair can't
+		// draw in the middle, of course ... but most games decide to put it
+		// towards the top left of centered, and this project now puts it at
+		// the bottom right. It would be cleaner if it was the top left too,
+		// since this is basically the standard for all games right now."
+		//
+		// Why this is exact and not just "close": every real caller
+		// (FpsDisplay.cpp's ResolveCrosshairFrame, and GameFrame() for the
+		// Apply-Scaling raster path) computes `c` as either exactly an
+		// integer (an even dimension, no fractional offset) or exactly a
+		// half-integer (an odd dimension, or a game rect whose own centre
+		// already sits on a pixel centre) -- never an arbitrary fraction.
+		// `floor(c - 0.5) + 0.5` agrees bit-for-bit with the untouched
+		// `floor(c) + 0.5` on every half-integer `c` (there is no tie to
+		// break there), and moves exactly one pixel left on every exact
+		// integer `c` (the only ambiguous case) -- so an odd dimension's own
+		// true centre pixel, which is what a half-integer `c` already names,
+		// is never disturbed.
 		inline double SnapCenter( float c, int t )
 		{
-			return ( t % 2 != 0 ) ? std::floor( c ) + 0.5 : std::round( c );
+			return ( t % 2 != 0 ) ? std::floor( c - 0.5 ) + 0.5 : std::round( c );
 		}
 
 		inline int SnapSize( float fl )
