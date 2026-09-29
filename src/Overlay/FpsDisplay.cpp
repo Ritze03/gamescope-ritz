@@ -995,6 +995,90 @@ namespace gamescope
 		return bAny ? ext : InkExtent{ 0.0f, 0.0f, 0.0f, 0.0f };
 	}
 
+	// ---- worst-case digit bearings, HORIZONTAL AXIS ONLY, computed once
+	// per setting (2026-09-29 fix) ---------------------------------------
+	//
+	// The report this fixes: with the outline ON, certain (font size,
+	// digit) pairs sit 1px short of the margin at the RIGHT edge -- e.g.
+	// "14" at 14px, and (measured during the fix) some sizes overflow PAST
+	// the margin instead. Cause: the margin correction below used to be
+	// measured off a SINGLE reference glyph, the pinned '0'-run (szPadded),
+	// on the theory that a round '0' carries the font's deepest
+	// cap-height/baseline overshoot in every direction, so any other digit
+	// sits a safe pixel further IN, never further out. That theory is false
+	// on the horizontal axis at some (size, outline) combinations, specific
+	// to the outline's coverage floor (kInkFloorOutline, FpsDisplay.h): at
+	// some sizes a different digit's own bitmap clears that floor's
+	// threshold one column further toward the edge than '0's does (a real,
+	// measured case: digit '4' at 14px/floor 16 has ext.right = 7 against
+	// its own 6px advance -- its ink genuinely overshoots its own cell),
+	// which made '0' understate how far the real digit can reach.
+	//
+	// **Scope: LEFT and RIGHT only.** The VERTICAL axis (top/bottom) keeps
+	// the single-'0'-reference measurement and the 2026-09-28
+	// `kBottomAnchorNudgePx` fix below UNCHANGED -- the user had already
+	// signed off on that behaviour ("The FPS display looks perfectly fine",
+	// re: the bottom edge, immediately before this task) and this task's
+	// own report was specifically "the one pixel gap towards the SIDE".
+	// Extending the worst-case scan to the vertical axis (an earlier cut of
+	// this fix did exactly that) reopened the approved bottom-edge
+	// behaviour: it produced a 1px bottom gap for the common case (a
+	// leading/trailing digit set without an '8' in it) that the approved
+	// 7d5c689 nudge did not have. Caught in review before merge; left
+	// exactly as approved.
+	//
+	// The fix: compute the correction from ALL TEN digits, once, and cache
+	// it -- never from whichever digit happens to be on screen. For LEFT
+	// and RIGHT this takes the SMALLEST bearing (deepest ink reach) any of
+	// '0'..'9' produces at the current (font size, ink floor) pair -- ink
+	// floor already encodes both outline on/off and Fixed/Inverted colour
+	// mode (InkCoverageFloor()), so no other input changes which digit is
+	// deepest. Whichever digit is actually displayed, its own true bearing
+	// is >= this minimum, so it can never overflow past the margin; a
+	// shallower digit simply sits up to a few pixels further in, same trade
+	// the single-'0' scheme always made, just now bounded by a real worst
+	// case instead of an assumed one. The on-screen position therefore
+	// still never depends on the displayed VALUE -- it depends only on the
+	// settings that change glyph ink, the same contract the pinned-width
+	// box sizing above already relies on.
+	struct HorizDigitBearings { float left = 0.0f, right = 0.0f; };
+
+	static HorizDigitBearings MeasureWorstCaseDigitBearingsHoriz( ImFont *pFont, float flFontSize, int nInkFloor )
+	{
+		HorizDigitBearings out;
+		out.left = out.right = FLT_MAX;
+		char szDigit[2] = { '0', '\0' };
+		for ( char c = '0'; c <= '9'; c++ )
+		{
+			szDigit[0] = c;
+			const ImVec2 adv = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szDigit );
+			const InkExtent ext = MeasureInkExtent( pFont, flFontSize, szDigit, nInkFloor );
+			out.left  = std::min( out.left,  std::round( ext.left ) );
+			out.right = std::min( out.right, std::round( adv.x - ext.right ) );
+		}
+		return out;
+	}
+
+	// Cached until (font, font size, ink floor) changes -- a slider release
+	// or a Fixed/Inverted/outline toggle recomputes it once, every other
+	// frame (and every value change) just reads the cache. Not a config
+	// generation counter: these three inputs are exactly the ones that can
+	// change which digit's bitmap is deepest, and comparing them directly is
+	// cheaper and cannot go stale the way a missed invalidation could.
+	static const HorizDigitBearings &CachedWorstCaseDigitBearingsHoriz( ImFont *pFont, float flFontSize, int nInkFloor )
+	{
+		struct Cache { ImFont *pFont = nullptr; float flFontSize = -1.0f; int nInkFloor = -1; HorizDigitBearings bearings; };
+		static Cache s_Cache;
+		if ( s_Cache.pFont != pFont || s_Cache.flFontSize != flFontSize || s_Cache.nInkFloor != nInkFloor )
+		{
+			s_Cache.pFont = pFont;
+			s_Cache.flFontSize = flFontSize;
+			s_Cache.nInkFloor = nInkFloor;
+			s_Cache.bearings = MeasureWorstCaseDigitBearingsHoriz( pFont, flFontSize, nInkFloor );
+		}
+		return s_Cache.bearings;
+	}
+
 	// Phase 2's spike reaction used to have two halves: Fixed mode inverts
 	// the number's own colour (below, still there), and Inverted mode --
 	// which cannot invert an already-inverted digit against itself --
@@ -1158,13 +1242,25 @@ namespace gamescope
 		// centred), shift the digits by exactly enough to cancel that
 		// bearing gap, so the outermost drawn pixel -- ink, or the
 		// outline's ink-plus-radius when the outline is on and drawn
-		// instead -- lands exactly `margin` px out. Measured with the
-		// glyph baked at '0' (MeasureInkExtent's own szPadded argument
-		// below): every digit shares this font's tabular bearings by
-		// design (the same property that makes the whole pinned-width
-		// scheme above jitter-free), so using '0' here is the same
-		// stability choice the box-sizing measurement already makes, not a
-		// new assumption.
+		// instead -- lands exactly `margin` px out.
+		//
+		// LEFT/RIGHT (horizontal): measured across every digit '0'..'9' and
+		// cached (CachedWorstCaseDigitBearingsHoriz(), 2026-09-29) -- a
+		// single pinned '0' reference used to stand in for "the font's
+		// deepest digit" on the theory that its round overshoot is always
+		// the worst case, which turned out false on this axis, with the
+		// outline on, at some sizes -- see that function's own comment.
+		// Taking the minimum bearing across all ten digits is
+		// value-independent in exactly the same sense the pinned-width
+		// scheme above already is: it depends on the font, size and ink
+		// floor, never on which digit is actually being displayed.
+		//
+		// TOP/BOTTOM (vertical): still the single pinned '0'-run reference,
+		// UNCHANGED since 7d5c689 (2026-09-28) -- the user had already
+		// signed off on this axis's behaviour going into the 2026-09-29
+		// task, which asked only about the horizontal side (see
+		// CachedWorstCaseDigitBearingsHoriz()'s own comment for why the
+		// worst-case scan does not extend here).
 		//
 		// The outline's own outward reach is never less than 1px once it
 		// is drawn at all -- DrawFpsModuleContent()'s own sub-pixel-radius
@@ -1189,9 +1285,10 @@ namespace gamescope
 		// is this floor applied to the same bitmap: one measurement covers
 		// both, and EdgeShift() adds the radius as before.
 		const int nInkFloor = fpsmath::InkCoverageFloor( bInvertedMode, L.bDrawOutline );
+		const HorizDigitBearings &horizBearings = CachedWorstCaseDigitBearingsHoriz( pFont, flFontSize, nInkFloor );
 		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded, nInkFloor );
-		const float flBearingLeft   = std::round( inkPinned.left );
-		const float flBearingRight  = std::round( L.numSize.x - inkPinned.right );
+		const float flBearingLeft   = horizBearings.left;
+		const float flBearingRight  = horizBearings.right;
 		const float flBearingTop    = std::round( inkPinned.top );
 		const float flBearingBottom = std::round( L.numSize.y - inkPinned.bottom );
 		const float flOutlineGeomRadius = L.bDrawOutline ? std::max( L.flOutlineRadius, 1.0f ) : 0.0f;
@@ -1444,6 +1541,17 @@ namespace gamescope
 		// deliberately let the box's own bottom edge sit 1px past the
 		// screen edge, since it is that empty row -- not the box's
 		// position -- that needs to leave the visible area.
+		//
+		// KEPT AS-IS through the 2026-09-29 horizontal-only fix above: the
+		// user, immediately before that task, on this exact axis --
+		// "The FPS display looks perfectly fine" -- and that task's own
+		// report was specifically the SIDE ("the one pixel gap towards the
+		// side"). An earlier cut of that fix extended the worst-case-digit
+		// scan to top/bottom too and dropped this nudge; caught in review
+		// before merge because it reopened this approved behaviour (a
+		// leading/trailing digit set without an '8' in it landed with a
+		// fresh 1px bottom gap the approved nudge did not have) -- reverted
+		// back to exactly this block, unchanged since 7d5c689.
 		constexpr float kBottomAnchorNudgePx = 1.0f;
 		const ImVec2 nudgedOrigin = ( nVert == 2 )
 			? ImVec2( origin.x, std::min( origin.y + kBottomAnchorNudgePx, std::max( 0.0f, io_display.y - boxSize.y ) + kBottomAnchorNudgePx ) )

@@ -930,18 +930,17 @@ while the fringe alone lands right, and the fringe cannot creep outward.
 `tests/test_fps_counter.cpp` pins `EdgeShift()`'s arithmetic exactly, as
 before.
 
-**One known 1px case.** `MeasureFpsModule()` takes its bearings from the
-**pinned `'0'`-run reference** rather than the actual digits, on the theory
-that `'0'`'s cap-height/baseline overshoot is the font's deepest, so any
-other digit sits a *safe* pixel further **in**, never further out. Measured
-and recorded in
-`build-release/verify-shots/hud-backdrop-removal-2026-09-09/results.txt`.
-2026-09-28 found the theory itself false for a subset of digits (see the
-*2026-09-28* note below) and briefly measured off the actual drawn string
-instead — reverted the same day because it made the readout's position
-change by a pixel whenever the displayed value changed. The pinned
-`'0'`-run reference is back for good; see that note for the fixed-offset
-fix that replaced it.
+**Partially superseded 2026-09-29, HORIZONTAL AXIS ONLY.** The LEFT/RIGHT
+bearing no longer comes from a single pinned `'0'`-run reference — the
+theory that `'0'`'s overshoot is always the font's deepest turned out false
+on this axis, with the outline on, at some sizes (see *2026-09-29* below).
+It is now the worst case across all ten digits on that axis alone, computed
+once per (font size, ink floor) and cached. **The TOP/BOTTOM bearing is
+UNCHANGED** — still exactly this section's `'0'`-run reference, plus the
+2026-09-28 bottom-anchor nudge below — at the user's explicit request going
+into that task (see *2026-09-29*'s own section for the quote). This section
+is kept as the accurate description of the vertical axis, and as history
+for how the horizontal axis used to work before it needed something more.
 
 **Measured after the fix**, and re-measured after the backdrop removal
 (font 36, flat 148 background, `*-edge` — the fringe's own outer pixel):
@@ -1128,6 +1127,171 @@ interchangeable fixes for the same report.
 (font size, digit, axis) triples landing 1px off with the outline on) is
 untouched by this reversion — it was already present before, during and
 after the rejected approach above.
+
+**Still exactly this, as of 2026-09-29.** `kBottomAnchorNudgePx` stays —
+see that day's own section below. A first cut of that day's horizontal fix
+extended the same worst-case-digit scan to this axis and dropped the
+nudge; caught in review before merge because the user had separately
+confirmed this exact bottom-anchor behaviour was already correct
+("The FPS display looks perfectly fine"), and that task's own report was
+specifically the *side*, not the bottom. Reverted back to precisely this
+section, byte-for-byte.
+
+### 2026-09-29: the RIGHT/LEFT margin correction is the worst case across all ten digits, cached once per setting
+
+**The report.** The user, on the outline-on residual noted above (14 at
+14px, and generally): *"I just saw the one pixel gap towards the side on
+certain font sizes. I actually want you to fix that, but make sure that
+the font or like the text doesn't shift around like it did in an earlier
+attempt to do so. So the proper position should be calculated once and
+then just used. Instead of actively calculating it, so if it's wrong once
+then just stays wrong, that's fine, but at least it's not annoying and
+shifts around like I did earlier."*
+
+**Scope: LEFT/RIGHT only, by explicit correction.** A first cut of this
+fix (reviewed before merge) applied the same worst-case-digit scan to
+*both* axes and dropped the 2026-09-28 bottom-anchor nudge. That reopened
+approved behaviour: immediately before this task, on the bottom edge
+specifically, the user had said, verbatim, *"The FPS display looks
+perfectly fine"* — and this task's own report was specifically *"the one
+pixel gap towards the **side**"*, i.e. left/right, not the bottom. The
+first cut's own jitter table (still on that mixed build) showed
+`bottom=25` at margin 24 for the common case (no `8` in the displayed
+digits) where the approved 7d5c689 nudge read `bottom=24` — a fresh 1px
+gap on an axis nobody had asked to change. Caught in review, reverted: the
+vertical bearing and `kBottomAnchorNudgePx` are back to byte-for-byte
+7d5c689 (`git diff 7d5c689 -- src/Overlay/FpsDisplay.cpp` shows the
+vertical code paths identical), and only the horizontal bearing uses the
+new scan. Every measurement below is from that corrected build.
+
+**Reproduction.** A font-size sweep (10–48px, margin 24, top-right and
+bottom-left anchors, outline off and `HUD_OUTLINE_STRENGTH` on, values
+12/14/88 forced) against the pre-fix binary
+(`scripts/pixel-regression.sh HUD_SIDE_SWEEP=1 --only hud-side-bearing`;
+evidence under `verify-shots/hud-side-2026-09-29/` in whichever of
+`build-release/`/`build-agent/` the run used) found the single-`'0'`
+reference wrong in **both directions** on the RIGHT edge, not just as a
+gap: at margin 24 the measured right edge was 25 (a 1px gap, e.g. size
+24/outline off) at some sizes and 23 (the outline genuinely **past** the
+margin) at others (e.g. size 28/40/44 with the outline on, value "14" —
+the exact case reported):
+
+| size | outline | axis | pre-fix measured | expect | defect |
+|---|---|---|---|---|---|
+| 24 | off | right (value 12/88) | 25 | 24 | 1px gap |
+| 28 | on | right (value "14") | 23 | 24 | 1px **overflow** |
+| 40 | on/off | right (value "14") | 23 | 24 | 1px overflow |
+| 44 | on | right (value "14") | 23 | 24 | 1px overflow |
+
+Root cause, confirmed via a targeted debug dump of every digit's own ink
+extent (`MeasureInkExtent()`) at size 14/outline floor 16: digit `'4'`
+measures `ext.right = 7.00` against its own `6.00`px advance — its ink
+genuinely overshoots its own glyph cell by 1px at that size with the
+outline on, something `'0'`'s round shape never does. `'0'` was never
+reliably the deepest-reaching digit on this axis at every size.
+
+**The fix.** `MeasureFpsModule()`'s LEFT/RIGHT bearing no longer comes from
+the single reference glyph. `CachedWorstCaseDigitBearingsHoriz()`
+(`FpsDisplay.cpp`) scans each of `'0'`..`'9'` individually through the same
+`MeasureInkExtent()` / `fpsmath::ScanInk()` visibility-floor machinery the
+single-reference scheme already used, and takes the **minimum** bearing on
+each of the two horizontal sides — the smallest per-digit "gap from ink to
+cell edge" is the digit that reaches furthest on that side, so shifting by
+that amount is the largest shift ANY digit could ever need on that axis,
+and every shallower digit lands with its own true bearing minus that
+amount of extra room — never negative, i.e. **never past the margin**.
+Cached by `(font, font size, ink floor)` — ink floor already encodes both
+outline on/off and Fixed/Inverted colour mode
+(`fpsmath::InkCoverageFloor()`) — so a slider release or a mode toggle
+recomputes it once; every other frame, and every value change, just reads
+the cache. The outline's own geometric radius is still added afterwards
+exactly as before (`flOutlineGeomRadius` in `EdgeShift()`) — only the
+*glyph* bearing input changed, and only for left/right.
+
+This is what makes the horizontal position value-independent by
+construction, not by convention: the ten-digit scan never looks at what is
+actually being *displayed* (`L.szNum`), only at the font/size/floor, so
+there is no code path left that could read the live value into the
+horizontal margin correction — unlike the rejected 2026-09-28 attempt,
+which measured `L.szNum` directly (on the vertical axis, which this fix
+does not touch at all).
+
+**Measured after the fix** (same sweep, corrected binary): the RIGHT edge
+at every sampled (size, outline) combination now lands at exactly 24
+(flush, the worst-case digit) or 25 (1px inside, a shallower digit) —
+**never 23**, across the full 10–48px sweep, outline off and on, values
+12/14/88. The LEFT edge (measured via the mirrored bottom-left-anchor
+sweep) shows the same 24-or-25-never-below pattern.
+`scripts/pixel-regression.sh`'s permanent `hud-side-bearing` check pins
+this at the sizes the pre-fix sweep actually failed at (20, 28, 36, 40px,
+right/top edge pair, outline on, value "14") with `tol=1` on the whole
+pair — loosened from the `hud-margin` check's usual `tol=0` deliberately,
+since a 1px "shallower digit sits inside" reading on the RIGHT edge is now
+the documented, accepted outcome, not a bug; what `tol=1` still catches is
+a return of the 23-or-below overflow. (The TOP half of that same pair is
+the untouched vertical axis, along for the ride only because the sampler
+checks both edges of a corner in one call — see below for its own,
+separate story.)
+
+**No jitter, proven — twice.** First, at margin 24, bottom-left anchor,
+font 36px, outline strength 2 (settings held fixed), forced through
+`fps_display_force` at 1, 12, 14, 88 and 188 in sequence, each captured
+and measured with `pixel_regression_sample.py`'s `margin` command:
+
+| forced value | leading digit | measured left | measured bottom |
+|---|---|---|---|
+| 1 | `1` | 24 | 25 |
+| 12 | `1` | 24 | 25 |
+| 14 | `1` | 24 | 25 |
+| 88 | `8` | 24 | 24 |
+| 188 | `1` | 24 | 24 |
+
+`left` — the pen's own X origin for a left-hugging anchor, set once by
+`MeasureFpsModule()`/`EdgeShift()` from settings alone — is **bit-for-bit
+identical (24) across every value**, including the jump from a leading `1`
+to a leading `8` and back, and across the 2-vs-3-digit width change from
+"14" to "188" (both fit the pinned 3-cell box, so the box itself does not
+resize either — see "No layout jitter" above). `bottom` (the untouched
+vertical axis) varies by exactly 1px between values whose digits include
+an `8` (24, flush) and values that don't (25) — the SAME `'0'`-reference
+behaviour this axis has always had, unrelated to this fix, included here
+only to show it did not regress.
+
+Second, at margin 0 (bottom-right anchor, plain HUD — the profile's
+existing state, unmodified), the same five values measured **exactly
+0/0 on both axes, with zero variance whatsoever** — see
+`build-agent/verify-shots/hud-side-2026-09-29/jitter-v2-bottomright-*.png`.
+Together the two runs show the pen origin never moves regardless of
+displayed value; only the antialiased edge of whichever specific digit is
+drawn can differ, by construction never more than the ten-digit spread
+already measured into the cached horizontal bearing (and, on the
+untouched vertical axis, never more than `'0'`'s own known spread, exactly
+as before this task).
+
+**Cross-check: `hud-margin` unaffected on the flush (non-outline) axis,
+loosened by design on the RIGHT/LEFT outline axis, and one pre-existing,
+unrelated gap found on the BOTTOM axis.** `check_hud_margin()`'s own
+outline-on `*-edge` assertions (font 36px, "60" forced, tol 0) now read 1px
+inside on LEFT/RIGHT at several corners (`'6'`/`'0'` are not the
+worst-case digit at that exact size) instead of exactly 0/8 — expected
+under this fix, and `assert_hud_margin()` was updated the same day to use
+the `*-ink` tolerance (1px) for the outline `*-edge` case, with the
+reasoning recorded next to it. TOP and BOTTOM in that same assertion are
+the *untouched* vertical axis and read exactly as `git show 7d5c689`'s own
+code does — confirmed by literally building `7d5c689` unmodified and
+running the same check against it.
+
+That direct comparison surfaced something this task did **not** cause and
+is **not** fixing: `hud-margin-bottom-left-m8-edge` and
+`hud-margin-bottom-right-m8-edge` (tol 0, non-outline, margin 8) read
+`bottom=7` instead of 8 on **both** the corrected build and a pristine,
+unmodified `7d5c689` build — i.e. this specific case was already off by
+1px on the approved commit itself, before any of this task's work. Flagged
+for a separate look; `hud-margin`'s own `*-ink` companion (tol 1) already
+covers it, so this is a tol-0 cosmetic gap in test strictness, not
+evidence of a rendering bug newly introduced here. The non-outline
+`*-edge` assertions at margin 0 (`hud-margin-bottom-*-m0-edge`) remain
+exact on both builds.
 
 
 ## Warm-up: `FpsDisplay_WarmUp()`
