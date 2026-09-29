@@ -149,35 +149,39 @@ TEST_CASE( "a 1px line is exactly one pixel wide, symmetric about an even-size o
 	REQUIRE( s.dot.empty() );
 	REQUIRE( NonOverlapping( s.lines ) );
 
-	// Odd thickness centres on pixel column 960 / row 540 (floor of the
-	// centre). Horizontal arms occupy row 540 only; vertical arms column
-	// 960 only. Gap 2 -> hole = 2*(2-1)+1 = 3 pixels (2026-09-08, revised
-	// same day), SYMMETRIC: one pixel on each side of the centre pixel,
-	// plus the centre pixel itself -- no stagger between the two arms of
-	// an axis, at any gap value.
+	// Odd thickness has no true centre pixel at an even size's own centre
+	// (960/540 is a pixel EDGE, not a pixel, on both axes) -- SnapCenter
+	// (2026-09-29) snaps to the TOP-LEFT neighbour, column 959 / row 539,
+	// not the bottom-right one floor(c) alone would give: "most games
+	// decide to put it towards the top left of centered" (the user).
+	// Horizontal arms occupy row 539 only; vertical arms column 959 only.
+	// Gap 2 -> hole = 2*(2-1)+1 = 3 pixels (2026-09-08, revised same day),
+	// SYMMETRIC: one pixel on each side of the centre pixel, plus the
+	// centre pixel itself -- no stagger between the two arms of an axis,
+	// at any gap value.
 	const auto px = Pixels( s.lines );
 	REQUIRE( px.size() == 4 * 4 );
-	for ( int x = 962; x < 966; x++ ) REQUIRE( px.count( { x, 540 } ) );       // right arm starts at 962
-	for ( int x = 955; x < 959; x++ ) REQUIRE( px.count( { x, 540 } ) );       // left arm ends at 958 (exclusive of 959)
-	for ( int y = 542; y < 546; y++ ) REQUIRE( px.count( { 960, y } ) );       // down arm
-	for ( int y = 535; y < 539; y++ ) REQUIRE( px.count( { 960, y } ) );       // up arm
-	// The hole is exactly columns/rows 959/960/961 -- equidistant on both
+	for ( int x = 961; x < 965; x++ ) REQUIRE( px.count( { x, 539 } ) );       // right arm starts at 961
+	for ( int x = 954; x < 958; x++ ) REQUIRE( px.count( { x, 539 } ) );       // left arm ends at 957 (exclusive of 958)
+	for ( int y = 541; y < 545; y++ ) REQUIRE( px.count( { 959, y } ) );       // down arm
+	for ( int y = 534; y < 538; y++ ) REQUIRE( px.count( { 959, y } ) );       // up arm
+	// The hole is exactly columns/rows 958/959/960 -- equidistant on both
 	// sides of the centre pixel, nothing else nearby is touched.
 	for ( int x = 950; x < 970; x++ )
 	{
-		if ( x >= 959 && x <= 961 ) continue;
-		REQUIRE_FALSE( px.count( { x, 539 } ) );
-		REQUIRE_FALSE( px.count( { x, 541 } ) );
+		if ( x >= 958 && x <= 960 ) continue;
+		REQUIRE_FALSE( px.count( { x, 538 } ) );
+		REQUIRE_FALSE( px.count( { x, 540 } ) );
 	}
 	for ( int y = 530; y < 550; y++ )
 	{
-		if ( y >= 539 && y <= 541 ) continue;
-		REQUIRE_FALSE( px.count( { 959, y } ) );
-		REQUIRE_FALSE( px.count( { 961, y } ) );
+		if ( y >= 538 && y <= 540 ) continue;
+		REQUIRE_FALSE( px.count( { 958, y } ) );
+		REQUIRE_FALSE( px.count( { 960, y } ) );
 	}
 	// The symmetry itself: nothing at all inside the 3-pixel hole.
-	for ( int x = 959; x <= 961; x++ ) REQUIRE_FALSE( px.count( { x, 540 } ) );
-	for ( int y = 539; y <= 541; y++ ) REQUIRE_FALSE( px.count( { 960, y } ) );
+	for ( int x = 958; x <= 960; x++ ) REQUIRE_FALSE( px.count( { x, 539 } ) );
+	for ( int y = 538; y <= 540; y++ ) REQUIRE_FALSE( px.count( { 959, y } ) );
 }
 
 TEST_CASE( "an even-width line straddles the centre edge symmetrically", "[crosshair]" )
@@ -224,6 +228,11 @@ TEST_CASE( "Gap N produces a hole of 2*(N-1)+width, exactly, at width 1 and widt
 	// crossing's own edges (hole == width).
 	for ( int nWidth : { 1, 2 } )
 	{
+		// nWidth 1 is odd: centre (100, 100) is an exact pixel edge, so
+		// SnapCenter (2026-09-29) snaps the crossing to (99, 99), its
+		// top-left neighbour, not (100, 100) itself -- see SnapCenter,
+		// CrosshairMath.h. nWidth 2 is even and unaffected.
+		const int nAnchor = ( nWidth % 2 != 0 ) ? 99 : 100;
 		for ( int nGap = 0; nGap <= 4; nGap++ )
 		{
 			Style st;
@@ -233,8 +242,8 @@ TEST_CASE( "Gap N produces a hole of 2*(N-1)+width, exactly, at width 1 and widt
 
 			const int nExpectedHole = nGap <= 0 ? 0 : 2 * ( nGap - 1 ) + nWidth;
 			const auto px = Pixels( Build( st, fr, {} ).lines );
-			REQUIRE( HoleRun( px, 100, 100, 1, 0 ) == nExpectedHole );
-			REQUIRE( HoleRun( px, 100, 100, 0, 1 ) == nExpectedHole );
+			REQUIRE( HoleRun( px, nAnchor, nAnchor, 1, 0 ) == nExpectedHole );
+			REQUIRE( HoleRun( px, nAnchor, nAnchor, 0, 1 ) == nExpectedHole );
 		}
 	}
 }
@@ -249,6 +258,9 @@ TEST_CASE( "an outline redraws over part of the hole but the true gap invariant 
 	// (2*(gap-1)+width).
 	for ( int nWidth : { 1, 2 } )
 	{
+		// See the identical note in the previous test: nWidth 1's crossing
+		// snaps to (99, 99), not (100, 100).
+		const int nAnchor = ( nWidth % 2 != 0 ) ? 99 : 100;
 		for ( int nGap = 0; nGap <= 4; nGap++ )
 		{
 			Style st;
@@ -261,8 +273,8 @@ TEST_CASE( "an outline redraws over part of the hole but the true gap invariant 
 			// run's ENDPOINTS (where the fill starts) do not move.
 			const int nExpectedHole = nGap <= 0 ? 0 : 2 * ( nGap - 1 ) + nWidth;
 			const auto px = Pixels( Build( st, fr, {} ).lines );
-			REQUIRE( HoleRun( px, 100, 100, 1, 0 ) == nExpectedHole );
-			REQUIRE( HoleRun( px, 100, 100, 0, 1 ) == nExpectedHole );
+			REQUIRE( HoleRun( px, nAnchor, nAnchor, 1, 0 ) == nExpectedHole );
+			REQUIRE( HoleRun( px, nAnchor, nAnchor, 0, 1 ) == nExpectedHole );
 		}
 	}
 }
@@ -321,6 +333,13 @@ TEST_CASE( "Apply Scaling's raster path scales the hole by the same factor as ev
 	Style st; st.flWidth = 1.0f; st.flLength = 6.0f; st.bDot = false; st.bOutline = false;
 	const Frame gf = GameFrame( 200, 200 );
 	Frame outFr; outFr.flCenterX = 100.0f; outFr.flCenterY = 100.0f; outFr.flScaleX = 2.0f; outFr.flScaleY = 2.0f;
+	// Game centre (100, 100) is an exact pixel edge on both axes, so the
+	// odd 1px width snaps its crossing top-left of it, to game pixel
+	// (99, 99) -- see SnapCenter, CrosshairMath.h. ScaledQuad's origin
+	// here is fixed (outFr.flCenterX/Y - gameW/H * 0.5 * scale == 0), so
+	// that one game-pixel shift becomes an exact scale-sized (2px) output
+	// shift: the row/column to scan is 98, not 100.
+	constexpr int nAnchor = 98;
 
 	for ( int nGap : { 1, 2, 3 } )
 	{
@@ -341,11 +360,11 @@ TEST_CASE( "Apply Scaling's raster path scales the hole by the same factor as ev
 		// the gap between those two runs -- exactly the game-pixel hole
 		// (2*(gap-1)+width) times scale.
 		int nRightStart = -1;
-		for ( int ox = 100; ox < 200; ox++ )
-			if ( Cov( ox, 100 ) >= 128 ) { nRightStart = ox; break; }
+		for ( int ox = nAnchor; ox < 200; ox++ )
+			if ( Cov( ox, nAnchor ) >= 128 ) { nRightStart = ox; break; }
 		int nLeftEnd = -1;
-		for ( int ox = 100; ox > 0; ox-- )
-			if ( Cov( ox, 100 ) >= 128 ) { nLeftEnd = ox; break; }
+		for ( int ox = nAnchor; ox > 0; ox-- )
+			if ( Cov( ox, nAnchor ) >= 128 ) { nLeftEnd = ox; break; }
 		REQUIRE( nRightStart > 0 );
 		REQUIRE( nLeftEnd > 0 );
 		const int nExpectedHole = 2 * ( nGap - 1 ) + 1; // width 1
@@ -355,13 +374,21 @@ TEST_CASE( "Apply Scaling's raster path scales the hole by the same factor as ev
 
 TEST_CASE( "the dot is a centred square and a 1px dot is one pixel", "[crosshair]" )
 {
+	// 1920x1080's own centre (960, 540) sits exactly on a pixel EDGE on
+	// both axes -- there is no true centre pixel for an odd (unpaired)
+	// size, so SnapCenter (2026-09-29) picks the TOP-LEFT neighbour (959,
+	// 539) rather than the bottom-right one a plain floor(c) would: "most
+	// games decide to put it towards the top left of centered" (the
+	// user). An even size still centres on the pixel EDGE itself and is
+	// unaffected -- symmetric two pixels straddling (960, 540) exactly as
+	// before.
 	Style st; st.bLine = false; st.bOutline = false; st.bDot = true;
 	Frame fr; fr.flCenterX = 960.0f; fr.flCenterY = 540.0f;
 
 	st.flDotSize = 1.0f;
 	Shape s = Build( st, fr, {} );
 	REQUIRE( s.dot.size() == 1 );
-	REQUIRE( s.dot[0] == IRect{ 960, 540, 961, 541 } );
+	REQUIRE( s.dot[0] == IRect{ 959, 539, 960, 540 } );
 
 	st.flDotSize = 2.0f;
 	s = Build( st, fr, {} );
@@ -369,11 +396,38 @@ TEST_CASE( "the dot is a centred square and a 1px dot is one pixel", "[crosshair
 
 	st.flDotSize = 3.0f;
 	s = Build( st, fr, {} );
-	REQUIRE( s.dot[0] == IRect{ 959, 539, 962, 542 } );
+	REQUIRE( s.dot[0] == IRect{ 958, 538, 961, 541 } );
 
 	st.flDotSize = 9.0f; // still a square, never a circle
 	s = Build( st, fr, {} );
-	REQUIRE( s.dot[0] == IRect{ 956, 536, 965, 545 } );
+	REQUIRE( s.dot[0] == IRect{ 955, 535, 964, 544 } );
+}
+
+TEST_CASE( "an odd width puts a 1px dot at (w-1)/2, an even width puts it at w/2 - 1", "[crosshair]" )
+{
+	// The pure formula the fix pins down (CrosshairMath.h's SnapCenter):
+	// GameFrame() centres at exactly w/2, so a 1px dot's snapped left edge
+	// is w/2 - 1 when w is even (the centre is a pixel edge, tie broken
+	// top-left) and (w-1)/2 when w is odd (a genuine centre pixel -- no
+	// tie, unchanged by the fix).
+	Style st; st.bLine = false; st.bOutline = false; st.bDot = true; st.flDotSize = 1.0f;
+
+	for ( const uint32_t w : { 640u, 1280u, 1920u } ) // even
+	{
+		const Frame fr = GameFrame( w, w );
+		const Shape s = Build( st, fr, {} );
+		REQUIRE( s.dot.size() == 1 );
+		REQUIRE( s.dot[0].x0 == (int)( w / 2 - 1 ) );
+		REQUIRE( s.dot[0].y0 == (int)( w / 2 - 1 ) );
+	}
+	for ( const uint32_t w : { 641u, 1281u, 1921u } ) // odd
+	{
+		const Frame fr = GameFrame( w, w );
+		const Shape s = Build( st, fr, {} );
+		REQUIRE( s.dot.size() == 1 );
+		REQUIRE( s.dot[0].x0 == (int)( ( w - 1 ) / 2 ) );
+		REQUIRE( s.dot[0].y0 == (int)( ( w - 1 ) / 2 ) );
+	}
 }
 
 TEST_CASE( "the outline sits strictly outside every fill and is exactly one ring wide", "[crosshair]" )
@@ -476,17 +530,20 @@ TEST_CASE( "an off-centre, letterboxed game centre is honoured exactly", "[cross
 	// A 1280x720 client letterboxed inside 1920x1080 at integer scale: on
 	// screen it is 1280x720 at (320, 180); centre (960, 540). A different,
 	// off-centre case: game rect at (100, 50), 800x600 -> centre (500, 350).
+	// (500, 350) is itself an exact pixel edge on both axes (like 1920's
+	// own 960), so the odd-thickness elements below snap to their
+	// top-left neighbour, (499, 349) -- see SnapCenter, CrosshairMath.h.
 	Style st; st.flWidth = 1.0f; st.flLength = 2.0f; st.flGap = 1.0f; st.bDot = true; st.flDotSize = 1.0f; st.bOutline = false;
 	Frame fr; fr.flCenterX = 500.0f; fr.flCenterY = 350.0f;
 	const Shape s = Build( st, fr, {} );
-	REQUIRE( s.dot[0] == IRect{ 500, 350, 501, 351 } );
+	REQUIRE( s.dot[0] == IRect{ 499, 349, 500, 350 } );
 	// Gap 1 is the TOTAL hole (2026-09-08): exactly the centre pixel
-	// (500, 350) itself is missing, so the arms touch its edges directly.
+	// (499, 349) itself is missing, so the arms touch its edges directly.
 	const auto px = Pixels( s.lines );
-	REQUIRE( px.count( { 501, 350 } ) ); REQUIRE( px.count( { 502, 350 } ) );
-	REQUIRE( px.count( { 498, 350 } ) ); REQUIRE( px.count( { 499, 350 } ) );
-	REQUIRE( px.count( { 500, 351 } ) ); REQUIRE( px.count( { 500, 352 } ) );
-	REQUIRE( px.count( { 500, 348 } ) ); REQUIRE( px.count( { 500, 349 } ) );
+	REQUIRE( px.count( { 500, 349 } ) ); REQUIRE( px.count( { 501, 349 } ) );
+	REQUIRE( px.count( { 497, 349 } ) ); REQUIRE( px.count( { 498, 349 } ) );
+	REQUIRE( px.count( { 499, 350 } ) ); REQUIRE( px.count( { 499, 351 } ) );
+	REQUIRE( px.count( { 499, 347 } ) ); REQUIRE( px.count( { 499, 348 } ) );
 	REQUIRE( px.size() == 8 );
 }
 
@@ -518,17 +575,19 @@ TEST_CASE( "line and dot switched off yield an empty shape (nothing to draw)", "
 
 TEST_CASE( "RasterRect is the game-pixel bounding box plus a one-texel margin", "[crosshair]" )
 {
-	// A 1280x960 game: centre (640, 480). 1px line, length 4, gap 2 -> hole
-	// = 2*(2-1)+1 = 3 pixels (639/640/641), no dot, no outline -> right arm
-	// 642..645, left arm 635..638, down arm 482..485, up arm 475..478.
+	// A 1280x960 game: centre (640, 480), itself an exact pixel edge on
+	// both axes, so the odd 1px width snaps top-left of it (639, 479) --
+	// see SnapCenter, CrosshairMath.h. 1px line, length 4, gap 2 -> hole
+	// = 2*(2-1)+1 = 3 pixels (638/639/640), no dot, no outline -> right arm
+	// 641..644, left arm 634..637, down arm 481..484, up arm 474..477.
 	Style st; st.flWidth = 1.0f; st.flLength = 4.0f; st.flGap = 2.0f; st.bDot = false; st.bOutline = false;
 	const Frame gf = GameFrame( 1280, 960 );
 	REQUIRE( gf.flScaleX == 1.0f );
 	REQUIRE( gf.flScaleY == 1.0f );
 	const Shape s = Build( st, gf, {} );
 
-	REQUIRE( BoundingBox( s ) == IRect{ 635, 475, 646, 486 } );
-	REQUIRE( RasterRect( s ) == IRect{ 634, 474, 647, 487 } ); // 13 x 13 texels
+	REQUIRE( BoundingBox( s ) == IRect{ 634, 474, 645, 485 } );
+	REQUIRE( RasterRect( s ) == IRect{ 633, 473, 646, 486 } ); // 13 x 13 texels
 	REQUIRE( kRasterMargin == 1 );
 
 	// Empty shape -> empty footprint (nothing to upload or draw).
@@ -655,19 +714,21 @@ TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent ma
 	REQUIRE( px.size() == (size_t)w * (size_t)( tr.y1 - tr.y0 ) );
 	auto At = [&]( int gx, int gy ) { return px[(size_t)( gy - tr.y0 ) * w + ( gx - tr.x0 )]; };
 
-	// A line pixel is exactly the line colour at full alpha ...
-	REQUIRE( At( 643, 480 ) == green );
-	REQUIRE( At( 640, 484 ) == green );
+	// A line pixel is exactly the line colour at full alpha ... (centre
+	// (640, 480) snaps top-left to (639, 479) -- see the RasterRect test
+	// above and SnapCenter, CrosshairMath.h).
+	REQUIRE( At( 642, 479 ) == green );
+	REQUIRE( At( 639, 483 ) == green );
 	// ... the gap and the centre stay fully transparent but take the line's
 	// RGB (they touch a painted texel), so the filter never mixes towards
-	// black -- gap 2 -> hole = 2*(2-1)+1 = 3 pixels (639/640/641) ...
-	REQUIRE( At( 641, 480 ) == 0x0000FF00u );
-	REQUIRE( At( 643, 479 ) == 0x0000FF00u ); // row above the right arm
+	// black -- gap 2 -> hole = 2*(2-1)+1 = 3 pixels (638/639/640) ...
+	REQUIRE( At( 640, 479 ) == 0x0000FF00u );
+	REQUIRE( At( 642, 478 ) == 0x0000FF00u ); // row above the right arm
 	// ... the corners of the margin, which touch nothing, are 0 ...
 	REQUIRE( At( tr.x0, tr.y0 ) == 0u );
 	REQUIRE( At( tr.x1 - 1, tr.y1 - 1 ) == 0u );
 	// ... and the margin column next to the arm's far end has the bleed too.
-	REQUIRE( At( 646, 480 ) == 0x0000FF00u );
+	REQUIRE( At( 645, 479 ) == 0x0000FF00u );
 
 	// Outline on: the ring is black and opaque; the margin beside it is
 	// transparent black (bled black, which IS the outline's colour). Gap 3
@@ -680,10 +741,10 @@ TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent ma
 	const int w2 = tr2.x1 - tr2.x0;
 	const std::vector<Argb> px2 = Rasterize( s2, tr2, PackArgb( 0x000000, 1.0f ), green, 0u );
 	auto At2 = [&]( int gx, int gy ) { return px2[(size_t)( gy - tr2.y0 ) * w2 + ( gx - tr2.x0 )]; };
-	REQUIRE( At2( 643, 480 ) == green );
-	REQUIRE( At2( 643, 479 ) == 0xFF000000u ); // outline above the arm
-	REQUIRE( At2( 643, 478 ) == 0x00000000u ); // margin above the outline
-	REQUIRE( At2( 640, 480 ) == 0x00000000u ); // centre pixel: gap, transparent, next to outline -> black RGB
+	REQUIRE( At2( 642, 479 ) == green );
+	REQUIRE( At2( 642, 478 ) == 0xFF000000u ); // outline above the arm
+	REQUIRE( At2( 642, 477 ) == 0x00000000u ); // margin above the outline
+	REQUIRE( At2( 639, 479 ) == 0x00000000u ); // centre pixel: gap, transparent, next to outline -> black RGB
 
 	// A half-transparent red dot over an opaque green plus (gap 0) blends
 	// OVER, as the vector path's SRC_ALPHA blend does: ~(128, 127, 0), alpha 1.
@@ -692,7 +753,9 @@ TEST_CASE( "Rasterize paints exact texels, bleeds colour into the transparent ma
 	const IRect tr3 = RasterRect( s3 );
 	const int w3 = tr3.x1 - tr3.x0;
 	const std::vector<Argb> px3 = Rasterize( s3, tr3, 0u, green, PackArgb( 0xFF0000, 0.5f ) );
-	const Argb c = px3[(size_t)( 480 - tr3.y0 ) * w3 + ( 640 - tr3.x0 )];
+	// The crossing square (gap 0) and the dot both land on (639, 479),
+	// the top-left snap of centre (640, 480) -- see SnapCenter.
+	const Argb c = px3[(size_t)( 479 - tr3.y0 ) * w3 + ( 639 - tr3.x0 )];
 	REQUIRE( ( c >> 24 ) == 0xFF );
 	const int r = ( c >> 16 ) & 0xFF, g = ( c >> 8 ) & 0xFF, b = c & 0xFF;
 	REQUIRE( ( r >= 127 && r <= 128 ) );
@@ -861,39 +924,42 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 		return out.px[(size_t)( oy - out.rect.y0 ) * ow + ( ox - out.rect.x0 )];
 	};
 
-	// In game pixels the right arm is x 328..339 on row 180 (centre column
-	// 320; gap 8 -> hole = 2*(8-1)+1 = 15 game pixels, 313..327, 2026-09-08
-	// revised same day). Stretched 2x: output x 656..679, rows 360 and
-	// 361. Across the arm the bilinear filter puts 75 % on the two rows it
-	// covers and 25 % on the two beside them -- at the LINE's colour, not a
-	// darker one (#14: "properly thicker and sub-pixel blurry").
-	REQUIRE( A8( At( 663, 360 ) ) == 191 ); REQUIRE( G8( At( 663, 360 ) ) == 255 ); REQUIRE( R8( At( 663, 360 ) ) == 0 );
-	REQUIRE( A8( At( 663, 361 ) ) == 191 );
-	REQUIRE( A8( At( 663, 359 ) ) == 64 );  REQUIRE( G8( At( 663, 359 ) ) == 255 );
-	REQUIRE( A8( At( 663, 362 ) ) == 64 );
-	REQUIRE( A8( At( 663, 358 ) ) == 0 );
-	REQUIRE( A8( At( 663, 363 ) ) == 0 );
+	// Game centre (320, 180) is an exact pixel edge on both axes (like
+	// 1920's own 960), so the odd 1px width snaps top-left of it (319,
+	// 179) -- see SnapCenter, CrosshairMath.h. In game pixels the right
+	// arm is therefore x 327..338 on row 179 (centre column 319; gap 8 ->
+	// hole = 2*(8-1)+1 = 15 game pixels, 312..326, 2026-09-08 revised same
+	// day). Stretched 2x: output x 654..677, rows 358 and 359. Across the
+	// arm the bilinear filter puts 75 % on the two rows it covers and
+	// 25 % on the two beside them -- at the LINE's colour, not a darker
+	// one (#14: "properly thicker and sub-pixel blurry").
+	REQUIRE( A8( At( 661, 358 ) ) == 191 ); REQUIRE( G8( At( 661, 358 ) ) == 255 ); REQUIRE( R8( At( 661, 358 ) ) == 0 );
+	REQUIRE( A8( At( 661, 359 ) ) == 191 );
+	REQUIRE( A8( At( 661, 357 ) ) == 64 );  REQUIRE( G8( At( 661, 357 ) ) == 255 );
+	REQUIRE( A8( At( 661, 360 ) ) == 64 );
+	REQUIRE( A8( At( 661, 356 ) ) == 0 );
+	REQUIRE( A8( At( 661, 361 ) ) == 0 );
 	// Along the arm: the end pixels are 75 % x 75 %, the ones past them
 	// 25 % x 75 %, and the gap itself is empty.
-	REQUIRE( A8( At( 656, 360 ) ) == 143 );
-	REQUIRE( A8( At( 655, 360 ) ) == 48 );
-	REQUIRE( A8( At( 679, 360 ) ) == 143 );
-	REQUIRE( A8( At( 680, 360 ) ) == 48 );
-	REQUIRE( A8( At( 681, 360 ) ) == 0 );
-	REQUIRE( A8( At( 640, 360 ) ) == 0 );
-	REQUIRE( A8( At( 645, 360 ) ) == 0 );
+	REQUIRE( A8( At( 654, 358 ) ) == 143 );
+	REQUIRE( A8( At( 653, 358 ) ) == 48 );
+	REQUIRE( A8( At( 677, 358 ) ) == 143 );
+	REQUIRE( A8( At( 678, 358 ) ) == 48 );
+	REQUIRE( A8( At( 679, 358 ) ) == 0 );
+	REQUIRE( A8( At( 638, 358 ) ) == 0 );
+	REQUIRE( A8( At( 643, 358 ) ) == 0 );
 
 	// Measured the way scripts/pixel-regression.sh measures: the run of
-	// >= 50 % coverage along the row is the arm -- starts at 656, ends at
-	// 679; length 24 = 12 x 2; width 2.
+	// >= 50 % coverage along the row is the arm -- starts at 654, ends at
+	// 677; length 24 = 12 x 2; width 2.
 	int nFirst = -1, nLast = -1;
-	for ( int x = 634; x < 700; x++ )
-		if ( A8( At( x, 360 ) ) >= 128 ) { if ( nFirst < 0 ) nFirst = x; nLast = x; }
-	REQUIRE( nFirst == 656 );
-	REQUIRE( nLast == 679 );
+	for ( int x = 632; x < 698; x++ )
+		if ( A8( At( x, 358 ) ) >= 128 ) { if ( nFirst < 0 ) nFirst = x; nLast = x; }
+	REQUIRE( nFirst == 654 );
+	REQUIRE( nLast == 677 );
 	int nWidth = 0;
-	for ( int y = 350; y < 370; y++ )
-		if ( A8( At( 663, y ) ) >= 128 ) nWidth++;
+	for ( int y = 348; y < 368; y++ )
+		if ( A8( At( 661, y ) ) >= 128 ) nWidth++;
 	REQUIRE( nWidth == 2 );
 
 	// Coverage is conserved: 48 opaque game texels x 4 output px each.
@@ -907,7 +973,7 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 	// alpha, so an interior pixel is (0, 128, 0) at 75 % x 50 %.
 	const std::vector<Argb> halfPx = Rasterize( s, tr, 0u, PackArgb( 0x00FF00, 0.5f ), 0u );
 	const OutputRaster half = ResampleToOutput( halfPx, tr, 640, 360, fr );
-	const Argb h = half.px[(size_t)( 360 - half.rect.y0 ) * ( half.rect.x1 - half.rect.x0 ) + ( 663 - half.rect.x0 )];
+	const Argb h = half.px[(size_t)( 358 - half.rect.y0 ) * ( half.rect.x1 - half.rect.x0 ) + ( 661 - half.rect.x0 )];
 	REQUIRE( ( G8( h ) >= 127 && G8( h ) <= 129 ) );
 	REQUIRE( ( A8( h ) >= 95 && A8( h ) <= 97 ) );
 
@@ -919,10 +985,10 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 	const OutputRaster o2 = ResampleToOutput( Rasterize( s2, tr2, PackArgb( 0x000000, 1.0f ), green, 0u ), tr2, 640, 360, fr );
 	const int ow2 = o2.rect.x1 - o2.rect.x0;
 	auto At2 = [&]( int ox, int oy ) { return o2.px[(size_t)( oy - o2.rect.y0 ) * ow2 + ( ox - o2.rect.x0 )]; };
-	REQUIRE( A8( At2( 663, 359 ) ) == 255 );                 // fully covered: 25 % line + 75 % outline
-	REQUIRE( ( G8( At2( 663, 359 ) ) >= 63 && G8( At2( 663, 359 ) ) <= 65 ) );
-	REQUIRE( A8( At2( 663, 357 ) ) == 64 );                  // outline's own soft edge
-	REQUIRE( G8( At2( 663, 357 ) ) == 0 );
+	REQUIRE( A8( At2( 661, 357 ) ) == 255 );                 // fully covered: 25 % line + 75 % outline
+	REQUIRE( ( G8( At2( 661, 357 ) ) >= 63 && G8( At2( 661, 357 ) ) <= 65 ) );
+	REQUIRE( A8( At2( 661, 355 ) ) == 64 );                  // outline's own soft edge
+	REQUIRE( G8( At2( 661, 355 ) ) == 0 );
 
 	// An empty raster (Shrink at 100 %) resamples to nothing.
 	Style off; off.bLine = false; off.bDot = false;
