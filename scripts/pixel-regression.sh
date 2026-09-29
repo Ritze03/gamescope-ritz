@@ -384,8 +384,17 @@ CH_GEO_ARM_OFFSET=$(( (CH_LINE_WIDTH + 1) / 2 + (CH_GEO_LINE_GAP - 1) ))
 CH_GEO_GAP_LO=1;                                       CH_GEO_GAP_HI=$((CH_GEO_ARM_OFFSET - CH_OUTLINE_WIDTH - 2))
 CH_GEO_OUT_LO=$((CH_GEO_ARM_OFFSET - CH_OUTLINE_WIDTH)); CH_GEO_OUT_HI=$((CH_GEO_ARM_OFFSET - 1))
 CH_GEO_ARM_LO=$((CH_GEO_ARM_OFFSET + 1));                CH_GEO_ARM_HI=$((CH_GEO_ARM_OFFSET + CH_LINE_LENGTH - 2))
-CH_CENTER_X=$((OUT_W / 2))
-CH_CENTER_Y=$((OUT_H / 2))
+# e7d364f (2026-09-29): detail::SnapCenter's odd-width branch changed from
+# floor(c)+0.5 to floor(c-0.5)+0.5, so on OUR even OUT_W/OUT_H an odd-width
+# crossing (CH_LINE_WIDTH=3 here, CH_ANIM_LINE_WIDTH=1 elsewhere) now snaps
+# to the TOP-LEFT pixel of the centre instead of the bottom-right one -- one
+# pixel lower/left than before. Was OUT_W/2, OUT_H/2 (640, 360); is now
+# OUT_W/2-1, OUT_H/2-1 (639, 359). See tests/test_crosshair.cpp's own
+# re-anchoring (e.g. 99 instead of 100 for odd width) and SnapCenter,
+# CrosshairMath.h. Even-width geometry (e.g. CH_GAPINV_WIDTHS' width 2) did
+# NOT move -- see check_crosshair_gap_invariant's own comment below.
+CH_CENTER_X=$((OUT_W / 2 - 1))
+CH_CENTER_Y=$((OUT_H / 2 - 1))
 
 # Gap invariant (crosshair-gap-invariant, 2026-09-08): gap N is exactly N
 # pixels missing across the centre -- see crosshair.md's "Gap" -- checked at
@@ -1203,12 +1212,18 @@ check_crosshair_gap_invariant() {
 		# The crossing's own low/high edge PIXELS on this width -- e.g.
 		# width 1: both edges are the crossing's one and only pixel
 		# (CH_CENTER_X itself); width 2: the crossing straddles the centre,
-		# so its two edges are CH_CENTER_X-1 and CH_CENTER_X. Each is
+		# so its two edges are CH_CENTER_X and CH_CENTER_X+1. Each is
 		# independently symmetric about the TRUE (possibly half-pixel, for
 		# an odd width) centre -- see cmd_symmetry's own docstring and
 		# CrosshairMath.h's detail::SnapCenter -- which a single shared
 		# integer anchor is not, for an even width.
-		local half=$(( width / 2 ))
+		#
+		# Since e7d364f's top-left snap (see CH_CENTER_X's own comment
+		# above), CH_CENTER_X is itself the crossing's LOW edge at every
+		# width, odd or even, not the high edge the old bottom-right snap
+		# gave it -- so the low edge is CH_CENTER_X - (width-1)/2, not
+		# CH_CENTER_X - width/2 (the two only coincide at odd widths).
+		local half=$(( (width - 1) / 2 ))
 		local lo_x=$(( CH_CENTER_X - half )); local hi_x=$(( lo_x + width - 1 ))
 		local lo_y=$(( CH_CENTER_Y - half )); local hi_y=$(( lo_y + width - 1 ))
 		for outline in 0 1; do
