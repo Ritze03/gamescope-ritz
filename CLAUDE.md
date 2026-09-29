@@ -23,6 +23,10 @@ Reference docs — plain links, read the one relevant to your task on demand:
   "where to look for X"). **Start here to navigate the code.**
 - Per-feature behaviour — `superdoc/features/`
 - `superdoc/README.md` — the docs table of contents
+- **Building (agents)** — build and test ONLY with `scripts/gentle-build.sh` (build dir
+  `build-agent/`) — never a raw `ninja`/`meson compile`, never an LTO `build-release/`
+  build — unless the task is specifically about the release/install build itself. See
+  `scripts/README.md` and `superdoc/features/build-and-tooling.md`.
 
 ## Always in context (force-loaded, mandatory)
 

@@ -46,6 +46,76 @@ Options: `--release` (default), `--debug`, `--test`, `--clean`, `--jobs N`,
   options) is wiped and reconfigured automatically; `--clean` forces this
   up front.
 
+## Gentle test builds for agents (`gentle-build.sh`)
+
+`gentle-build.sh` is what every agent should run for a throwaway "does it compile,
+do the tests pass" build — **not** `build-gamescope-ritz.sh`/`install.sh`, and never a
+raw `ninja`/`meson compile`. Those build the optimised, LTO'd `build-release/` tree the
+user actually launches games through, at full parallelism; several agents each running
+one of those at once — which is the normal case, one per worktree — was reported as
+lagging the whole desktop while the user is gaming. `gentle-build.sh` does the exact
+same full build, into its own `build-agent/` directory, tuned to get out of the way.
+
+```sh
+scripts/gentle-build.sh                       # full gentle build -> build-agent/
+scripts/gentle-build.sh --test                 # build, then run gamescope_tests gently
+scripts/gentle-build.sh --setup-only            # just configure, don't build
+scripts/gentle-build.sh --target src/gamescope # just the binary
+scripts/gentle-build.sh --jobs 2 --cpu-quota 70% # a bit more parallelism/duty-cycle
+GENTLE_CPUS=4-9 scripts/gentle-build.sh --jobs 2 # different core pin
+```
+
+**When to use which:** `gentle-build.sh` for every agent build and test run, full stop.
+`build-gamescope-ritz.sh` (or `install.sh`) only when the task is specifically about the
+release/install build itself (verifying LTO still builds clean, checking install
+behaviour, producing the binary the user will actually run).
+
+**The knobs, and why each one is there** (full detail, including the user's own
+words and the measurements behind each choice, is in the script's own header comment —
+run `scripts/gentle-build.sh --help` — and in `superdoc/features/build-and-tooling.md`'s
+own section on this script; this is the quick-reference version):
+
+| knob | default | what it does | why |
+|---|---|---|---|
+| `--dir` | `build-agent` | build directory name | never touches `build-release/`/`build/`; reused (incremental) across runs of the script in the same worktree |
+| `--jobs` / `GENTLE_JOBS` | `1` | ninja parallelism, capped at `2` | fewer concurrent `cc1plus` processes is the main lever against this CPU's one shared, unpartitionable L3 cache getting thrashed — see below |
+| `--cpu-quota` / `GENTLE_CPU_QUOTA` | `50%` | `systemd-run -p CPUQuota=` on the whole build | duty-cycles even a single compiler process so the game gets uncontested stretches on the shared cache; raise toward `100%` if it's slower than you need |
+| `GENTLE_CPUS` | `6-9` | `taskset -c` + cgroup `AllowedCPUs=` | keeps compiler threads off the cores the game is likely scheduled on, protecting those cores' *private* L1/L2 (not the shared L3 — nothing can protect that on this CPU; see below) |
+| — | `-Db_lto=false` | no LTO | LTO's whole-program link is this project's single worst spike, memory or cache, and a test build doesn't need it |
+| — | `-Doptimization=2` | `-O2`, not release's `-O3` | measured against `-O1` on this project's largest translation unit — the difference was noise (4.86s vs 4.83s wall, one core), so `-O2` is kept rather than trading codegen for nothing |
+| — | `-g0` | no debug info | smaller objects, less I/O |
+| — | `-fuse-ld=lld` (if a trial link succeeds) | lld instead of bfd | lower memory **and** a measurably faster link — less time spent hammering the cache |
+| — | auto-detected | wires `ccache` into `CC`/`CXX` if it's on `PATH`, with `CCACHE_BASEDIR`/`CCACHE_NOHASHDIR=1` set so every worktree's identical sources share one `~/.cache/ccache` (max_size raised to 15G) | cuts repeat/incremental compiles across full rebuilds, and across worktrees, not just within one — installed on this machine |
+| — | `chrt --idle 0` + `nice -n 19` + `ionice -c3` | lowest CPU/IO scheduling class the kernel offers | inherited by every child process ninja spawns |
+| — | `systemd-run --user --scope -p CPUWeight=idle -p IOWeight=1` | cgroup-level counterpart to the above | skipped, with a warning, if `systemd-run --user --scope` doesn't work in this session |
+
+**Why CPU cache, not memory — read this before changing a limit.** The first version
+of this script capped the build's *memory* (`MemoryHigh`) on the assumption that a big
+compile evicts the user's RAM working set. The user corrected that directly: *"I wasn't
+talking about RAM. I have enough RAM. That doesn't matter. It's the CPU cache that is
+being hit hard, which is pretty slow on my 10900K."* This machine (i9-10900K) has 10
+cores, SMT **off**, and **one 20MB L3 cache shared by every core** with no Intel
+CAT/resctrl to partition it (verified: no `cat_l3` in `/proc/cpuinfo`, no
+`/sys/fs/resctrl`). A memory cap does nothing for that, and CPU pinning alone doesn't
+either — a compiler on core 7 still evicts the game's lines from the L3 every core
+shares. That's why the real levers here are concurrency (`--jobs`) and duty-cycle
+(`--cpu-quota`), with pinning kept only for what it *can* still do (protect a core's
+private L1/L2). See `superdoc/features/build-and-tooling.md`'s own section for the full
+reasoning and the measurements behind each kept/dropped flag.
+
+`--test` runs `<dir>/tests/gamescope_tests` under the identical gentle wrapper afterward.
+Fails loudly (non-zero exit, a clear message naming what failed) on either a build or a
+test failure. `systemd-run --user --scope` availability is checked once, up front; if it
+doesn't work in the session, the script falls back to `chrt`/`nice`/`ionice`/`taskset`
+alone and says so, rather than silently skipping the cgroup limits.
+
+**Measured on this machine:** a genuinely cold (empty ccache) full build of all 679
+ninja targets plus the full test suite took 14m43s wall at the defaults above, with all
+588 test cases passing; a second full build into a fresh directory with ccache warm from
+the first took 18s wall for the identical target set (533/533 compiler calls hit the
+cache). Full numbers and methodology: `superdoc/features/build-and-tooling.md`'s own
+section on this script.
+
 ## Testing on the remote laptop rig
 
 `remote-test.sh` builds locally, ships the binary to a dedicated CachyOS test laptop
