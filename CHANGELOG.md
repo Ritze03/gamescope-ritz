@@ -15,6 +15,9 @@ The newest version below is the one this build reports.
 - **Settings rail no longer freezes mid-animation**: switching between the full and
   icon-only rail now always finishes its animation, instead of sometimes stopping
   halfway until you move the mouse.
+- **Crosshair centres top-left, not bottom-right**: when the screen's middle falls
+  between pixels, a 1px dot or line now lands on the top-left pixel, the way most
+  games place their own crosshair.
 
 ## [0.10.1] – 2026-09-28
 
