@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -95,6 +96,18 @@ namespace fghost
 		// Generated frames per pair are N-1 <= 3.
 		constexpr int kMaxOutputs = int( kMaxMultiplier ) - 1;
 
+		// Crosshair protection tunables. The ROI is a centred square of 3% of the
+		// frame's area (~332 px at 2560x1440): the user's "the middle one to maybe
+		// three percent of the screen", which fits a crosshair two to three times
+		// the usual size. A pixel is "still" when no channel moved more than
+		// 3.5/255 (a hair above 3 levels, so rounding never decides) and is masked
+		// after 8 consecutive still real frames: long enough that a one-frame
+		// stall of the picture does not mask a whole scene, short enough that a
+		// crosshair is protected within ~0.1 s of play.
+		constexpr double kXhairAreaFrac = 0.03;
+		constexpr float kXhairThreshold = 3.5f / 255.0f;
+		constexpr uint32_t kXhairStableFrames = 8;
+
 		struct Host_t
 		{
 			framegen::Interpolator interp;
@@ -130,6 +143,18 @@ namespace fghost
 			uint64_t ulProfileSeq = 0;   // submission sequence of the last cb that wrote into it
 			int nProfileSynths = 0;
 			int nProfileSynthsWanted = 0;
+
+			// Crosshair protection (superdoc/features/frame-generation.md). All of
+			// it is ROI-sized (kXhairAreaFrac of the frame, centred), created on
+			// first use while Static HUD protection is on, and released with the
+			// ring (teardown / size change, both after a waitIdle).
+			gamescope::Rc<CVulkanTexture> pXhCnt[2];   // ping-pong stability counters (.r = count/255)
+			gamescope::Rc<CVulkanTexture> pXhPatch;    // .rgb = the real frame's ORIGINAL ROI pixels, .a = mask
+			int nXhCnt = 0;                // the counter texture written for the newest real frame
+			bool bXhHist = false;          // counters + patch describe the previous real frame (no gap)
+			bool bXhPatchCur = false;      // pXhPatch holds a usable mask for the CURRENT real frame
+			bool bXhFailed = false;        // textures could not be created: stay off until size change / teardown
+			uint32_t uXhX = 0, uXhY = 0, uXhSize = 0;   // the ROI in frame pixels
 		};
 
 		Host_t *g_pHost = nullptr;   // leaked on purpose: see HostGet()
@@ -191,6 +216,22 @@ namespace fghost
 			H.bEstimateValid = false;
 			for ( bool &b : H.bOutValid )
 				b = false;
+			// The crosshair counters compare consecutive real frames, so any gap
+			// restarts them (the next frame copied in starts every counter at 0).
+			H.bXhHist = false;
+			H.bXhPatchCur = false;
+		}
+
+		// The crosshair textures. Callers have already waited for the device to
+		// go idle (Teardown, the size-change path): same rule as the ring.
+		void ReleaseCrosshair( Host_t &H )
+		{
+			for ( auto &p : H.pXhCnt )
+				p = nullptr;
+			H.pXhPatch = nullptr;
+			H.bXhHist = false;
+			H.bXhPatchCur = false;
+			H.bXhFailed = false;
 		}
 
 		// Release everything. DECISION: g_device.waitIdle() first -- the library
@@ -204,6 +245,7 @@ namespace fghost
 				p = nullptr;
 			for ( auto &p : H.pOut )
 				p = nullptr;
+			ReleaseCrosshair( H );
 			H.bLive = false;
 			H.uWidth = H.uHeight = 0;
 			DropFrames( H );
@@ -234,6 +276,126 @@ namespace fghost
 					return false;
 			}
 			return true;
+		}
+
+		// The ROI textures for the current frame size; false = feature off for now.
+		bool EnsureCrosshair( Host_t &H )
+		{
+			if ( H.pXhPatch )
+				return true;
+			if ( H.bXhFailed )
+				return false;
+
+			uint32_t uSide = uint32_t( std::lround( std::sqrt( kXhairAreaFrac * double( H.uWidth ) * double( H.uHeight ) ) ) );
+			uSide = std::min( std::max( uSide, 32u ), std::min( H.uWidth, H.uHeight ) );
+			H.uXhSize = uSide;
+			H.uXhX = ( H.uWidth - uSide ) / 2;
+			H.uXhY = ( H.uHeight - uSide ) / 2;
+
+			if ( !CreateTexture( H.pXhCnt[0], uSide, uSide ) || !CreateTexture( H.pXhCnt[1], uSide, uSide ) || !CreateTexture( H.pXhPatch, uSide, uSide ) )
+			{
+				// Not worth failing frame generation over: just run without it.
+				fg_log.errorf( "crosshair protection unavailable: could not create its %ux%u textures", uSide, uSide );
+				ReleaseCrosshair( H );
+				H.bXhFailed = true;
+				return false;
+			}
+			H.bXhHist = false;
+			return true;
+		}
+
+		// == cs_fg_crosshair_{detect,inpaint,patch}.comp's xhair_t block.
+		struct XhairPush_t
+		{
+			int32_t ox, oy, w, h;
+			float flThr;
+			uint32_t uK;
+			uint32_t uReset;
+			uint32_t uMode;
+		};
+
+		void XhairBind( CVulkanCmdBuffer *pCb, uint32_t uSlot, const gamescope::Rc<CVulkanTexture> &pTex )
+		{
+			pCb->bindTexture( uSlot, pTex );
+			pCb->setTextureSrgb( uSlot, true );   // raw UNORM view, like every layer-0 pass
+			pCb->setSamplerUnnormalized( uSlot, true );
+			pCb->setSamplerNearest( uSlot, true );
+		}
+
+		void XhairDispatch( CVulkanCmdBuffer *pCb, const Host_t &H, ShaderType eShader, uint32_t uMode, bool bReset )
+		{
+			const XhairPush_t push = { int32_t( H.uXhX ), int32_t( H.uXhY ), int32_t( H.uXhSize ), int32_t( H.uXhSize ),
+				kXhairThreshold, kXhairStableFrames, bReset ? 1u : 0u, uMode };
+			pCb->bindPipeline( g_device.pipeline( eShader ) );
+			pCb->uploadConstantsRaw( &push, sizeof( push ) );
+			pCb->dispatch( div_roundup( H.uXhSize, 8 ), div_roundup( H.uXhSize, 8 ) );
+		}
+
+		// Crosshair protection, removal half. Runs once per NEW real frame, right
+		// after it was copied into ring slot nNew (same command buffer):
+		//   1. stability: compare the new frame's ROI with the previous frame's
+		//      ORIGINAL ROI (the patch texture) and update the per-pixel counters;
+		//   2. mask + patch: save the new frame's original ROI pixels and the
+		//      dilated mask of long-still pixels into the patch texture;
+		//   3. inpaint: overwrite the masked pixels of the ring slot from their
+		//      surroundings, so estimate + warp see plain background there.
+		// Why on every real frame and not only when a pair is generated: the
+		// counters must see consecutive real frames; pass-through pairs would
+		// otherwise leave gaps. The previous frame's ring slot was already
+		// inpainted in ITS turn and is only ever used as `prev`, so nothing is
+		// redone for it. Every pass is ROI-sized (a few % of the frame).
+		void RecordCrosshairDetect( CVulkanCmdBuffer *pCb, Host_t &H, int nNew )
+		{
+			const bool bReset = !H.bXhHist;
+			const int nIn = H.nXhCnt;
+			const int nOut = 1 - H.nXhCnt;
+
+			// 1. stability. On a reset frame the old counters/patch are neither bound
+			// nor read: they may never have been written (UNDEFINED layout), and
+			// binding them first would stop the target passes below from discarding
+			// them the way a first-sight destination must.
+			pCb->clearState();
+			XhairBind( pCb, 0, H.pRing[ nNew ] );
+			if ( !bReset )
+			{
+				XhairBind( pCb, 1, H.pXhPatch );
+				XhairBind( pCb, 2, H.pXhCnt[ nIn ] );
+			}
+			pCb->bindTarget( H.pXhCnt[ nOut ] );
+			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_DETECT, 0, bReset );
+
+			// 2. mask + patch (overwrites the previous frame's patch, which pass 1
+			// has finished reading).
+			pCb->clearState();
+			XhairBind( pCb, 0, H.pRing[ nNew ] );
+			XhairBind( pCb, 1, H.pXhCnt[ nOut ] );
+			pCb->bindTarget( H.pXhPatch );
+			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_DETECT, 1, bReset );
+
+			// 3. inpaint. Nothing can be masked on a reset frame (every counter is 0).
+			if ( !bReset )
+			{
+				pCb->clearState();
+				XhairBind( pCb, 0, H.pXhPatch );
+				pCb->bindTarget( H.pRing[ nNew ] );
+				XhairDispatch( pCb, H, SHADER_TYPE_FG_INPAINT, 0, false );
+			}
+			pCb->clearState();
+
+			H.nXhCnt = nOut;
+			H.bXhHist = true;
+			H.bXhPatchCur = !bReset;
+		}
+
+		// Crosshair protection, restore half: out = mix(out, original, mask) over
+		// the ROI. Records after recordSynth() into the same output texture.
+		void RecordCrosshairPatch( CVulkanCmdBuffer *pCb, const Host_t &H, const gamescope::Rc<CVulkanTexture> &pOut )
+		{
+			pCb->clearState();
+			XhairBind( pCb, 0, H.pXhPatch );
+			pCb->bindTarget( pOut );
+			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_PATCH, 0, false );
+			pCb->clearState();
 		}
 
 		uint64_t FailKey( uint32_t w, uint32_t h, const Config &c )
@@ -294,6 +456,7 @@ namespace fghost
 					p = nullptr;
 				for ( auto &p : H.pOut )
 					p = nullptr;
+				ReleaseCrosshair( H );
 				if ( !H.interp.resize( w, h, kHostVkFormat ) || !CreateRing( H ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u", w, h );
@@ -591,6 +754,8 @@ namespace fghost
 
 		gamescope::Rc<CVulkanTexture> pResult;
 
+		const bool bXhair = cfg.hud != HudProtect::Off && EnsureCrosshair( H );
+
 		// D11: a pairId not seen before is a new real frame. Copy it into the other
 		// ring slot (in this very command buffer) whatever this composite shows, so
 		// the next pair always has a prev.
@@ -618,6 +783,20 @@ namespace fghost
 			// every later command on the queue, not just the rest of this buffer.
 			pCb->insertBarrier();
 			pCb->bindTexture( 0, nullptr );
+
+			// Static HUD protection also keeps a still crosshair out of the
+			// interpolation: remove it from the ring frame now, patch it back onto
+			// the generated frames later. Off = none of this is recorded.
+			if ( bXhair )
+			{
+				RecordCrosshairDetect( pCb, H, nNewSlot );
+				pCb->insertBarrier();   // flush the ring slot / patch for later command buffers
+			}
+			else
+			{
+				H.bXhHist = false;
+				H.bXhPatchCur = false;
+			}
 		}
 
 		const bool bGenerate = slot.nK >= 1 && slot.nK < slot.nN && H.bHavePrev;
@@ -681,6 +860,9 @@ namespace fghost
 					if ( bOk )
 					{
 						pCb->markDirty( pOut );
+						// Put the crosshair back (only if THIS pair's frame was inpainted).
+						if ( bXhair && H.bXhPatchCur )
+							RecordCrosshairPatch( pCb, H, H.pOut[ nIdx ] );
 						pCb->insertBarrier();   // flush for the consumers in later command buffers
 						H.bOutValid[ nIdx ] = true;
 						H.nOutN[ nIdx ] = slot.nN;

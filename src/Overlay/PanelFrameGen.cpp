@@ -214,9 +214,10 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.hud_protection, kHudKeys, 3, 1 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.hud_protection = kHudKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kHudOptions, std::size( kHudOptions ) )
-			.Help( "Keeps a motionless on-screen HUD from wobbling. The game's own HUD can still "
-			       "artifact when frames are generated; this fork's own Crosshair is drawn after "
-			       "generation and stays sharp." )
+			.Help( "Keeps a motionless on-screen HUD from wobbling, and a still crosshair in the "
+			       "middle of the screen sharp. The game's own HUD can still artifact when "
+			       "frames are generated; this fork's own Crosshair is drawn after generation "
+			       "and stays sharp." )
 			.Default( 1 )
 			.Keywords( "frame generation static hud protection ui wobble crosshair" )
 			.DisabledUnless( On, "frame generation is off" );

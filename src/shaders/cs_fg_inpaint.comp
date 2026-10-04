@@ -1,0 +1,84 @@
+#version 460
+
+// cs_fg_inpaint.comp -- frame generation's crosshair protection, removal
+// half (src/FrameGen/FrameGenHost.cpp, superdoc/features/frame-generation.md
+// "Crosshair protection"). Fills the masked ROI pixels of the NEW real frame's
+// ring slot, in place, from their unmasked surroundings, so motion estimation
+// and warping see plain background where the crosshair was.
+//
+//   slot 0 = the patch texture (ROI-sized): .rgb = the frame's original
+//            pixels, .a > 0 = masked
+//   dst    = the ring slot (full frame; written at u_origin + p)
+//
+// Only masked pixels are written; every other pixel of the ring slot keeps the
+// real value copied there by cs_fg_copy.comp, so this shader never reads the
+// ring. Method: from each masked pixel walk out along 8 directions to the
+// first unmasked pixel (at most kReach steps) and average those, weighted
+// 1/distance^2 -- nearest wins, so a thin line is filled from the pixels just
+// above and below it. Chosen over a push-pull pyramid because a crosshair is
+// thin (at most a handful of px across after the dilation) and this is ONE
+// dispatch with no scratch levels. A pixel with no unmasked neighbour within
+// reach (the whole ROI is still) is left as the real pixel: it is restored
+// from the patch afterwards anyway.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+// == FrameGenHost.cpp's XhairPush_t (only u_origin / u_size are used here).
+layout(binding = 0, scalar)
+uniform xhair_t {
+    ivec2 u_origin;
+    ivec2 u_size;
+    float u_thr;
+    uint  u_k;
+    uint  u_reset;
+    uint  u_mode;
+};
+
+const int kReach = 12;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, u_size)))
+        return;
+
+    if (texelFetch(s_samplers[0], p, 0).a == 0.0)
+        return;
+
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            if (dx == 0 && dy == 0)
+                continue;
+            float len2 = float(dx * dx + dy * dy);   // 1 for axis steps, 2 for diagonals
+            for (int s = 1; s <= kReach; s++)
+            {
+                ivec2 q = p + ivec2(dx, dy) * s;
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, u_size)))
+                    break;
+                vec4 v = texelFetch(s_samplers[0], q, 0);
+                if (v.a == 0.0)
+                {
+                    float w = 1.0 / (float(s * s) * len2);
+                    acc += v.rgb * w;
+                    wsum += w;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (wsum > 0.0)
+        imageStore(dst, u_origin + p, vec4(acc / wsum, 1.0));
+}

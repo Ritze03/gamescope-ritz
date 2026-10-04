@@ -1,0 +1,99 @@
+#version 460
+
+// cs_fg_crosshair_detect.comp -- frame generation's crosshair protection,
+// detection half (src/FrameGen/FrameGenHost.cpp, superdoc/features/
+// frame-generation.md "Crosshair protection"). Two passes of one tiny
+// compute shader, picked by u_mode, both over the centred ROI only
+// (u_origin / u_size in frame pixels; a few % of the frame).
+//
+//   mode 0, STABILITY: per ROI pixel, a saturating count of consecutive real
+//     frames on which the pixel did not change:
+//       slot 0 = the NEW real frame's ring slot (full frame; read at origin+p)
+//       slot 1 = the PATCH texture of the PREVIOUS real frame (ROI-sized, .rgb
+//                = that frame's ORIGINAL pixels -- the ring copy of it has
+//                been inpainted, so it cannot be compared against)
+//       slot 2 = last frame's counters;   dst = this frame's counters
+//     count' = max channel |new - old| <= u_thr ? min(count + 1, 255) : 0.
+//     u_reset != 0 (history dropped, size change, feature just switched on)
+//     starts every counter at 0 and reads neither slot 1 nor 2.
+//
+//   mode 1, MASK + PATCH: builds the patch texture of the new frame:
+//       slot 0 = the new frame's ring slot, slot 1 = the counters just written
+//       dst.rgb = the frame's ORIGINAL pixel (saved before inpainting)
+//       dst.a   = 1.0 within 1 px of a pixel with count >= u_k,
+//                 0.5 within 2 px (a one-pixel feather), else 0.
+//     The 2 px dilation catches the anti-aliased rim and outline of a
+//     crosshair whose own pixels are stable but whose blended edge pixels
+//     are not quite.
+//
+// There is deliberately no "does this look like a crosshair" test: static for
+// u_k frames inside the central ROI IS the detector. A still camera also
+// masks static background, which is harmless (it is restored with the real,
+// identical pixels), and the moment anything moves its pixels leave the mask
+// on that very pair (the counter resets at once).
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+// == FrameGenHost.cpp's XhairPush_t, field for field (shared by all three
+// crosshair shaders).
+layout(binding = 0, scalar)
+uniform xhair_t {
+    ivec2 u_origin;   // the ROI's top-left in the frame
+    ivec2 u_size;     // the ROI, pixels (== the aux textures' size)
+    float u_thr;      // stability threshold, in 0..1 units of a channel
+    uint  u_k;        // frames a pixel must stay still to be masked
+    uint  u_reset;
+    uint  u_mode;
+};
+
+// The counters are stored as count/255 in an UNORM texture; round-trip exact.
+uint cnt_at(ivec2 p)
+{
+    if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, u_size)))
+        return 0u;
+    return uint(texelFetch(s_samplers[1], p, 0).r * 255.0 + 0.5);
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, u_size)))
+        return;
+
+    ivec2 q = u_origin + p;
+    vec3 now = texelFetch(s_samplers[0], q, 0).rgb;
+
+    if (u_mode == 0u)
+    {
+        uint n = 0u;
+        if (u_reset == 0u)
+        {
+            vec3 old = texelFetch(s_samplers[1], p, 0).rgb;
+            vec3 d = abs(now - old);
+            if (max(d.r, max(d.g, d.b)) <= u_thr)
+                n = min(uint(texelFetch(s_samplers[2], p, 0).r * 255.0 + 0.5) + 1u, 255u);
+        }
+        imageStore(dst, p, vec4(float(n) / 255.0, 0.0, 0.0, 1.0));
+    }
+    else
+    {
+        float a = 0.0;
+        for (int y = -2; y <= 2; y++)
+        {
+            for (int x = -2; x <= 2; x++)
+            {
+                if (cnt_at(p + ivec2(x, y)) >= u_k)
+                    a = max(a, (abs(x) <= 1 && abs(y) <= 1) ? 1.0 : 0.5);
+            }
+        }
+        imageStore(dst, p, vec4(now, a));
+    }
+}

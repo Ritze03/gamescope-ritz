@@ -57,6 +57,9 @@
 #include "cs_effects_bloom_down.h"
 #include "cs_zoom.h"
 #include "cs_fg_copy.h"
+#include "cs_fg_crosshair_detect.h"
+#include "cs_fg_inpaint.h"
+#include "cs_fg_crosshair_patch.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1043,6 +1046,9 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_V2_BOX1_FINE, cs_effects_v2_box1_fine);
 	SHADER(EFFECTS_V2_BOX2_FINE, cs_effects_v2_box2_fine);
 	SHADER(FG_COPY, cs_fg_copy);
+	SHADER(FG_XHAIR_DETECT, cs_fg_crosshair_detect);
+	SHADER(FG_INPAINT, cs_fg_inpaint);
+	SHADER(FG_XHAIR_PATCH, cs_fg_crosshair_patch);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1314,6 +1320,10 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	// on the render thread. (The FrameGen library builds its own pipelines
 	// at init, which is a one-off on that same switch.)
 	SHADER(FG_COPY, 1, 1, 1);
+	// Crosshair protection's three (cs_fg_crosshair_detect/inpaint/patch.comp), same reason.
+	SHADER(FG_XHAIR_DETECT, 1, 1, 1);
+	SHADER(FG_INPAINT, 1, 1, 1);
+	SHADER(FG_XHAIR_PATCH, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
