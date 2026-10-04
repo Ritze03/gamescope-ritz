@@ -962,6 +962,9 @@ namespace gamescope::ui
 			{ "display.frame_limiter", RailGroup::Display },
 			{ "display.hdr",           RailGroup::Display },
 			{ "image.shaders",         RailGroup::Display },
+			// Frame generation (2026-10-04): directly below Shaders -- both
+			// change what the game picture looks like before it is scaled.
+			{ "image.framegen",        RailGroup::Display },
 			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
 			// moves here from Settings (it is the pointer's own on-screen
 			// appearance, the same "drawn over the game" concern as the

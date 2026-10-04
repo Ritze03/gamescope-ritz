@@ -1591,6 +1591,64 @@ TEST_CASE( "null_binds: delay_ms and jitter_ms are clamped to their sliders' ran
     REQUIRE( loaded.null_binds.jitter_ms == gamescope::nullbinds::kMinJitterMs );
 }
 
+// ---------------------------------------------------------------------
+// Frame generation (2026-10-04, Overlay/PanelFrameGen.cpp): per-profile,
+// under "framegen", additive (no schema bump), readable-string enums.
+// ---------------------------------------------------------------------
+
+TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Quality/Default/Normal", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( Settings{}.framegen.multiplier == 0 );
+    REQUIRE( Settings{}.framegen.quality == "quality" );
+    REQUIRE( Settings{}.framegen.safety == "default" );
+    REQUIRE( Settings{}.framegen.hud_protection == "normal" );
+
+    Settings s{};
+    s.framegen.multiplier = 3;
+    s.framegen.quality = "performance";
+    s.framegen.safety = "high";
+    s.framegen.hud_protection = "strong";
+    REQUIRE( SaveSections( s ) );
+
+    const Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.multiplier == 3 );
+    REQUIRE( loaded.framegen.quality == "performance" );
+    REQUIRE( loaded.framegen.safety == "high" );
+    REQUIRE( loaded.framegen.hud_protection == "strong" );
+
+    // The keys the Frame generation area's rows are bound to: the Shell's
+    // inherited/overridden dot and "Reset to inherited" go through this.
+    REQUIRE( IsSettingsKey( "framegen.multiplier" ) );
+    REQUIRE( IsSettingsKey( "framegen.quality" ) );
+    REQUIRE( IsSettingsKey( "framegen.safety" ) );
+    REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
+}
+
+TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )
+{
+    TempConfigHome home;
+
+    Settings s{};
+    s.framegen.multiplier = 1;            // not a real choice -> Off
+    s.framegen.quality = "ultra";         // unknown -> stays "quality"
+    s.framegen.safety = "";               // unknown -> stays "default"
+    s.framegen.hud_protection = "max";    // unknown -> stays "normal"
+    REQUIRE( SaveSections( s ) );
+
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.multiplier == 0 );
+    REQUIRE( loaded.framegen.quality == "quality" );
+    REQUIRE( loaded.framegen.safety == "default" );
+    REQUIRE( loaded.framegen.hud_protection == "normal" );
+
+    s.framegen.multiplier = 9;            // above 4 -> 4
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.multiplier == 4 );
+}
+
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
 // no compositor deps, so it needs no Zoom.cpp link at all -- see that
 // header's own comment.

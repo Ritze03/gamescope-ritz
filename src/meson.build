@@ -251,6 +251,7 @@ src = [
   'Overlay/EffectPreview.cpp',
   'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',
+  'Overlay/PanelFrameGen.cpp',
   'Overlay/PanelAudio.cpp',
   'Overlay/PanelConfig.cpp',
   'Overlay/LogCapture.cpp',

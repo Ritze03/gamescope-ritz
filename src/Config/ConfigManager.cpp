@@ -271,6 +271,26 @@ namespace gamescope::config
                 n.jitter_ms = std::clamp( JGetInt( *pNullBinds, "jitter_ms", n.jitter_ms ), 0, 20 );
             }
 
+            // Frame generation (2026-10-04). Additive, like null_binds above.
+            // multiplier is normalised the way fghost::SetConfig() does (1
+            // -> 0, above 4 -> 4); an unknown enum string keeps the default
+            // rather than guessing.
+            if ( const nlohmann::json *pFrameGen = JGetObject( j, "framegen" ) )
+            {
+                auto &f = s.framegen;
+                const int nMult = std::clamp( JGetInt( *pFrameGen, "multiplier", f.multiplier ), 0, 4 );
+                f.multiplier = nMult < 2 ? 0 : nMult;
+                const std::string sQuality = JGetString( *pFrameGen, "quality", f.quality );
+                if ( sQuality == "quality" || sQuality == "performance" )
+                    f.quality = sQuality;
+                const std::string sSafety = JGetString( *pFrameGen, "safety", f.safety );
+                if ( sSafety == "low" || sSafety == "default" || sSafety == "high" )
+                    f.safety = sSafety;
+                const std::string sHud = JGetString( *pFrameGen, "hud_protection", f.hud_protection );
+                if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
+                    f.hud_protection = sHud;
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -655,6 +675,13 @@ namespace gamescope::config
             jNullBinds[ "delay_ms" ] = nb.delay_ms;
             jNullBinds[ "jitter_ms" ] = nb.jitter_ms;
 
+            const auto &fg = s.framegen;
+            nlohmann::json jFrameGen = nlohmann::json::object();
+            jFrameGen[ "multiplier" ] = fg.multiplier;
+            jFrameGen[ "quality" ] = fg.quality;
+            jFrameGen[ "safety" ] = fg.safety;
+            jFrameGen[ "hud_protection" ] = fg.hud_protection;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -746,6 +773,7 @@ namespace gamescope::config
             j[ "zoom" ] = std::move( jZoom );
             j[ "autoclicker" ] = std::move( jAutoclicker );
             j[ "null_binds" ] = std::move( jNullBinds );
+            j[ "framegen" ] = std::move( jFrameGen );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

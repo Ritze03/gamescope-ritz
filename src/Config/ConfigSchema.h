@@ -454,6 +454,26 @@ namespace gamescope::config
         int jitter_ms = 3;
     };
 
+    // Frame generation (2026-10-04, this fork's own addition -- see
+    // Overlay/PanelFrameGen.cpp and FrameGen/FrameGenHost.h). Per profile.
+    // ADDITIVE, so no schema bump: an older config has no "framegen" object
+    // and resolves to these compiled-in defaults, the precedent
+    // NullBindsSettings above set. The enums are stored as readable strings
+    // (like AutoclickerSettings::mode) and mapped to fghost::Config by
+    // PanelFrameGen.cpp -- this header deliberately knows nothing of the
+    // renderer.
+    struct FrameGenSettings
+    {
+        // 0 = Off, else 2, 3 or 4 (frames shown per real game frame).
+        int multiplier = 0;
+        // "quality" | "performance"
+        std::string quality = "quality";
+        // Artifact safety: "low" | "default" | "high"
+        std::string safety = "default";
+        // Static HUD protection: "off" | "normal" | "strong"
+        std::string hud_protection = "normal";
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -1197,6 +1217,7 @@ namespace gamescope::config
         ZoomSettings zoom;
         AutoclickerSettings autoclicker;
         NullBindsSettings null_binds;
+        FrameGenSettings framegen;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

@@ -1941,6 +1941,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// (moved out of display.general) and force grab keyboard, INPUT's
 		// own General area. See PanelInput.cpp and Icons.cpp.
 		"input.general",
+		// The twenty-second (2026-10-04): frame generation, directly below
+		// Shaders in DISPLAY. See PanelFrameGen.cpp and Icons.cpp.
+		"image.framegen",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2156,6 +2159,7 @@ TEST_CASE( "rail: the six groups are in the order the request named", "[overlay_
 		{ "display.frame_limiter", ui::RailGroup::Display },
 		{ "display.hdr",           ui::RailGroup::Display },
 		{ "image.shaders",         ui::RailGroup::Display },
+		{ "image.framegen",        ui::RailGroup::Display },
 		{ "system.hud",            ui::RailGroup::Overlay },
 		{ "system.crosshair",      ui::RailGroup::Overlay },
 		{ "system.zoom",           ui::RailGroup::Overlay },
@@ -2311,7 +2315,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	ui::Registry reg;
 	const char *pszAllAreas[] = {
 		"display.general", "display.resolution", "display.upscaling",
-		"display.frame_limiter", "display.hdr", "image.shaders",
+		"display.frame_limiter", "display.hdr", "image.shaders", "image.framegen",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
 		"input.general", "system.autoclicker", "system.null_binds",
 		"system.friends", "audio.mixer",

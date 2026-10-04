@@ -59,6 +59,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
+#include "Overlay/PanelFrameGen.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
@@ -870,6 +871,9 @@ namespace gamescope::ui::shell
 			// tab bar redrawn as headings. AUTONOMOUS-DECISIONS.md D13.1.
 			PanelDisplay_RegisterAreas( reg );
 			PanelShaders_RegisterArea( reg );
+			// Frame generation (2026-10-04): the next area down the DISPLAY
+			// group, per-profile like the Shaders above it.
+			PanelFrameGen_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
 			// The System tab (2026-09-05, requests-2026-09-05.md item 5)

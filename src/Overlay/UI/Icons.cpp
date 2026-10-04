@@ -163,6 +163,18 @@ namespace gamescope::ui
 			Poly( { 3.7f, 12.4f }, { 12.0f, 16.8f }, { 20.3f, 12.4f } ),
 			Poly( { 3.7f, 16.6f }, { 12.0f, 21.0f }, { 20.3f, 16.6f } ) } },
 
+		{ "image.framegen", 3, {
+			// THREE FRAMES in a row: two real ones as stroked outlines at the
+			// edges, the generated one between them as a filled block --
+			// the one place in this glyph a fill carries meaning ("made, not
+			// rendered"). Freehand (2026-10-04), like every glyph after
+			// system.zoom. Read against its nearest neighbours: image.shaders
+			// is stacked rhombi, display.general one rect inside another, and
+			// no other glyph pairs two side-by-side outlines with a filled bar.
+			Rect( 2.5f, 6.0f, 8.5f, 18.0f ),
+			Rect( 15.5f, 6.0f, 21.5f, 18.0f ),
+			Bar( 10.5f, 9.0f, 13.5f, 15.0f ) } },
+
 		// ---- SYSTEM -------------------------------------------------------
 		{ "system.general", 5, {
 			// A chip: a square body with one pin centred on each of its
