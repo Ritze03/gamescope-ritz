@@ -1948,6 +1948,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twenty-third (2026-10-04): motion blur, directly below Frame
 		// generation in MOTION. See PanelMotionBlur.cpp and Icons.cpp.
 		"image.motionblur",
+		// The twenty-fourth (2026-10-04): the lag spike buffer, directly below
+		// Motion blur in MOTION. See PanelLagBuffer.cpp and Icons.cpp.
+		"image.lagbuffer",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2164,9 +2167,10 @@ TEST_CASE( "rail: the seven groups are in the order the request named", "[overla
 		{ "display.hdr",           ui::RailGroup::Display },
 		{ "image.shaders",         ui::RailGroup::Display },
 		// MOTION (2026-10-04): Frame generation moved out of DISPLAY, Motion blur
-		// is new; between DISPLAY and OVERLAY.
+		// and the Lag spike buffer are new; between DISPLAY and OVERLAY.
 		{ "image.framegen",        ui::RailGroup::Motion },
 		{ "image.motionblur",      ui::RailGroup::Motion },
+		{ "image.lagbuffer",       ui::RailGroup::Motion },
 		{ "system.hud",            ui::RailGroup::Overlay },
 		{ "system.crosshair",      ui::RailGroup::Overlay },
 		{ "system.zoom",           ui::RailGroup::Overlay },
@@ -2312,7 +2316,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	// (content ~= 896px against ~= 878px available -- see this task's own
 	// brief). I7 (2026-09-27) split those into six groups, so DISPLAY (6
 	// areas) is now the busiest (MOTION, 2026-10-04, took Frame generation
-	// out of it and added Motion blur: seven groups) instead of the old MISC. Every
+	// out of it and added Motion blur and the Lag spike buffer: seven groups) instead of the old MISC. Every
 	// real area, including input.general (PanelInput.cpp, landed
 	// 2026-09-27) -- this synthetic registry still builds its own Area for
 	// each id rather than linking the real panel files, so
@@ -2325,7 +2329,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	const char *pszAllAreas[] = {
 		"display.general", "display.resolution", "display.upscaling",
 		"display.frame_limiter", "display.hdr", "image.shaders",
-		"image.framegen", "image.motionblur",
+		"image.framegen", "image.motionblur", "image.lagbuffer",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
 		"input.general", "system.autoclicker", "system.null_binds",
 		"system.friends", "audio.mixer",

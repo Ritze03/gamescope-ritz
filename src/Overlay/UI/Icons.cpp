@@ -188,6 +188,18 @@ namespace gamescope::ui
 			Line( { 5.5f, 12.0f }, { 10.0f, 12.0f } ),
 			Line( { 3.5f, 15.5f }, { 10.0f, 15.5f } ) } },
 
+		{ "image.lagbuffer", 4, {
+			// A frame-time trace with one spike: a flat line, one tall peak, the flat
+			// line again -- and a solid bar under the peak's foot, the buffer that
+			// bridges it ("made, not rendered": the one fill, as in image.framegen).
+			// Freehand (2026-10-04). Read against its neighbours: image.framegen is
+			// three rectangles, image.motionblur a lone circle with streaks, and no
+			// other glyph pairs a single tall peak on a baseline with a fill below.
+			Line( { 3.0f, 17.0f }, { 8.0f, 17.0f } ),
+			Poly( { 8.0f, 17.0f }, { 11.0f, 4.5f }, { 14.0f, 17.0f } ),
+			Line( { 14.0f, 17.0f }, { 21.0f, 17.0f } ),
+			Bar( 8.0f, 19.5f, 14.0f, 21.0f ) } },
+
 		// ---- SYSTEM -------------------------------------------------------
 		{ "system.general", 5, {
 			// A chip: a square body with one pin centred on each of its

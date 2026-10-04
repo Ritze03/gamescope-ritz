@@ -130,6 +130,10 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Motion blur (Motion blur settings area)](features/motion-blur.md) — interpolation-based
   motion blur, with or without frame generation: the composition model (buffer = delay,
   frame generation = cadence, blur = shutter window), the five settings, costs, limits.
+- [Lag spike buffer (Lag spike buffer settings area)](features/lag-spike-buffer.md) —
+  detects the game's frame-time spikes and runs slightly behind so a repeat is bridged with
+  generated frames: independent of frame generation, the settings, the host ring that follows
+  the library's history depth, the memory and audio caveats.
 - [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — screen capture via PipeWire.
 
 ### Tooling & runtime

@@ -110,7 +110,33 @@ namespace fghost
 
 		std::atomic<uint32_t> g_uBlur{ PackBlur( BlurConfig{} ) };
 
-		// The gate word. bit 0: frame generation OR motion blur is on. bit 1: the
+		// The lag spike buffer's config, its own word (a third switch next to
+		// frame generation and blur, independent of both): bit 0 enabled, bits 1-2
+		// test mode, bits 3-6 look-back minutes (1..10), bits 7-14 max buffer ms
+		// (0..250).
+		constexpr uint32_t kLagEnabledBit = 1u;
+
+		uint32_t PackLag( const LagBufferConfig &l )
+		{
+			const int nLook = std::min( std::max( l.lookbackMin, kMinLagLookbackMin ), kMaxLagLookbackMin );
+			const int nMax = std::min( std::max( l.maxBufferMs, 0 ), kMaxLagBufferMs );
+			const uint32_t uMode = std::min( uint32_t( l.testMode ), 2u );
+			return ( l.enabled ? kLagEnabledBit : 0u ) | ( uMode << 1 ) | ( uint32_t( nLook ) << 3 ) | ( uint32_t( nMax ) << 7 );
+		}
+
+		LagBufferConfig UnpackLag( uint32_t u )
+		{
+			LagBufferConfig l;
+			l.enabled = ( u & kLagEnabledBit ) != 0;
+			l.testMode = LagTest( std::min( ( u >> 1 ) & 0x3u, 2u ) );
+			l.lookbackMin = int( ( u >> 3 ) & 0xFu );
+			l.maxBufferMs = int( ( u >> 7 ) & 0xFFu );
+			return l;
+		}
+
+		std::atomic<uint32_t> g_uLag{ PackLag( LagBufferConfig{} ) };
+
+		// The gate word. bit 0: frame generation OR motion blur OR the lag spike buffer is on. bit 1: the
 		// render thread holds resources. RenderWanted() is `!= 0`, so with both off
 		// and everything released the per-frame cost is this one load.
 		constexpr uint32_t kGateEnabled = 1u << 0;
@@ -122,7 +148,8 @@ namespace fghost
 		{
 			const bool bFg = ( ( g_uConfig.load( std::memory_order_relaxed ) >> 26 ) & 1u ) != 0;
 			const bool bBlur = ( g_uBlur.load( std::memory_order_relaxed ) & kBlurEnabledBit ) != 0;
-			if ( bFg || bBlur )
+			const bool bLag = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
+			if ( bFg || bBlur || bLag )
 			{
 				g_uGate.fetch_or( kGateEnabled, std::memory_order_relaxed );
 			}
@@ -163,15 +190,26 @@ namespace fghost
 		constexpr uint32_t kHostDrmFormat = DRM_FORMAT_ARGB8888;
 		constexpr VkFormat kHostVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-		// The ring holds the last real frames: three (framegen::pacing::kHistory) for
-		// now -- Low latency only ever uses the newest pair, Smoothness may still be
-		// inside the pair before it -- and up to kRingMax once the pacer asks for more
-		// (its HistoryDepth(), with a lag-spike buffer; FrameRequest::historyDepth).
-		// The ring only grows. NB the library's UI protection keeps only
-		// Interpolator::kUiFrames (3) observed frames, so a pair older than that is
-		// refused by recordSynth with UI protection on (handled: the real frame shows).
+		// The ring holds the last real frames: three (framegen::pacing::kHistory)
+		// normally -- Low latency only ever uses the newest pair, Smoothness may still
+		// be inside the pair before it -- and up to kRingMax = 65 with a lag spike
+		// buffer. It FOLLOWS the pacer's HistoryDepth() (FrameRequest::historyDepth),
+		// which itself follows the buffer's size, not its cap (the user: "the amount of
+		// frames should be dynamically be determined by the buffer size"):
+		//   * GROW: at once, every paint it is wanted (the pacer asks ahead of the
+		//     buffer's ramp), new empty slots at the OLDEST end so the depth is gained
+		//     immediately. Allocation only, no GPU wait.
+		//   * SHRINK: only after the wanted depth has stayed at least kRingShrinkSlack
+		//     lower than the ring for kRingShrinkDwellNs (the library's own depth already
+		//     dwells 2 s), by a deliberate g_device.waitIdle() -- the one place the
+		//     host waits for the GPU for this -- which also lets the library free its
+		//     unused UI-protection copies (releaseUnusedUi()). Why a wait: a freed slot
+		//     may still be read by a composite in flight, and the library has no
+		//     deferred free. Why a dwell + slack: so a wobbling depth does not stall.
 		constexpr int kRingMin = framegen::pacing::kHistory;
 		constexpr int kRingMax = framegen::pacing::kHistoryMax;
+		constexpr int kRingShrinkSlack = 2;
+		constexpr uint64_t kRingShrinkDwellNs = 4ull * 1000ull * 1000ull * 1000ull;
 
 		// Pooled outputs. One composite shows one output; the next paint records
 		// into another while the previous composite may still be sampling its own
@@ -205,7 +243,14 @@ namespace fghost
 			// here is ever a game buffer.
 			gamescope::Rc<CVulkanTexture> pRing[ kRingMax ];
 			uint64_t ulSlotId[ kRingMax ] = {};
-			int nRing = 0;           // slots created (kRingMin..kRingMax)
+			int nRing = 0;           // slots created (kRingMin..kRingMax); FOLLOWS the pacer's depth: grows at once, shrinks after a dwell
+			// Ring shrink bookkeeping (the dwell before a deliberate waitIdle + free).
+			uint64_t ulShrinkSinceNs = 0;   // when the wanted depth first stayed >= kRingShrinkSlack below nRing (0 = not shrinking)
+			int nShrinkMaxWant = 0;         // the largest depth wanted since then
+			int nGrowFailAt = 0;            // a ring grow to this depth failed (0 = none): not retried until the wanted depth drops below it
+			// The library's Settings::uiHistory as applied (3 = default; follows the depth with UI protection on).
+			uint32_t nUiHist = framegen::pacing::kHistory;
+			int nUiGrowFailAt = 0;          // a uiHistory raise to this value failed (0 = none)
 			int nCurSlot = 0;
 			bool bHaveCur = false;   // pRing[nCurSlot] holds a valid real frame
 			uint64_t ulCurId = 0;    // the commit id of pRing[nCurSlot]
@@ -255,7 +300,7 @@ namespace fghost
 			return *g_pHost;
 		}
 
-		framegen::Settings ToLibrarySettings( const Config &c, const BlurConfig &b )
+		framegen::Settings ToLibrarySettings( const Config &c, const BlurConfig &b, uint32_t nUiHistory )
 		{
 			framegen::Settings s;   // everything else stays at the library's approved defaults
 
@@ -308,6 +353,9 @@ namespace fghost
 			// 0 = off: recordSynthBlur then collapses to recordSynth at the window's end.
 			s.blurSamples = b.enabled ? uint32_t( std::min( std::max( b.samples, kMinBlurSamples ), kMaxBlurSamples ) ) : 0u;
 			s.blurWeights = b.weights == BlurWeighting::Even ? framegen::BlurWeights::Even : framegen::BlurWeights::Gaussian;
+			// The deep UI-protection history follows the pacer's depth (SyncUiHistory);
+			// a preset change must not reset it to the default.
+			s.uiHistory = nUiHistory;
 			return s;
 		}
 
@@ -361,6 +409,10 @@ namespace fghost
 			for ( auto &p : H.pRing )
 				p = nullptr;
 			H.nRing = 0;
+			H.ulShrinkSinceNs = 0;
+			H.nGrowFailAt = 0;
+			H.nUiHist = framegen::pacing::kHistory;
+			H.nUiGrowFailAt = 0;
 			for ( OutSlot_t &o : H.out )
 				o.pTex = nullptr;
 			H.bLive = false;
@@ -388,17 +440,44 @@ namespace fghost
 			return true;
 		}
 
-		// Brings the ring to n slots (never fewer than it has). False = a texture
-		// could not be created; the slots made so far stay.
-		bool GrowRing( Host_t &H, int n )
+		// Brings the ring to nNew slots, KEEPING the newest frames in age order: slots
+		// are rearranged by moving the Rc pointers (the textures themselves, and so the
+		// library's cache keys -- their views -- never move), nCurSlot ends as nNew - 1
+		// and the next real frame goes into slot 0 = the oldest. Growing puts the new
+		// empty slots at the oldest end (the depth is gained immediately); shrinking
+		// drops the oldest frames, which FREES their textures: the caller must have
+		// waited for the GPU. False = a texture could not be created; nothing changed.
+		bool ResizeRing( Host_t &H, int nNew )
 		{
-			n = std::min( std::max( n, kRingMin ), kRingMax );
-			for ( int i = H.nRing; i < n; i++ )
+			nNew = std::min( std::max( nNew, kRingMin ), kRingMax );
+			const int nOld = H.nRing;
+			if ( nNew == nOld )
+				return true;
+
+			gamescope::Rc<CVulkanTexture> pTex[ kRingMax ];
+			uint64_t ulId[ kRingMax ] = {};
+			int n = 0;
+			for ( ; n < nNew - nOld; n++ )
 			{
-				if ( !CreateTexture( H.pRing[ i ], H.uWidth, H.uHeight ) )
-					return false;
-				H.nRing = i + 1;
+				if ( !CreateTexture( pTex[ n ], H.uWidth, H.uHeight ) )
+					return false;   // never used by the GPU: freed at once by the locals
 			}
+			const int nCurEff = H.bHaveCur ? H.nCurSlot : nOld - 1;
+			const int nKeep = std::min( nOld, nNew );
+			for ( int i = nOld - nKeep; i < nOld; i++ )   // age index, 0 = oldest
+			{
+				const int nSrc = ( nCurEff + 1 + i ) % nOld;
+				pTex[ n ] = std::move( H.pRing[ nSrc ] );
+				ulId[ n ] = H.ulSlotId[ nSrc ];
+				n++;
+			}
+			for ( int i = 0; i < kRingMax; i++ )
+			{
+				H.pRing[ i ] = i < nNew ? std::move( pTex[ i ] ) : nullptr;
+				H.ulSlotId[ i ] = i < nNew ? ulId[ i ] : 0;
+			}
+			H.nRing = nNew;
+			H.nCurSlot = nNew - 1;
 			return true;
 		}
 
@@ -415,7 +494,7 @@ namespace fghost
 			if ( H.ulFailedKey == ulKey )
 				return false;
 
-			const framegen::Settings want = ToLibrarySettings( c, b );
+			const framegen::Settings want = ToLibrarySettings( c, b, H.nUiHist );
 
 			// Only the library's own presets (quality, safety, HUD protection, UI
 			// protection, and the blur's sample count and weights) matter to what is
@@ -440,7 +519,7 @@ namespace fghost
 
 				H.uWidth = w;
 				H.uHeight = h;
-				if ( !H.interp.init( info ) || !GrowRing( H, kRingMin ) )
+				if ( !H.interp.init( info ) || !ResizeRing( H, kRingMin ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not create the interpolator or its frame ring at %ux%u", w, h );
 					Teardown( H );
@@ -464,13 +543,12 @@ namespace fghost
 				H.uWidth = w;
 				H.uHeight = h;
 				DropFrames( H );
-				const int nRingWas = H.nRing;
 				for ( auto &p : H.pRing )
 					p = nullptr;
 				H.nRing = 0;
 				for ( OutSlot_t &o : H.out )
 					o.pTex = nullptr;
-				if ( !H.interp.resize( w, h, kHostVkFormat ) || !GrowRing( H, nRingWas ) )
+				if ( !H.interp.resize( w, h, kHostVkFormat ) || !ResizeRing( H, kRingMin ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u", w, h );
 					Teardown( H );
@@ -686,6 +764,92 @@ namespace fghost
 					g_flLastSynthMs.load( std::memory_order_relaxed ), flPatchMs, nSynth, nBlurOutputs, H.nProfileBlurSamples );
 		}
 
+		// Makes the host's ring and the library's UI-protection history follow the
+		// pacer's depth (see the ring comment above). Called once per active paint.
+		void FollowDepth( Host_t &H, int nDepth, bool bUi )
+		{
+			const int nWant = std::min( std::max( nDepth, kRingMin ), kRingMax );
+
+			// ---- the real-frame ring ----
+			if ( nWant > H.nRing )
+			{
+				H.ulShrinkSinceNs = 0;
+				if ( H.nGrowFailAt == 0 || nWant < H.nGrowFailAt )
+				{
+					H.nGrowFailAt = 0;
+					if ( ResizeRing( H, nWant ) )
+						fg_log.debugf( "frame ring: grown to %d frames (%ux%u)", H.nRing, H.uWidth, H.uHeight );
+					else
+					{
+						// Not fatal: a pair or a delayed frame that is not in the ring just
+						// shows the newest real frame. Not retried until the depth drops.
+						H.nGrowFailAt = nWant;
+						fg_log.errorf( "frame generation: could not grow the frame ring to %d frames; keeping %d", nWant, H.nRing );
+					}
+				}
+			}
+			else if ( nWant <= H.nRing - kRingShrinkSlack )
+			{
+				H.nGrowFailAt = 0;
+				const uint64_t ulNow = get_time_in_nanos();
+				if ( !H.ulShrinkSinceNs )
+				{
+					H.ulShrinkSinceNs = ulNow;
+					H.nShrinkMaxWant = nWant;
+				}
+				else
+				{
+					H.nShrinkMaxWant = std::max( H.nShrinkMaxWant, nWant );
+					if ( ulNow - H.ulShrinkSinceNs >= kRingShrinkDwellNs )
+					{
+						// The deliberate wait: freeing a slot a composite in flight may
+						// still read needs the GPU idle, and so does releaseUnusedUi().
+						g_device.waitIdle();   // WAITIDLE 4 of 4: the ring shrank after a dwell (lag spike buffer)
+						const int nWas = H.nRing;
+						ResizeRing( H, H.nShrinkMaxWant );   // shrinking cannot fail
+						if ( H.bEstimateValid && ( FindSlot( H, H.ulEstPrev ) < 0 || FindSlot( H, H.ulEstCurr ) < 0 ) )
+							H.bEstimateValid = false;
+						H.interp.releaseUnusedUi();
+						H.ulShrinkSinceNs = 0;
+						fg_log.debugf( "frame ring: shrunk from %d to %d frames", nWas, H.nRing );
+					}
+				}
+			}
+			else
+			{
+				H.ulShrinkSinceNs = 0;
+				H.nGrowFailAt = 0;
+			}
+
+			// ---- the library's UI-protection history (Settings::uiHistory) ----
+			// With protection off it is irrelevant: keep the default (a raise would
+			// allocate clean copies nobody uses).
+			const uint32_t uUi = bUi ? uint32_t( nWant ) : uint32_t( framegen::pacing::kHistory );
+			if ( uUi != H.nUiHist )
+			{
+				if ( uUi > H.nUiHist && H.nUiGrowFailAt != 0 && int( uUi ) >= H.nUiGrowFailAt )
+					return;   // a raise to this much failed already; wait for the depth to drop
+				framegen::Settings st = H.interp.settings();
+				st.uiHistory = uUi;
+				// Growing allocates without a GPU wait (false, nothing changed, on failure);
+				// lowering frees nothing (releaseUnusedUi(), above, does that).
+				if ( H.interp.setSettings( st ) )
+				{
+					H.nUiHist = uUi;
+					H.nUiGrowFailAt = 0;
+				}
+				else if ( uUi > H.nUiHist )
+				{
+					H.nUiGrowFailAt = int( uUi );
+					fg_log.errorf( "frame generation: could not raise the UI-protection history to %u frames; keeping %u", uUi, H.nUiHist );
+				}
+			}
+			else
+			{
+				H.nUiGrowFailAt = 0;
+			}
+		}
+
 		// The pool slot an output is to be recorded into: a free one, else the
 		// least recently used (the one just shown has the newest use, so it is safe).
 		OutSlot_t *PickOutSlot( Host_t &H )
@@ -722,6 +886,17 @@ namespace fghost
 	BlurConfig GetBlurConfig()
 	{
 		return UnpackBlur( g_uBlur.load( std::memory_order_relaxed ) );
+	}
+
+	void SetLagBufferConfig( const LagBufferConfig &cfg )
+	{
+		g_uLag.store( PackLag( cfg ), std::memory_order_relaxed );
+		UpdateGate();
+	}
+
+	LagBufferConfig GetLagBufferConfig()
+	{
+		return UnpackLag( g_uLag.load( std::memory_order_relaxed ) );
 	}
 
 	Config GetConfig()
@@ -781,6 +956,7 @@ namespace fghost
 			case PassReason::GameTooFast:         return "Game already reaches the refresh rate or target";
 			case PassReason::GameStalled:         return "Frame gap; showing real frames";
 			case PassReason::RendererUnavailable: return "Not available here";
+			case PassReason::WaitingForDecoder:   return "Waiting for the next video frame";
 		}
 		return "";
 	}
@@ -823,12 +999,13 @@ namespace fghost
 		const Config cfg = Unpack( uPackedConfig );
 		const uint32_t uPackedBlur = g_uBlur.load( std::memory_order_relaxed );
 		const BlurConfig blurCfg = UnpackBlur( uPackedBlur );
+		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
-		// Frame generation and motion blur both off (or never on): release
+		// Frame generation, motion blur and the lag spike buffer all off (or never on): release
 		// everything. The first branch is the whole cost of the off path once
 		// resources are gone, and vulkan_composite() does not even reach it then
 		// (RenderWanted() == 0).
-		if ( !cfg.enabled && !blurCfg.enabled )
+		if ( !cfg.enabled && !blurCfg.enabled && !bLagOn )
 		{
 			if ( g_pHost )
 			{
@@ -896,13 +1073,12 @@ namespace fghost
 		}
 		SetReason( Unavailable::Ok );
 
-		// The pacer may ask for a deeper ring (a lag-spike buffer): it only grows.
-		if ( req.historyDepth > H.nRing && !GrowRing( H, req.historyDepth ) )
-		{
-			fg_log.errorf( "frame generation: could not grow the frame ring to %d slots", req.historyDepth );
-			SetReason( Unavailable::InitFailed );
-			return nullptr;
-		}
+		const bool bUi = cfg.ui != UiProt::Off;
+
+		// The ring and the library's UI-protection history FOLLOW the pacer's depth
+		// (the lag spike buffer's size, not its cap): grow at once, shrink after a
+		// dwell. Checked every paint, before this paint's copy and observe.
+		FollowDepth( H, req.historyDepth, bUi );
 
 		// ---- everything below records into one command buffer of our own ----
 		// (created lazily: a pass-through composite of an already-seen frame records nothing)
@@ -920,7 +1096,6 @@ namespace fghost
 
 		gamescope::Rc<CVulkanTexture> pResult;
 
-		const bool bUi = cfg.ui != UiProt::Off;
 		bool bObservedThisCb = false;
 
 		// D11: a newestId not seen before is a new real frame. Copy it into the next

@@ -37,14 +37,14 @@ Three features share **one content timeline**, each owning **one dimension** of 
 
 | Feature | Owns | In gamescope |
 | --- | --- | --- |
-| Lag-spike buffer (future) | how far behind real time we show (`extraDelayNs`) | not built; `extraDelayNs` is fixed 0, the ring is already sized from `HistoryDepth()` |
+| Lag-spike buffer | how far behind real time we show | the Lag spike buffer switch -> `Inputs::lagBuffer` ([lag-spike-buffer](lag-spike-buffer.md)); `extraDelayNs` stays 0 |
 | Frame generation | which instants get an output frame (the cadence) | the Frame generation switch -> `Inputs::frameGen` |
 | Motion blur | what each output shows over time (the shutter window `[t0, t1]`) | the Motion blur switch -> `Inputs::blur*` |
 
 Every combination falls out of the one planner: FG off + blur on = one blurred output per
 real frame ("real-rate" planning, game rate in, game rate out, no delay); FG on + blur on =
 every generated output is blurred over its own window; both off = pass-through, renderer
-inert. gamescope runs the pacer whenever **either** is on (`fghost::Active()`), applies the
+inert. gamescope runs the pacer whenever **any of the three** is on (`fghost::Active()`), applies the
 `Decision` with the one renderer rule (see [frame-generation](frame-generation.md)'s API
 note): `prevId != 0` -> `recordSynthBlur( prev, curr, out, t0, t1 )` (a plain synth when
 `t0 == t1`, a blurred real frame when the window ends at 1); `prevId == 0` -> show the real
@@ -114,4 +114,4 @@ ramp -- use more samples for a longer smear.
 
 ## Related
 
-[frame-generation](frame-generation.md) · [compositing-vulkan](compositing-vulkan.md)
+[frame-generation](frame-generation.md) · [lag-spike-buffer](lag-spike-buffer.md) · [compositing-vulkan](compositing-vulkan.md)

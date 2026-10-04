@@ -530,6 +530,26 @@ namespace gamescope::config
         std::string weights = "gaussian";
     };
 
+    // Lag spike buffer (2026-10-04, this fork's own addition -- see
+    // Overlay/PanelLagBuffer.cpp and FrameGen/FrameGenHost.h's fghost::LagBufferConfig).
+    // Per profile. ADDITIVE, so no schema bump: an older config has no "lag_buffer"
+    // object and resolves to these compiled-in defaults. Independent of frame
+    // generation (it fills gaps with generated frames whether or not the multiplier
+    // is on). The library (frame-gen-ritz) does all the work.
+    struct LagBufferSettings
+    {
+        bool enabled = false;
+        // How far back spikes count, in minutes, 1..10 (clamped on load; the library
+        // takes up to 600 s).
+        int lookback_min = 5;
+        // The cap on the buffer and the line between a spike and an outlier, in ms,
+        // 0..250 (clamped on load).
+        int max_ms = 50;
+        // "off" | "min" | "max": pin the buffer's target at 0 / at max_ms so the user
+        // can feel both ends. An unknown string keeps "off".
+        std::string test_mode = "off";
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -1275,6 +1295,7 @@ namespace gamescope::config
         NullBindsSettings null_binds;
         FrameGenSettings framegen;
         MotionBlurSettings motion_blur;
+        LagBufferSettings lag_buffer;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

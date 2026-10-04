@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
+- **Lag spike buffer**: a new tab in the Motion group bridges repeating game stutters
+  with generated frames, at the cost of a small, adaptive delay.
 - **Motion blur**: a new Motion blur tab blends generated in-between frames into each
   shown frame, with or without frame generation.
 - **Frame generation**: a new Frame generation area shows extra frames for every game

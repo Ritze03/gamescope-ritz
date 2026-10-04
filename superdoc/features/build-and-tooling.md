@@ -189,7 +189,7 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 ### FrameGen submodule (2026-10-04)
 
 The frame-generation library is a git submodule, `subprojects/FrameGen`
-(github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `2eca330` (UI protection, motion blur (PR #2) and the pacing planner (PR #3)). **A fresh checkout or worktree
+(github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `2991d45` (UI protection, motion blur (PR #2), the pacing planner (PR #3), the lag-spike buffer (PR #4), video timestamps (PR #5) and video/HDR formats (PR #6); gamescope uses only PR #4 so far) **A fresh checkout or worktree
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
@@ -199,7 +199,7 @@ interpolation's 11, UI protection's six, `ui_*.comp`, which share the include
 `ui_common.glsl`, and motion blur's three, `blur_lookup`/`blur_error`/`blur_resolve`, which
 share `blur_common.glsl`; the depfile re-runs glslang when either changes; the test-only
 `gpu/blendbench.comp` is not built) are compiled with `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers
-as gamescope's own) using absolute paths, and `framegen.cpp` is compiled through the
+as gamescope's own) using absolute paths (since PR #6 the library can also build per-format shader variants, `<name>_<fmt>_spv`, which `framegen.cpp` includes behind `__has_include`; gamescope builds **none** -- Rgba8 only, the HDR work is a separate later task), and `framegen.cpp` is compiled through the
 wrapper `src/FrameGen/FrameGenLib.cpp`, which `#include`s it. `Why:` bumping the submodule
 still pulls upstream library work, with no copy to drift. `fgtest` is not built. The
 pacer is the library's header-only `gpu/pacing.h` (included by `FrameGenHost.cpp` and

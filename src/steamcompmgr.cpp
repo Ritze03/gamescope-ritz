@@ -7845,6 +7845,10 @@ namespace
 	static_assert( uint8_t( fghost::PassReason::GameTooFast ) == uint8_t( fgpacing::Reason::GameTooFast ) );
 	static_assert( uint8_t( fghost::PassReason::GameStalled ) == uint8_t( fgpacing::Reason::GameStalled ) );
 	static_assert( uint8_t( fghost::PassReason::RendererUnavailable ) == uint8_t( fgpacing::Reason::RendererUnavailable ) );
+	static_assert( uint8_t( fghost::PassReason::WaitingForDecoder ) == uint8_t( fgpacing::Reason::WaitingForDecoder ) );
+	static_assert( uint8_t( fghost::LagTest::Off ) == uint8_t( fgpacing::LagTestMode::Off ) );
+	static_assert( uint8_t( fghost::LagTest::ForceMin ) == uint8_t( fgpacing::LagTestMode::ForceMin ) );
+	static_assert( uint8_t( fghost::LagTest::ForceMax ) == uint8_t( fgpacing::LagTestMode::ForceMax ) );
 	static_assert( uint8_t( fghost::Mode::Off ) == uint8_t( fgpacing::Mode::Off ) );
 	static_assert( uint8_t( fghost::Mode::Fixed ) == uint8_t( fgpacing::Mode::Fixed ) );
 	static_assert( uint8_t( fghost::Mode::Target ) == uint8_t( fgpacing::Mode::Target ) );
@@ -7919,6 +7923,13 @@ namespace
 		bool bBlur = false;        // motion blur switched on
 		bool bBlurActive = false;
 		int nBlurKey = 0;          // samples / amount / relative / weights
+		bool bLag = false;         // lag spike buffer switched on
+		int nLagKey = 0;           // look-back / max / test mode
+		int nLagTarget = -1;       // the buffer's target, rounded to ms
+		int nLagSpike = -1;        // the newest spike in the window, rounded to ms
+		int nLagOutliers = -1;
+		int nLagHistory = -1;      // real frames kept (HistoryDepth())
+		bool bLagSettled = false;  // the live buffer has reached its target (within 1 ms)
 	};
 	FrameGenLog_t s_FrameGenLog;
 
@@ -8032,18 +8043,28 @@ namespace
 		const bool bGenerating = status.fgActive;
 		const bool bExtra = FrameGen_ExtraPaced();
 		const int nBlurKey = blur.samples | ( blur.amountPercent << 4 ) | ( int( blur.relative ) << 11 ) | ( int( blur.weights ) << 12 );
+		const fghost::LagBufferConfig lag = fghost::GetLagBufferConfig();
+		const int nLagKey = lag.lookbackMin | ( lag.maxBufferMs << 4 ) | ( int( lag.testMode ) << 12 );
+		const int nLagTarget = lag.enabled ? int( std::lround( status.bufferTargetMs ) ) : 0;
+		const int nLagSpike = lag.enabled ? int( std::lround( status.lastSpikeMs ) ) : 0;
+		const int nLagOutliers = lag.enabled ? status.outliersIgnored : 0;
+		const int nLagHistory = lag.enabled ? status.historyFrames : 0;
+		const bool bLagSettled = !lag.enabled || std::fabs( status.bufferDelayMs - status.bufferTargetMs ) < 1.0f;
 		const bool bChanged = !L.bValid || int( cfg.mode ) != L.nMode || cfg.multiplier != L.nMultiplier ||
 			cfg.targetFps != L.nTarget || int( cfg.priority ) != L.nPriority || cfg.pauseAtRefresh != L.bPause ||
 			bExtra != L.bExtra || bGenerating != L.bGenerating ||
 			status.reason != L.ePass || eUnavailable != L.eUnavailable ||
-			cfg.enabled != L.bFg || blur.enabled != L.bBlur || status.blurActive != L.bBlurActive || nBlurKey != L.nBlurKey;
+			cfg.enabled != L.bFg || blur.enabled != L.bBlur || status.blurActive != L.bBlurActive || nBlurKey != L.nBlurKey ||
+			lag.enabled != L.bLag || nLagKey != L.nLagKey || nLagTarget != L.nLagTarget || nLagSpike != L.nLagSpike ||
+			nLagOutliers != L.nLagOutliers || nLagHistory != L.nLagHistory || bLagSettled != L.bLagSettled;
 		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
 		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
 		if ( !bChanged && !bPeriodic )
 			return;
 
 		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), cfg.pauseAtRefresh, bExtra, bGenerating, status.reason, eUnavailable, ulNow,
-			cfg.enabled, blur.enabled, status.blurActive, nBlurKey };
+			cfg.enabled, blur.enabled, status.blurActive, nBlurKey,
+			lag.enabled, nLagKey, nLagTarget, nLagSpike, nLagOutliers, nLagHistory, bLagSettled };
 
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
@@ -8060,15 +8081,26 @@ namespace
 		else
 			snprintf( szBlur, sizeof( szBlur ), "motion blur on, not applied" );
 
+		// "lag buffer off" / "lag buffer 31.4 ms (target 32.0, max 50, look-back 5 min,
+		// test max), last spike 28 ms, 3 in window, 1 outlier(s) ignored, 5 frames kept"
+		char szLag[ 192 ];
+		if ( !lag.enabled )
+			snprintf( szLag, sizeof( szLag ), "lag buffer off" );
+		else
+			snprintf( szLag, sizeof( szLag ), "lag buffer %.1f ms (target %.1f, max %d, look-back %d min%s), last spike %.0f ms, %d in window, %d outlier(s) ignored, %d frames kept",
+				status.bufferDelayMs, status.bufferTargetMs, lag.maxBufferMs, lag.lookbackMin,
+				lag.testMode == fghost::LagTest::ForceMax ? ", test max" : ( lag.testMode == fghost::LagTest::ForceMin ? ", test min" : "" ),
+				status.lastSpikeMs, status.spikesInWindow, status.outliersIgnored, status.historyFrames );
+
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, pacing: \"%s\" (%u), renderer: %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, pacing: \"%s\" (%u), renderer: %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
-				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur,
+				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
 		else
-			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, pacing: \"%s\", renderer: %s",
-				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur,
+			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, pacing: \"%s\", renderer: %s",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
 	}
 
@@ -8088,6 +8120,11 @@ namespace
 		status.blurWindowMs = r.blurWindowMs;
 		status.blurSamples = r.blurSamples;
 		status.bufferDelayMs = r.bufferDelayMs;
+		status.bufferTargetMs = r.bufferTargetMs;
+		status.lastSpikeMs = r.lastSpikeMs;
+		status.spikesInWindow = r.spikesInWindow;
+		status.outliersIgnored = r.outliersIgnored;
+		status.historyFrames = r.historyFrames;
 		status.reason = fghost::PassReason( uint8_t( r.reason ) );
 		return status;
 	}
@@ -8142,18 +8179,19 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			status.reason = fghost::PassReason::Off;
 			fghost::PublishPacingStatus( status );
 			s_FrameGenLog = FrameGenLog_t();
-			fg_log.infof( "frame generation and motion blur: off" );
+			fg_log.infof( "frame generation, motion blur and lag spike buffer: off" );
 		}
 		return false;
 	}
 	const fghost::Config cfg = fghost::GetConfig();
 	const fghost::BlurConfig blurCfg = fghost::GetBlurConfig();
+	const fghost::LagBufferConfig lagCfg = fghost::GetLagBufferConfig();
 	if ( !s_FrameGen.bActive )
 	{
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
-		fg_log.infof( "frame generation: %s%s, %s, motion blur %s", cfg.enabled ? "on, " : "off", cfg.enabled ? szMode : "",
-			cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency", blurCfg.enabled ? "on" : "off" );
+		fg_log.infof( "frame generation: %s%s, %s, motion blur %s, lag spike buffer %s", cfg.enabled ? "on, " : "off", cfg.enabled ? szMode : "",
+			cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency", blurCfg.enabled ? "on" : "off", lagCfg.enabled ? "on" : "off" );
 	}
 	s_FrameGen.bActive = true;
 
@@ -8222,10 +8260,16 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.costSeq = renderStatus.costSeq;
 	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
 	// The three features, each its own switch (the library composes them): frame
-	// generation (the cadence), motion blur (the shutter window). The buffer's
-	// extraDelayNs stays 0 until its lag-spike detection exists.
+	// generation (the cadence), motion blur (the shutter window), the lag spike
+	// buffer (the delay, sized by the library from the game's own spikes). With
+	// frame generation off the pacer plans real-rate: the buffer then fills gaps
+	// only. extraDelayNs (a fixed manual delay) stays 0.
 	in.frameGen = cfg.enabled;
 	in.extraDelayNs = 0;
+	in.lagBuffer.enabled = lagCfg.enabled;
+	in.lagBuffer.lookbackSec = double( lagCfg.lookbackMin ) * 60.0;
+	in.lagBuffer.maxBufferMs = double( lagCfg.maxBufferMs );
+	in.lagBuffer.testMode = fgpacing::LagTestMode( uint8_t( lagCfg.testMode ) );
 	in.blur = blurCfg.enabled;
 	in.blurSamples = blurCfg.samples;
 	in.blurAmount = double( blurCfg.amountPercent ) / 100.0;

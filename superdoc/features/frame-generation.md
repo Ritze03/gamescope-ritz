@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`2eca330`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`2991d45`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -57,11 +57,17 @@ which FG cannot substitute per output frame.
 ## Renderer (`fghost`)
 
 - **Off = zero cost**: one relaxed atomic load per frame; no Interpolator, no ring, direct
-  scanout stays possible. The host object is created lazily on first use; turning **both**
-  FG and motion blur off frees everything after a `g_device.waitIdle()`. The two share one
-  host (one Interpolator, one ring, one output pool): the gate is `Config::enabled ||
-  BlurConfig::enabled` (`fghost::Active()`; `Enabled()` stays "frame generation").
-- **Backends force a full composite while `fghost::RenderWanted()`** -- FG or blur enabled,
+  scanout stays possible. The host object is created lazily on first use; turning **all three**
+  (FG, motion blur, the lag spike buffer) off frees everything after a `g_device.waitIdle()`.
+  The three share one host (one Interpolator, one ring, one output pool): the gate is
+  `Config::enabled || BlurConfig::enabled || LagBufferConfig::enabled` (`fghost::Active()`;
+  `Enabled()` stays "frame generation"). **How the three combine** (the library's pacer owns
+  it; gamescope sets each `Inputs` field from its own config): frame generation = which
+  instants get an output (the cadence), motion blur = the shutter window of each output, the
+  lag spike buffer = how far behind real time we show. Any subset works; with only the buffer
+  on, real frames are shown and generated frames appear only inside gaps -- see
+  [lag-spike-buffer](lag-spike-buffer.md).
+- **Backends force a full composite while `fghost::RenderWanted()`** -- FG, blur or the lag spike buffer enabled,
   *or* it still holds resources -- so turning the last one off releases them: the next
   composite runs `RecordBaseLayer`, which tears down, instead of direct scanout skipping it
   forever. (`SetConfig` / `SetBlurConfig` to Off also ask for that composite with
@@ -82,10 +88,11 @@ which FG cannot substitute per output frame.
   would reset the device's upload-buffer offset and corrupt it, and the hook must run
   before the ReShade block, which comes before the composite command buffer exists. A
   pass-through of an already-seen frame records nothing.
-- **Private frame ring** (3 slots now; sized to the pacer's `HistoryDepth()` through
-  `FrameRequest::historyDepth`, grows only, up to the library's `kHistoryMax` = 16 for a
-  future lag-spike buffer; note the library's UI protection keeps 3 observed frames, so a
-  pair older than that is refused with UI protection on and the real frame shows), always `B8G8R8A8_UNORM`, filled by the tiny compute copy
+- **Private frame ring** (3 slots normally; it FOLLOWS the pacer's `HistoryDepth()` through
+  `FrameRequest::historyDepth`, up to the library's `kHistoryMax` = 65 with the lag spike
+  buffer: grown at once, shrunk only after a 4 s dwell at a deliberate `waitIdle`, with the
+  library's `Settings::uiHistory` kept equal to it while UI protection is on -- see
+  [lag-spike-buffer](lag-spike-buffer.md)'s "gamescope wiring"), always `B8G8R8A8_UNORM`, filled by the tiny compute copy
   `cs_fg_copy.comp`; each slot remembers its commit id. `Why:` game buffers are never
   pinned (pinning another commit starves 3-image swapchains and lowers the real frame
   rate); commit dmabufs are SAMPLED-only so `vkCmdCopyImage` is impossible; the copy also
@@ -182,9 +189,9 @@ the `curr` view it is given. All of these are runtime `Settings` fields; the hos
   for frames that are only passed through** (the stillness counters compare consecutive real
   frames; a gap costs only the exact "8 in a row"). Off: the call is skipped entirely.
 - The **ring holds the real, un-inpainted frame**: `recordSynth` must get the real `curr`
-  to paste from. The library keeps `kUiFrames = 3` clean copies, LRU by view; the 3-slot
-  ring re-observes exactly one slot per new frame, so the library holds exactly the ring's
-  three frames and a pair whose frames are both in the ring is always protected. A pair
+  to paste from. The library keeps `uiHistory` (default `kUiFrames` = 3) clean copies, LRU by
+  view; the ring re-observes exactly one slot per new frame and `uiHistory` follows the ring's
+  depth, so the library holds exactly the ring's frames and a pair whose frames are both in the ring is always protected. A pair
   with an unobserved view (protection just switched on) simply runs unprotected.
 - If `recordSynth` returns false with UI protection on (an observed frame of the pair was
   evicted or re-observed after the estimate, or a descriptor ring is full), the real frame
@@ -278,9 +285,10 @@ bPresentTick, bSkippable )`):
   that latches it. `Why:` latch times are vblank-quantised (about +/-7 ms for 60 fps on a
   144 Hz display), which would wreck the interval estimate.
 - **Paint** (`FrameGen_PrePaint`, right before `paint_all()`): runs the pacer whenever **any**
-  of frame generation or motion blur is on (`fghost::Active()`), with `Inputs::frameGen` =
-  the Frame generation switch, `blur*` = the Motion blur config, `extraDelayNs` = 0 (the
-  lag-spike buffer's hook, unused until its detection exists). `presentNs` (V) is the vblank
+  of frame generation, motion blur or the lag spike buffer is on (`fghost::Active()`), with
+  `Inputs::frameGen` = the Frame generation switch, `blur*` = the Motion blur config,
+  `lagBuffer` = the Lag spike buffer config (each its own switch: the three combine, see
+  [lag-spike-buffer](lag-spike-buffer.md)), `extraDelayNs` = 0 (a fixed manual delay, unused). `presentNs` (V) is the vblank
   timer's predicted target for this paint (`g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank`,
   never in the past; a missing or implausible value, or a non-vblank paint, falls back to
   `now`; an extra-timer tick uses its own target).
@@ -291,7 +299,7 @@ bPresentTick, bSkippable )`):
   unless a buffer delays, then an older ring frame is substituted). gamescope does not
   interpret `t`.
 - **Status** (`TakeStatus` -> `fghost::PacingStatus`): the library's `Report`, each feature
-  separately (`fgActive`, `blurActive`, `blurWindowMs`, `blurSamples`, `bufferDelayMs`),
+  separately (`fgActive`, `blurActive`, `blurWindowMs`, `blurSamples`, `bufferDelayMs`, `bufferTargetMs`, `lastSpikeMs`, `spikesInWindow`, `outliersIgnored`, `historyFrames`),
   feeds each tab's own status line.
 - **Reset** (`Pacer::Discontinuity()` / `Decision::reset` -> `fghost::Reset()`): no FG for the
   next frame, the previous real frames are forgotten, on a focus/window change, size/format
@@ -627,5 +635,5 @@ MangoHud output timing).
 
 ## Related
 
-[shader-effects](shader-effects.md) · [compositing-vulkan](compositing-vulkan.md) ·
+[lag-spike-buffer](lag-spike-buffer.md) · [motion-blur](motion-blur.md) · [shader-effects](shader-effects.md) · [compositing-vulkan](compositing-vulkan.md) ·
 [resolution-and-refresh](resolution-and-refresh.md) · [backend-drm](backend-drm.md)

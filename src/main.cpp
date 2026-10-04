@@ -40,6 +40,7 @@
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFrameGen.h"
 #include "Overlay/PanelMotionBlur.h"
+#include "Overlay/PanelLagBuffer.h"
 #include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
@@ -628,6 +629,8 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	gamescope::PanelFrameGen_ApplyStartupConfig( config );
 	// Motion blur (Motion blur area, per profile): the same, for the shutter.
 	gamescope::PanelMotionBlur_ApplyStartupConfig( config );
+	// Lag spike buffer (Lag spike buffer area, per profile): the same, for the pacer.
+	gamescope::PanelLagBuffer_ApplyStartupConfig( config );
 
 	// This fork's own hotkeys (overlay.keybinds, src/Keybinds.cpp). Above the
 	// bStartup early-out on purpose: a saved rebind has to be in force from

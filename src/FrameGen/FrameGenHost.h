@@ -24,7 +24,7 @@
 // once per output frame (see RecordBaseLayer). There is no "k of N" any more:
 // one estimate per pair, any number of synths at any t.
 //
-// OFF = ZERO COST. With frame generation AND motion blur off nothing in here runs per frame beyond one
+// OFF = ZERO COST. With frame generation, motion blur AND the lag spike buffer off nothing in here runs per frame beyond one
 // relaxed atomic load (RenderWanted()), no Interpolator exists, no texture is
 // allocated, and the backends are free to direct-scanout. Turning it off frees
 // everything (after a g_device.waitIdle()).
@@ -121,6 +121,36 @@ namespace fghost
 	void       SetBlurConfig( const BlurConfig &cfg );
 	BlurConfig GetBlurConfig();
 
+	// ------------------------------------------------------------------
+	//  Lag spike buffer (the Lag spike buffer settings area; the library does the work)
+	// ------------------------------------------------------------------
+
+	// framegen::pacing::LagTestMode: Off = size from the game's own spikes, ForceMin
+	// pins the buffer's target at 0, ForceMax at maxBufferMs (so the user can feel
+	// both ends).
+	enum class LagTest : uint8_t { Off, ForceMin, ForceMax };
+
+	constexpr int kMinLagLookbackMin = 1;
+	constexpr int kMaxLagLookbackMin = 10;   // the library takes 600 s; the UI offers 1..10 minutes
+	constexpr int kMaxLagBufferMs = 250;
+
+	// Independent of Config AND BlurConfig: the buffer fills gaps with generated
+	// frames whether or not frame generation (the multiplier) is on, and combines
+	// with blur. Pushed to the pacer (Inputs::lagBuffer) live; nothing here waits.
+	struct LagBufferConfig
+	{
+		bool enabled = false;
+		int lookbackMin = 5;          // kMinLagLookbackMin..kMaxLagLookbackMin (SetLagBufferConfig clamps)
+		int maxBufferMs = 50;         // 0..kMaxLagBufferMs
+		LagTest testMode = LagTest::Off;
+	};
+
+	// Replace the whole lag spike buffer config. Thread-safe, cheap, any time. Like
+	// SetConfig(): switching the last feature off asks for one more composite so the
+	// resources are released.
+	void           SetLagBufferConfig( const LagBufferConfig &cfg );
+	LagBufferConfig GetLagBufferConfig();
+
 	struct Config
 	{
 		// The master switch. false: nothing runs (mode / multiplier are kept).
@@ -167,7 +197,7 @@ namespace fghost
 	// bBaseLayerEffectsApplied, which is past the point FG can substitute).
 	bool Enabled();   // == Config::enabled (frame generation only)
 
-	// Frame generation OR motion blur is on: the renderer is wanted, the backends
+	// Frame generation OR motion blur OR the lag spike buffer is on: the renderer is wanted, the backends
 	// must full-composite, steamcompmgr must not pre-upscale, and the pacer is
 	// driven. One relaxed atomic load.
 	bool Active();
@@ -210,7 +240,10 @@ namespace fghost
 		// buffer delays (then an older frame still in the ring: it is substituted).
 		uint64_t showId = 0;
 		// Real frames the renderer's ring must hold (framegen::pacing::Pacer::
-		// HistoryDepth(): 3, more with a buffer). Only ever grows the ring.
+		// HistoryDepth(): 3, up to kHistoryMax = 65 with a buffer). The renderer
+		// grows its ring (and the library's UI-protection history) at once when it
+		// rises, and shrinks them only after it has stayed lower for a while, at a
+		// point where it waits for the GPU anyway.
 		int historyDepth = 3;
 	};
 
@@ -292,6 +325,7 @@ namespace fghost
 		GameTooFast,    // the game's own rate already reaches the output rate (refresh or target)
 		GameStalled,    // a gap in the game's frames: showing real frames until it settles
 		RendererUnavailable, // see RenderStatus::reason
+		WaitingForDecoder,   // video mode only (library PR #5): never occurs for gamescope's arrival mode
 	};
 
 	const char *PassReasonText( PassReason eReason );
@@ -318,6 +352,11 @@ namespace fghost
 		float blurWindowMs = 0.0f;  // the last shutter window, ms of content time
 		int   blurSamples = 0;      // samples per output while blurActive
 		float bufferDelayMs = 0.0f; // the lag-spike buffer's part of delayMs (0 until it exists)
+		float bufferTargetMs = 0.0f; // what the buffer is ramping toward (0 with the buffer off)
+		float lastSpikeMs = 0.0f;    // the newest spike inside the look-back window (0 = none)
+		int   spikesInWindow = 0;    // spikes inside the window that size the buffer
+		int   outliersIgnored = 0;   // spikes in the window above Max buffer: ignored for sizing
+		int   historyFrames = 3;     // real frames the host keeps (pacer's HistoryDepth())
 		PassReason reason = PassReason::Normal; // why it is not generating as asked, or pass-through
 	};
 

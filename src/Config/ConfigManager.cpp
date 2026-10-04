@@ -356,6 +356,19 @@ namespace gamescope::config
                     m.weights = sWeights;
             }
 
+            // Lag spike buffer (2026-10-04). Additive: look-back and max are clamped,
+            // an unknown test mode keeps "off".
+            if ( const nlohmann::json *pLag = JGetObject( j, "lag_buffer" ) )
+            {
+                auto &l = s.lag_buffer;
+                l.enabled = JGetBool( *pLag, "enabled", l.enabled );
+                l.lookback_min = std::clamp( JGetInt( *pLag, "lookback_min", l.lookback_min ), 1, 10 );
+                l.max_ms = std::clamp( JGetInt( *pLag, "max_ms", l.max_ms ), 0, 250 );
+                const std::string sMode = JGetString( *pLag, "test_mode", l.test_mode );
+                if ( sMode == "off" || sMode == "min" || sMode == "max" )
+                    l.test_mode = sMode;
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -763,6 +776,13 @@ namespace gamescope::config
             jMotionBlur[ "relative" ] = mb.relative;
             jMotionBlur[ "weights" ] = mb.weights;
 
+            const auto &lb = s.lag_buffer;
+            nlohmann::json jLagBuffer = nlohmann::json::object();
+            jLagBuffer[ "enabled" ] = lb.enabled;
+            jLagBuffer[ "lookback_min" ] = lb.lookback_min;
+            jLagBuffer[ "max_ms" ] = lb.max_ms;
+            jLagBuffer[ "test_mode" ] = lb.test_mode;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -856,6 +876,7 @@ namespace gamescope::config
             j[ "null_binds" ] = std::move( jNullBinds );
             j[ "framegen" ] = std::move( jFrameGen );
             j[ "motion_blur" ] = std::move( jMotionBlur );
+            j[ "lag_buffer" ] = std::move( jLagBuffer );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

@@ -1985,6 +1985,80 @@ TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum
     REQUIRE( loaded.motion_blur.enabled == false );
 }
 
+// ---------------------------------------------------------------------
+// Lag spike buffer (2026-10-04, Overlay/PanelLagBuffer.cpp): per-profile, under
+// "lag_buffer", additive (no schema bump).
+// ---------------------------------------------------------------------
+
+TEST_CASE( "lag_buffer: every field round-trips, and an absent section is off/5/50/off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.lag_buffer.enabled == false );
+    REQUIRE( Settings{}.lag_buffer.lookback_min == 5 );
+    REQUIRE( Settings{}.lag_buffer.max_ms == 50 );
+    REQUIRE( Settings{}.lag_buffer.test_mode == "off" );
+
+    // A profile written before the section existed loads the defaults.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 2 }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.lag_buffer.enabled == false );
+    REQUIRE( loaded.lag_buffer.lookback_min == 5 );
+    REQUIRE( loaded.lag_buffer.max_ms == 50 );
+    REQUIRE( loaded.lag_buffer.test_mode == "off" );
+
+    Settings s;
+    s.lag_buffer.enabled = true;
+    s.lag_buffer.lookback_min = 9;
+    s.lag_buffer.max_ms = 250;
+    s.lag_buffer.test_mode = "max";
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.lag_buffer.enabled == true );
+    REQUIRE( loaded.lag_buffer.lookback_min == 9 );
+    REQUIRE( loaded.lag_buffer.max_ms == 250 );
+    REQUIRE( loaded.lag_buffer.test_mode == "max" );
+
+    s.lag_buffer.test_mode = "min";
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().lag_buffer.test_mode == "min" );
+
+    // The keys the Lag spike buffer area's rows are bound to.
+    REQUIRE( IsSettingsKey( "lag_buffer.enabled" ) );
+    REQUIRE( IsSettingsKey( "lag_buffer.lookback_min" ) );
+    REQUIRE( IsSettingsKey( "lag_buffer.max_ms" ) );
+    REQUIRE( IsSettingsKey( "lag_buffer.test_mode" ) );
+}
+
+TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "lag_buffer": { "enabled": true, "lookback_min": 0, "max_ms": 999, "test_mode": "sideways" }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.lag_buffer.enabled == true );
+    REQUIRE( loaded.lag_buffer.lookback_min == 1 );      // below 1 -> 1
+    REQUIRE( loaded.lag_buffer.max_ms == 250 );          // above 250 -> 250
+    REQUIRE( loaded.lag_buffer.test_mode == "off" );     // unknown -> default
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "lag_buffer": { "lookback_min": 60, "max_ms": -10 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.lag_buffer.lookback_min == 10 );     // the library takes 600 s, the UI offers 10 min
+    REQUIRE( loaded.lag_buffer.max_ms == 0 );
+    REQUIRE( loaded.lag_buffer.enabled == false );
+}
+
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
 // no compositor deps, so it needs no Zoom.cpp link at all -- see that
 // header's own comment.

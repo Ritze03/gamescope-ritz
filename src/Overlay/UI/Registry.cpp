@@ -963,13 +963,14 @@ namespace gamescope::ui
 			{ "display.frame_limiter", RailGroup::Display },
 			{ "display.hdr",           RailGroup::Display },
 			{ "image.shaders",         RailGroup::Display },
-			// ---- MOTION -- 2026-10-04: the two features that work on the
+			// ---- MOTION -- 2026-10-04: the three features that work on the
 			// game's FRAMES over time. Frame generation moved here from
-			// DISPLAY (where it sat below Shaders); Motion blur is new. Each is
-			// its own switch and they work alone or together (the library's
-			// pacer composes them).
+			// DISPLAY (where it sat below Shaders); Motion blur and the Lag
+			// spike buffer are new. Each is its own switch and they work alone
+			// or together (the library's pacer composes them).
 			{ "image.framegen",        RailGroup::Motion },
 			{ "image.motionblur",      RailGroup::Motion },
+			{ "image.lagbuffer",       RailGroup::Motion },
 			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
 			// moves here from Settings (it is the pointer's own on-screen
 			// appearance, the same "drawn over the game" concern as the

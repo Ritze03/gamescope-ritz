@@ -258,6 +258,7 @@ src = [
   'Overlay/PanelShaders.cpp',
   'Overlay/PanelFrameGen.cpp',
   'Overlay/PanelMotionBlur.cpp',
+  'Overlay/PanelLagBuffer.cpp',
   'Overlay/PanelAudio.cpp',
   'Overlay/PanelConfig.cpp',
   'Overlay/LogCapture.cpp',

@@ -89,18 +89,20 @@ one place that wires all of it together at startup.
   `NullBinds_Tick()`, called once a frame from `steamcompmgr.cpp` next to
   `Zoom_FillRequest()`, keeps a profile's setting live even if the Shell is never
   opened. See [null-binds](../features/null-binds.md).
-- **Frame generation and motion blur** (rail group MOTION) — `src/FrameGen/`:
+- **Frame generation, motion blur and the lag spike buffer** (rail group MOTION) — `src/FrameGen/`:
   `FrameGenHost.{h,cpp}` (`fghost`, the renderer glue: frame ring, lazy per-slot synthesis,
   the one `recordSynthBlur` call, own command buffer, status; `Config` for frame generation,
-  `BlurConfig` for motion blur) and `FrameGenLib.cpp` (wrapper that compiles the
+  `BlurConfig` for motion blur, `LagBufferConfig` for the lag spike buffer; the ring follows the
+  pacer's history depth) and `FrameGenLib.cpp` (wrapper that compiles the
   `subprojects/FrameGen` library -- optical flow, blur, UI protection **and the pacer**,
   `gpu/pacing.h`, `framegen::pacing` -- into the binary). Glue:
   `FrameGen_OnArrival/PrePaint/PostPaint` in `src/steamcompmgr.cpp` (feeds the library's
-  pacer whenever either feature is on and applies its decision); the hook is
+  pacer whenever any of the three features is on and applies its decision); the hook is
   `fghost::RecordBaseLayer` in `vulkan_composite()`; backends force a full composite while
-  either is on. Panels: `Overlay/PanelFrameGen.cpp`, `Overlay/PanelMotionBlur.cpp`. See
-  [frame-generation](../features/frame-generation.md) and
-  [motion-blur](../features/motion-blur.md).
+  any is on. Panels: `Overlay/PanelFrameGen.cpp`, `Overlay/PanelMotionBlur.cpp`,
+  `Overlay/PanelLagBuffer.cpp`. See [frame-generation](../features/frame-generation.md),
+  [motion-blur](../features/motion-blur.md) and
+  [lag-spike-buffer](../features/lag-spike-buffer.md).
 - **Latent/unwired code** — `gamescope::CLibInputHandler` (`src/LibInputHandler.h:11`)
   is a fully-implemented `IWaitable` for driving raw `libinput` events without a seat
   (intended for a VR global-input path) but has **no call site anywhere in the
