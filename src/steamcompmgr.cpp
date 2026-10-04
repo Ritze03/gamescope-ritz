@@ -141,7 +141,7 @@ static const int g_nBaseCursorScale = 36;
 
 LogScope xwm_log("xwm");
 LogScope focus_log("focus");
-LogScope fg_log("framegen");
+LogScope fg_log("framegen_pacing");
 LogScope g_WaitableLog("waitable");
 
 gamescope::ConVar<bool> cv_overlay_unmultiplied_alpha{ "overlay_unmultiplied_alpha", false };
