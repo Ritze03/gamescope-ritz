@@ -39,6 +39,8 @@ The newest version below is the one this build reports.
   reaches your refresh rate, or keeps generating above it.
 
 ### Fixed
+- **Pause at refresh rate above 250 fps**: games running faster than 250 fps are now
+  measured correctly, so frame generation pauses as intended.
 - **UI protection after a pause**: the crosshair and HUD stay protected the moment
   frame generation resumes after passing frames through.
 - **Frame generation latency**: Low latency adds much less delay again, and generated

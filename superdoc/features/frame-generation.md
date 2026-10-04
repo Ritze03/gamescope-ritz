@@ -579,6 +579,8 @@ or if he wants it to automatically limit itself if basically it's not doing anyt
 should handle that."*) Row **Pause at refresh rate**, per profile, default **On**, after
 Priority.
 
+The library now measures game rates up to about 1000 fps (the interval clamp is 1-50 ms); before this, a game above 250 fps read as 250, so Pause at refresh rate never paused it.
+
 - **On (default)** -- everything above, unchanged: the output is capped at the refresh
   (fixed `o = max(i / N, 1 / refresh)`, target clamped to the refresh) and generation stops
   once the game alone reaches it (the ratio band).
