@@ -5,9 +5,15 @@
 #include <mutex>
 #include <optional>
 #include "waitable.h"
+#include "convar.h"
 
 namespace gamescope
 {
+    // display.low_latency_wakeup (Display > General) mirrors into this; default on.
+    // On: every non-VRR wake-up lead is sized from the measured draw time; off:
+    // upstream's rolling average + red zone heuristic, always.
+    extern ConVar<bool> vblank_measured_lead;
+
     struct VBlankScheduleTime
     {
         // The expected time for the vblank we want to target.
@@ -42,12 +48,26 @@ namespace gamescope
 
         static constexpr uint64_t kVRRFlushingTime = 300'000;
 
-        // Measured wake-up lead (frame generation / motion blur / lag spike buffer on,
-        // SetMeasuredLead(true)): the lead is the largest of the last kDrawTimeWindow
+        // Measured wake-up lead (vblank_measured_lead, the "Low-latency wake-up"
+        // setting, on by default): the lead is the largest of the last kDrawTimeWindow
         // draws plus this margin, instead of the rolling average + red zone (+ the
         // 2.4 ms compositing floor) that gives about 4 ms whatever the draw costs.
         static constexpr size_t   kDrawTimeWindow = 60;
         static constexpr uint64_t kMeasuredLeadMargin = 750'000ul;
+
+        // The measured lead, ns, for a recent-max draw time (0 = none measured yet)
+        // and a refresh interval. The draw is floored at the margin itself, so the
+        // lead never goes under 2 x kMeasuredLeadMargin (1.5 ms): a direct-scanout
+        // frame measures tiny draws (a flip is not a composite), and a lead sized
+        // from those would miss the first refresh after an overlay or a composite
+        // appears. Capped at one refresh: past that the wake-up just slips a vblank.
+        static constexpr uint64_t MeasuredLead( uint64_t ulRecentMaxDraw, uint64_t ulRefreshInterval )
+        {
+            const uint64_t ulDraw = ulRecentMaxDraw ? ulRecentMaxDraw : kStartingVBlankDrawTime;
+            const uint64_t ulFloored = ulDraw > kMeasuredLeadMargin ? ulDraw : kMeasuredLeadMargin;
+            const uint64_t ulLead = ulFloored + kMeasuredLeadMargin;
+            return ulLead < ulRefreshInterval ? ulLead : ulRefreshInterval;
+        }
 
         CVBlankTimer();
         ~CVBlankTimer();
@@ -66,10 +86,9 @@ namespace gamescope
         void UpdateWasCompositing( bool bCompositing );
         void UpdateLastDrawTime( uint64_t ulNanos );
 
-        // Frame generation & co. fed back from steamcompmgr every loop pass: size the
-        // wake-up lead from the measured draw time (see kMeasuredLeadMargin) instead of
-        // the upstream heuristic. Off = byte-identical to upstream.
-        void SetMeasuredLead( bool bMeasured );
+        // Whether the wake-up lead is sized from the measured draw time (the
+        // vblank_measured_lead ConVar); off = byte-identical to upstream. (Reads
+        // true under VRR too, which keeps its own small lead either way.)
         bool UsesMeasuredLead() const;
         // The lead the last (non-VRR or VRR) schedule used, ns: how long before its
         // vblank the timer wakes. For the log; 0 before the first schedule.
@@ -126,7 +145,6 @@ namespace gamescope
         size_t m_nDrawRingNext = 0;
         size_t m_nDrawRingCount = 0;
         std::atomic<uint64_t> m_ulRecentMaxDrawTime = { 0 };
-        std::atomic<bool> m_bMeasuredLead = { false };
         std::atomic<uint64_t> m_ulLastLead = { 0 };
 
         //////////////////////////////////

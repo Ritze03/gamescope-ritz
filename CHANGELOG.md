@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
+- **Low-latency wake-up**: a new Display setting, on by default, wakes gamescope just
+  in time for each refresh, cutting about 2 ms of delay.
 - **Tearing in a desktop window**: the tearing setting now works when gamescope runs
   as a window, where the host compositor allows it.
 - **HDR frame generation**: frame generation, motion blur and UI protection now also
@@ -46,6 +48,8 @@ The newest version below is the one this build reports.
   the Status line shows as `Off · buffer 0 ms`.
 - **Pause at refresh rate help**: it now says generation also stops at your Target fps.
 - **Slider handle**: the slider's handle now sits exactly where its filled track ends.
+- **Motion blur sampling**: blur samples now sit in the middle of equal time slices, so
+  real frames are no longer counted twice.
 
 ### Info
 - **MOTION group**: Frame generation and Motion blur moved to a new MOTION group

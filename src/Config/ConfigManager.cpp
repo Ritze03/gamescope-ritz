@@ -140,6 +140,7 @@ namespace gamescope::config
                 s.gamescope.tearing_enabled = JGetBool( *pGamescope, "tearing_enabled", s.gamescope.tearing_enabled );
                 s.gamescope.fps_limit = JGetInt( *pGamescope, "fps_limit", s.gamescope.fps_limit );
                 s.gamescope.force_grab_cursor = JGetBool( *pGamescope, "force_grab_cursor", s.gamescope.force_grab_cursor );
+                s.gamescope.low_latency_wakeup = JGetBool( *pGamescope, "low_latency_wakeup", s.gamescope.low_latency_wakeup );
                 s.gamescope.force_windows_fullscreen = JGetBool( *pGamescope, "force_windows_fullscreen", s.gamescope.force_windows_fullscreen );
                 s.gamescope.force_grab_keyboard = JGetBool( *pGamescope, "force_grab_keyboard", s.gamescope.force_grab_keyboard );
                 s.gamescope.sdr_gamut_wideness = JGetFloat( *pGamescope, "sdr_gamut_wideness", s.gamescope.sdr_gamut_wideness );
@@ -662,6 +663,7 @@ namespace gamescope::config
             jGamescope[ "tearing_enabled" ] = s.gamescope.tearing_enabled;
             jGamescope[ "fps_limit" ] = s.gamescope.fps_limit;
             jGamescope[ "force_grab_cursor" ] = s.gamescope.force_grab_cursor;
+            jGamescope[ "low_latency_wakeup" ] = s.gamescope.low_latency_wakeup;
             jGamescope[ "force_windows_fullscreen" ] = s.gamescope.force_windows_fullscreen;
             jGamescope[ "force_grab_keyboard" ] = s.gamescope.force_grab_keyboard;
             jGamescope[ "sdr_gamut_wideness" ] = s.gamescope.sdr_gamut_wideness;

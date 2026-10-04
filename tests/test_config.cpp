@@ -3243,6 +3243,36 @@ TEST_CASE( "gamescope.force_windows_fullscreen round-trips and defaults to off",
     REQUIRE( loaded.gamescope.force_windows_fullscreen );
 }
 
+TEST_CASE( "gamescope.low_latency_wakeup round-trips and defaults to on", "[config]" )
+{
+    // 2026-10-04: Display > General's "Low-latency wake-up". Additive (schema stays 5):
+    // a file written before the key existed must load as ON, the default.
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE( s.gamescope.low_latency_wakeup );
+
+    // Absent key -> true (a schema-5 file from before the setting existed).
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "gamescope": { "tearing_enabled": true }
+    })";
+    {
+        Settings old = LoadSections();
+        REQUIRE( old.gamescope.tearing_enabled );
+        REQUIRE( old.gamescope.low_latency_wakeup );
+    }
+
+    s.gamescope.low_latency_wakeup = false;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_FALSE( LoadSections().gamescope.low_latency_wakeup );
+
+    s.gamescope.low_latency_wakeup = true;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().gamescope.low_latency_wakeup );
+}
+
 // ---- requests-2026-09-06 item 1: select loads, and edits land in the selection ----
 
 TEST_CASE( "select B then a routed write: B's file changes and A's does not; ResolvedSettings follows the selection", "[config]" )

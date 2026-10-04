@@ -25,6 +25,7 @@
 
 #include "main.hpp"
 #include "steamcompmgr.hpp"
+#include "vblankmanager.hpp"
 #include "rendervulkan.hpp"
 #include "wlserver.hpp"
 #include "convar.h"
@@ -644,6 +645,9 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 		cv_hdr_enabled = config.gamescope.hdr_enabled;
 	if ( !Given( Opt::ImmediateFlips ) )
 		cv_tearing_enabled = config.gamescope.tearing_enabled;
+	// Low-latency wake-up: a plain ConVar mirror like the three above, so it is in
+	// force from the first vblank (the vblank timer reads it on its own thread).
+	gamescope::vblank_measured_lead = config.gamescope.low_latency_wakeup;
 
 	if ( bStartup )
 		return;

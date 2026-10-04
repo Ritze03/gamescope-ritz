@@ -170,6 +170,41 @@ never pointed at, which was the Rust report. A window smaller than the new scree
 alone. Details and the measurements: [cursor-pipeline.md](cursor-pipeline.md), "A window
 larger than the screen".
 
+### Low-latency wake-up (`display.low_latency_wakeup`)
+
+Added 2026-10-04. Display > General switch, **default On**, config key
+`gamescope.low_latency_wakeup` (per profile, like VRR / Allow tearing / Force maximize; additive,
+schema stays 5, absent = true). It mirrors into the `vblank_measured_lead` ConVar (the same
+plain-mirror pattern as `cv_tearing_enabled`: `ApplyEdit` writes config + ConVar, and
+`main.cpp`'s `ritz_apply_config_live` / `PanelDisplay.cpp`'s `PushCachedSettingsToLiveState`
+re-push it on startup and profile switch). There is no launch flag, so no launch lock; the
+ConVar stays usable from the debug console for a session-only override until the next profile
+push.
+
+`CVBlankTimer` (`src/vblankmanager.{hpp,cpp}`) wakes ahead of each vblank by an offset.
+- **Off (upstream)**: `offset = rollingMaxDrawTime + redZone`; the draw time is seeded at 3 ms and
+  floored at 2.4 ms while compositing, the red zone is 1.65 ms on internal screens (nested
+  mode included), so a compositing frame wakes about 4.05 ms ahead, clamped to one refresh
+  (3.57 ms at 280 Hz).
+- **On**: `offset = min(max(M, 0.75 ms) + 0.75 ms, one refresh)` where `M` is the largest of the
+  last 60 wake-up -> present draw times (`UpdateLastDrawTime()`; 3 ms assumed until one is
+  measured) -- `CVBlankTimer::MeasuredLead()`, a pure static, unit-tested. A 1.1 ms worst draw
+  gives 1.85 ms. The 0.75 ms floor on `M` keeps the lead at **1.5 ms minimum**: a direct-scanout
+  frame measures tiny draws, and a lead sized from those would miss the first refresh after an
+  overlay or composite appears. Applies with or without compositing and with or without frame
+  generation, motion blur or the lag buffer.
+- **VRR** keeps its own small lead (0.3 ms red zone plus the compositing floor) in both modes.
+
+**Trade-off** (stated in the help text): a draw that suddenly takes longer than the recent
+maximum misses the refresh, so the previous image shows once more (one stutter); the window is a
+rolling max, so it widens at once and narrows only after 60 clean draws. Valve's cautious values
+were tuned mainly for the Steam Deck. `Why` default On: the user's priority is latency, and the
+lead is delay no later stage can recover -- a real frame landing inside it is shown one refresh
+late (see [frame-generation.md](frame-generation.md)'s Latency section for the headless
+numbers: 4.05 -> about 1.9 ms). A read-only **Wake-up lead** Facts row under the switch shows the
+current lead and the recent max draw; the frame-generation debug status line carries the same
+text.
+
 ## Frame generation and the Frame limiter
 
 The Frame limiter caps the *game*; [frame generation](frame-generation.md) multiplies the

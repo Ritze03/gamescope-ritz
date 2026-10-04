@@ -118,3 +118,31 @@ TEST_CASE( "framegen pacing: with the lag buffer off, Max buffer and test mode l
 	CHECK( adDelay[ 0 ] == adDelay[ 1 ] );
 	CHECK( adDelay[ 0 ] == adDelay[ 2 ] );
 }
+
+// ---- the vblank timer's measured wake-up lead (Display > General "Low-latency wake-up") ----
+// src/vblankmanager.hpp's pure CVBlankTimer::MeasuredLead(): the largest recent draw
+// time + 0.75 ms, the draw floored at 0.75 ms (a direct-scanout frame measures tiny
+// draws), capped at one refresh, and 3 ms assumed before anything is measured.
+#include "vblankmanager.hpp"
+
+TEST_CASE( "vblank measured lead: max draw + 0.75 ms, floored, clamped to a refresh", "[framegen_pacing]" )
+{
+	using gamescope::CVBlankTimer;
+	constexpr uint64_t kMsNs = 1'000'000ull;
+	const uint64_t k240 = 4'166'667ull;
+	const uint64_t k280 = 3'571'429ull;
+
+	// The headline case: a 1.1 ms worst draw wakes 1.85 ms ahead.
+	REQUIRE( CVBlankTimer::MeasuredLead( 1'100'000ull, k240 ) == 1'850'000ull );
+	// Nothing measured yet: the starting 3 ms draw, still capped.
+	REQUIRE( CVBlankTimer::MeasuredLead( 0, 8 * kMsNs ) == 3'750'000ull );
+	REQUIRE( CVBlankTimer::MeasuredLead( 0, k280 ) == k280 );
+	// Clamped to one refresh.
+	REQUIRE( CVBlankTimer::MeasuredLead( 5 * kMsNs, k240 ) == k240 );
+	REQUIRE( CVBlankTimer::MeasuredLead( 3 * kMsNs, k280 ) == k280 );
+	// Floor: a tiny (direct-scanout) draw never takes the lead under 1.5 ms.
+	REQUIRE( CVBlankTimer::MeasuredLead( 50'000ull, k240 ) == 1'500'000ull );
+	REQUIRE( CVBlankTimer::MeasuredLead( 750'000ull, k240 ) == 1'500'000ull );
+	// ...but the floor itself never exceeds a refresh.
+	REQUIRE( CVBlankTimer::MeasuredLead( 50'000ull, 1'000'000ull ) == 1'000'000ull );
+}

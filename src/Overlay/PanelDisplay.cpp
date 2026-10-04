@@ -59,6 +59,7 @@
 
 #include "main.hpp"
 #include "steamcompmgr.hpp"
+#include "vblankmanager.hpp"
 #include "convar.h"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
@@ -281,6 +282,7 @@ namespace gamescope
 			cv_hdr_enabled = s_CachedSettings.gamescope.hdr_enabled;
 		if ( !LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ) )
 			cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
+		gamescope::vblank_measured_lead = s_CachedSettings.gamescope.low_latency_wakeup;
 		// force_grab_cursor's own push moved with its row to PanelInput.cpp
 		// (2026-09-27, input.general) -- that file's own EnsureConfigLoaded()
 		// re-pushes it now (and gates it the same way), and main.cpp's
@@ -613,7 +615,7 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
 		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing "
-		            "maximize fullscreen nested window" );
+		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
@@ -654,6 +656,40 @@ namespace gamescope
 			.Keywords( "immediate flip vsync latency tear seam" )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ); },
 				LaunchLockReason( LaunchOptions::Opt::ImmediateFlips ).c_str() );
+
+		// Low-latency wake-up (2026-10-04): a plain ConVar mirror of
+		// gamescope.low_latency_wakeup, the same shape as Allow tearing above.
+		// The help text names the trade-off on purpose -- see
+		// superdoc/features/resolution-and-refresh.md's "Low-latency wake-up".
+		a.Switch( "display.low_latency_wakeup", "Low-latency wake-up",
+			ui::AnyBind::Of<bool>(
+				[]{ return gamescope::vblank_measured_lead.Get(); },
+				[]( bool b ) {
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.low_latency_wakeup = b; },
+						[ b ] { gamescope::vblank_measured_lead = b; } );
+				} ) )
+			.Key( "gamescope.low_latency_wakeup" )
+			.Help( "gamescope wakes up only as early before each refresh as its drawing actually needs "
+			       "(about 2 ms) instead of a fixed ~4 ms, so a new game frame is less likely to wait a "
+			       "whole refresh. Saves about 2 ms of delay when gamescope draws the frame itself "
+			       "(scaling, FSR, shaders, frame generation). If a draw suddenly takes longer than usual, "
+			       "one refresh can repeat the previous image. Off: upstream's cautious timing." )
+			.Default( true )
+			.Keywords( "latency wake-up wakeup vblank lead timing delay input lag draw time" );
+
+		a.Facts( "display.wakeup_lead", "Wake-up lead", []{
+			const gamescope::CVBlankTimer &Timer = GetVBlankTimer();
+			char sz[ 96 ];
+			if ( Timer.UsesMeasuredLead() )
+				std::snprintf( sz, sizeof( sz ), "%.1f ms (measured, max draw %.1f ms)",
+					Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6 );
+			else
+				std::snprintf( sz, sizeof( sz ), "%.1f ms (upstream timing)", Timer.GetLastLead() / 1e6 );
+			return std::string( sz );
+		} )
+			.Help( "How long before each refresh gamescope wakes up to draw. Read-only." )
+			.Keywords( "wake-up lead vblank timing" );
 
 		// Force grab cursor MOVED to input.general (PanelInput.cpp) on
 		// 2026-09-27 -- the user: "Input: General - Force grab cursor

@@ -21,7 +21,7 @@ Code map:
 | Library build glue | `src/FrameGen/FrameGenLib.cpp` + the `custom_target()`s in `src/meson.build` |
 | Renderer host (`fghost`) | `src/FrameGen/FrameGenHost.{h,cpp}` |
 | Pacing (`framegen::pacing::Pacer`) | **the library**: `subprojects/FrameGen/gpu/pacing.h` (header-only; tests: its own `pacingtest`). gamescope's `src/FrameGen/Pacing.h` was deleted 2026-10-04 |
-| Wake-up lead | `src/vblankmanager.{hpp,cpp}` (`SetMeasuredLead`, `GetLastLead`) |
+| Wake-up lead | `src/vblankmanager.{hpp,cpp}` (`MeasuredLead`, `vblank_measured_lead`, `GetLastLead`); setting: [Low-latency wake-up](resolution-and-refresh.md#low-latency-wake-up-displaylow_latency_wakeup) |
 | Pacing glue + the main-loop gate | `src/steamcompmgr.cpp` (`FrameGen_OnArrival` / `FrameGen_PrePaint` / `FrameGen_PostPaint` / `FrameGen_TimerPaced`, `PaintTick` in the paint decision) |
 | Composite hook | `src/rendervulkan.cpp` (`vulkan_composite()`, `fghost::RecordBaseLayer`) |
 | Frame-ring copy shader | `src/shaders/cs_fg_copy.comp` |
@@ -504,17 +504,21 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    that is more than a whole 3.57 ms refresh). The lead is latency the library cannot see: a
    real frame landing inside it is shown one refresh late, and `now` is that much earlier than
    `V` (`Inputs::presentNs`), so with a long lead Low latency fits no generated frames between
-   real ones (the PR #8 author: 240 of 560 ticks at 120 fps with a 4 ms lead). **Now, while any
-   of frame generation / motion blur / the lag spike buffer is on** (`fghost::Active()`, fed to
-   `CVBlankTimer::SetMeasuredLead()` every main-loop pass), `offset = min(max of the last 60
-   draw times + 0.75 ms, one refresh)` (`kDrawTimeWindow`, `kMeasuredLeadMargin`): the draw time
+   real ones (the PR #8 author: 240 of 560 ticks at 120 fps with a 4 ms lead). **Now** (first only while any
+   of frame generation / motion blur / the lag spike buffer was on; **since 2026-10-04 for all
+   play**, controlled by the Display > General **Low-latency wake-up** setting, default on, see
+   [resolution-and-refresh.md](resolution-and-refresh.md#low-latency-wake-up-displaylow_latency_wakeup)),
+   `offset = min(max(max of the last 60 draw times, 0.75 ms) + 0.75 ms, one refresh)` (`kDrawTimeWindow`,
+   `kMeasuredLeadMargin`, `CVBlankTimer::MeasuredLead()`): the draw time
    is wake-up -> present as the backends already report it through `UpdateLastDrawTime()`, so
    the FG work is inside it; a rolling **max**, not an average, so one slow draw widens the lead
    at once and it narrows only after 60 clean ones. VRR keeps its own small lead (0.3 ms red
-   zone). ConVar `vblank_measured_lead` (default on) turns it off. **With all three features off
-   nothing changed**: the upstream heuristic is untouched. `Why` it was left alone: it is
-   deliberate upstream tuning (and the user decides whether the same ~4 ms is also too long for
-   a plain game; it costs a frame landing in the lead one refresh, exactly as above). The
+   zone). ConVar `vblank_measured_lead` (default on; the setting mirrors into it) turns it off, and
+   **with the setting Off the upstream heuristic runs always, even with frame generation on**
+   (the user gets upstream's cautious timing and the generation headroom suffers, as
+   measured below). `Why` it was first FG-only: the heuristic is deliberate upstream tuning;
+   the user then approved the measured lead for all play, with the trade-off stated in the
+   setting's help text. The
    effective lead is in the debug status line: `wake-up lead 1.89 ms (measured, max draw 1.14
    ms)` or `(default)`.
 3. **Tearing was off for generated frames.** The main loop forced `FlipType::Normal` while

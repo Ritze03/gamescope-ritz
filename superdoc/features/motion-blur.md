@@ -91,6 +91,15 @@ unsupported pixel format, ... -- then pacing's: warming up, a frame gap, the GPU
 frames` before the first publish. Pacing's reason `Off` (what it reports for a blur-only
 plan with frame generation off) is deliberately not shown as a reason.
 
+## Sample positions (library PR #10, 2026-10-04)
+
+The `N` samples sit at the **midpoints of `N` equal slices** of the shutter window
+(`t_k = t0 + (t1 - t0)(k + 0.5)/N`, a box filter), not at both ends of it. `Why`: with
+both-ends sampling a real frame at a shared end was counted in two neighbouring outputs
+whenever windows tile (100% blur), double-weighting it. Every sample is now a synth (plus one
+for windows ending at 1); `t0 == t1` / blur off is unchanged. No API change: the host only moved
+the FrameGen submodule to frame-gen-ritz `0f8c58e`.
+
 ## Costs and limits
 
 Library measurements (RX 7900 XTX, per sample): about **0.030 ms at 1280x960**, 0.052 ms at

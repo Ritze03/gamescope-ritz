@@ -8251,7 +8251,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	// red zone, vblankmanager.cpp) EARLIER than V, and the library's Low latency no
 	// longer pads its delay for that gap (frame-gen-ritz PR #8: D = max(0, i - o) +
 	// a p75 jitter, no paint-lead term): the host keeps the lead no longer than
-	// drawing needs instead (CVBlankTimer::SetMeasuredLead(), set from fghost::Active()).
+	// drawing needs instead (the Low-latency wake-up setting, CVBlankTimer::MeasuredLead()).
 	{
 		const uint64_t ulTarget = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
 		constexpr uint64_t kPlausibleNs = 1000ull * 1000ull * 1000ull;
@@ -10682,11 +10682,6 @@ steamcompmgr_main(int argc, char **argv)
 			hasRepaint = true;
 
 		bool bPainted = false;
-
-		// Frame generation / motion blur / the lag spike buffer on: the vblank timer
-		// sizes its wake-up lead from the measured draw time instead of upstream's
-		// ~4 ms heuristic (vblankmanager.cpp). One relaxed load + store.
-		GetVBlankTimer().SetMeasuredLead( fghost::Active() );
 
 		static int nIgnoredOverlayRepaints = 0;
 

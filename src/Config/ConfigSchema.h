@@ -77,6 +77,10 @@ namespace gamescope::config
         // mechanisms the fields above already use -- see PanelDisplay.cpp.
         int fps_limit = 0;                     // 0 = unlimited, matches g_nSteamCompMgrTargetFPS's own semantics; live via the GAMESCOPE_FPS_LIMIT X11 property
         bool force_grab_cursor = false;        // mirrors --force-grab-cursor's runtime effect on g_bForceRelativeMouse; genuinely live, not startup-only. Row lives in input.general (PanelInput.cpp) since 2026-09-27 -- moved out of display.general, see that file's own comment.
+        // display.general "Low-latency wake-up" (2026-10-04): wake the vblank timer by the
+        // measured draw time instead of upstream's ~4 ms heuristic, for all play. Mirrors
+        // into the vblank_measured_lead ConVar. Additive, no schema bump: absent = true.
+        bool low_latency_wakeup = true;
         bool force_windows_fullscreen = false; // mirrors --force-windows-fullscreen; per-Xwayland-ctx, genuinely live via steamcompmgr_set_force_windows_fullscreen()
         // input.general's other row (2026-09-27): mirrors -g/--grab's effect
         // on main.hpp's g_bGrabbed. Live on the SDL backend (PanelInput.cpp's
