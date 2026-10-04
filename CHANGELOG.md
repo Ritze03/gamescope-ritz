@@ -41,6 +41,7 @@ The newest version below is the one this build reports.
   non-existent Force minimum is gone, and Off follows the game with no buffer, which
   the Status line shows as `Off · buffer 0 ms`.
 - **Pause at refresh rate help**: it now says generation also stops at your Target fps.
+- **Slider handle**: the slider's handle now sits exactly where its filled track ends.
 
 ### Info
 - **MOTION group**: Frame generation and Motion blur moved to a new MOTION group

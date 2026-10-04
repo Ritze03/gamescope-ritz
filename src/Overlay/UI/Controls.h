@@ -30,25 +30,25 @@
 //
 //   1. ONE RECT PER ATOM. The rect handed to ItemAdd() is the same C++ object
 //      handed to the painter. An atom never recomputes its own geometry.
-//   2. THE SLIDER'S HANDLE IS ONE CONSTANT WIDTH, PAINTED WHERE SliderBehavior
-//      SAYS. SliderGrab() below is the only code in the kit that names a grab
-//      width; it pushes that width into GrabMinSize, calls SliderBehavior(),
-//      and gets back the grab rect SliderBehavior itself produced.
+//   2. THE SLIDER'S HANDLE AND FILL SHARE ONE value -> x MAP. SliderGrab()
+//      (Controls.cpp) is the only code in the kit that names a grab width; it
+//      pushes that width into GrabMinSize and calls SliderBehavior(), always
+//      with a float, so ImGui's travel range is exactly SliderValueX()'s
+//      [trackMin + handle/2 .. trackMax - handle/2]. The painter places the
+//      fill end, the handle centre and the default tick with SliderValueX()
+//      too -- so where you click, where the handle is drawn and where the
+//      fill ends are one number.
 //
-//      GrabMinSize is a FLOOR, not a ceiling: for a non-decimal data type
-//      (every SliderInt) ImGui's own SliderBehaviorT widens the grab past it
-//      on purpose, "so a coarse, small-range int slider (Outline Width,
-//      Dot > Size, Line > Width -- requests-2026-09-06.md item 4) can
-//      represent one unit" -- and that widening has no style-var knob to cap
-//      it. SliderGrab() re-centres the returned rect to the kit's own
-//      constant width AFTER SliderBehavior has already used its own (wider)
-//      grab to resolve this frame's click, drag and keyboard step -- so the
-//      CENTRE the painter draws at is still exactly where SliderBehavior put
-//      it, nothing about hit-testing or the value changes, and only the
-//      drawn WIDTH is a second, later assignment. That is the one deliberate
-//      exception to "an atom never recomputes its own geometry" above: it
-//      touches only a size, never a position, and never before
-//      SliderBehavior has already committed this frame's interaction.
+//      Why always float: GrabMinSize is a FLOOR, not a ceiling. For a
+//      non-decimal data type ImGui's SliderBehaviorT widens the grab to
+//      track / (range + 1) "to represent one unit", with no style var to cap
+//      it, and insets its travel by half of that. Until 2026-10-04 SliderInt
+//      used that int path and repainted the grab 8px wide around ImGui's
+//      centre (the former ConstantWidthGrab()), which fixed the handle's
+//      width (requests-2026-09-06.md item 4) but left its CENTRE far in from
+//      the fill end on a small range -- Motion blur Samples 2..8 sat 1/14 of
+//      the track off at each end, the user's "the dragger is wrong compared
+//      to where the line actually fills to".
 //
 // The same rule applies to the measured atoms: MeasureCells() is the single
 // function that decides how wide a segmented group or a chip bank is, and both
@@ -318,21 +318,17 @@ namespace gamescope::ui
 		bool SliderInt( const RowCtx &row, const char *pszId, int *pnValue,
 		                int nMin, int nMax, int nDefault = 0, bool bHasDefault = false );
 
-		// requests-2026-09-06.md item 4: "Outline Width", "Dot > Size" and
-		// "Line > Width" drew a grab far wider than every other slider's.
-		// ImGui's own SliderBehaviorT widens a non-decimal (every SliderInt)
-		// grab past GrabMinSize on purpose -- "if possible have the grab
-		// size represent 1 unit" -- which a coarse, small-range int slider
-		// turns into a grab spanning a large fraction of the track.
-		//
-		// This is the pure half of the fix, extracted out of SliderGrab()
-		// (Controls.cpp, its only caller) so it is checkable without an
-		// ImGui context: recentre `grab` to `flConstantW` wide around its
-		// OWN centre -- the centre SliderBehavior already computed for this
-		// frame's value/drag/click, left untouched -- clamped to `flHitW`
-		// so a pathologically narrow track cannot make the returned rect
-		// wider than the row it is drawn in.
-		ImRect ConstantWidthGrab( const ImRect &grab, float flConstantW, float flHitW );
+		// The ONE value -> x map of a slider (see rule 2 at the top of this
+		// file): the x of the handle's centre, which is also where the fill
+		// ends and where the default tick sits, for `flFraction` in [0..1]
+		// (clamped) on a track starting at `flTrackMinX`, `flTrackW` wide,
+		// with a `flHandleW`-wide handle. The centre travels
+		// [min + handle/2 .. max - handle/2], so at 0 and 1 the handle's
+		// edges sit flush with the track's caps (issue #86). The handle is
+		// clamped to the track's width so a pathologically narrow track
+		// cannot push the handle outside it. Pure and ImGui-free so
+		// test_overlay_ui.cpp can pin it.
+		float SliderValueX( float flFraction, float flTrackMinX, float flTrackW, float flHandleW );
 
 		// requests-2026-09-07 item 8/A: "editing any element should
 		// automatically select it, so it also pops up in the inspector
@@ -346,7 +342,7 @@ namespace gamescope::ui
 		// on a row that was not already selected changed the value but left
 		// the OLD row highlighted and the Inspector showing the wrong row.
 		//
-		// This is the pure half of the fix, same reason ConstantWidthGrab()
+		// This is the pure half of the fix, same reason SliderValueX()
 		// above is one: Shell.cpp's row-drawing functions are file-private
 		// (Shell.h's own header comment: "this is the whole of its public
 		// surface... deliberately, because... there is no header a category
@@ -397,7 +393,7 @@ namespace gamescope::ui
 		// in Shell.cpp, so it kept reading "of 6" after Registry.cpp's
 		// kParamBudget was raised to 7 (2026-09-06) -- a row at the new
 		// ceiling read "PARAMETERS 7 of 6". Pure text formatting, kept
-		// free of ImGui (same reason ConstantWidthGrab()/ShouldSelectRow()
+		// free of ImGui (same reason SliderValueX()/ShouldSelectRow()
 		// above are) so it can be pinned against ui::ParamBudget()
 		// directly rather than only read by eye in a capture. The caller
 		// passes both numbers rather than this function reaching for
@@ -733,7 +729,7 @@ namespace gamescope::ui
 		//
 		// Pure geometry, kept free of ImGui and returned with a zero Y
 		// range (the caller supplies the actual top/bottom) for the same
-		// reason ConstantWidthGrab() above is: test_overlay_ui.cpp pins it
+		// reason SliderValueX() above is: test_overlay_ui.cpp pins it
 		// directly.
 		ImRect HueSwatchRect( float flBodyMinX, float flBodyMaxX,
 		                     int nIndex, int nSwatches, float flGapPx );
