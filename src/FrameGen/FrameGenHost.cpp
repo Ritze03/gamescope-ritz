@@ -1,7 +1,7 @@
 // FrameGenHost.cpp -- see FrameGenHost.h for the model and the API contract.
 //
 // Layout of this file:
-//   1. cross-thread state   (config, gate, slot, reset flag, status)
+//   1. cross-thread state   (config, gate, frame request, reset flag, status)
 //   2. render-thread state  (Host: the Interpolator, the ring, the outputs)
 //   3. RecordBaseLayer()    (the one per-composite entry point)
 
@@ -34,16 +34,25 @@ namespace fghost
 
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
-		// safety, 8-9 hud protection.
-		constexpr uint32_t kMaxMultiplier = 4;
+		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps.
+		constexpr int kMinTargetFps = 30;
+		constexpr int kMaxTargetFps = 1000;
 
 		uint32_t Pack( const Config &c )
 		{
-			int nMult = c.multiplier < 2 ? 0 : std::min( c.multiplier, (int)kMaxMultiplier );
+			int nMult = c.multiplier < 2 ? 0 : std::min( c.multiplier, kMaxMultiplier );
+			Mode eMode = c.mode;
+			// A fixed multiplier below 2x is not a mode: it is Off.
+			if ( eMode == Mode::Fixed && nMult < 2 )
+				eMode = Mode::Off;
+			const int nTarget = c.targetFps <= 0 ? 0 : std::min( std::max( c.targetFps, kMinTargetFps ), kMaxTargetFps );
 			return uint32_t( nMult )
 				| ( uint32_t( c.quality ) << 4 )
 				| ( uint32_t( c.safety ) << 6 )
-				| ( uint32_t( c.hud ) << 8 );
+				| ( uint32_t( c.hud ) << 8 )
+				| ( uint32_t( eMode ) << 10 )
+				| ( uint32_t( c.priority ) << 12 )
+				| ( uint32_t( nTarget ) << 13 );
 		}
 
 		Config Unpack( uint32_t u )
@@ -53,31 +62,31 @@ namespace fghost
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
 			c.safety = Safety( ( u >> 6 ) & 0x3u );
 			c.hud = HudProtect( ( u >> 8 ) & 0x3u );
+			c.mode = Mode( ( u >> 10 ) & 0x3u );
+			c.priority = Priority( ( u >> 12 ) & 0x1u );
+			c.targetFps = int( ( u >> 13 ) & 0x3FFu );
 			return c;
 		}
 
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
 
-		// The gate word. bit 0: enabled (multiplier >= 2). bit 1: the render
-		// thread holds resources. RenderWanted() is `!= 0`, so with FG off and
-		// everything released the per-frame cost is this one load.
+		// The gate word. bit 0: enabled (mode != Off). bit 1: the render thread
+		// holds resources. RenderWanted() is `!= 0`, so with FG off and everything
+		// released the per-frame cost is this one load.
 		constexpr uint32_t kGateEnabled = 1u << 0;
 		constexpr uint32_t kGateLive = 1u << 1;
 		std::atomic<uint32_t> g_uGate{ 0 };
 
-		struct Slot_t
-		{
-			uint64_t ulPairId = 0;
-			int nK = 0;
-			int nN = 0;   // < 2: pacing has not driven the renderer (yet)
-		};
-		std::mutex g_SlotMutex;
-		Slot_t g_Slot;
+		std::mutex g_FrameMutex;
+		FrameRequest g_Frame;   // t < 0 (inert) until pacing drives the renderer
 
 		std::atomic<bool> g_bResetRequested{ false };
 
 		std::atomic<uint8_t> g_eReason{ uint8_t( Unavailable::Ok ) };
 		std::atomic<float> g_flLastPairGpuMs{ -1.0f };
+		std::atomic<float> g_flLastEstimateMs{ -1.0f };
+		std::atomic<float> g_flLastSynthMs{ -1.0f };
+		std::atomic<uint32_t> g_uCostSeq{ 0 };
 
 		std::mutex g_PacingMutex;
 		PacingStatus g_Pacing;
@@ -93,8 +102,22 @@ namespace fghost
 		constexpr uint32_t kHostDrmFormat = DRM_FORMAT_ARGB8888;
 		constexpr VkFormat kHostVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-		// Generated frames per pair are N-1 <= 3.
-		constexpr int kMaxOutputs = int( kMaxMultiplier ) - 1;
+		// The ring holds the last three real frames: Low latency only ever uses the
+		// newest pair (two of them), Smoothness may still be inside the pair before
+		// it while the newest has already arrived (see Pacing.h).
+		constexpr int kRingSize = 3;
+
+		// Pooled outputs. One composite shows one output; the next paint records
+		// into another while the previous composite may still be sampling its own
+		// (same queue, ordered by barriers), and one more keeps the last repaintable
+		// output alive across a skipped vblank. Three is that: shown + next + spare.
+		// (The old per-k pool needed up to 3 as well, for 4x.)
+		constexpr int kOutPool = 3;
+
+		// Generated frames per real pair, well under the library's 32-set
+		// descriptor ring (FrameGen/Pacing.h's kMaxSynthsPerPair is the same
+		// number; pacing already stops asking, this is the renderer's own guard).
+		constexpr int kMaxSynthsPerPair = 24;
 
 		// Crosshair protection tunables. The ROI is a centred square of 3% of the
 		// frame's area (~332 px at 2560x1440): the user's "the middle one to maybe
@@ -108,27 +131,38 @@ namespace fghost
 		constexpr float kXhairThreshold = 3.5f / 255.0f;
 		constexpr uint32_t kXhairStableFrames = 8;
 
+		struct OutSlot_t
+		{
+			gamescope::Rc<CVulkanTexture> pTex;
+			uint64_t ulOutId = 0;
+			bool bValid = false;
+			uint64_t ulUse = 0;   // LRU clock
+		};
+
 		struct Host_t
 		{
 			framegen::Interpolator interp;
 			bool bLive = false;
 			uint32_t uWidth = 0, uHeight = 0;
 
-			// D11: the private ring. Real frames alternate between the slots; the
-			// newest is `nCurSlot`, the one before it the other. Nothing here is
-			// ever a game buffer.
-			gamescope::Rc<CVulkanTexture> pRing[2];
+			// D11: the private ring. Real frames fill the slots in turn; the newest
+			// is `nCurSlot`. Each slot remembers the commit id it holds (0 = empty),
+			// which is how a pair is found: pacing names its frames by id. Nothing
+			// here is ever a game buffer.
+			gamescope::Rc<CVulkanTexture> pRing[ kRingSize ];
+			uint64_t ulSlotId[ kRingSize ] = {};
 			int nCurSlot = 0;
 			bool bHaveCur = false;   // pRing[nCurSlot] holds a valid real frame
-			bool bHavePrev = false;  // ...and pRing[1 - nCurSlot] holds the one before it
-			uint64_t ulCurPair = 0;  // the pairId of pRing[nCurSlot]
+			uint64_t ulCurId = 0;    // the commit id of pRing[nCurSlot]
 
-			// D13: whether the library holds a motion estimate for the current
-			// (prev, curr), and the cache of generated frames for it.
+			// D13: whether the library holds a motion estimate, and for which pair
+			// (the library keeps exactly one: the latest), how many synths it has
+			// served, and the cache of generated frames.
 			bool bEstimateValid = false;
-			gamescope::Rc<CVulkanTexture> pOut[ kMaxOutputs ];
-			bool bOutValid[ kMaxOutputs ] = {};
-			int nOutN[ kMaxOutputs ] = {};   // the n the cached frame was made for (t = k/n)
+			uint64_t ulEstPrev = 0, ulEstCurr = 0;
+			int nPairSynths = 0;
+			OutSlot_t out[ kOutPool ];
+			uint64_t ulUseClock = 0;
 
 			// What the library is currently configured with.
 			uint32_t uAppliedConfig = 0;
@@ -142,17 +176,19 @@ namespace fghost
 			bool bProfileOpen = false;
 			uint64_t ulProfileSeq = 0;   // submission sequence of the last cb that wrote into it
 			int nProfileSynths = 0;
-			int nProfileSynthsWanted = 0;
 
 			// Crosshair protection (superdoc/features/frame-generation.md). All of
 			// it is ROI-sized (kXhairAreaFrac of the frame, centred), created on
 			// first use while Static HUD protection is on, and released with the
-			// ring (teardown / size change, both after a waitIdle).
-			gamescope::Rc<CVulkanTexture> pXhCnt[2];   // ping-pong stability counters (.r = count/255)
-			gamescope::Rc<CVulkanTexture> pXhPatch;    // .rgb = the real frame's ORIGINAL ROI pixels, .a = mask
+			// ring (teardown / size change, both after a waitIdle). The patch
+			// textures are per RING SLOT (the original ROI pixels + mask of the real
+			// frame in that slot), so a synth of an older pair still gets ITS
+			// frame's crosshair back.
+			gamescope::Rc<CVulkanTexture> pXhCnt[2];             // ping-pong stability counters (.r = count/255)
+			gamescope::Rc<CVulkanTexture> pXhPatch[ kRingSize ]; // .rgb = the real frame's ORIGINAL ROI pixels, .a = mask
+			bool bXhPatchValid[ kRingSize ] = {};                // that slot's patch holds a usable mask
 			int nXhCnt = 0;                // the counter texture written for the newest real frame
-			bool bXhHist = false;          // counters + patch describe the previous real frame (no gap)
-			bool bXhPatchCur = false;      // pXhPatch holds a usable mask for the CURRENT real frame
+			bool bXhHist = false;          // counters + the newest slot's patch describe the previous real frame (no gap)
 			bool bXhFailed = false;        // textures could not be created: stay off until size change / teardown
 			uint32_t uXhX = 0, uXhY = 0, uXhSize = 0;   // the ROI in frame pixels
 		};
@@ -206,20 +242,41 @@ namespace fghost
 			g_eReason.store( uint8_t( e ), std::memory_order_relaxed );
 		}
 
-		// Forget the previous frame and every cached output. Frees nothing, so no
+		void InvalidateOutputs( Host_t &H )
+		{
+			for ( OutSlot_t &o : H.out )
+				o.bValid = false;
+		}
+
+		// Forget the previous frames and every cached output. Frees nothing, so no
 		// wait is needed.
 		void DropFrames( Host_t &H )
 		{
 			H.bHaveCur = false;
-			H.bHavePrev = false;
-			H.ulCurPair = 0;
+			H.ulCurId = 0;
+			for ( uint64_t &id : H.ulSlotId )
+				id = 0;
 			H.bEstimateValid = false;
-			for ( bool &b : H.bOutValid )
-				b = false;
+			H.nPairSynths = 0;
+			InvalidateOutputs( H );
 			// The crosshair counters compare consecutive real frames, so any gap
 			// restarts them (the next frame copied in starts every counter at 0).
 			H.bXhHist = false;
-			H.bXhPatchCur = false;
+			for ( bool &b : H.bXhPatchValid )
+				b = false;
+		}
+
+		// The ring slot holding commit `ulId`, or -1.
+		int FindSlot( const Host_t &H, uint64_t ulId )
+		{
+			if ( !ulId )
+				return -1;
+			for ( int i = 0; i < kRingSize; i++ )
+			{
+				if ( H.ulSlotId[ i ] == ulId )
+					return i;
+			}
+			return -1;
 		}
 
 		// The crosshair textures. Callers have already waited for the device to
@@ -228,9 +285,11 @@ namespace fghost
 		{
 			for ( auto &p : H.pXhCnt )
 				p = nullptr;
-			H.pXhPatch = nullptr;
+			for ( auto &p : H.pXhPatch )
+				p = nullptr;
 			H.bXhHist = false;
-			H.bXhPatchCur = false;
+			for ( bool &b : H.bXhPatchValid )
+				b = false;
 			H.bXhFailed = false;
 		}
 
@@ -243,8 +302,8 @@ namespace fghost
 			H.interp.destroy();    // also cleans up a half-built init; a no-op when never initialised
 			for ( auto &p : H.pRing )
 				p = nullptr;
-			for ( auto &p : H.pOut )
-				p = nullptr;
+			for ( OutSlot_t &o : H.out )
+				o.pTex = nullptr;
 			ReleaseCrosshair( H );
 			H.bLive = false;
 			H.uWidth = H.uHeight = 0;
@@ -253,6 +312,8 @@ namespace fghost
 			H.uAppliedConfig = 0;
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
 			g_flLastPairGpuMs.store( -1.0f, std::memory_order_relaxed );
+			g_flLastEstimateMs.store( -1.0f, std::memory_order_relaxed );
+			g_flLastSynthMs.store( -1.0f, std::memory_order_relaxed );
 		}
 
 		bool CreateTexture( gamescope::Rc<CVulkanTexture> &out, uint32_t w, uint32_t h )
@@ -281,7 +342,7 @@ namespace fghost
 		// The ROI textures for the current frame size; false = feature off for now.
 		bool EnsureCrosshair( Host_t &H )
 		{
-			if ( H.pXhPatch )
+			if ( H.pXhPatch[0] )
 				return true;
 			if ( H.bXhFailed )
 				return false;
@@ -292,7 +353,10 @@ namespace fghost
 			H.uXhX = ( H.uWidth - uSide ) / 2;
 			H.uXhY = ( H.uHeight - uSide ) / 2;
 
-			if ( !CreateTexture( H.pXhCnt[0], uSide, uSide ) || !CreateTexture( H.pXhCnt[1], uSide, uSide ) || !CreateTexture( H.pXhPatch, uSide, uSide ) )
+			bool bOk = CreateTexture( H.pXhCnt[0], uSide, uSide ) && CreateTexture( H.pXhCnt[1], uSide, uSide );
+			for ( int i = 0; bOk && i < kRingSize; i++ )
+				bOk = CreateTexture( H.pXhPatch[ i ], uSide, uSide );
+			if ( !bOk )
 			{
 				// Not worth failing frame generation over: just run without it.
 				fg_log.errorf( "crosshair protection unavailable: could not create its %ux%u textures", uSide, uSide );
@@ -334,9 +398,10 @@ namespace fghost
 		// Crosshair protection, removal half. Runs once per NEW real frame, right
 		// after it was copied into ring slot nNew (same command buffer):
 		//   1. stability: compare the new frame's ROI with the previous frame's
-		//      ORIGINAL ROI (the patch texture) and update the per-pixel counters;
+		//      ORIGINAL ROI (the previous slot's patch texture) and update the
+		//      per-pixel counters;
 		//   2. mask + patch: save the new frame's original ROI pixels and the
-		//      dilated mask of long-still pixels into the patch texture;
+		//      dilated mask of long-still pixels into nNew's patch texture;
 		//   3. inpaint: overwrite the masked pixels of the ring slot from their
 		//      surroundings, so estimate + warp see plain background there.
 		// Why on every real frame and not only when a pair is generated: the
@@ -344,9 +409,10 @@ namespace fghost
 		// otherwise leave gaps. The previous frame's ring slot was already
 		// inpainted in ITS turn and is only ever used as `prev`, so nothing is
 		// redone for it. Every pass is ROI-sized (a few % of the frame).
-		void RecordCrosshairDetect( CVulkanCmdBuffer *pCb, Host_t &H, int nNew )
+		// nPrev = the slot of the previous real frame (-1 on a reset).
+		void RecordCrosshairDetect( CVulkanCmdBuffer *pCb, Host_t &H, int nNew, int nPrev )
 		{
-			const bool bReset = !H.bXhHist;
+			const bool bReset = !H.bXhHist || nPrev < 0;
 			const int nIn = H.nXhCnt;
 			const int nOut = 1 - H.nXhCnt;
 
@@ -358,25 +424,25 @@ namespace fghost
 			XhairBind( pCb, 0, H.pRing[ nNew ] );
 			if ( !bReset )
 			{
-				XhairBind( pCb, 1, H.pXhPatch );
+				XhairBind( pCb, 1, H.pXhPatch[ nPrev ] );
 				XhairBind( pCb, 2, H.pXhCnt[ nIn ] );
 			}
 			pCb->bindTarget( H.pXhCnt[ nOut ] );
 			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_DETECT, 0, bReset );
 
-			// 2. mask + patch (overwrites the previous frame's patch, which pass 1
-			// has finished reading).
+			// 2. mask + patch (writes this frame's own patch texture; the previous
+			// frame's, read by pass 1, is a different one).
 			pCb->clearState();
 			XhairBind( pCb, 0, H.pRing[ nNew ] );
 			XhairBind( pCb, 1, H.pXhCnt[ nOut ] );
-			pCb->bindTarget( H.pXhPatch );
+			pCb->bindTarget( H.pXhPatch[ nNew ] );
 			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_DETECT, 1, bReset );
 
 			// 3. inpaint. Nothing can be masked on a reset frame (every counter is 0).
 			if ( !bReset )
 			{
 				pCb->clearState();
-				XhairBind( pCb, 0, H.pXhPatch );
+				XhairBind( pCb, 0, H.pXhPatch[ nNew ] );
 				pCb->bindTarget( H.pRing[ nNew ] );
 				XhairDispatch( pCb, H, SHADER_TYPE_FG_INPAINT, 0, false );
 			}
@@ -384,15 +450,16 @@ namespace fghost
 
 			H.nXhCnt = nOut;
 			H.bXhHist = true;
-			H.bXhPatchCur = !bReset;
+			H.bXhPatchValid[ nNew ] = !bReset;
 		}
 
 		// Crosshair protection, restore half: out = mix(out, original, mask) over
-		// the ROI. Records after recordSynth() into the same output texture.
-		void RecordCrosshairPatch( CVulkanCmdBuffer *pCb, const Host_t &H, const gamescope::Rc<CVulkanTexture> &pOut )
+		// the ROI, with the patch of the real frame the synth leads UP TO (its
+		// curr). Records after recordSynth() into the same output texture.
+		void RecordCrosshairPatch( CVulkanCmdBuffer *pCb, const Host_t &H, int nCurrSlot, const gamescope::Rc<CVulkanTexture> &pOut )
 		{
 			pCb->clearState();
-			XhairBind( pCb, 0, H.pXhPatch );
+			XhairBind( pCb, 0, H.pXhPatch[ nCurrSlot ] );
 			pCb->bindTarget( pOut );
 			XhairDispatch( pCb, H, SHADER_TYPE_FG_XHAIR_PATCH, 0, false );
 			pCb->clearState();
@@ -412,6 +479,10 @@ namespace fghost
 				return false;
 
 			const framegen::Settings want = ToLibrarySettings( c );
+
+			// Only the library's own presets matter to what is already applied; mode,
+			// priority and target are pacing's business and never reconfigure it.
+			const uint32_t uLibraryConfig = uPackedConfig & 0x3F0u;
 
 			if ( !H.bLive )
 			{
@@ -438,7 +509,7 @@ namespace fghost
 
 				H.bLive = true;
 				g_uGate.fetch_or( kGateLive, std::memory_order_relaxed );
-				H.uAppliedConfig = uPackedConfig;
+				H.uAppliedConfig = uLibraryConfig;
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s",
 					w, h, want.flowScale, H.bProfiling ? "on" : "n/a" );
@@ -454,8 +525,8 @@ namespace fghost
 				DropFrames( H );
 				for ( auto &p : H.pRing )
 					p = nullptr;
-				for ( auto &p : H.pOut )
-					p = nullptr;
+				for ( OutSlot_t &o : H.out )
+					o.pTex = nullptr;
 				ReleaseCrosshair( H );
 				if ( !H.interp.resize( w, h, kHostVkFormat ) || !CreateRing( H ) )
 				{
@@ -468,7 +539,7 @@ namespace fghost
 				// applies a pending change.
 			}
 
-			if ( uPackedConfig != H.uAppliedConfig )
+			if ( uLibraryConfig != H.uAppliedConfig )
 			{
 				if ( want.flowScale != H.interp.settings().flowScale )
 				{
@@ -484,8 +555,7 @@ namespace fghost
 						return false;
 					}
 					H.bEstimateValid = false;
-					for ( bool &b : H.bOutValid )
-						b = false;
+					InvalidateOutputs( H );
 					H.bProfileOpen = false;
 				}
 				else
@@ -494,7 +564,7 @@ namespace fghost
 					// in flight changes, so no wait.
 					H.interp.setSettings( want );
 				}
-				H.uAppliedConfig = uPackedConfig;
+				H.uAppliedConfig = uLibraryConfig;
 			}
 			return true;
 		}
@@ -504,16 +574,19 @@ namespace fghost
 		// waiting. Never calls readTimings() on an unretired profile: that call
 		// waits (VK_QUERY_RESULT_WAIT_BIT) and would stall the compositor.
 		//
-		// bAboutToRecordEstimate: the next recordEstimate() resets the query
-		// pool, so an unretired profile is dropped rather than kept (it would be
-		// read half-overwritten).
-		void HarvestProfile( Host_t &H, bool bAboutToRecordEstimate )
+		// A pair's profile holds a VARIABLE number of synths now, so it is read
+		// once the pair is over: when the next estimate is about to reset the query
+		// pool, or when this composite is not still playing the profile's pair.
+		// (An unretired profile is dropped at the next estimate rather than kept:
+		// it would be read half-overwritten.)
+		//
+		// Published: the estimate's time, the mean time of one synth, and their sum
+		// for the synths profiled -- the cost guard budgets from the first two.
+		void HarvestProfile( Host_t &H, bool bAboutToRecordEstimate, bool bPairStillPlaying )
 		{
 			if ( !H.bProfileOpen )
 				return;
-
-			const bool bComplete = H.nProfileSynths >= H.nProfileSynthsWanted;
-			if ( !bComplete && !bAboutToRecordEstimate )
+			if ( !bAboutToRecordEstimate && ( bPairStillPlaying || H.nProfileSynths == 0 ) )
 				return;   // more synths of this pair may still be recorded into it
 
 			const uint64_t ulDone = g_device.completedSeqNo();
@@ -538,7 +611,8 @@ namespace fghost
 			// dropped -- an under-count of a lookup/mismatch pass (~0.01-0.04 ms)
 			// instead of an over-count of ~16 ms. The first synth is recorded in the
 			// estimate's own command buffer, contiguous with it, and keeps all of its.
-			uint64_t ulTicks = 0;
+			uint64_t ulEstTicks = 0;
+			uint64_t ulSynthTicks = 0;
 			int nSynth = 0;
 			const char *pszPrev = "";
 			for ( size_t i = 0; i < names.size(); i++ )
@@ -551,20 +625,45 @@ namespace fghost
 
 				if ( bSynthStart && nSynth >= 2 )
 					continue;
-				ulTicks += ticks[i];
+				if ( nSynth == 0 )
+					ulEstTicks += ticks[i];
+				else
+					ulSynthTicks += ticks[i];
 			}
 
-			const double flMs = double( ulTicks ) * double( g_device.timestampPeriodNs() ) * 1e-6;
+			const double flToMs = double( g_device.timestampPeriodNs() ) * 1e-6;
+			const double flEstMs = double( ulEstTicks ) * flToMs;
+			const double flSynthMs = nSynth > 0 ? double( ulSynthTicks ) * flToMs / double( nSynth ) : -1.0;
+			const double flPairMs = flEstMs + double( ulSynthTicks ) * flToMs;
 			// A wrapped counter (timestampValidBits < 64) would show up as an absurd
 			// value; keep the previous reading instead.
-			if ( flMs < 0.0 || flMs > 1000.0 )
+			if ( flPairMs < 0.0 || flPairMs > 1000.0 || flEstMs < 0.0 )
 				return;
-			g_flLastPairGpuMs.store( float( flMs ), std::memory_order_relaxed );
+			g_flLastPairGpuMs.store( float( flPairMs ), std::memory_order_relaxed );
+			g_flLastEstimateMs.store( float( flEstMs ), std::memory_order_relaxed );
+			if ( flSynthMs >= 0.0 )
+				g_flLastSynthMs.store( float( flSynthMs ), std::memory_order_relaxed );
+			g_uCostSeq.fetch_add( 1, std::memory_order_relaxed );
+		}
+
+		// The pool slot an output is to be recorded into: a free one, else the
+		// least recently used (the one just shown has the newest use, so it is safe).
+		OutSlot_t *PickOutSlot( Host_t &H )
+		{
+			OutSlot_t *pBest = nullptr;
+			for ( OutSlot_t &o : H.out )
+			{
+				if ( !o.bValid )
+					return &o;
+				if ( !pBest || o.ulUse < pBest->ulUse )
+					pBest = &o;
+			}
+			return pBest;
 		}
 	}
 
 	// ------------------------------------------------------------------
-	//  Public API: config, gate, slot, reset, status
+	//  Public API: config, gate, frame request, reset, status
 	// ------------------------------------------------------------------
 
 	void SetConfig( const Config &cfg )
@@ -572,7 +671,7 @@ namespace fghost
 		const uint32_t uPacked = Pack( cfg );
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
 
-		if ( ( uPacked & 0xFu ) >= 2 )
+		if ( Mode( ( uPacked >> 10 ) & 0x3u ) != Mode::Off )
 		{
 			g_uGate.fetch_or( kGateEnabled, std::memory_order_relaxed );
 		}
@@ -602,10 +701,10 @@ namespace fghost
 		return g_uGate.load( std::memory_order_relaxed ) != 0;
 	}
 
-	void SetSlot( uint64_t pairId, int k, int n )
+	void SetFrame( const FrameRequest &request )
 	{
-		std::lock_guard<std::mutex> lock( g_SlotMutex );
-		g_Slot = Slot_t{ pairId, k, n };
+		std::lock_guard<std::mutex> lock( g_FrameMutex );
+		g_Frame = request;
 	}
 
 	void Reset()
@@ -635,9 +734,8 @@ namespace fghost
 			case PassReason::Normal:                return "";
 			case PassReason::Off:                 return "Off";
 			case PassReason::WarmingUp:           return "Waiting for a second frame";
-			case PassReason::RefreshLimit:        return "Display refresh too low for this multiplier";
-			case PassReason::CostGuard:           return "Stepped down to keep up with the GPU";
-			case PassReason::GameTooFast:         return "Game already fills the display";
+			case PassReason::CostGuard:           return "Limited to keep up with the GPU";
+			case PassReason::GameTooFast:         return "Game already reaches the refresh rate or target";
 			case PassReason::GameStalled:         return "Frame gap; showing real frames";
 			case PassReason::RendererUnavailable: return "Not available here";
 		}
@@ -649,7 +747,13 @@ namespace fghost
 		RenderStatus s;
 		s.reason = Unavailable( g_eReason.load( std::memory_order_relaxed ) );
 		s.timestampsSupported = g_device.supportsTimestamps();
-		s.lastPairGpuMs = s.timestampsSupported ? g_flLastPairGpuMs.load( std::memory_order_relaxed ) : -1.0f;
+		if ( s.timestampsSupported )
+		{
+			s.lastPairGpuMs = g_flLastPairGpuMs.load( std::memory_order_relaxed );
+			s.lastEstimateMs = g_flLastEstimateMs.load( std::memory_order_relaxed );
+			s.lastSynthMs = g_flLastSynthMs.load( std::memory_order_relaxed );
+		}
+		s.costSeq = g_uCostSeq.load( std::memory_order_relaxed );
 		return s;
 	}
 
@@ -677,7 +781,7 @@ namespace fghost
 		// Switched off (or never on): release everything. The first branch is the
 		// whole cost of the off path once resources are gone, and
 		// vulkan_composite() does not even reach it then (RenderWanted() == 0).
-		if ( cfg.multiplier < 2 )
+		if ( cfg.mode == Mode::Off )
 		{
 			if ( g_pHost )
 			{
@@ -693,16 +797,23 @@ namespace fghost
 		if ( !pLayer0 )
 			return nullptr;
 
-		Slot_t slot;
+		FrameRequest req;
 		{
-			std::lock_guard<std::mutex> lock( g_SlotMutex );
-			slot = g_Slot;
+			std::lock_guard<std::mutex> lock( g_FrameMutex );
+			req = g_Frame;
 		}
 
-		// Pacing has not driven the renderer: stay completely inert. Enabled() is
-		// true so the backends already composite, but nothing is copied or run.
-		if ( slot.nN < 2 || slot.nN > int( kMaxMultiplier ) )
+		// Pacing has not driven the renderer, or says it is settled pass-through:
+		// stay completely inert. Enabled() is true so the backends already
+		// composite, but nothing is copied or run. The frames are forgotten, so the
+		// first frame after the inert stretch starts a clean sequence (no ancient
+		// "previous" frame, crosshair counters restarted).
+		if ( req.t < 0.0f || req.newestId == 0 )
+		{
+			if ( g_pHost && ( g_uGate.load( std::memory_order_relaxed ) & kGateLive ) )
+				DropFrames( *g_pHost );
 			return nullptr;
+		}
 
 		Host_t &H = HostGet();
 
@@ -739,7 +850,7 @@ namespace fghost
 		SetReason( Unavailable::Ok );
 
 		// ---- everything below records into one command buffer of our own ----
-		// (created lazily: a pass-through composite of an already-seen pair records nothing)
+		// (created lazily: a pass-through composite of an already-seen frame records nothing)
 		std::unique_ptr<CVulkanCmdBuffer> pCmd;
 		bool bProfileWritten = false;
 		auto Cmd = [&]() -> CVulkanCmdBuffer *
@@ -756,19 +867,23 @@ namespace fghost
 
 		const bool bXhair = cfg.hud != HudProtect::Off && EnsureCrosshair( H );
 
-		// D11: a pairId not seen before is a new real frame. Copy it into the other
+		// D11: a newestId not seen before is a new real frame. Copy it into the next
 		// ring slot (in this very command buffer) whatever this composite shows, so
-		// the next pair always has a prev.
-		if ( !H.bHaveCur || slot.ulPairId != H.ulCurPair )
+		// later pairs always have it.
+		if ( !H.bHaveCur || req.newestId != H.ulCurId )
 		{
-			const int nNewSlot = H.bHaveCur ? 1 - H.nCurSlot : 0;
-			H.bHavePrev = H.bHaveCur;
+			const int nPrevSlot = H.bHaveCur ? H.nCurSlot : -1;
+			const int nNewSlot = H.bHaveCur ? ( H.nCurSlot + 1 ) % kRingSize : 0;
 			H.nCurSlot = nNewSlot;
 			H.bHaveCur = true;
-			H.ulCurPair = slot.ulPairId;
-			H.bEstimateValid = false;
-			for ( bool &b : H.bOutValid )
-				b = false;
+			H.ulCurId = req.newestId;
+			H.ulSlotId[ nNewSlot ] = req.newestId;
+			H.bXhPatchValid[ nNewSlot ] = false;
+			// The estimate and the cached outputs belong to pairs of frames; the
+			// estimate's frames may now be gone from the ring (overwritten), the
+			// outputs stay valid (they are finished images keyed by outId).
+			if ( H.bEstimateValid && ( FindSlot( H, H.ulEstPrev ) < 0 || FindSlot( H, H.ulEstCurr ) < 0 ) )
+				H.bEstimateValid = false;
 
 			CVulkanCmdBuffer *pCb = Cmd();
 			pCb->bindPipeline( g_device.pipeline( SHADER_TYPE_FG_COPY ) );
@@ -789,45 +904,51 @@ namespace fghost
 			// the generated frames later. Off = none of this is recorded.
 			if ( bXhair )
 			{
-				RecordCrosshairDetect( pCb, H, nNewSlot );
+				RecordCrosshairDetect( pCb, H, nNewSlot, nPrevSlot );
 				pCb->insertBarrier();   // flush the ring slot / patch for later command buffers
 			}
 			else
 			{
 				H.bXhHist = false;
-				H.bXhPatchCur = false;
+				H.bXhPatchValid[ nNewSlot ] = false;
 			}
 		}
 
-		const bool bGenerate = slot.nK >= 1 && slot.nK < slot.nN && H.bHavePrev;
-		if ( bGenerate )
+		// ---- the generated frame, if this output is one ----
+		bool bPairPlaying = false;   // this composite shows a synth of the profile's pair
+		if ( req.t > 0.0f && req.t < 1.0f && req.prevId && req.currId && req.prevId != req.currId )
 		{
-			const int nK = slot.nK;
-			const int nIdx = nK - 1;
+			const int nPrevSlot = FindSlot( H, req.prevId );
+			const int nCurrSlot = FindSlot( H, req.currId );
+			bPairPlaying = H.bProfileOpen && req.prevId == H.ulEstPrev && req.currId == H.ulEstCurr;
 
-			if ( H.bOutValid[ nIdx ] && H.nOutN[ nIdx ] == slot.nN )
+			OutSlot_t *pHit = nullptr;
+			for ( OutSlot_t &o : H.out )
 			{
-				// D13: this slot of this pair was generated by an earlier composite.
-				pResult = H.pOut[ nIdx ];
+				if ( o.bValid && o.ulOutId == req.outId )
+					pHit = &o;
 			}
-			else
+
+			if ( pHit )
 			{
-				CVulkanTexture *pPrev = H.pRing[ 1 - H.nCurSlot ].get();
-				CVulkanTexture *pCurr = H.pRing[ H.nCurSlot ].get();
+				// D13: this output was generated by an earlier composite (a repaint).
+				pHit->ulUse = ++H.ulUseClock;
+				pResult = pHit->pTex;
+			}
+			else if ( nPrevSlot >= 0 && nCurrSlot >= 0 )
+			{
+				CVulkanTexture *pPrev = H.pRing[ nPrevSlot ].get();
+				CVulkanTexture *pCurr = H.pRing[ nCurrSlot ].get();
 				bool bOk = true;
 
-				if ( !H.pOut[ nIdx ] )
-					bOk = CreateTexture( H.pOut[ nIdx ], uWidth, uHeight );
-
-				if ( bOk && !H.bEstimateValid )
+				if ( !H.bEstimateValid || H.ulEstPrev != req.prevId || H.ulEstCurr != req.currId )
 				{
 					// D16: a new estimate resets the library's query pool; read the previous
 					// pair's timings first, if they have retired.
 					if ( H.bProfiling )
 					{
-						HarvestProfile( H, true );
+						HarvestProfile( H, true, false );
 						H.nProfileSynths = 0;
-						H.nProfileSynthsWanted = slot.nN - 1;
 					}
 
 					CVulkanCmdBuffer *pCb = Cmd();
@@ -838,51 +959,78 @@ namespace fghost
 					if ( bOk )
 					{
 						H.bEstimateValid = true;
+						H.ulEstPrev = req.prevId;
+						H.ulEstCurr = req.currId;
+						H.nPairSynths = 0;
 						if ( H.bProfiling )
 						{
 							H.bProfileOpen = true;
 							bProfileWritten = true;
+							bPairPlaying = true;
 						}
 					}
 				}
 
-				if ( bOk )
+				if ( bOk && H.nPairSynths >= kMaxSynthsPerPair )
 				{
-					CVulkanTexture *pOut = H.pOut[ nIdx ].get();
-					CVulkanCmdBuffer *pCb = Cmd();
-					// The output is fully overwritten: prepareDestImage discards its old
-					// contents (UNDEFINED -> GENERAL), and insertBarrier orders it after
-					// every earlier read of it (the previous pair's composite).
-					pCb->prepareDestImage( pOut );
-					pCb->insertBarrier();
-					bOk = H.interp.recordSynth( pCb->rawBuffer(), pPrev->srgbView(), pCurr->srgbView(), pOut->srgbView(),
-						float( nK ) / float( slot.nN ) );
+					// Over the per-pair synth cap (pacing stops asking long before this):
+					// show the most recent output of the pool, or the real frame.
+					const OutSlot_t *pNear = nullptr;
+					for ( const OutSlot_t &o : H.out )
+					{
+						if ( o.bValid && ( !pNear || o.ulUse > pNear->ulUse ) )
+							pNear = &o;
+					}
+					if ( pNear )
+						pResult = pNear->pTex;
+				}
+				else if ( bOk )
+				{
+					OutSlot_t *pSlot = PickOutSlot( H );
+					if ( !pSlot->pTex )
+						bOk = CreateTexture( pSlot->pTex, uWidth, uHeight );
+
 					if ( bOk )
 					{
-						pCb->markDirty( pOut );
-						// Put the crosshair back (only if THIS pair's frame was inpainted).
-						if ( bXhair && H.bXhPatchCur )
-							RecordCrosshairPatch( pCb, H, H.pOut[ nIdx ] );
-						pCb->insertBarrier();   // flush for the consumers in later command buffers
-						H.bOutValid[ nIdx ] = true;
-						H.nOutN[ nIdx ] = slot.nN;
-						if ( H.bProfileOpen )
+						CVulkanTexture *pOut = pSlot->pTex.get();
+						CVulkanCmdBuffer *pCb = Cmd();
+						// The output is fully overwritten: prepareDestImage discards its old
+						// contents (UNDEFINED -> GENERAL), and insertBarrier orders it after
+						// every earlier read of it (an earlier composite).
+						pSlot->bValid = false;
+						pCb->prepareDestImage( pOut );
+						pCb->insertBarrier();
+						bOk = H.interp.recordSynth( pCb->rawBuffer(), pPrev->srgbView(), pCurr->srgbView(), pOut->srgbView(), req.t );
+						if ( bOk )
 						{
-							H.nProfileSynths++;
-							bProfileWritten = true;
+							pCb->markDirty( pOut );
+							// Put the crosshair back (only if THIS pair's curr frame was inpainted).
+							if ( bXhair && H.bXhPatchValid[ nCurrSlot ] )
+								RecordCrosshairPatch( pCb, H, nCurrSlot, pSlot->pTex );
+							pCb->insertBarrier();   // flush for the consumers in later command buffers
+							pSlot->bValid = true;
+							pSlot->ulOutId = req.outId;
+							pSlot->ulUse = ++H.ulUseClock;
+							H.nPairSynths++;
+							if ( H.bProfileOpen )
+							{
+								H.nProfileSynths++;
+								bProfileWritten = true;
+							}
+							pResult = pSlot->pTex;
 						}
-						pResult = H.pOut[ nIdx ];
 					}
 				}
 
 				if ( !bOk )
 				{
 					// Nothing was recorded for the failing call, so `pResult` stays null:
-					// the real frame is shown for this slot (library contract: never
+					// the real frame is shown for this output (library contract: never
 					// present an `out` whose record returned false).
 					SetReason( Unavailable::RecordFailed );
 				}
 			}
+			// else: a frame of the pair is gone from the ring -- the real frame is shown.
 		}
 
 		if ( pCmd )
@@ -894,7 +1042,7 @@ namespace fghost
 
 		// Cheap poll for the finished pair's timings (a counter read, never a wait).
 		if ( H.bProfiling )
-			HarvestProfile( H, false );
+			HarvestProfile( H, false, bPairPlaying );
 
 		return pResult;
 	}

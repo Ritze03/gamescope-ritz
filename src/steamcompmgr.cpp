@@ -7790,24 +7790,31 @@ register_systray(xwayland_ctx_t *ctx)
 //    arrival  handle_done_commit(): a real frame became the focused window's
 //             newest usable commit -> s_FrameGen.pacer.OnArrival()
 //    paint    main loop, right before paint_all(): FrameGen_PrePaint() asks the
-//             pacer which image this refresh shows and hands (pairId, k, n) to
-//             fghost::SetSlot() -- paint_all() then builds layer 0 from the
-//             same commit and vulkan_composite() substitutes the generated frame
+//             pacer which output frame this vblank shows -- the real frame, or a
+//             generated one at some t between two real frames, for the content
+//             time (vblank time V - delay D) -- and hands it to
+//             fghost::SetFrame(); paint_all() then builds layer 0 from the same
+//             commit and vulkan_composite() substitutes the generated frame
 //    repeat   main loop, right after hasRepaint is cleared: FrameGen_PostPaint()
 //             forces the repaint that the rest of the pair needs on the next
 //             vblank. It MUST come after `hasRepaint = false`, or that clear
 //             would eat the request; force_repaint() is vblank-gated, so it
 //             lands on the next refresh, which is the next slot.
 //
-//  Phase A: every backend is paced off the fixed-refresh vblank sequence. A
-//  later phase that times slots under VRR / nested replaces "the next vblank" in
-//  FrameGen_PrePaint()'s `bVblank` argument and in the force_repaint() below;
-//  nothing in Pacing.h cares where the tick comes from. Until then VRR and
-//  tearing are passed through (FrameGen_Unpaced(): n = 0, no hold, the pacer
-//  reset on entry and exit); FG never forces VRR off.
+//  Every backend is paced off the vblank TIMER (the fixed-refresh vblank
+//  sequence; CVBlankTimer ticks at g_nNestedRefresh, else g_nOutputRefresh).
+//  Under VRR or for a tearing surface the main loop would paint on every commit
+//  arrival; while FG is generating it paints on timer ticks only instead
+//  (FrameGen_TimerPaced() / fgpacing::PaintTick() in the main loop, and a
+//  normal sync flip), so the output frames keep their even spacing. VRR and
+//  tearing stay enabled on the display -- FG never forces them off -- and while
+//  FG passes real frames through they behave as they always did. V -- the time
+//  a paint is presented at -- is the vblank timer's predicted target
+//  (g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank), the one place the
+//  display's clock enters.
 //
 //  Off costs one relaxed atomic load per paint (fghost::Enabled()) and one plain
-//  bool read per focused-window commit: no extra repaint, no SetSlot, no
+//  bool read per focused-window commit: no extra repaint, no SetFrame, no
 //  status.
 // ---------------------------------------------------------------------------
 namespace
@@ -7817,11 +7824,16 @@ namespace
 	static_assert( uint8_t( fghost::PassReason::Normal ) == uint8_t( fgpacing::Reason::Normal ) );
 	static_assert( uint8_t( fghost::PassReason::Off ) == uint8_t( fgpacing::Reason::Off ) );
 	static_assert( uint8_t( fghost::PassReason::WarmingUp ) == uint8_t( fgpacing::Reason::WarmingUp ) );
-	static_assert( uint8_t( fghost::PassReason::RefreshLimit ) == uint8_t( fgpacing::Reason::RefreshLimit ) );
 	static_assert( uint8_t( fghost::PassReason::CostGuard ) == uint8_t( fgpacing::Reason::CostGuard ) );
 	static_assert( uint8_t( fghost::PassReason::GameTooFast ) == uint8_t( fgpacing::Reason::GameTooFast ) );
 	static_assert( uint8_t( fghost::PassReason::GameStalled ) == uint8_t( fgpacing::Reason::GameStalled ) );
 	static_assert( uint8_t( fghost::PassReason::RendererUnavailable ) == uint8_t( fgpacing::Reason::RendererUnavailable ) );
+	static_assert( uint8_t( fghost::Mode::Off ) == uint8_t( fgpacing::Mode::Off ) );
+	static_assert( uint8_t( fghost::Mode::Fixed ) == uint8_t( fgpacing::Mode::Fixed ) );
+	static_assert( uint8_t( fghost::Mode::Target ) == uint8_t( fgpacing::Mode::Target ) );
+	static_assert( uint8_t( fghost::Priority::LowLatency ) == uint8_t( fgpacing::Priority::LowLatency ) );
+	static_assert( uint8_t( fghost::Priority::Smoothness ) == uint8_t( fgpacing::Priority::Smoothness ) );
+	static_assert( fghost::kMaxMultiplier == fgpacing::kMaxN );
 
 	struct FrameGenPacing_t
 	{
@@ -7829,13 +7841,8 @@ namespace
 		// FrameGen was on at the last paint. Also gates the arrival hook, so the
 		// off path never touches the pacer. steamcompmgr thread only.
 		bool bActive = false;
-		// The pair needs another refresh: FrameGen_PostPaint() forces it.
+		// Another output frame is due: FrameGen_PostPaint() forces the next vblank.
 		bool bRepaintNext = false;
-		// VRR / tearing: the display is not paced off a fixed vblank, so FG passes
-		// through (see FrameGen_Unpaced()). bUnpaced is the state the pacer was last
-		// reset for; ulUnpacedUntil is the hysteresis hold (ns) before leaving it.
-		bool bUnpaced = false;
-		uint64_t ulUnpacedUntil = 0;
 	};
 	FrameGenPacing_t s_FrameGen;
 
@@ -7843,53 +7850,95 @@ namespace
 	struct FrameGenLog_t
 	{
 		bool bValid = false;
-		int nChosenN = -1;
-		int nActiveN = -1;
+		int nMode = -1;
+		int nMultiplier = -1;
+		int nTarget = -1;
+		int nPriority = -1;
+		bool bGenerating = false;
 		fghost::PassReason ePass = fghost::PassReason::Off;
 		fghost::Unavailable eUnavailable = fghost::Unavailable::Ok;
 		uint64_t ulLastLine = 0;   // last line of either kind, for the 5 s periodic one
 	};
 	FrameGenLog_t s_FrameGenLog;
 
-	// Is the present path one the pair's slots cannot be spaced on? Under VRR the
-	// main loop treats every moment as a vblank and a forced repaint paints at
-	// once, so the generated slots would be presented back-to-back at CPU speed;
-	// tearing (async flips) is the same. Phase B (timer pacing) lifts this.
-	// Tearing mirrors the `bTearing` the main loop uses to choose FlipType::Async.
-	bool FrameGen_Unpaced()
+	// Is frame generation generating right now, i.e. should the main loop pace
+	// its paints on the vblank timer? True while FG is on and the pacer's last
+	// plan was to generate. Under VRR and for a tearing surface the loop would
+	// otherwise paint on every commit arrival (see fgpacing::PaintTick()); while
+	// generating, the output frames are painted on timer ticks instead, exactly
+	// as on a fixed-refresh display. VRR / tearing stay enabled on the display
+	// (D2: FG never forces them off); only OUR paint cadence follows the timer.
+	// While passing through (the game already reaches the output rate, HDR, the
+	// cost guard, still warming up) this is false and the loop behaves as without
+	// frame generation. One relaxed atomic load when FG is off.
+	// steamcompmgr thread only.
+	bool FrameGen_TimerPaced()
 	{
-		gamescope::IBackendConnector *pConnector = GetBackend()->GetCurrentConnector();
-		if ( pConnector && pConnector->IsVRRActive() )
-			return true;
-
-		const gamescope::Rc<commit_t> &pBase = g_HeldCommits[ HELD_COMMIT_BASE ];
-		return cv_tearing_enabled && GetBackend()->SupportsTearing() && pBase != nullptr && pBase->async;
+		return fghost::Enabled() && s_FrameGen.bActive && s_FrameGen.pacer.Generating();
 	}
 
-	// One line when chosenN / activeN / the pass reason / the renderer's reason
-	// changes, plus (debug) a compact one at most every 5 s while FG is on. Called
-	// where the pacing status is published and when the renderer's reason moves,
-	// never per frame.
+	// "fixed 3x" / "target 240 fps" / "target display refresh", for the log.
+	void FrameGen_ModeText( const fghost::Config &cfg, char *psz, size_t cb )
+	{
+		if ( cfg.mode == fghost::Mode::Fixed )
+			snprintf( psz, cb, "fixed %dx", cfg.multiplier );
+		else if ( cfg.mode == fghost::Mode::Target && cfg.targetFps > 0 )
+			snprintf( psz, cb, "target %d fps", cfg.targetFps );
+		else if ( cfg.mode == fghost::Mode::Target )
+			snprintf( psz, cb, "target display refresh" );
+		else
+			snprintf( psz, cb, "off" );
+	}
+
+	// One line when the mode / multiplier / target / priority, whether it is
+	// generating, the pass reason or the renderer's reason changes, plus (debug) a
+	// compact one at most every 5 s while FG is on. Called where the pacing status
+	// is published and when the renderer's reason moves, never per frame. (Not
+	// keyed on the rounded multiplier: a game at a fractional ratio would flap
+	// between two values and spam the log.)
 	void FrameGen_LogStatus( const fghost::PacingStatus &status, fghost::Unavailable eUnavailable, uint64_t ulNow )
 	{
 		FrameGenLog_t &L = s_FrameGenLog;
-		const bool bChanged = !L.bValid || status.chosenN != L.nChosenN || status.activeN != L.nActiveN ||
+		const fghost::Config cfg = fghost::GetConfig();
+		const bool bGenerating = status.activeN >= 2;
+		const bool bChanged = !L.bValid || int( cfg.mode ) != L.nMode || cfg.multiplier != L.nMultiplier ||
+			cfg.targetFps != L.nTarget || int( cfg.priority ) != L.nPriority || bGenerating != L.bGenerating ||
 			status.reason != L.ePass || eUnavailable != L.eUnavailable;
 		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
 		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
 		if ( !bChanged && !bPeriodic )
 			return;
 
-		L = { true, status.chosenN, status.activeN, status.reason, eUnavailable, ulNow };
+		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), bGenerating, status.reason, eUnavailable, ulNow };
+
+		char szMode[ 48 ];
+		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
+		const char *pszPriority = cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency";
 
 		if ( bChanged )
-			fg_log.infof( "frame generation: game %.1f fps, presented %.1f fps, chosen %dx -> active %dx, delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
-				status.gameFps, status.presentedFps, status.chosenN, status.activeN, status.delayMs,
+			fg_log.infof( "frame generation: %s, %s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier,
+				bGenerating ? "generating" : "passing through", status.delayMs,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
 		else
-			fg_log.debugf( "frame generation status: game %.1f fps, presented %.1f fps, %dx -> %dx, delay %.1f ms, pacing: \"%s\", renderer: %s",
-				status.gameFps, status.presentedFps, status.chosenN, status.activeN, status.delayMs,
+			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, pacing: \"%s\", renderer: %s",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
+	}
+
+	fghost::PacingStatus FrameGen_ToStatus( const fgpacing::Pacer::Report &r )
+	{
+		fghost::PacingStatus status;
+		status.valid = true;
+		status.gameFps = r.gameFps;
+		status.presentedFps = r.presentedFps;
+		status.effectiveMultiplier = r.effectiveMultiplier;
+		status.targetFps = r.targetFps;
+		status.chosenN = r.chosenN;
+		status.activeN = r.activeN;
+		status.delayMs = r.delayMs;
+		status.reason = fghost::PassReason( uint8_t( r.reason ) );
+		return status;
 	}
 }
 
@@ -7913,7 +7962,7 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
 }
 
-// Right before paint_all(): decide what this refresh shows and tell the renderer.
+// Right before paint_all(): decide what this vblank shows and tell the renderer.
 static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 {
 	if ( !fghost::Enabled() )
@@ -7923,10 +7972,8 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 			// Switched off: stop paying for it and say so once.
 			s_FrameGen.bActive = false;
 			s_FrameGen.bRepaintNext = false;
-			s_FrameGen.bUnpaced = false;
-			s_FrameGen.ulUnpacedUntil = 0;
 			s_FrameGen.pacer.Reset();
-			fghost::SetSlot( 0, 0, 0 );
+			fghost::SetFrame( fghost::FrameRequest{} );
 
 			fghost::PacingStatus status;
 			status.valid = false;
@@ -7937,15 +7984,21 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 		}
 		return;
 	}
+	const fghost::Config cfg = fghost::GetConfig();
 	if ( !s_FrameGen.bActive )
-		fg_log.infof( "frame generation: on, chosen %dx", fghost::GetConfig().multiplier );
+	{
+		char szMode[ 48 ];
+		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
+		fg_log.infof( "frame generation: on, %s, %s", szMode,
+			cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency" );
+	}
 	s_FrameGen.bActive = true;
 
 	// Only the connector the user is looking at takes part: the pacer's one
 	// sequence belongs to it. Another connector's paint leaves it alone.
 	if ( pPaintFocus != GetCurrentFocus() )
 	{
-		fghost::SetSlot( 0, 0, 0 );
+		fghost::SetFrame( fghost::FrameRequest{} );
 		return;
 	}
 
@@ -7963,83 +8016,57 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 	{
 		// Layer 0 is not a plain game frame (a fade, the Steam UI, a streaming
 		// client, no commit yet): the renderer stays inert and the next game frame
-		// starts a fresh pair.
+		// starts a fresh sequence.
 		s_FrameGen.pacer.Discontinuity();
 		s_FrameGen.bRepaintNext = false;
-		fghost::SetSlot( 0, 0, 0 );
+		fghost::SetFrame( fghost::FrameRequest{} );
 		return;
 	}
 
 	const fghost::RenderStatus renderStatus = fghost::GetRenderStatus();
 	const uint64_t ulNow = get_time_in_nanos();
 
-	// VRR / tearing: pass through. Hysteresis: entering is immediate, leaving
-	// needs the condition clear for kUnpacedHoldNs (VRR does not flap; a tearing
-	// surface's async flag can follow the held commit).
-	constexpr uint64_t kUnpacedHoldNs = 500ull * 1000ull * 1000ull;
-	if ( FrameGen_Unpaced() )
-		s_FrameGen.ulUnpacedUntil = ulNow + kUnpacedHoldNs;
-	const bool bUnpaced = ulNow < s_FrameGen.ulUnpacedUntil;
-	if ( bUnpaced != s_FrameGen.bUnpaced )
-	{
-		// Entering or leaving: the next pair starts clean.
-		s_FrameGen.bUnpaced = bUnpaced;
-		s_FrameGen.pacer.Reset();
-		s_FrameGen.bRepaintNext = false;
-		fghost::Reset();
-	}
-
 	fgpacing::Pacer::Inputs in;
 	in.now = ulNow;
-	in.chosenN = fghost::GetConfig().multiplier;
-	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):
-	// that is the rate at which slots tick.
-	in.refreshHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
-	in.costMs = renderStatus.lastPairGpuMs;
-	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
-
-	if ( bUnpaced )
+	// V: when this composite is presented. The vblank timer's predicted target for
+	// the vblank this paint is for; a paint that is not a vblank, or a target that
+	// is missing or implausible (the first frames, a stale value), falls back to
+	// now. A paint that woke after its target is presented at the next one, so V is
+	// never in the past.
 	{
-		// The real frame goes out at once, the renderer stays inert, no extra
-		// repaint. The pacer is still fed arrivals (FrameGen_OnArrival) so the
-		// status can show the game's rate.
-		fghost::SetSlot( 0, 0, 0 );
-		if ( s_FrameGen.pacer.StatusDue( in.now ) )
-		{
-			const fgpacing::Pacer::Report s = s_FrameGen.pacer.TakeStatus( in, in.now );
-			fghost::PacingStatus status;
-			status.valid = true;
-			status.gameFps = s.gameFps;
-			status.presentedFps = s.gameFps;
-			status.chosenN = s.chosenN;
-			status.activeN = 0;
-			status.delayMs = 0.0f;
-			// No dedicated "variable refresh" value exists; RefreshLimit is the closest.
-			status.reason = fghost::PassReason::RefreshLimit;
-			fghost::PublishPacingStatus( status );
-			FrameGen_LogStatus( status, renderStatus.reason, in.now );
-		}
-		return;
+		const uint64_t ulTarget = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
+		constexpr uint64_t kPlausibleNs = 1000ull * 1000ull * 1000ull;
+		const bool bPlausible = bVblank && ulTarget != 0 && ulTarget < ulNow + kPlausibleNs && ulTarget + kPlausibleNs > ulNow;
+		in.vblankNs = bPlausible ? std::max( ulTarget, ulNow ) : ulNow;
 	}
+	in.mode = fgpacing::Mode( uint8_t( cfg.mode ) );
+	in.multiplier = cfg.multiplier;
+	in.targetFps = cfg.targetFps;
+	in.priority = fgpacing::Priority( uint8_t( cfg.priority ) );
+	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):
+	// that is the rate at which output frames tick.
+	in.refreshHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
+	in.estimateMs = renderStatus.lastEstimateMs;
+	in.synthMs = renderStatus.lastSynthMs;
+	in.costSeq = renderStatus.costSeq;
+	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
 
 	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank );
 
 	if ( d.reset )
 		fghost::Reset();
-	fghost::SetSlot( d.pairId, d.k, d.n );
+	fghost::FrameRequest request;
+	request.newestId = d.newestId;
+	request.prevId = d.prevId;
+	request.currId = d.currId;
+	request.outId = d.outId;
+	request.t = d.inert ? -1.0f : d.t;
+	fghost::SetFrame( request );
 	s_FrameGen.bRepaintNext = d.repaintNext;
 
 	if ( s_FrameGen.pacer.StatusDue( in.now ) )
 	{
-		const fgpacing::Pacer::Report s = s_FrameGen.pacer.TakeStatus( in, in.now );
-		fghost::PacingStatus status;
-		status.valid = true;
-		status.gameFps = s.gameFps;
-		status.presentedFps = s.presentedFps;
-		status.chosenN = s.chosenN;
-		status.activeN = s.activeN;
-		status.delayMs = s.delayMs;
-		status.reason = fghost::PassReason( uint8_t( s.reason ) );
+		const fghost::PacingStatus status = FrameGen_ToStatus( s_FrameGen.pacer.TakeStatus( in, in.now ) );
 		fghost::PublishPacingStatus( status );
 		FrameGen_LogStatus( status, renderStatus.reason, in.now );
 	}
@@ -10424,7 +10451,14 @@ steamcompmgr_main(int argc, char **argv)
 
 			// A false vblank value means bShouldPaint will resolve to false below, effectively ignoring this flag and losing any request
 			// to force a repaint. Don't clear g_bForceRepaint unless vblank is true.
-			const bool bForceRepaint = vblank && g_bForceRepaint.exchange(false);
+			//
+			// Frame generation: while it is generating, only vblank-TIMER ticks paint,
+			// even under VRR (where `vblank` is true on every iteration) or for a
+			// tearing surface -- see fgpacing::PaintTick(). Without frame generation
+			// bPaintTick == vblank, so nothing here changes.
+			const bool bFGTimerPaced = FrameGen_TimerPaced();
+			const bool bPaintTick = fgpacing::PaintTick( bFGTimerPaced, bIsVBlankFromTimer, vblank );
+			const bool bForceRepaint = bPaintTick && g_bForceRepaint.exchange(false);
 			const bool bForceSyncFlip = bForceRepaint || is_fading_out();
 
 			// If we are compositing, always force sync flips because we currently wait
@@ -10444,6 +10478,8 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bForceSyncFlip )
 				eFlipType = FlipType::Normal;
+			else if ( bFGTimerPaced )
+				eFlipType = FlipType::Normal;   // frame generation is generating: paint on timer ticks, a normal flip, even under VRR or tearing
 			else if ( bVRR )
 				eFlipType = FlipType::VRR;
 			else if ( bTearing )
@@ -10469,7 +10505,7 @@ steamcompmgr_main(int argc, char **argv)
 				{
 					case FlipType::Normal:
 					{
-						bShouldPaint = vblank && ( hasRepaint || hasRepaintNonBasePlane || bForceSyncFlip );
+						bShouldPaint = bPaintTick && ( hasRepaint || hasRepaintNonBasePlane || bForceSyncFlip );
 						break;
 					}
 
@@ -10524,7 +10560,7 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bShouldPaint )
 			{
-				FrameGen_PrePaint( pPaintFocus, vblank );
+				FrameGen_PrePaint( pPaintFocus, bPaintTick );
 
 				paint_all( pPaintFocus, eFlipType == FlipType::Async );
 

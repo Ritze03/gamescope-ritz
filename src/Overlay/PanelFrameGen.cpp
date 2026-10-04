@@ -1,14 +1,17 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Four per-profile rows (multiplier, Quality, Artifact safety, Static
-// HUD protection) plus one live Status line. Every row's id IS its config key
-// (`framegen.multiplier`, ...), which is how the Shell's per-profile
+// SHAPE. Six per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
+// Target fps, Priority, Quality, Artifact safety, Static HUD protection -- plus
+// one live Status line. Every row's id IS its config key (`framegen.mode`,
+// `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
 // override needed (config::IsSettingsKey() answers from the serializer).
+// The first row sets TWO keys (mode, and the multiplier for a fixed choice) but
+// is tied to `framegen.mode`: the Shell's marker follows one key per row.
 // Every edit calls fghost::SetConfig() at once; the renderer applies the
 // presets live (a Quality change costs it one GPU wait, which is its business).
 //
-// `Why only these four:` the library's expert knobs (searchPenalty and the
+// `Why only these:` the library's expert knobs (searchPenalty and the
 // rest) are deliberately not exposed -- only the defaults were visually
 // reviewed, so a slider would hand the user settings nobody has looked at.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
@@ -35,12 +38,19 @@ namespace gamescope
 		// Choice rows bind ints; fghost wants its own enums. These are the
 		// only three places that translate, and an unknown string falls to the
 		// default the schema documents.
-		constexpr ui::Option kMultiplierOptions[] = {
-			{ 0, "Off" }, { 2, "2×" }, { 3, "3×" }, { 4, "4×" } };
+		// The first row folds the mode and the multiplier into one choice, as the
+		// user asked ("up to 8x", "a target FPS mode"): 0 = Off, 2..8 = fixed
+		// multiplier, 9 = Target fps (not a multiplier, just the next free id).
+		constexpr int kTargetChoice = 9;
+		constexpr ui::Option kModeOptions[] = {
+			{ 0, "Off" }, { 2, "2×" }, { 3, "3×" }, { 4, "4×" }, { 5, "5×" },
+			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
+		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 
+		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
@@ -55,10 +65,52 @@ namespace gamescope
 
 		int ClampIdx( int n, int nMax ) { return n < 0 ? 0 : ( n > nMax ? nMax : n ); }
 
+		// The row's value for the stored mode + multiplier, and back.
+		int ModeChoice( const config::FrameGenSettings &f )
+		{
+			if ( f.mode == "target" )
+				return kTargetChoice;
+			if ( f.mode == "fixed" && f.multiplier >= 2 )
+				return f.multiplier > fghost::kMaxMultiplier ? fghost::kMaxMultiplier : f.multiplier;
+			return 0;
+		}
+
+		void SetModeChoice( config::FrameGenSettings &f, int n )
+		{
+			if ( n == kTargetChoice )
+			{
+				f.mode = "target";
+			}
+			else if ( n >= 2 )
+			{
+				f.mode = "fixed";
+				f.multiplier = n > fghost::kMaxMultiplier ? fghost::kMaxMultiplier : n;
+			}
+			else
+			{
+				f.mode = "off";
+			}
+		}
+
+		// Target fps: 0 = the display's refresh, else 30..1000. A drag that lands
+		// in the dead zone 1..29 snaps to whichever end is nearer, so the slider
+		// can still be dragged back to "Display refresh".
+		int NormalizeTarget( int n )
+		{
+			if ( n < 15 )
+				return 0;
+			return n < 30 ? 30 : ( n > 1000 ? 1000 : n );
+		}
+
 		fghost::Config ToHostConfig( const config::FrameGenSettings &f )
 		{
 			fghost::Config c;
-			c.multiplier = f.multiplier;   // SetConfig() normalises anything but 0/2/3/4
+			c.mode = f.mode == "target" ? fghost::Mode::Target
+				: ( f.mode == "fixed" ? fghost::Mode::Fixed : fghost::Mode::Off );
+			c.multiplier = f.multiplier;   // SetConfig() normalises (fixed below 2x -> Off, above 8x -> 8x)
+			c.targetFps = f.target_fps;
+			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 0 ) == 1
+				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 3, 1 );
@@ -96,34 +148,60 @@ namespace gamescope
 		bool On()
 		{
 			EnsureConfigLoaded();
-			return s_Settings.framegen.multiplier >= 2;
+			return ModeChoice( s_Settings.framegen ) != 0;
+		}
+
+		bool TargetMode()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.mode == "target";
 		}
 
 		// ---- the Status line (decision D18) -----------------------------------
 		// One line, always. Pure over its inputs so the strings are one place;
 		// the live caller below feeds it the two fghost snapshots.
 		//   Off                       -> "Off"
-		//   pacing live, N >= 2       -> "game 60 fps -> presented ~120 fps · 4× (2× active)
-		//                                 · FG 0.42 ms · +8.3 ms delay"
+		//   generating (activeN >= 2) -> fixed:  "game 60 fps -> presented ~120 fps · 2×
+		//                                          · FG 0.42 ms · +8.3 ms delay"
+		//                                (a fixed multiplier the display saturates reads
+		//                                 "2× (1.4× actual)")
+		//                                target: "game 100 fps -> presented ~240 fps ·
+		//                                          target 240 (2.4×) · FG 0.50 ms · +6.3 ms delay"
 		//   otherwise the reason      -> the renderer's (HDR, 10-bit, YCbCr, ...) when it
-		//                                 refuses, else pacing's (game too fast, GPU too
-		//                                 slow, warming up, reset, ...)
+		//                                 refuses, else pacing's (game already at the
+		//                                 refresh or target, GPU too slow, VRR, warming
+		//                                 up, ...)
 		//   nothing published yet     -> "Waiting for frames"
 		// The font is Basic Latin + Latin-1 only, so the arrow is "->" (U+2192
 		// is not in the atlas); "·" and "×" are Latin-1 and render.
-		std::string StatusLine( int nChosen, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
+		std::string StatusLine( const config::FrameGenSettings &f, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
 		{
-			if ( nChosen < 2 )
+			const int nChoice = ModeChoice( f );
+			if ( nChoice == 0 )
 				return "Off";
 
 			if ( ps.valid && ps.activeN >= 2 )
 			{
 				char sz[ 192 ];
-				int n = std::snprintf( sz, sizeof( sz ), "game %.0f fps -> presented ~%.0f fps · %d×",
-					ps.gameFps, ps.presentedFps, ps.chosenN );
+				int n = std::snprintf( sz, sizeof( sz ), "game %.0f fps -> presented ~%.0f fps",
+					ps.gameFps, ps.presentedFps );
 				std::string s( sz, n > 0 ? (size_t)n : 0 );
-				if ( ps.activeN != ps.chosenN )
-					s += " (" + std::to_string( ps.activeN ) + "× active)";
+				if ( nChoice == kTargetChoice )
+				{
+					std::snprintf( sz, sizeof( sz ), " · target %.0f (%.1f×)", ps.targetFps, ps.effectiveMultiplier );
+					s += sz;
+				}
+				else
+				{
+					std::snprintf( sz, sizeof( sz ), " · %d×", nChoice );
+					s += sz;
+					// The display cannot show N x the game: say what it actually does.
+					if ( ps.effectiveMultiplier > 0.0f && ps.effectiveMultiplier < float( nChoice ) - 0.15f )
+					{
+						std::snprintf( sz, sizeof( sz ), " (%.1f× actual)", ps.effectiveMultiplier );
+						s += sz;
+					}
+				}
 				if ( rs.lastPairGpuMs < 0.0f )
 					s += " · FG n/a";
 				else
@@ -159,11 +237,14 @@ namespace gamescope
 		ui::Area &a = reg.Add( "image.framegen", "Frame generation", ui::Section::Display );
 
 		a.Keywords( "frame generation framegen interpolation fluid motion smooth fps multiplier "
-		            "optical flow lsfg fsr3 fmf frames" );
+		            "target priority latency smoothness optical flow lsfg fsr3 fmf frames" );
 		a.Summary( []
 		{
 			EnsureConfigLoaded();
-			const int n = s_Settings.framegen.multiplier;
+			const int n = ModeChoice( s_Settings.framegen );
+			if ( n == kTargetChoice )
+				return s_Settings.framegen.target_fps > 0
+					? "target " + std::to_string( s_Settings.framegen.target_fps ) : std::string( "target" );
 			return n >= 2 ? std::to_string( n ) + "×" : std::string( "off" );
 		} );
 
@@ -171,19 +252,44 @@ namespace gamescope
 
 		a.Group( "Frame generation" );
 
-		a.Choice( "framegen.multiplier", "Frame generation",
+		a.Choice( "framegen.mode", "Frame generation",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.multiplier; },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.multiplier = n < 2 ? 0 : ( n > 4 ? 4 : n ); PersistAndPush(); } ),
-			kMultiplierOptions, std::size( kMultiplierOptions ) )
-			.Help( "Shows 2, 3 or 4 frames for every game frame by generating the ones in "
-			       "between. It holds each real frame back, adding about 1/2 of a game frame of "
-			       "delay at 2×, 2/3 at 3× and 3/4 at 4× -- not suited to twitch shooters. Works "
-			       "best when the game runs at about 1/N of your refresh rate: the Frame limiter "
-			       "caps the game and this multiplies the capped rate, so a limit of refresh/N is "
-			       "the natural pairing." )
-			.Default( S{}.multiplier )
-			.Keywords( "frame generation multiplier 2x 3x 4x double triple quadruple interpolation off" );
+				[]{ EnsureConfigLoaded(); return ModeChoice( s_Settings.framegen ); },
+				[]( int n ) { EnsureConfigLoaded(); SetModeChoice( s_Settings.framegen, n ); PersistAndPush(); } ),
+			kModeOptions, std::size( kModeOptions ) )
+			.Help( "Shows extra frames between the game's own by generating them, 2× to 8× the "
+			       "game's rate, or aiming at a Target fps. It keeps generating until the game "
+			       "reaches your refresh rate (or the target); a multiplier your display cannot "
+			       "show just fills every refresh. Adds delay, so it is not suited to twitch "
+			       "shooters. The Frame limiter caps the game and this multiplies the capped rate." )
+			.Default( 0 )
+			.Keywords( "frame generation multiplier 2x 3x 4x 5x 6x 7x 8x double triple quadruple target fps dynamic interpolation off" );
+
+		a.Slider( "framegen.target_fps", "Target fps",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.target_fps; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.target_fps = NormalizeTarget( n ); PersistAndPush(); } ) )
+			.Help( "The frame rate to aim for in Target fps mode. The number of generated frames "
+			       "follows the game's frame times on every frame: if the game drops from 120 to "
+			       "100 fps with a target of 240, it generates more per game frame at once. 0 "
+			       "aims at your display's refresh rate; a target above it is capped to it." )
+			.Range( 0.0f, 1000.0f ).Step( 5.0f ).Unit( "fps" )
+			.ZeroMeans( "Display refresh" )
+			.Default( 0 )
+			.Keywords( "frame generation target fps frame rate dynamic refresh" )
+			.DisabledUnless( TargetMode, "Frame generation is not set to Target fps" );
+
+		a.Choice( "framegen.priority", "Priority",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.priority, kPriorityKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.priority = kPriorityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kPriorityOptions, std::size( kPriorityOptions ) )
+			.Help( "Low latency adds the least delay, but motion can stutter when the game's "
+			       "frame times jitter. Smoothness spaces the frames perfectly evenly and adds "
+			       "about one game frame of delay." )
+			.Default( 0 )
+			.Keywords( "frame generation priority low latency smoothness input lag jitter pacing" )
+			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.quality", "Quality",
 			ui::AnyBind::Of<int>(
@@ -227,13 +333,14 @@ namespace gamescope
 		a.Facts( "framegen.status", "Status", []
 		{
 			EnsureConfigLoaded();
-			return StatusLine( s_Settings.framegen.multiplier, fghost::GetPacingStatus(), fghost::GetRenderStatus() );
+			return StatusLine( s_Settings.framegen, fghost::GetPacingStatus(), fghost::GetRenderStatus() );
 		} )
 			.Help( "What frame generation is doing right now, or why it is passing real frames "
-			       "through: the game running too fast for the chosen multiplier, a GPU too slow "
-			       "to keep up, or HDR / 10-bit content. It steps down to a lower multiplier "
-			       "before giving up. MangoHud with output timing shows the presented rate; this "
-			       "fork's HUD shows the game rate." )
+			       "through: the game already reaching the refresh rate or target, a GPU too slow "
+			       "to keep up, variable refresh, or HDR / 10-bit content. When the GPU is the "
+			       "limit it generates fewer frames before giving up. MangoHud with output timing "
+			       "shows the presented rate; this fork's HUD shows the game rate, or the "
+			       "presented rate with Count generated frames." )
 			.Keywords( "frame generation status fps presented delay latency reason" );
 	}
 }

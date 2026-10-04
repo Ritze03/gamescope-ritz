@@ -1,16 +1,20 @@
 // Unit tests for src/FrameGen/Pacing.h -- the pure half of frame-generation
-// pacing (decisions D5, D9, D10, D12, D14, D16, D21 of the FG plan). No
-// compositor, no Vulkan, no clock: every test drives the pacer with times it
-// picks itself.
+// pacing: per-vblank fractional pacing (content time tau = V - D, the output
+// interval o, Low latency / Smoothness), pass-through, the cost guard, the D12
+// resets and the D14 interval estimator. No compositor, no Vulkan, no clock:
+// every test drives the pacer with times it picks itself.
 //
 // `Driver` below stands in for steamcompmgr's main loop on a fixed-refresh
-// display: real frames arrive at their own times, a vblank paints iff a frame
-// arrived since the last paint or the last decision asked for a repaint (that
-// is hasRepaint + force_repaint()), and what each paint decided is logged.
+// display: real frames arrive at times the test lists, a vblank paints iff a
+// frame arrived since the last paint or the last decision asked for a repaint
+// (hasRepaint + force_repaint()), V is the vblank's time, and what each paint
+// decided is logged.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <map>
+#include <set>
 #include <vector>
 
 #include "FrameGen/Pacing.h"
@@ -30,34 +34,44 @@ namespace
 	struct Driver
 	{
 		Pacer pacer;
-		double refreshHz = 120.0;
-		int chosenN = 2;
-		// Generation cost per unit of N, ms; < 0 = the GPU cannot time it. The renderer
-		// reports the cost of the last pair that GENERATED, i.e. costPerN x the N it ran
-		// at, and keeps reporting that value (stale) while nothing generates.
-		double costPerNMs = -1.0;
+		double refreshHz = 125.0;      // 8 ms vblanks: integer-ms arithmetic in most tests
+		Mode mode = Mode::Fixed;
+		int multiplier = 2;
+		int targetFps = 0;
+		Priority priority = Priority::LowLatency;
+		// The renderer's reported cost (stale values persist); < 0 = no timings.
+		float estimateMs = -1.0f;
+		float synthMs = -1.0f;
+		uint32_t costSeq = 0;
 		bool rendererOk = true;
+		bool uiRepaints = false;       // a cursor / overlay repaint on every vblank
 		uint64_t focusKey = 1;
 		LayerKey layer{ 1920, 1080, 87 };
 
 		Ns now = 0;
-		Ns nextVblank = 0;
+		uint64_t vblankIdx = 0;
 		uint64_t newestId = 0;
 		bool wantPaint = false;
 		bool forced = false;
-		float lastCostMs = -1.0f;
 		Ns lastArrival = 0;
 		std::vector<Painted> log;
 
-		Ns VblankNs() const { return Ns( 1e9 / refreshHz ); }
+		Ns VblankAt( uint64_t i ) const { return Ns( double( i ) * 1e9 / refreshHz ); }
+		Ns NextVblank() const { return VblankAt( vblankIdx ); }
 
 		Pacer::Inputs Inputs( Ns t ) const
 		{
 			Pacer::Inputs in;
 			in.now = t;
-			in.chosenN = chosenN;
+			in.vblankNs = t;
+			in.mode = mode;
+			in.multiplier = multiplier;
+			in.targetFps = targetFps;
+			in.priority = priority;
 			in.refreshHz = refreshHz;
-			in.costMs = lastCostMs;
+			in.estimateMs = estimateMs;
+			in.synthMs = synthMs;
+			in.costSeq = costSeq;
 			in.rendererOk = rendererOk;
 			return in;
 		}
@@ -75,68 +89,36 @@ namespace
 			const Pacer::Decision d = pacer.OnPaint( Inputs( t ), newestId, bVblank );
 			log.push_back( { t, d } );
 			forced = d.repaintNext;
-			if ( d.k >= 1 )
-				lastCostMs = costPerNMs >= 0.0 ? float( costPerNMs * d.n ) : -1.0f;
 			return d;
 		}
 
 		void Vblank()
 		{
-			if ( wantPaint || forced )
+			if ( wantPaint || forced || uiRepaints )
 			{
 				wantPaint = false;
-				Paint( nextVblank );
+				Paint( NextVblank() );
 			}
-			nextVblank += VblankNs();
+			vblankIdx++;
 		}
 
-		// Vblanks only (no new frames) for dur: lets the last pair play out.
-		void Settle( Ns dur )
+		// An arrival at the same instant as a vblank goes first (it was ready before
+		// the loop looked).
+		void RunArrivals( const std::vector<Ns> &arrivals, Ns tEnd )
 		{
-			const Ns tEnd = now + dur;
-			while ( nextVblank < tEnd )
+			size_t i = 0;
+			for ( ;; )
 			{
-				now = nextVblank;
-				Vblank();
-			}
-			now = tEnd;
-		}
-
-		// A real frame arrives at t (the vblanks before it run first), and the next
-		// vblank paints. Returns what that paint decided.
-		Pacer::Decision ArriveAndPaint( Ns t )
-		{
-			while ( nextVblank < t )
-			{
-				now = nextVblank;
-				Vblank();
-			}
-			now = t;
-			Arrive( t );
-			now = nextVblank;
-			Vblank();
-			return log.back().d;
-		}
-
-		// Advance to tEnd: game frames every flIntervalMs starting at tFirstArrival,
-		// vblanks on the fixed grid. An arrival at the same instant as a vblank goes
-		// first (it was ready before the loop looked).
-		void Run( Ns tEnd, double flIntervalMs, Ns tFirstArrival )
-		{
-			Ns nextArrival = tFirstArrival;
-			uint64_t nArrival = 0;
-			while ( nextVblank < tEnd || nextArrival < tEnd )
-			{
-				if ( nextArrival <= nextVblank && nextArrival < tEnd )
+				const Ns tA = i < arrivals.size() ? arrivals[ i ] : ~Ns( 0 );
+				if ( tA <= NextVblank() && tA < tEnd )
 				{
-					now = nextArrival;
-					Arrive( nextArrival );
-					nArrival++;
-					nextArrival = tFirstArrival + Ns( double( nArrival ) * flIntervalMs * double( MS ) );
+					now = tA;
+					Arrive( tA );
+					i++;
 				}
-				else if ( nextVblank < tEnd )
+				else if ( NextVblank() < tEnd )
 				{
-					now = nextVblank;
+					now = NextVblank();
 					Vblank();
 				}
 				else
@@ -145,197 +127,117 @@ namespace
 			now = tEnd;
 		}
 
-		// The last full pair in the log: the paints that share the final pairId.
-		std::vector<Pacer::Decision> LastPair() const
+		static std::vector<Ns> Periodic( Ns first, double intervalMs, Ns tEnd )
 		{
-			std::vector<Pacer::Decision> out;
-			if ( log.empty() )
-				return out;
-			const uint64_t id = log.back().d.pairId;
-			for ( size_t i = log.size(); i-- > 0 && log[ i ].d.pairId == id; )
-				out.insert( out.begin(), log[ i ].d );
-			return out;
+			std::vector<Ns> v;
+			for ( uint64_t n = 0;; n++ )
+			{
+				const Ns t = first + Ns( double( n ) * intervalMs * double( MS ) );
+				if ( t >= tEnd )
+					break;
+				v.push_back( t );
+			}
+			return v;
 		}
+
+		// Game frames every intervalMs from the current time until now + dur.
+		void Run( Ns dur, double intervalMs, Ns firstOffset = 3 * MS )
+		{
+			const Ns tEnd = now + dur;
+			RunArrivals( Periodic( now + firstOffset, intervalMs, tEnd ), tEnd );
+		}
+
+		// Vblanks only (no new frames).
+		void Settle( Ns dur ) { RunArrivals( {}, now + dur ); }
+
+		// A real frame arrives at t (the vblanks before it run first) and the next
+		// vblank paints. Returns what that paint decided.
+		Pacer::Decision ArriveAndPaint( Ns t )
+		{
+			while ( NextVblank() < t )
+			{
+				now = NextVblank();
+				Vblank();
+			}
+			now = t;
+			Arrive( t );
+			now = NextVblank();
+			Vblank();
+			return log.back().d;
+		}
+
+		int CountOutputs( Ns t0, Ns t1 ) const
+		{
+			int n = 0;
+			for ( const Painted &p : log )
+				n += ( p.t >= t0 && p.t < t1 && p.d.newOutput ) ? 1 : 0;
+			return n;
+		}
+
+		Pacer::Report Status() { return pacer.TakeStatus( Inputs( now ), now ); }
 	};
-}
 
-// ---------------------------------------------------------------------------
-//  D5 / slot sequence
-// ---------------------------------------------------------------------------
-
-TEST_CASE( "framegen pacing: fixed-refresh slot sequence for N = 2, 3, 4", "[framegen_pacing]" )
-{
-	// 30 fps on 120 Hz: every N in 2..4 fits (30 x 4 = 120 <= 144).
-	for ( int n = 2; n <= 4; n++ )
+	// A warmed-up driver: `dur` of frames at intervalMs.
+	void WarmUp( Driver &drv, double intervalMs = 16.0, Ns dur = 1000 * MS, Ns firstOffset = 3 * MS )
 	{
-		Driver drv;
-		drv.chosenN = n;
-		drv.refreshHz = 120.0;
-		// Arrivals 1 ms before a vblank (vblanks are every 8.33 ms, the game every 33.33 ms).
-		drv.Run( 2000 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-		drv.Settle( 40 * MS );
-
-		INFO( "N = " << n );
-		REQUIRE( drv.pacer.ActiveN() == n );
-
-		// The paints of the last COMPLETE pair: slots 1..n-1 then the real frame, on
-		// consecutive vblanks. (The log ends right after the real frame of the last
-		// arrival, since nothing repaints after it.)
-		const auto pair = drv.LastPair();
-		REQUIRE( int( pair.size() ) == n );
-		for ( int i = 0; i < n - 1; i++ )
-		{
-			CHECK( pair[ i ].k == i + 1 );
-			CHECK( pair[ i ].n == n );
-		}
-		CHECK( pair[ n - 1 ].k == 0 );   // the real frame
-		CHECK( pair[ n - 1 ].n == n );
-		// only the last generated slot is NOT followed by another generated one
-		for ( int i = 0; i < n - 1; i++ )
-			CHECK( pair[ i ].repaintNext );
-		CHECK_FALSE( pair[ n - 1 ].repaintNext );
-
-		// consecutive vblanks
-		const size_t nLog = drv.log.size();
-		for ( int i = 1; i < n; i++ )
-			CHECK( drv.log[ nLog - n + i ].t - drv.log[ nLog - n + i - 1 ].t == drv.VblankNs() );
-
-		// and no reset in steady state
-		for ( size_t i = 1; i < drv.log.size(); i++ )
-			CHECK_FALSE( drv.log[ i ].d.reset );
+		drv.Run( dur, intervalMs, firstOffset );
 	}
 }
 
-TEST_CASE( "framegen pacing: the first slot is the first vblank after the real frame arrives", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.Run( 1000 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-	drv.Settle( 40 * MS );
-
-	// Arrival at t = 7.3 + i * 33.33 ms; the vblank grid is every 8.33 ms.
-	// The paint carrying slot 1 of each pair is the first vblank at or after it.
-	const size_t nLog = drv.log.size();
-	REQUIRE( nLog >= 4 );
-	const Painted &slot1 = drv.log[ nLog - 2 ];
-	const Painted &real = drv.log[ nLog - 1 ];
-	REQUIRE( slot1.d.k == 1 );
-	REQUIRE( real.d.k == 0 );
-	CHECK( real.t - slot1.t == drv.VblankNs() );
-	// no vblank between arrival and slot 1 was skipped: slot 1 lands within one
-	// refresh of the arrival that made it
-	const Ns tArrival = Ns( 7.3 * double( MS ) ) + Ns( double( drv.newestId - 1 ) * ( 1000.0 / 30.0 ) * double( MS ) );
-	CHECK( slot1.t >= tArrival );
-	CHECK( slot1.t - tArrival < drv.VblankNs() );
-}
-
-TEST_CASE( "framegen pacing: a UI repaint with nothing new shows the real frame again", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.Run( 1000 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-	drv.Settle( 40 * MS );
-	REQUIRE( drv.log.back().d.k == 0 );
-	const uint64_t id = drv.log.back().d.pairId;
-
-	const Pacer::Decision a = drv.Paint( drv.log.back().t + 20 * MS );
-	CHECK( a.pairId == id );
-	CHECK( a.k == 0 );
-	CHECK( a.n == 2 );
-	CHECK_FALSE( a.repaintNext );
-	CHECK_FALSE( a.reset );
-}
-
-TEST_CASE( "framegen pacing: a paint that is not a vblank repeats the current slot", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 3;
-	drv.refreshHz = 120.0;
-	drv.Run( 500 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-	drv.Settle( 30 * MS );
-	// Stop right after slot 1 of a pair has been shown.
-	const Pacer::Decision s1 = drv.ArriveAndPaint( drv.nextVblank - 2 * MS );
-	REQUIRE( s1.k == 1 );
-
-	// a cursor-move repaint between vblanks
-	const Pacer::Decision rep = drv.Paint( drv.nextVblank - 3 * MS, false );
-	CHECK( rep.pairId == s1.pairId );
-	CHECK( rep.k == 1 );
-	CHECK( rep.n == 3 );
-	CHECK( rep.repaintNext );   // the pair is not finished
-
-	// the next real vblank is slot 2, not 3
-	const Pacer::Decision s2 = drv.Paint( drv.nextVblank );
-	CHECK( s2.k == 2 );
-}
-
 // ---------------------------------------------------------------------------
-//  D9
+//  Pure helpers
 // ---------------------------------------------------------------------------
 
-TEST_CASE( "framegen pacing: an early arrival drops the rest of the pair and starts the next at once", "[framegen_pacing]" )
+TEST_CASE( "framegen pacing: output interval for a fixed multiplier and for a target", "[framegen_pacing]" )
 {
-	Driver drv;
-	drv.chosenN = 4;
-	drv.refreshHz = 120.0;
-	drv.Run( 500 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-	drv.Settle( 30 * MS );
-	REQUIRE( drv.pacer.ActiveN() == 4 );
-
-	// A new real frame; show its slot 1 and slot 2 ...
-	const Pacer::Decision a1 = drv.ArriveAndPaint( drv.nextVblank - 1 * MS );
-	const uint64_t idA = drv.newestId;
-	drv.Vblank();                       // the pair asked for this repaint
-	const Pacer::Decision a2 = drv.log.back().d;
-	REQUIRE( a1.pairId == idA );
-	REQUIRE( a1.k == 1 );
-	REQUIRE( a2.k == 2 );
-
-	// ... and the next real frame arrives before slot 3 and the held real frame.
-	const Pacer::Decision b1 = drv.ArriveAndPaint( drv.nextVblank - 1 * MS );
-	const uint64_t idB = drv.newestId;
-
-	// The very next vblank is slot 1 of the NEW pair: no slot 3 of A, no real A.
-	CHECK( b1.pairId == idB );
-	CHECK( b1.k == 1 );
-	CHECK( b1.n == 4 );
-	CHECK( b1.repaintNext );
-	CHECK_FALSE( b1.reset );
-
-	// A never reached the screen as a real frame and its slot 3 never played.
-	for ( const Painted &p : drv.log )
-		if ( p.d.pairId == idA )
-			CHECK( ( p.d.k == 1 || p.d.k == 2 ) );
+	// Fixed: interval / N, never faster than the display.
+	CHECK( OutputIntervalMs( Mode::Fixed, 2, 0, 16.0, 125.0 ) == 8.0 );
+	CHECK( OutputIntervalMs( Mode::Fixed, 4, 0, 16.0, 125.0 ) == 8.0 );       // 4 ms wanted, 8 ms vblank
+	CHECK( std::fabs( OutputIntervalMs( Mode::Fixed, 2, 0, 10.0, 144.0 ) - 1000.0 / 144.0 ) < 1e-9 );
+	// Target: 1 / min(target, refresh), 0 = the refresh.
+	CHECK( OutputIntervalMs( Mode::Target, 2, 100, 16.0, 240.0 ) == 10.0 );
+	CHECK( std::fabs( OutputIntervalMs( Mode::Target, 2, 0, 16.0, 240.0 ) - 1000.0 / 240.0 ) < 1e-9 );
+	CHECK( std::fabs( OutputIntervalMs( Mode::Target, 2, 500, 16.0, 240.0 ) - 1000.0 / 240.0 ) < 1e-9 );   // capped to the refresh
 }
 
-TEST_CASE( "framegen pacing: delay does not pile up when the game runs a little above refresh/N", "[framegen_pacing]" )
+TEST_CASE( "framegen pacing: delay per priority", "[framegen_pacing]" )
 {
-	// 70 fps x 2 = 140 <= 1.2 x 120: fits, but a pair (2 refreshes = 16.7 ms) is
-	// longer than the game interval (14.3 ms), so pairs are dropped. Each paint's
-	// pair must be the NEWEST frame at that time (never an older one).
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.Run( 3000 * MS, 1000.0 / 70.0, Ns( 3.1 * double( MS ) ) );
-	REQUIRE( drv.pacer.ActiveN() == 2 );
-
-	for ( size_t i = 1; i < drv.log.size(); i++ )
-		CHECK( drv.log[ i ].d.pairId >= drv.log[ i - 1 ].d.pairId );
-
-	// and each real frame's slot 1 is shown within one refresh of its arrival
-	// (the pair is dropped to the next one, never queued behind it)
-	size_t nSlot1 = 0;
-	for ( const Painted &p : drv.log )
-		if ( p.d.k == 1 )
-			nSlot1++;
-	CHECK( nSlot1 > 100 );
+	// Low latency: the latest interval minus the output interval, floored at 0.
+	CHECK( LowLatencyDelayMs( 16.0, 8.0 ) == 8.0 );          // (N-1)/N of an interval at 2x
+	CHECK( std::fabs( LowLatencyDelayMs( 12.0, 4.0 ) - 8.0 ) < 1e-9 );   // 2/3 at 3x
+	CHECK( LowLatencyDelayMs( 6.0, 8.0 ) == 0.0 );
+	// Smoothness: the median interval plus max(2 ms, spread), at most half an interval.
+	CHECK( SmoothnessDelayMs( 16.0, 0.0 ) == 18.0 );
+	CHECK( SmoothnessDelayMs( 16.0, 5.0 ) == 21.0 );
+	CHECK( SmoothnessDelayMs( 16.0, 30.0 ) == 24.0 );        // margin capped at 8 ms
+	CHECK( SmoothnessDelayMs( 3.0, 0.0 ) == 4.5 );           // 2 ms margin capped at 1.5
 }
 
-// ---------------------------------------------------------------------------
-//  D14
-// ---------------------------------------------------------------------------
+TEST_CASE( "framegen pacing: the jitter spread ignores one hitch", "[framegen_pacing]" )
+{
+	IntervalEstimator e;
+	CHECK( e.SpreadMs() == 0.0 );
+	for ( int i = 0; i < 8; i++ )
+		e.AddInterval( 16 * MS );
+	CHECK( e.SpreadMs() == 0.0 );
+	e.AddInterval( 60 * MS );                  // one hitch
+	CHECK( e.SpreadMs() == 0.0 );
+	e.AddInterval( 20 * MS );
+	e.AddInterval( 22 * MS );
+	CHECK( e.SpreadMs() > 3.0 );               // a jittery game does show
+}
+
+TEST_CASE( "framegen pacing: the GPU budget in synths per pair", "[framegen_pacing]" )
+{
+	// 25% of 16 ms = 4 ms; estimate 1 ms leaves 3 ms.
+	CHECK( MaxSynthsPerPair( 16.0, 1.0, 1.0 ) == 3 );
+	CHECK( MaxSynthsPerPair( 16.0, 1.0, 1.5 ) == 2 );
+	CHECK( MaxSynthsPerPair( 16.0, 3.9, 0.5 ) == 0 );
+	CHECK( MaxSynthsPerPair( 16.0, 5.0, 0.5 ) == 0 );
+	CHECK( MaxSynthsPerPair( 16.0, -1.0, 0.5 ) == INT_MAX );   // no timings, no guard
+	CHECK( MaxSynthsPerPair( 16.0, 1.0, -1.0 ) == INT_MAX );
+	CHECK( MaxSynthsPerPair( 50.0, 0.1, 0.01 ) == kMaxSynthsPerPair );
+}
 
 TEST_CASE( "framegen pacing: interval is the median of the last 8, clamped to 4..50 ms", "[framegen_pacing]" )
 {
@@ -354,8 +256,7 @@ TEST_CASE( "framegen pacing: interval is the median of the last 8, clamped to 4.
 	e.AddInterval( 90 * MS );
 	CHECK( e.IntervalMs() == 10.0 );
 
-	// Even count: mean of the two middle values (10, 10, 10, 10, 10, 90 -> 10).
-	// 2 more outliers: 10 x4, 90 x3 -> sorted 10 10 10 10 90 90 90 -> 10.
+	// 10 x4, 90 x3 -> sorted 10 10 10 10 90 90 90 -> 10.
 	e.AddInterval( 90 * MS );
 	e.AddInterval( 90 * MS );
 	CHECK( e.IntervalMs() == 10.0 );
@@ -364,7 +265,7 @@ TEST_CASE( "framegen pacing: interval is the median of the last 8, clamped to 4.
 	CHECK( e.Count() == 8 );
 	CHECK( e.IntervalMs() == 50.0 );
 
-	// Only the LAST 8 count: nine more 20 ms frames push everything else out.
+	// Only the LAST 8 count.
 	for ( int i = 0; i < 9; i++ )
 		e.AddInterval( 20 * MS );
 	CHECK( e.Count() == 8 );
@@ -396,236 +297,796 @@ TEST_CASE( "framegen pacing: the interval comes from arrival times, not from whe
 {
 	// 60 fps on 144 Hz: latch times are quantised to 6.94 ms, arrivals are not.
 	Driver drv;
-	drv.chosenN = 2;
 	drv.refreshHz = 144.0;
-	drv.Run( 1000 * MS, 1000.0 / 60.0, Ns( 2.0 * double( MS ) ) );
+	drv.Run( 1000 * MS, 1000.0 / 60.0, 2 * MS );
 	REQUIRE( drv.pacer.EstimateValid() );
 	CHECK( std::fabs( drv.pacer.IntervalMs() - 1000.0 / 60.0 ) < 0.001 );
 
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
+	const Pacer::Report s = drv.Status();
 	CHECK( std::fabs( s.gameFps - 60.0f ) < 0.01f );
 }
 
 // ---------------------------------------------------------------------------
-//  D5 / D21
+//  Content time: t for both priorities
 // ---------------------------------------------------------------------------
 
-TEST_CASE( "framegen pacing: fits thresholds are 0.6 / 0.4 / 0.3 x refresh", "[framegen_pacing]" )
+TEST_CASE( "framegen pacing: low latency 2x is synth 0.5 then the real frame", "[framegen_pacing]" )
 {
-	// 144 Hz: 2x up to 86.4 fps, 3x up to 57.6, 4x up to 43.2.
-	CHECK( Fits( 1000.0 / 86.0, 2, 144.0 ) );
-	CHECK_FALSE( Fits( 1000.0 / 87.0, 2, 144.0 ) );
-	CHECK( Fits( 1000.0 / 57.0, 3, 144.0 ) );
-	CHECK_FALSE( Fits( 1000.0 / 58.0, 3, 144.0 ) );
-	CHECK( Fits( 1000.0 / 43.0, 4, 144.0 ) );
-	CHECK_FALSE( Fits( 1000.0 / 44.0, 4, 144.0 ) );
-
-	// exactly on the line fits (60 fps x 2 on a 100 Hz display is 120 = 1.2 x 100)
-	CHECK( Fits( 1000.0 / 60.0, 2, 100.0 ) );
-	CHECK( Fits( 1000.0 / 30.0, 4, 100.0 ) );
-	CHECK( Fits( 1000.0 / 40.0, 3, 100.0 ) );
-	CHECK_FALSE( Fits( 1000.0 / 31.0, 4, 100.0 ) );
-
-	// nonsense in, "no"
-	CHECK_FALSE( Fits( 0.0, 2, 144.0 ) );
-	CHECK_FALSE( Fits( 16.0, 2, 0.0 ) );
-}
-
-TEST_CASE( "framegen pacing: effective N is the highest that fits, below 2 is pass-through", "[framegen_pacing]" )
-{
-	const double hz = 144.0;
-
-	// Everything fits: the chosen N.
-	NChoice c = ChooseN( 4, 1000.0 / 40.0, hz, -1.0 );
-	CHECK( c.n == 4 );
-	CHECK( c.reason == Reason::Normal );
-
-	// 50 fps: 4x needs 200 > 172.8, 3x needs 150: steps down to 3.
-	c = ChooseN( 4, 1000.0 / 50.0, hz, -1.0 );
-	CHECK( c.n == 3 );
-	CHECK( c.reason == Reason::RefreshLimit );
-
-	// 70 fps: only 2x (140).
-	c = ChooseN( 4, 1000.0 / 70.0, hz, -1.0 );
-	CHECK( c.n == 2 );
-	CHECK( c.reason == Reason::RefreshLimit );
-
-	// 90 fps: not even 2x (180 > 172.8): pass-through, because the game's rate
-	// already fills the display.
-	c = ChooseN( 4, 1000.0 / 90.0, hz, -1.0 );
-	CHECK( c.n == 0 );
-	CHECK( c.reason == Reason::GameTooFast );
-
-	// A chosen N below what fits is just honoured.
-	c = ChooseN( 2, 1000.0 / 30.0, hz, -1.0 );
-	CHECK( c.n == 2 );
-	CHECK( c.reason == Reason::Normal );
-
-	// Off.
-	c = ChooseN( 0, 1000.0 / 30.0, hz, -1.0 );
-	CHECK( c.n == 0 );
-	CHECK( c.reason == Reason::Off );
-
-	// The 60 Hz case from the plan: 2x of a 30 fps game fits (60 <= 72), 45 fps
-	// does not (90 > 72).
-	CHECK( ChooseN( 2, 1000.0 / 30.0, 60.0, -1.0 ).n == 2 );
-	CHECK( ChooseN( 2, 1000.0 / 45.0, 60.0, -1.0 ).n == 0 );
-}
-
-TEST_CASE( "framegen pacing: a step down only happens at a pair boundary", "[framegen_pacing]" )
-{
-	// Game speeds up so that 3x stops fitting; the held N changes only after the
-	// hysteresis, and then only takes effect at the next pair's slot 1 (it is
-	// latched there), never mid-pair.
+	// 125 Hz (8 ms vblank), 62.5 fps (16 ms), arrivals ON the vblank grid:
+	// o = 8, D = 16 - 8 = 8, tau = V - 8.
 	Driver drv;
-	drv.chosenN = 3;
+	WarmUp( drv, 16.0, 1000 * MS, 0 );
+	drv.log.clear();
+	drv.Run( 400 * MS, 16.0, 0 );
+	// Find an arrival-aligned pair (past the first few, where the run starts).
+	int nChecked = 0;
+	for ( size_t i = 6; i + 1 < drv.log.size(); i++ )
+	{
+		const Pacer::Decision &a = drv.log[ i ].d;
+		const Pacer::Decision &b = drv.log[ i + 1 ].d;
+		if ( a.t < 1.0f && !a.inert && b.t >= 1.0f && drv.log[ i + 1 ].t - drv.log[ i ].t == 8 * MS )
+		{
+			CHECK( std::fabs( a.t - 0.5f ) < 0.01f );
+			CHECK( a.currId == a.newestId );
+			CHECK( a.prevId == a.newestId - 1 );
+			CHECK( a.repaintNext );
+			CHECK( b.newestId == a.newestId );
+			CHECK( b.prevId == 0 );
+			CHECK_FALSE( b.repaintNext );
+			CHECK( b.newOutput );
+			nChecked++;
+		}
+	}
+	CHECK( nChecked >= 10 );
+}
+
+TEST_CASE( "framegen pacing: low latency 3x is thirds then the real frame", "[framegen_pacing]" )
+{
+	// 250 Hz (4 ms), 12 ms frames, 3x: o = 4, D = 12 - 4 = 8.
+	Driver drv;
+	drv.refreshHz = 250.0;
+	drv.multiplier = 3;
+	drv.Run( 1000 * MS, 12.0, 0 );
+	drv.log.clear();
+	drv.Run( 300 * MS, 12.0, 0 );
+
+	int nChecked = 0;
+	for ( size_t i = 0; i + 2 < drv.log.size(); i++ )
+	{
+		const Pacer::Decision &a = drv.log[ i ].d;
+		const Pacer::Decision &b = drv.log[ i + 1 ].d;
+		const Pacer::Decision &c = drv.log[ i + 2 ].d;
+		if ( a.t < 1.0f && b.t < 1.0f && c.t >= 1.0f && a.newestId == c.newestId )
+		{
+			CHECK( std::fabs( a.t - 1.0f / 3.0f ) < 0.01f );
+			CHECK( std::fabs( b.t - 2.0f / 3.0f ) < 0.01f );
+			nChecked++;
+		}
+	}
+	CHECK( nChecked >= 10 );
+}
+
+TEST_CASE( "framegen pacing: the content time never goes backwards", "[framegen_pacing]" )
+{
+	for ( int prio = 0; prio < 2; prio++ )
+	{
+		Driver drv;
+		drv.priority = prio ? Priority::Smoothness : Priority::LowLatency;
+		INFO( "priority " << prio );
+		WarmUp( drv, 16.0, 400 * MS );
+
+		// +-5 ms of jitter on every frame, plus the odd late one.
+		std::vector<Ns> arr;
+		Ns t = drv.now + 3 * MS;
+		for ( int i = 0; i < 120; i++ )
+		{
+			arr.push_back( t );
+			const int64_t jitter = ( ( i * 7919 ) % 11 ) - 5;     // deterministic -5..+5
+			t += Ns( ( 16 + jitter + ( i % 17 == 0 ? 9 : 0 ) ) * int64_t( MS ) );
+		}
+
+		int64_t last = drv.pacer.ContentNs();
+		int nMoved = 0;
+		const Ns tEnd = arr.back() + 100 * MS;
+		size_t ia = 0;
+		while ( true )
+		{
+			const Ns tA = ia < arr.size() ? arr[ ia ] : ~Ns( 0 );
+			if ( tA <= drv.NextVblank() && tA < tEnd )
+			{
+				drv.now = tA;
+				drv.Arrive( tA );
+				ia++;
+			}
+			else if ( drv.NextVblank() < tEnd )
+			{
+				drv.now = drv.NextVblank();
+				const size_t nBefore = drv.log.size();
+				drv.Vblank();
+				if ( drv.log.size() > nBefore )
+				{
+					const int64_t c = drv.pacer.ContentNs();
+					REQUIRE( c >= last );
+					nMoved += c > last ? 1 : 0;
+					last = c;
+					const Pacer::Decision &d = drv.log.back().d;
+					REQUIRE( d.t > 0.0f );
+					REQUIRE( d.t <= 1.0f );
+				}
+			}
+			else
+				break;
+		}
+		CHECK( nMoved > 100 );
+	}
+}
+
+// ---------------------------------------------------------------------------
+//  Saturation, cadence, target
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: a fixed multiplier saturates at the refresh and never steps down", "[framegen_pacing]" )
+{
+	// 2x at 100 fps on 144 Hz: 200 wanted, 144 shown. Before the rework this
+	// passed through (100 x 2 > 1.2 x 144); now every vblank gets an output.
+	Driver drv;
 	drv.refreshHz = 144.0;
-	drv.Run( 1000 * MS, 1000.0 / 40.0, Ns( 1.0 * double( MS ) ) );   // 40 fps: 3x fits (120 <= 172.8)
-	REQUIRE( drv.pacer.ActiveN() == 3 );
-
-	// 62 fps: 3x = 186 > 172.8, 2x fits.
+	drv.multiplier = 2;
+	WarmUp( drv, 10.0, 1000 * MS );
+	drv.log.clear();
 	const Ns t0 = drv.now;
-	drv.Run( t0 + 3000 * MS, 1000.0 / 62.0, t0 + 1 * MS );
-	REQUIRE( drv.pacer.ActiveN() == 2 );
+	drv.Run( 2000 * MS, 10.0 );
 
-	// Every pair in the log is internally consistent: all paints of one pairId that
-	// generated share ONE n.
-	uint64_t id = 0;
-	int n = 0;
+	for ( const Painted &p : drv.log )
+		REQUIRE_FALSE( p.d.inert );
+	const int nOut = drv.CountOutputs( t0, t0 + 2000 * MS );
+	CHECK( nOut >= 2 * 138 );
+	CHECK( nOut <= 2 * 146 );
+
+	const Pacer::Report s = drv.Status();
+	CHECK( s.reason == Reason::Normal );
+	CHECK( s.activeN >= 2 );
+	CHECK( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 144.0 ) < 1e-6 );
+}
+
+TEST_CASE( "framegen pacing: no 60% cutoff -- generating keeps going until the game reaches the refresh", "[framegen_pacing]" )
+{
+	// 2x at 86 fps on 144 Hz (60% of refresh) used to pass through.
+	Driver drv;
+	drv.refreshHz = 144.0;
+	WarmUp( drv, 1000.0 / 86.0, 1000 * MS );
+	CHECK( drv.pacer.Generating() );
+	// ...and at 130 fps (90% of the refresh) too.
+	Driver d2;
+	d2.refreshHz = 144.0;
+	WarmUp( d2, 1000.0 / 130.0, 1000 * MS );
+	CHECK( d2.pacer.Generating() );
+}
+
+TEST_CASE( "framegen pacing: below the refresh the output rate is exactly N x the game", "[framegen_pacing]" )
+{
+	struct Case { double fps; int n; };
+	const Case cases[] = { { 60.0, 2 }, { 40.0, 3 }, { 30.0, 4 }, { 24.0, 5 } };   // all 120 / 120 / 120 / 120 on 144 Hz
+	for ( const Case &c : cases )
+	{
+		Driver drv;
+		drv.refreshHz = 144.0;
+		drv.multiplier = c.n;
+		INFO( "fps " << c.fps << " n " << c.n );
+		WarmUp( drv, 1000.0 / c.fps, 1000 * MS );
+		const Ns t0 = drv.now;
+		drv.Run( 3000 * MS, 1000.0 / c.fps );
+		const int nOut = drv.CountOutputs( t0, t0 + 3000 * MS );
+		const double expect = c.fps * c.n * 3.0;
+		CHECK( std::fabs( double( nOut ) - expect ) <= 4.0 );
+	}
+}
+
+TEST_CASE( "framegen pacing: target mode follows the latest interval on the very next pair", "[framegen_pacing]" )
+{
+	// Target 240 on a 240 Hz display: 120 fps -> 2 per game frame; the game
+	// drops to 100 fps -> 2.4 per game frame at once, no multiplier to re-pick.
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.mode = Mode::Target;
+	drv.targetFps = 240;
+	WarmUp( drv, 1000.0 / 120.0, 1000 * MS );
+	{
+		const Ns t0 = drv.now;
+		drv.Run( 1000 * MS, 1000.0 / 120.0 );
+		const int n = drv.CountOutputs( t0, t0 + 1000 * MS );
+		CHECK( n >= 236 );
+		CHECK( n <= 242 );
+	}
+
+	// The drop. At 120 fps every pair got exactly 2 outputs; from the very first
+	// pair after the drop some get 3 (2.4 on average) -- no multiplier to re-pick,
+	// the count falls out of t.
+	const Ns tDrop = drv.now;
+	drv.log.clear();
+	drv.Run( 100 * MS, 10.0 );
+	std::map<uint64_t, int> perFrame;
+	for ( const Painted &p : drv.log )
+		perFrame[ p.d.newestId ] += p.d.newOutput ? 1 : 0;
+	int nThree = 0;
+	for ( const auto &kv : perFrame )
+		nThree += kv.second >= 3 ? 1 : 0;
+	CHECK( nThree >= 2 );
+	CHECK( drv.CountOutputs( tDrop, tDrop + 100 * MS ) >= 22 );
+
+	drv.Status();
+	const Ns t1 = drv.now;
+	drv.Run( 1000 * MS, 10.0 );
+	const int n = drv.CountOutputs( t1, t1 + 1000 * MS );
+	CHECK( n >= 236 );
+	CHECK( n <= 242 );
+
+	const Pacer::Report s = drv.Status();
+	CHECK( s.chosenN == 0 );
+	CHECK( s.targetFps == 240.0f );
+	CHECK( std::fabs( s.gameFps - 100.0f ) < 0.5f );
+	CHECK( std::fabs( s.effectiveMultiplier - 2.4f ) < 0.15f );
+	CHECK( s.activeN == 2 );
+}
+
+TEST_CASE( "framegen pacing: target 0 aims at the display refresh and a target above it is capped", "[framegen_pacing]" )
+{
+	for ( int target : { 0, 500 } )
+	{
+		Driver drv;
+		drv.refreshHz = 144.0;
+		drv.mode = Mode::Target;
+		drv.targetFps = target;
+		WarmUp( drv, 1000.0 / 60.0, 1000 * MS );
+		const Ns t0 = drv.now;
+		drv.Run( 2000 * MS, 1000.0 / 60.0 );
+		const int n = drv.CountOutputs( t0, t0 + 2000 * MS );
+		INFO( "target " << target << " n " << n );
+		// Low latency shows each real frame as soon as the content time reaches it,
+		// so a vblank that falls between that and the next real frame re-presents
+		// the same image (not counted): a little under the refresh, never over.
+		CHECK( n >= 2 * 125 );
+		CHECK( n <= 2 * 146 );
+		CHECK( drv.Status().targetFps == 144.0f );
+	}
+
+	// Smoothness queues about one game frame, so every vblank has content: the
+	// full refresh.
+	{
+		Driver drv;
+		drv.refreshHz = 144.0;
+		drv.mode = Mode::Target;
+		drv.priority = Priority::Smoothness;
+		WarmUp( drv, 1000.0 / 60.0, 1000 * MS );
+		const Ns t0 = drv.now;
+		drv.Run( 2000 * MS, 1000.0 / 60.0 );
+		const int n = drv.CountOutputs( t0, t0 + 2000 * MS );
+		INFO( "smoothness n " << n );
+		CHECK( n >= 2 * 140 );
+		CHECK( n <= 2 * 146 );
+	}
+}
+
+TEST_CASE( "framegen pacing: an uncapped game just under the refresh still generates", "[framegen_pacing]" )
+{
+	// 200 fps on 240 Hz, target = refresh: ratio 1.2.
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.mode = Mode::Target;
+	drv.targetFps = 0;
+	WarmUp( drv, 5.0, 1000 * MS );
+	CHECK( drv.pacer.Generating() );
+	CHECK( drv.Status().activeN >= 2 );
+}
+
+// ---------------------------------------------------------------------------
+//  Pass-through
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: pass-through only when the game reaches the output rate, with a ratio band", "[framegen_pacing]" )
+{
+	// 2x on 60 Hz: the output rate is 60. Interval / output interval is the ratio.
+	Driver drv;
+	drv.refreshHz = 60.0;
+	auto Phase = [&]( double fps ) { drv.Run( 2000 * MS, 1000.0 / fps ); };
+
+	Phase( 50.0 );                                  // ratio 1.2
+	CHECK( drv.pacer.Generating() );
+	Phase( 58.5 );                                  // 1.026: still above the stop ratio
+	CHECK( drv.pacer.Generating() );
+	Phase( 59.4 );                                  // 1.0101: the game fills the display
+	CHECK_FALSE( drv.pacer.Generating() );
+	{
+		const Pacer::Report s = drv.Status();
+		CHECK( s.reason == Reason::GameTooFast );
+		CHECK( s.activeN == 0 );
+		CHECK( s.delayMs == 0.0f );
+	}
+	Phase( 57.0 );                                  // 1.0526: inside the band, stays off
+	CHECK_FALSE( drv.pacer.Generating() );
+	Phase( 54.0 );                                  // 1.111: above the start ratio
+	CHECK( drv.pacer.Generating() );
+
+	// A game above the refresh is plainly passed through.
+	Driver d2;
+	d2.refreshHz = 60.0;
+	WarmUp( d2, 1000.0 / 90.0, 1000 * MS );
+	CHECK_FALSE( d2.pacer.Generating() );
+}
+
+TEST_CASE( "framegen pacing: settled pass-through shows each real frame at once with the renderer inert", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 60.0;
+	WarmUp( drv, 1000.0 / 70.0, 1000 * MS );
+	drv.log.clear();
+	drv.Run( 500 * MS, 1000.0 / 70.0 );
+	REQUIRE( drv.log.size() > 20 );
 	for ( const Painted &p : drv.log )
 	{
-		if ( p.d.pairId != id )
-		{
-			id = p.d.pairId;
-			n = 0;
-		}
-		if ( p.d.k >= 1 )
-		{
-			if ( n == 0 )
-				n = p.d.n;
-			CHECK( p.d.n == n );
-		}
+		CHECK( p.d.inert );
+		CHECK( p.d.t >= 1.0f );
+		CHECK_FALSE( p.d.repaintNext );
+		CHECK( p.d.newOutput );             // every real frame shown counts
 	}
-}
-
-// ---------------------------------------------------------------------------
-//  D10
-// ---------------------------------------------------------------------------
-
-TEST_CASE( "framegen pacing: hysteresis holds a change for 0.5 s", "[framegen_pacing]" )
-{
-	NHysteresis h;
-	CHECK_FALSE( h.Initialised() );
-
-	// The first target is adopted at once.
-	NChoice four; four.n = 4;
-	NChoice three; three.n = 3; three.reason = Reason::RefreshLimit;
-	NChoice off; off.n = 0; off.reason = Reason::GameTooFast;
-
-	Ns t = 1000 * MS;
-	CHECK( h.Update( t, four ).n == 4 );
-	CHECK( h.Changed() );
-
-	// A different target does not take effect before 0.5 s ...
-	CHECK( h.Update( t + 10 * MS, three ).n == 4 );
-	CHECK_FALSE( h.Changed() );
-	CHECK( h.Update( t + 300 * MS, three ).n == 4 );
-	CHECK( h.Update( t + 509 * MS, three ).n == 4 );
-	// ... and does after (measured from when the target first changed, t + 10 ms).
-	CHECK( h.Update( t + 510 * MS, three ).n == 3 );
-	CHECK( h.Changed() );
-	CHECK( h.Held().reason == Reason::RefreshLimit );
-	CHECK( h.Update( t + 520 * MS, three ).n == 3 );
-	CHECK_FALSE( h.Changed() );
-}
-
-TEST_CASE( "framegen pacing: a target that flaps never gets through", "[framegen_pacing]" )
-{
-	NHysteresis h;
-	NChoice two; two.n = 2;
-	NChoice off; off.n = 0; off.reason = Reason::GameTooFast;
-
-	Ns t = 0;
-	h.Update( t, two );
-	// Alternating every 100 ms for 10 s: the timer restarts every time, so pass-through
-	// is never entered.
-	for ( int i = 0; i < 100; i++ )
-	{
-		t += 100 * MS;
-		const NChoice &held = h.Update( t, ( i & 1 ) ? two : off );
-		CHECK( held.n == 2 );
-	}
-
-	// Steady at pass-through: switches after 0.5 s.
-	t += 100 * MS;
-	h.Update( t, off );
-	CHECK( h.Held().n == 2 );
-	h.Update( t + 499 * MS, off );
-	CHECK( h.Held().n == 2 );
-	h.Update( t + 500 * MS, off );
-	CHECK( h.Held().n == 0 );
-	CHECK( h.Held().reason == Reason::GameTooFast );
-
-	// and the way back is held just as long
-	t += 600 * MS;
-	h.Update( t, two );
-	CHECK( h.Held().n == 0 );
-	h.Update( t + 500 * MS, two );
-	CHECK( h.Held().n == 2 );
-}
-
-TEST_CASE( "framegen pacing: pass-through is entered and left only after 0.5 s", "[framegen_pacing]" )
-{
-	// 40 fps, 2x on 144 Hz: generating.
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 144.0;
-	drv.Run( 1000 * MS, 1000.0 / 40.0, Ns( 1.0 * double( MS ) ) );
-	REQUIRE( drv.pacer.ActiveN() == 2 );
-
-	// The game jumps to 120 fps (2x no longer fits: 240 > 172.8).
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 250 * MS, 1000.0 / 120.0, t0 + 1 * MS );
-	// 250 ms in, the median has long caught up but the hysteresis has not elapsed.
-	CHECK( drv.pacer.ActiveN() == 2 );
-
-	drv.Run( t0 + 1000 * MS, 1000.0 / 120.0, drv.now + 1 * MS );
-	CHECK( drv.pacer.ActiveN() == 0 );
-
-	// In pass-through the renderer is left inert and every frame goes out at once.
-	const Painted &last = drv.log.back();
-	CHECK( last.d.k == 0 );
-	CHECK( last.d.n == 0 );
-	CHECK_FALSE( last.d.repaintNext );
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
+	// The status number is the real frame rate, not a paint count.
+	const Pacer::Report s = drv.Status();
 	CHECK( s.reason == Reason::GameTooFast );
-	CHECK( s.activeN == 0 );
-	CHECK( s.delayMs == 0.0f );
+}
+
+TEST_CASE( "framegen pacing: the first real frame after a pass-through is only copied", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 60.0;
+	WarmUp( drv, 1000.0 / 70.0, 1000 * MS );
+	REQUIRE_FALSE( drv.pacer.Generating() );
+	// The game slows to 40 fps: generating again. The frame that starts it has
+	// no previous frame: real, renderer NOT inert (it copies), nothing queued.
+	drv.log.clear();
+	drv.Run( 1000 * MS, 25.0 );
+	REQUIRE( drv.pacer.Generating() );
+	bool bSawCopyOnly = false;
+	for ( size_t i = 0; i < drv.log.size(); i++ )
+	{
+		if ( !drv.log[ i ].d.inert && drv.pacer.HistoryCount() >= 1 )
+		{
+			// the first non-inert decision is a copy-only real frame
+			CHECK( drv.log[ i ].d.t >= 1.0f );
+			CHECK_FALSE( drv.log[ i ].d.repaintNext );
+			bSawCopyOnly = true;
+			break;
+		}
+	}
+	CHECK( bSawCopyOnly );
+}
+
+TEST_CASE( "framegen pacing: an unavailable renderer passes through but keeps driving it", "[framegen_pacing]" )
+{
+	Driver drv;
+	WarmUp( drv, 16.0, 800 * MS );
+	REQUIRE( drv.pacer.Generating() );
+
+	drv.rendererOk = false;
+	drv.log.clear();
+	drv.Run( 400 * MS, 16.0 );
+	REQUIRE_FALSE( drv.log.empty() );
+	for ( const Painted &p : drv.log )
+	{
+		CHECK_FALSE( p.d.inert );          // still driven, so the renderer re-checks
+		CHECK( p.d.t >= 1.0f );
+		CHECK_FALSE( p.d.repaintNext );
+	}
+	CHECK( drv.Status().reason == Reason::RendererUnavailable );
+
+	// The cause goes away: generation resumes (one real frame to copy first).
+	drv.rendererOk = true;
+	drv.Run( 800 * MS, 16.0 );
+	CHECK( drv.pacer.Generating() );
+	CHECK( drv.Status().reason == Reason::Normal );
+}
+
+TEST_CASE( "framegen pacing: variable refresh and tearing still generate, painted on timer ticks only", "[framegen_pacing]" )
+{
+	// The main loop under VRR: every iteration counts as a vblank (a commit
+	// arrival paints at once), but while the pacer generates only vblank-TIMER
+	// ticks may paint -- PaintTick() is the rule steamcompmgr.cpp applies.
+	CHECK( PaintTick( true, true, true ) );
+	CHECK_FALSE( PaintTick( true, false, true ) );       // VRR arrival iteration while generating
+	CHECK( PaintTick( false, false, true ) );            // passing through: as always
+	CHECK_FALSE( PaintTick( false, false, false ) );
+	CHECK( PaintTick( true, true, false ) );
+
+	// An uncapped 200 fps game on a 240 Hz VRR panel, target = refresh.
+	Pacer pacer;
+	const double flRefresh = 240.0;
+	const Ns vblank = Ns( 1e9 / flRefresh );
+	const LayerKey layer{ 1920, 1080, 87 };
+	Ns tNextTick = 0;
+	Ns tNextArrival = 3 * MS;
+	uint64_t id = 0;
+	bool bWant = false, bForced = false;
+	int nPaintsOnTicks = 0, nPaintsOffTicks = 0, nGeneratingPaints = 0;
+	Pacer::Inputs in;
+	in.refreshHz = flRefresh;
+	in.mode = Mode::Target;
+	in.targetFps = 0;
+	for ( int step = 0; step < 4000; step++ )
+	{
+		const bool bArrival = tNextArrival <= tNextTick;
+		const Ns t = bArrival ? tNextArrival : tNextTick;
+		in.now = in.vblankNs = t;
+		if ( bArrival )
+		{
+			id++;
+			pacer.OnArrival( id, t, 1, layer );
+			bWant = true;
+			tNextArrival += 5 * MS;                       // 200 fps
+		}
+		else
+		{
+			tNextTick += vblank;
+		}
+		// VRR: the loop's `vblank` is true on every iteration.
+		const bool bTick = !bArrival;
+		const bool bGenBefore = pacer.Generating();
+		if ( PaintTick( bGenBefore, bTick, true ) && ( bWant || bForced ) )
+		{
+			const Pacer::Decision d = pacer.OnPaint( in, id, true );
+			bWant = false;
+			bForced = d.repaintNext;
+			if ( bGenBefore )
+			{
+				nGeneratingPaints++;
+				( bTick ? nPaintsOnTicks : nPaintsOffTicks )++;
+			}
+		}
+	}
+	CHECK( pacer.Generating() );
+	CHECK( nGeneratingPaints > 400 );
+	CHECK( nPaintsOffTicks == 0 );
+	CHECK( nPaintsOnTicks == nGeneratingPaints );
 }
 
 // ---------------------------------------------------------------------------
-//  D12
+//  Low latency vs Smoothness
 // ---------------------------------------------------------------------------
 
-namespace
+TEST_CASE( "framegen pacing: low latency snaps to an early real frame, smoothness plays the pair it was in", "[framegen_pacing]" )
 {
-	// A running 30 fps / 120 Hz / 2x session, ready to be disturbed.
-	void WarmUp( Driver &drv )
+	for ( int prio = 0; prio < 2; prio++ )
 	{
-		drv.chosenN = 2;
-		drv.refreshHz = 120.0;
-		drv.Run( 1000 * MS, 1000.0 / 30.0, Ns( 7.3 * double( MS ) ) );
-		drv.Settle( 40 * MS );
-		REQUIRE( drv.pacer.ActiveN() == 2 );
-		REQUIRE( drv.pacer.HavePrev() );
-		REQUIRE( drv.pacer.EstimateValid() );
+		Driver drv;
+		drv.priority = prio ? Priority::Smoothness : Priority::LowLatency;
+		WarmUp( drv, 16.0, 1000 * MS, 0 );
+		INFO( "priority " << prio );
+
+		// The next frame comes 2 ms early (it is painted at the vblank 2 ms later).
+		const Pacer::Decision d = drv.ArriveAndPaint( drv.lastArrival + 14 * MS );
+		REQUIRE( d.t < 1.0f );
+		if ( prio == 0 )
+		{
+			// Snap: the new pair is the one played at once.
+			CHECK( d.currId == d.newestId );
+			CHECK( d.t > 0.3f );
+		}
+		else
+		{
+			// Queued: the pair before it is still playing.
+			CHECK( d.currId != d.newestId );
+			CHECK( d.currId == d.newestId - 1 );
+		}
 	}
 }
+
+TEST_CASE( "framegen pacing: a late real frame holds at t = 1 in low latency, smoothness absorbs it", "[framegen_pacing]" )
+{
+	auto HoldBefore = [&]( Priority prio, int nLateMs )
+	{
+		Driver drv;
+		drv.priority = prio;
+		WarmUp( drv, 16.0, 1000 * MS, 0 );
+		drv.log.clear();
+		// Let the vblanks run up to the late frame, which arrives nLateMs late.
+		const Ns tLate = drv.lastArrival + Ns( 16 + nLateMs ) * MS;
+		drv.RunArrivals( {}, tLate - 1 );
+		bool bHold = false;
+		for ( const Painted &p : drv.log )
+			bHold = bHold || ( p.d.t >= 1.0f && !p.d.repaintNext && !p.d.inert );
+		const Pacer::Decision d = drv.ArriveAndPaint( tLate );
+		return std::make_pair( bHold, d );
+	};
+
+	// 6 ms late: low latency has already shown the newest real frame and waits.
+	{
+		const auto r = HoldBefore( Priority::LowLatency, 6 );
+		CHECK( r.first );
+		CHECK( r.second.t < 1.0f );            // the late frame is then played from its pair
+	}
+	// Smoothness absorbs it (its queue is about one game frame): no hold...
+	{
+		const auto r = HoldBefore( Priority::Smoothness, 6 );
+		CHECK_FALSE( r.first );
+		CHECK( r.second.t < 1.0f );
+	}
+	// ...until the frame is later than the queue: 12 ms late holds at t = 1 once,
+	// and the content then carries on from where it was (no skip back).
+	{
+		Driver drv;
+		drv.priority = Priority::Smoothness;
+		WarmUp( drv, 16.0, 1000 * MS, 0 );
+		const Ns tLate = drv.lastArrival + 28 * MS;
+		drv.RunArrivals( {}, tLate - 1 );
+		bool bHold = false;
+		for ( const Painted &p : drv.log )
+			bHold = bHold || ( p.d.t >= 1.0f && !p.d.repaintNext && !p.d.inert && p.t > drv.lastArrival );
+		CHECK( bHold );
+		const int64_t before = drv.pacer.ContentNs();
+		const Pacer::Decision d = drv.ArriveAndPaint( tLate );
+		CHECK( drv.pacer.ContentNs() >= before );
+		CHECK( d.t < 1.0f );
+	}
+}
+
+TEST_CASE( "framegen pacing: the delay in the status is D for each priority", "[framegen_pacing]" )
+{
+	Driver ll;
+	WarmUp( ll, 16.0, 1000 * MS );
+	CHECK( std::fabs( ll.Status().delayMs - 8.0f ) < 0.01f );          // 16 - 8
+
+	Driver sm;
+	sm.priority = Priority::Smoothness;
+	WarmUp( sm, 16.0, 1000 * MS );
+	CHECK( std::fabs( sm.Status().delayMs - 18.0f ) < 0.01f );         // 16 + 2 ms margin
+
+	Driver t3;
+	t3.refreshHz = 250.0;
+	t3.multiplier = 3;
+	WarmUp( t3, 12.0, 1000 * MS );
+	CHECK( std::fabs( t3.Status().delayMs - 8.0f ) < 0.01f );          // 12 - 4: 2/3 of a frame
+}
+
+// ---------------------------------------------------------------------------
+//  Status
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: presented fps ignores repaints of an already-shown output", "[framegen_pacing]" )
+{
+	Driver clean;
+	WarmUp( clean, 16.0, 1000 * MS );
+	clean.Status();
+	clean.Run( 2000 * MS, 16.0 );
+	const float flClean = clean.Status().presentedFps;
+
+	// The same game with a cursor/overlay repaint on every single vblank.
+	Driver noisy;
+	noisy.uiRepaints = true;
+	WarmUp( noisy, 16.0, 1000 * MS );
+	noisy.Status();
+	noisy.Run( 2000 * MS, 16.0 );
+	const float flNoisy = noisy.Status().presentedFps;
+
+	// 62.5 fps x 2.
+	CHECK( std::fabs( flClean - 125.0f ) < 4.0f );
+	CHECK( std::fabs( flNoisy - flClean ) < 1.0f );
+
+	// A repaint is the same output again: same id, not counted, nothing queued.
+	clean.Settle( 100 * MS );
+	Pacer::Decision before = clean.log.back().d;
+	clean.now = clean.NextVblank();
+	const Pacer::Decision rep = clean.Paint( clean.now );
+	CHECK_FALSE( rep.newOutput );
+	CHECK( rep.outId == before.outId );
+	CHECK( rep.t == before.t );
+	CHECK( rep.prevId == before.prevId );
+	CHECK( rep.currId == before.currId );
+}
+
+TEST_CASE( "framegen pacing: status numbers", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.multiplier = 3;
+	drv.refreshHz = 250.0;
+	WarmUp( drv, 12.0, 1000 * MS );
+	drv.Status();
+	drv.Run( 1000 * MS, 12.0 );
+	const Pacer::Report s = drv.Status();
+	CHECK( std::fabs( s.gameFps - 83.33f ) < 0.1f );
+	CHECK( std::fabs( s.presentedFps - 250.0f ) < 6.0f );
+	CHECK( s.chosenN == 3 );
+	CHECK( s.activeN == 3 );
+	CHECK( std::fabs( s.effectiveMultiplier - 3.0f ) < 0.1f );
+	CHECK( s.targetFps == 0.0f );
+	CHECK( s.reason == Reason::Normal );
+
+	// Before there is anything to report.
+	Pacer fresh;
+	Pacer::Inputs in;
+	const Pacer::Report f = fresh.TakeStatus( in, 0 );
+	CHECK( f.activeN == 0 );
+	CHECK( f.reason == Reason::WarmingUp );
+	CHECK( f.gameFps == 0.0f );
+}
+
+TEST_CASE( "framegen pacing: changing the mode or the multiplier takes effect at once", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 250.0;
+	drv.multiplier = 2;
+	WarmUp( drv, 12.0, 1000 * MS );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 6.0 ) < 1e-9 );
+	drv.multiplier = 3;
+	drv.Run( 100 * MS, 12.0 );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 4.0 ) < 1e-9 );
+	drv.mode = Mode::Target;
+	drv.targetFps = 100;
+	drv.Run( 100 * MS, 12.0 );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 10.0 ) < 1e-9 );
+	CHECK( drv.Status().chosenN == 0 );
+}
+
+// ---------------------------------------------------------------------------
+//  Synth clamp
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: at most kMaxSynthsPerPair distinct synths per real pair", "[framegen_pacing]" )
+{
+	// 1000 Hz, 20 fps, aiming at 1000 fps: 50 outputs per pair wanted.
+	Driver drv;
+	drv.refreshHz = 1000.0;
+	drv.mode = Mode::Target;
+	drv.targetFps = 1000;
+	WarmUp( drv, 50.0, 1000 * MS );
+	drv.log.clear();
+	drv.Run( 1000 * MS, 50.0 );
+
+	std::map<std::pair<uint64_t, uint64_t>, std::set<uint64_t>> perPair;
+	for ( const Painted &p : drv.log )
+	{
+		if ( p.d.t < 1.0f && !p.d.inert )
+		{
+			REQUIRE( p.d.t > 0.0f );
+			perPair[ { p.d.prevId, p.d.currId } ].insert( p.d.outId );
+		}
+	}
+	REQUIRE( perPair.size() >= 10 );
+	size_t nMax = 0;
+	for ( const auto &kv : perPair )
+		nMax = std::max( nMax, kv.second.size() );
+	CHECK( nMax == size_t( kMaxSynthsPerPair ) );
+}
+
+// ---------------------------------------------------------------------------
+//  Cost guard
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: the cost guard lowers the output rate, then passes through", "[framegen_pacing]" )
+{
+	// 4x at 60 fps on 240 Hz: o = 4.17 ms, three generated frames per pair.
+	// Budget 25% of 16.67 = 4.17 ms.
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.multiplier = 4;
+	WarmUp( drv, 1000.0 / 60.0, 1000 * MS );
+	REQUIRE( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 240.0 ) < 1e-6 );
+
+	// Estimate 1 ms + 1.5 ms per synth: room for 2 synths -> 3 outputs per pair.
+	drv.estimateMs = 1.0f;
+	drv.synthMs = 1.5f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - ( 1000.0 / 60.0 ) / 3.0 ) < 1e-6 );
+	{
+		const Pacer::Report s = drv.Status();
+		CHECK( s.reason == Reason::CostGuard );
+		CHECK( s.activeN >= 2 );
+	}
+
+	// Cheaper: back to the full rate.
+	drv.synthMs = 0.5f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 240.0 ) < 1e-6 );
+	CHECK( drv.Status().reason == Reason::Normal );
+
+	// The estimate alone is over budget: not even one generated frame fits.
+	drv.estimateMs = 5.0f;
+	drv.costSeq++;
+	drv.log.clear();
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK_FALSE( drv.pacer.Generating() );
+	CHECK( drv.pacer.CostBlocked() );
+	CHECK( drv.log.back().d.inert );
+	{
+		const Pacer::Report s = drv.Status();
+		CHECK( s.reason == Reason::CostGuard );
+		CHECK( s.activeN == 0 );
+	}
+}
+
+TEST_CASE( "framegen pacing: a cost-guard pass-through is retried after a while", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.multiplier = 4;
+	WarmUp( drv, 1000.0 / 60.0, 800 * MS );
+	drv.estimateMs = 5.0f;
+	drv.synthMs = 0.5f;
+	drv.costSeq++;
+	drv.Run( 500 * MS, 1000.0 / 60.0 );
+	REQUIRE( drv.pacer.CostBlocked() );
+	REQUIRE_FALSE( drv.pacer.Generating() );
+
+	// Nothing generates, so nothing is measured: the stale numbers stay and the
+	// guard holds for the retry period...
+	drv.Run( 8 * 1000 * MS, 1000.0 / 60.0 );
+	CHECK_FALSE( drv.pacer.Generating() );
+
+	// ...then a probe generates one frame per pair, to take a new measurement.
+	drv.Run( 3 * 1000 * MS, 1000.0 / 60.0 );
+	CHECK( drv.pacer.Generating() );
+	CHECK( drv.pacer.OutputMs() >= 0.5 * ( 1000.0 / 60.0 ) - 1e-6 );
+	CHECK( drv.Status().reason == Reason::CostGuard );
+
+	// The probe's pair measured cheap: the guard lifts for good.
+	drv.estimateMs = 0.5f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK_FALSE( drv.pacer.CostBlocked() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 240.0 ) < 1e-6 );
+}
+
+TEST_CASE( "framegen pacing: a probe that is still too expensive blocks again", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.multiplier = 4;
+	WarmUp( drv, 1000.0 / 60.0, 800 * MS );
+	drv.estimateMs = 5.0f;
+	drv.synthMs = 0.5f;
+	drv.costSeq++;
+	drv.Run( 500 * MS, 1000.0 / 60.0 );
+	REQUIRE( drv.pacer.CostBlocked() );
+	drv.Run( 10 * 1000 * MS + 200 * MS, 1000.0 / 60.0 );
+	REQUIRE( drv.pacer.Generating() );              // probing
+	drv.costSeq++;                                  // a fresh measurement: still 5 ms
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK_FALSE( drv.pacer.Generating() );
+	CHECK( drv.pacer.CostBlocked() );
+}
+
+TEST_CASE( "framegen pacing: no timings means no cost guard", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 240.0;
+	drv.multiplier = 4;
+	WarmUp( drv, 1000.0 / 60.0, 800 * MS );
+	drv.estimateMs = 5.0f;
+	drv.synthMs = 5.0f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	REQUIRE_FALSE( drv.pacer.Generating() );
+
+	// The GPU cannot time it (or the renderer forgot): the guard is off.
+	drv.estimateMs = -1.0f;
+	drv.synthMs = -1.0f;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK( drv.pacer.Generating() );
+	CHECK_FALSE( drv.pacer.CostBlocked() );
+	CHECK( drv.Status().reason == Reason::Normal );
+}
+
+// ---------------------------------------------------------------------------
+//  D12: resets
+// ---------------------------------------------------------------------------
 
 TEST_CASE( "framegen pacing: a gap longer than 100 ms resets", "[framegen_pacing]" )
 {
 	Driver drv;
-	WarmUp( drv );
+	WarmUp( drv, 16.0 );
+	REQUIRE( drv.pacer.Generating() );
 
 	// 99 ms between real frames is a slow frame, not a gap.
 	Pacer::Decision d = drv.ArriveAndPaint( drv.lastArrival + 99 * MS );
@@ -635,24 +1096,25 @@ TEST_CASE( "framegen pacing: a gap longer than 100 ms resets", "[framegen_pacing
 	// 101 ms is.
 	d = drv.ArriveAndPaint( drv.lastArrival + 101 * MS );
 	CHECK( d.reset );                      // fghost::Reset() before this composite
-	CHECK( d.k == 0 );                     // the first frame after the gap goes out directly
+	CHECK( d.t >= 1.0f );                  // the first frame after the gap goes out directly
+	CHECK_FALSE( d.inert );                // ...but is copied
 	CHECK_FALSE( d.repaintNext );
 	CHECK_FALSE( drv.pacer.EstimateValid() );   // history gone
+	CHECK( drv.pacer.HistoryCount() == 1 );
 
 	// The status says why, until the estimate has settled again.
-	Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
+	Pacer::Report s = drv.Status();
 	CHECK( s.reason == Reason::GameStalled );
 	CHECK( s.activeN == 0 );
 
 	// Frames keep coming at 30 fps: real frames only until the interval is known
 	// again (kMinSamples intervals), then generation resumes.
-	drv.Run( drv.now + 1500 * MS, 1000.0 / 30.0, drv.now + 3 * MS );
+	drv.Run( 1500 * MS, 1000.0 / 30.0 );
 	CHECK( drv.pacer.EstimateValid() );
-	CHECK( drv.pacer.ActiveN() == 2 );
-	CHECK( drv.log.back().d.n == 2 );
-	s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
+	CHECK( drv.pacer.Generating() );
+	s = drv.Status();
 	CHECK( s.reason == Reason::Normal );
-	CHECK( s.activeN == 2 );
+	CHECK( s.activeN >= 2 );
 
 	// Exactly one reset in the whole run since the gap.
 	int nReset = 0;
@@ -666,7 +1128,7 @@ TEST_CASE( "framegen pacing: a size or format change of layer 0 resets", "[frame
 	for ( int what = 0; what < 3; what++ )
 	{
 		Driver drv;
-		WarmUp( drv );
+		WarmUp( drv, 16.0 );
 		INFO( "what = " << what );
 
 		if ( what == 0 )
@@ -678,7 +1140,7 @@ TEST_CASE( "framegen pacing: a size or format change of layer 0 resets", "[frame
 
 		const Pacer::Decision d = drv.ArriveAndPaint( drv.lastArrival + 33 * MS );
 		CHECK( d.reset );
-		CHECK( d.k == 0 );
+		CHECK( d.t >= 1.0f );
 		CHECK_FALSE( drv.pacer.EstimateValid() );
 		CHECK_FALSE( d.repaintNext );
 	}
@@ -689,273 +1151,77 @@ TEST_CASE( "framegen pacing: a focus change resets", "[framegen_pacing]" )
 	// with an arrival of its own
 	{
 		Driver drv;
-		WarmUp( drv );
+		WarmUp( drv, 16.0 );
 		drv.focusKey = 2;
 		const Pacer::Decision d = drv.ArriveAndPaint( drv.lastArrival + 33 * MS );
 		CHECK( d.reset );
-		CHECK( d.k == 0 );
+		CHECK( d.t >= 1.0f );
 		CHECK_FALSE( drv.pacer.EstimateValid() );
 	}
 	// layer 0 swapped for another window's commit with no arrival at all
 	// (determine_and_apply_focus() picks that window's last done commit)
 	{
 		Driver drv;
-		WarmUp( drv );
+		WarmUp( drv, 16.0 );
 		drv.newestId += 1000;
-		const Pacer::Decision d = drv.Paint( drv.nextVblank );
+		const Pacer::Decision d = drv.Paint( drv.NextVblank() );
 		CHECK( d.reset );
-		CHECK( d.k == 0 );
-		CHECK( d.pairId == drv.newestId );
-		CHECK( d.n >= 2 );                 // warm-up frame: the renderer still copies it
+		CHECK( d.t >= 1.0f );
+		CHECK( d.newestId == drv.newestId );
+		CHECK_FALSE( d.inert );            // warm-up frame: the renderer still copies it
 	}
 	// layer 0 not a game frame (fade, Steam UI): the glue reports a discontinuity
 	{
 		Driver drv;
-		WarmUp( drv );
+		WarmUp( drv, 16.0 );
 		drv.pacer.Discontinuity();
-		CHECK_FALSE( drv.pacer.HavePrev() );
-		CHECK_FALSE( drv.pacer.PairActive() );
+		drv.forced = false;                // the glue drops its pending repaint too
+		drv.wantPaint = false;
+		CHECK( drv.pacer.HistoryCount() == 0 );
 		// the game's next frame is the first of a fresh sequence
 		const Pacer::Decision d = drv.ArriveAndPaint( drv.lastArrival + 33 * MS );
 		CHECK( d.reset );
-		CHECK( d.k == 0 );
+		CHECK( d.t >= 1.0f );
 	}
 }
 
-TEST_CASE( "framegen pacing: after a reset the next pair is a real frame and the one after generates", "[framegen_pacing]" )
+TEST_CASE( "framegen pacing: after a reset the next frame is copied and generation resumes after warm-up", "[framegen_pacing]" )
 {
 	Driver drv;
-	WarmUp( drv );
+	WarmUp( drv, 16.0 );
 	drv.focusKey = 7;
 	drv.layer.width = 1280;
 	drv.layer.height = 720;
-	// 30 fps, long enough for the estimate and one pair
-	drv.Run( drv.now + 1000 * MS, 1000.0 / 30.0, drv.now + 3 * MS );
-	drv.Settle( 40 * MS );
-	CHECK( drv.pacer.ActiveN() == 2 );
-	const auto pair = drv.LastPair();
-	REQUIRE( pair.size() == 2 );
-	CHECK( pair[ 0 ].k == 1 );
-	CHECK( pair[ 1 ].k == 0 );
-}
-
-// ---------------------------------------------------------------------------
-//  D16
-// ---------------------------------------------------------------------------
-
-TEST_CASE( "framegen pacing: cost guard step-down arithmetic", "[framegen_pacing]" )
-{
-	// 60 fps: the budget is 25 % of 16.67 ms = 4.17 ms. Cost per unit of N is the
-	// measured pair cost divided by the N it ran at.
-	const double iv = 1000.0 / 60.0;
-	const double hz = 240.0;
-
-	// cheap: no guard
-	NChoice c = ChooseN( 4, iv, hz, 1.0 );    // 4 x 1.0 = 4.0 <= 4.17
-	CHECK( c.n == 4 );
-	CHECK( c.reason == Reason::Normal );
-
-	// 4 x 1.2 = 4.8 over, 3 x 1.2 = 3.6 fits
-	c = ChooseN( 4, iv, hz, 1.2 );
-	CHECK( c.n == 3 );
-	CHECK( c.reason == Reason::CostGuard );
-
-	// 1.5: 6.0, 4.5 over, 3.0 fits at 2x
-	c = ChooseN( 4, iv, hz, 1.5 );
-	CHECK( c.n == 2 );
-	CHECK( c.reason == Reason::CostGuard );
-
-	// 2.2: even 2x costs 4.4 > 4.17: pass-through
-	c = ChooseN( 4, iv, hz, 2.2 );
-	CHECK( c.n == 0 );
-	CHECK( c.reason == Reason::CostGuard );
-	c = ChooseN( 2, iv, hz, 2.2 );
-	CHECK( c.n == 0 );
-	CHECK( c.reason == Reason::CostGuard );
-
-	// The guard never changes the user's chosen N upward, and a fit limit that is
-	// already lower wins the reason.
-	c = ChooseN( 2, iv, hz, 0.1 );
-	CHECK( c.n == 2 );
-	CHECK( c.reason == Reason::Normal );
-	c = ChooseN( 4, 1000.0 / 100.0, 144.0, 0.1 );   // 100 fps on 144 Hz: too fast
-	CHECK( c.n == 0 );
-	CHECK( c.reason == Reason::GameTooFast );
-
-	// No timings (n/a): no guard at all, whatever the numbers.
-	c = ChooseN( 4, iv, hz, -1.0 );
-	CHECK( c.n == 4 );
-	CHECK( c.reason == Reason::Normal );
-}
-
-TEST_CASE( "framegen pacing: the cost guard steps N down as measured cost rises", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 4;
-	drv.refreshHz = 240.0;
-	drv.costPerNMs = 1.0;      // cheap: 4 x 1.0 = 4.0 ms <= 4.17
-	drv.Run( 3000 * MS, 1000.0 / 60.0, 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 4 );
-	CHECK( drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now ).reason == Reason::Normal );
-
-	// the GPU gets busier: 1.25 per N
-	drv.costPerNMs = 1.25;
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 300 * MS, 1000.0 / 60.0, t0 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 4 );     // not yet: hysteresis
-	drv.Run( t0 + 4000 * MS, 1000.0 / 60.0, drv.now + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 3 );
-	Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	CHECK( s.reason == Reason::CostGuard );
-	CHECK( s.activeN == 3 );
-	CHECK( s.chosenN == 4 );
-
-	// busier still
-	drv.costPerNMs = 1.8;
-	const Ns t1 = drv.now;
-	drv.Run( t1 + 4000 * MS, 1000.0 / 60.0, t1 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 2 );
-	CHECK( drv.log.back().d.n == 2 );
-}
-
-TEST_CASE( "framegen pacing: when even 2x is over budget the cost guard passes through", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.costPerNMs = 0.5;
-	drv.Run( 2000 * MS, 1000.0 / 30.0, 2 * MS );
-	REQUIRE( drv.pacer.ActiveN() == 2 );
-
-	drv.costPerNMs = 3.0;      // 2 x 3.0 = 6 ms > 25 % of 33.3 ms? No: budget is 8.3 ms.
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 3000 * MS, 1000.0 / 30.0, t0 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 2 );   // 6 ms fits the 8.3 ms budget of a 30 fps game
-
-	drv.costPerNMs = 5.0;      // 2 x 5.0 = 10 ms > 8.3 ms
-	const Ns t1 = drv.now;
-	drv.Run( t1 + 3000 * MS, 1000.0 / 30.0, t1 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 0 );
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	CHECK( s.reason == Reason::CostGuard );
-	CHECK( s.activeN == 0 );
-	CHECK( s.delayMs == 0.0f );
-	CHECK( drv.log.back().d.k == 0 );
-	CHECK( drv.log.back().d.n == 0 );    // inert renderer
-}
-
-TEST_CASE( "framegen pacing: a cost-guard pass-through is retried after a while", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 4;
-	drv.refreshHz = 240.0;
-	drv.costPerNMs = 2.5;      // over budget even at 2x (5 ms > 4.17 ms)
-	drv.Run( 3000 * MS, 1000.0 / 60.0, 2 * MS );
-	REQUIRE( drv.pacer.ActiveN() == 0 );
-
-	// The load goes away. Nothing is generated, so nothing is measured: only the
-	// periodic probe can find out.
-	drv.costPerNMs = 0.5;
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 5000 * MS, 1000.0 / 60.0, t0 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 0 );     // 5 s: not yet
-	drv.Run( t0 + 20000 * MS, 1000.0 / 60.0, drv.now + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 4 );     // probed with 2x, measured, stepped back up
-}
-
-TEST_CASE( "framegen pacing: no timings means no cost guard", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 4;
-	drv.refreshHz = 240.0;
-	drv.costPerNMs = -1.0;     // timestamps unsupported: lastPairGpuMs < 0
-	drv.Run( 5000 * MS, 1000.0 / 60.0, 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 4 );
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	CHECK( s.reason == Reason::Normal );
-}
-
-// ---------------------------------------------------------------------------
-//  Renderer unavailable, status, chosen N
-// ---------------------------------------------------------------------------
-
-TEST_CASE( "framegen pacing: an unavailable renderer passes through but keeps driving it", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 3;
-	drv.refreshHz = 120.0;
-	drv.rendererOk = false;
-	drv.Run( 1500 * MS, 1000.0 / 30.0, 2 * MS );
-
+	drv.log.clear();
+	drv.Run( 1000 * MS, 1000.0 / 30.0 );
+	REQUIRE( drv.pacer.Generating() );
+	REQUIRE_FALSE( drv.log.empty() );
+	int nReset = 0;
+	for ( const Painted &p : drv.log )
+		nReset += p.d.reset ? 1 : 0;
+	CHECK( nReset == 1 );
+	// Warm-up frames are real and not inert; generated frames come after.
+	bool bGen = false;
 	for ( const Painted &p : drv.log )
 	{
-		CHECK( p.d.k == 0 );                  // real frames only
-		CHECK( p.d.n >= 2 );                  // but the renderer is still told, so it can notice the cause went away
-		CHECK_FALSE( p.d.repaintNext );
+		if ( p.d.t < 1.0f )
+			bGen = true;
+		else if ( !bGen )
+			CHECK_FALSE( p.d.inert );
 	}
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	CHECK( s.reason == Reason::RendererUnavailable );
-	CHECK( s.activeN == 0 );
-
-	// It comes back: generation resumes after one warm-up frame.
-	drv.rendererOk = true;
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 1000 * MS, 1000.0 / 30.0, t0 + 2 * MS );
-	drv.Settle( 40 * MS );
-	CHECK( drv.pacer.ActiveN() == 3 );
-	CHECK( drv.LastPair().size() == 3 );
-}
-
-TEST_CASE( "framegen pacing: status numbers", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.Run( 1000 * MS, 1000.0 / 60.0, 2 * MS );   // 60 fps, 2x on 120 Hz: every refresh is a paint
-	REQUIRE( drv.pacer.ActiveN() == 2 );
-
-	// A fresh window, then exactly one second of play.
-	drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 1000 * MS, 1000.0 / 60.0, t0 + 2 * MS );
-	const Pacer::Report s = drv.pacer.TakeStatus( drv.Inputs( drv.now ), drv.now );
-	CHECK( std::fabs( s.gameFps - 60.0f ) < 0.1f );
-	CHECK( std::fabs( s.presentedFps - 120.0f ) < 3.0f );
-	CHECK( s.chosenN == 2 );
-	CHECK( s.activeN == 2 );
-	CHECK( std::fabs( s.delayMs - 1000.0f / 60.0f / 2.0f ) < 0.01f );   // (N-1)/N x interval
-	CHECK( s.reason == Reason::Normal );
-
-	// published at a modest rate
-	CHECK_FALSE( drv.pacer.StatusDue( drv.now + 100 * MS ) );
-	CHECK( drv.pacer.StatusDue( drv.now + 250 * MS ) );
-}
-
-TEST_CASE( "framegen pacing: changing the chosen multiplier takes effect at once", "[framegen_pacing]" )
-{
-	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 240.0;
-	drv.Run( 1000 * MS, 1000.0 / 60.0, 2 * MS );
-	REQUIRE( drv.pacer.ActiveN() == 2 );
-
-	// the user picks 4x: adopted at the next paint, not after half a second
-	drv.chosenN = 4;
-	const Ns t0 = drv.now;
-	drv.Run( t0 + 100 * MS, 1000.0 / 60.0, t0 + 2 * MS );
-	CHECK( drv.pacer.ActiveN() == 4 );
+	CHECK( bGen );
 }
 
 TEST_CASE( "framegen pacing: Reset forgets everything", "[framegen_pacing]" )
 {
 	Driver drv;
-	drv.chosenN = 2;
-	drv.refreshHz = 120.0;
-	drv.Run( 1000 * MS, 1000.0 / 30.0, 7 * MS );
+	WarmUp( drv, 16.0 );
 	REQUIRE( drv.pacer.EstimateValid() );
 	drv.pacer.Reset();
 	CHECK_FALSE( drv.pacer.EstimateValid() );
-	CHECK_FALSE( drv.pacer.HavePrev() );
-	CHECK_FALSE( drv.pacer.PairActive() );
-	CHECK( drv.pacer.ActiveN() == 0 );
+	CHECK_FALSE( drv.pacer.Generating() );
+	CHECK( drv.pacer.HistoryCount() == 0 );
+	CHECK( drv.pacer.ContentNs() == 0 );
+	const Pacer::Report s = drv.Status();
+	CHECK( s.reason == Reason::WarmingUp );
 }
