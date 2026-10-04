@@ -378,28 +378,58 @@ TEST_CASE( "fps_display.lag_detection_enabled round-trips", "[config]" )
     }
 }
 
-TEST_CASE( "fps_display.count_generated_frames round-trips and defaults off", "[config]" )
+TEST_CASE( "fps_display.fps_shown round-trips, defaults to game, migrates the legacy bool", "[config]" )
 {
-    REQUIRE( Settings{}.fps_display.count_generated_frames == false );
+    REQUIRE( Settings{}.fps_display.fps_shown == "game" );
 
-    for ( bool bValue : { true, false } )
+    for ( const char *pszValue : { "game", "output", "both" } )
     {
         TempConfigHome home;
 
         Settings s{};
-        s.fps_display.count_generated_frames = bValue;
+        s.fps_display.fps_shown = pszValue;
 
         REQUIRE( SaveSections( s ) );
 
         Settings loaded = LoadSections();
-        REQUIRE( loaded.fps_display.count_generated_frames == bValue );
+        REQUIRE( loaded.fps_display.fps_shown == pszValue );
     }
 
-    // An existing config that predates the key loads as Off.
-    TempConfigHome home;
-    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true}})";
-    Settings loaded = LoadSections();
-    REQUIRE( loaded.fps_display.count_generated_frames == false );
+    // An existing config that predates the key loads as game.
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true}})";
+        REQUIRE( ResolvedSettings().fps_display.fps_shown == "game" );
+    }
+
+    // Legacy count_generated_frames (true, no fps_shown) migrates to output.
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"count_generated_frames": true}})";
+        REQUIRE( ResolvedSettings().fps_display.fps_shown == "output" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"count_generated_frames": false}})";
+        REQUIRE( ResolvedSettings().fps_display.fps_shown == "game" );
+    }
+
+    // fps_shown wins over the legacy key; garbage falls back to game.
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"count_generated_frames": true, "fps_shown": "both"}})";
+        REQUIRE( ResolvedSettings().fps_display.fps_shown == "both" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"fps_shown": "nonsense"}})";
+        REQUIRE( ResolvedSettings().fps_display.fps_shown == "game" );
+    }
 }
 
 // cursor_override_game (request #6, 2026-09-04): a separate opt-in from

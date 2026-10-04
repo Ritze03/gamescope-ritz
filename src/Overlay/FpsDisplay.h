@@ -123,6 +123,17 @@ namespace gamescope
 			return n == 1 ? "immediate" : "smoothing";
 		}
 
+		// fps_display.fps_shown (2026-10-04): 0 = "game", 1 = "output",
+		// 2 = "both"; anything unrecognised is "game".
+		inline int FpsShownToInt( std::string_view sShown )
+		{
+			return sShown == "output" ? 1 : sShown == "both" ? 2 : 0;
+		}
+		inline const char *FpsShownFromInt( int n )
+		{
+			return n == 1 ? "output" : n == 2 ? "both" : "game";
+		}
+
 		// 2026-09-07 margin fix's pure arithmetic (FpsDisplay.cpp's
 		// MeasureFpsModule(), "margin fix" comment, and fps-display.md's
 		// "Margin" section carry the full reasoning): how far to shift the

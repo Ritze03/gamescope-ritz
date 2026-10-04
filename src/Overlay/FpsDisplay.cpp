@@ -330,33 +330,115 @@ namespace gamescope
 	// every intermediate integer) and holds for the remaining 700 ms. Until
 	// the first window completes it shows the Immediate value, so the first
 	// second is a real reading rather than a made-up 60.
-	static uint64_t s_ulSmoothingWindowStartNs = 0;
-	static uint64_t s_ulSmoothingWindowStartCount = 0;
-	static bool s_bSmoothingSeeded = false;
-	static float s_flShownFrom = 0.0f;
-	static float s_flShownTo = 0.0f;
-	static uint64_t s_ulGlideStartNs = 0;
+	//
+	// 2026-10-04: all of this state lives in a RateWindows so two independent
+	// copies can run -- the game's (commit counter) and the output's (Frame
+	// generation's presentedFps, see below). "FPS shown" = Both draws both
+	// numbers, and each must keep its own smoothing: the game number must not
+	// restart when generation starts or stops.
+	struct RateWindows
+	{
+		uint64_t ulSmoothingStartNs = 0;
+		uint64_t ulSmoothingStartCount = 0;
+		bool     bSeeded = false;
+		float    flShownFrom = 0.0f;
+		float    flShownTo = 0.0f;
+		uint64_t ulGlideStartNs = 0;
 
-	// Immediate: the count over the last ~100 ms, republished each time
-	// that window rolls over. Jittery by design -- that is what the mode
-	// promises ("the very latest reading, jitter and all").
-	static uint64_t s_ulImmediateWindowStartNs = 0;
-	static uint64_t s_ulImmediateWindowStartCount = 0;
-	static float s_flImmediateFps = 0.0f;
+		// Immediate: the count over the last ~100 ms, republished each time
+		// that window rolls over. Jittery by design -- that is what the mode
+		// promises ("the very latest reading, jitter and all").
+		uint64_t ulImmediateStartNs = 0;
+		uint64_t ulImmediateStartCount = 0;
+		float    flImmediateFps = 0.0f;
 
-	// "Count generated frames" (fps_display.count_generated_frames). While the
-	// shown number comes from Frame generation's published presentedFps rather
-	// than from the commit counter, each window below averages the samples taken
-	// per call instead of dividing a commit delta by time -- presentedFps is
-	// already a rate (published about every 250 ms), so it has no count to
-	// diff. s_bGenSource remembers which source the windows were filled from, so
-	// a switch (option toggled, frame generation on/off, pass-through begins)
-	// restarts both windows instead of mixing a commit delta with a rate.
-	static bool  s_bGenSource = false;
-	static double s_dImmediateGenSum = 0.0;
-	static int    s_nImmediateGenN = 0;
-	static double s_dSmoothingGenSum = 0.0;
-	static int    s_nSmoothingGenN = 0;
+		// A rate source (presentedFps) is already a rate (published about
+		// every 250 ms), so it has no count to diff: each window averages the
+		// samples taken per call instead. bRateSource remembers which source
+		// the windows were filled from, so a switch (frame generation on/off,
+		// pass-through begins) restarts both windows instead of mixing a
+		// commit delta with a rate.
+		bool   bRateSource = false;
+		double dImmediateSum = 0.0;
+		int    nImmediateN = 0;
+		double dSmoothingSum = 0.0;
+		int    nSmoothingN = 0;
+		bool   bGliding = false;
+
+		float Step( uint64_t ulNowNanos, uint64_t ulCount, bool bRate, float flRate, bool bImmediateMode )
+		{
+			if ( bRate != bRateSource )
+			{
+				bRateSource = bRate;
+				ulImmediateStartNs = 0;
+				ulSmoothingStartNs = 0;
+				dImmediateSum = dSmoothingSum = 0.0;
+				nImmediateN = nSmoothingN = 0;
+			}
+			if ( bRate )
+			{
+				dImmediateSum += flRate;
+				nImmediateN++;
+				dSmoothingSum += flRate;
+				nSmoothingN++;
+			}
+
+			// ---- Immediate: ~100 ms tumbling window -----------------------
+			if ( ulImmediateStartNs == 0 )
+			{
+				ulImmediateStartNs = ulNowNanos;
+				ulImmediateStartCount = ulCount;
+			}
+			else if ( ulNowNanos - ulImmediateStartNs >= fpsmath::kImmediateWindowNs )
+			{
+				flImmediateFps = bRate
+					? (float)( dImmediateSum / std::max( nImmediateN, 1 ) )
+					: fpsmath::RateFromCounts( ulCount - ulImmediateStartCount, ulNowNanos - ulImmediateStartNs );
+				ulImmediateStartNs = ulNowNanos;
+				ulImmediateStartCount = ulCount;
+				dImmediateSum = 0.0;
+				nImmediateN = 0;
+			}
+
+			// ---- Smoothing: 1 s window -> 300 ms glide -> 700 ms hold ------
+			if ( ulSmoothingStartNs == 0 )
+			{
+				ulSmoothingStartNs = ulNowNanos;
+				ulSmoothingStartCount = ulCount;
+			}
+			else if ( ulNowNanos - ulSmoothingStartNs >= fpsmath::kSmoothingWindowNs )
+			{
+				const float flTarget = bRate
+					? (float)( dSmoothingSum / std::max( nSmoothingN, 1 ) )
+					: fpsmath::RateFromCounts( ulCount - ulSmoothingStartCount, ulNowNanos - ulSmoothingStartNs );
+				dSmoothingSum = 0.0;
+				nSmoothingN = 0;
+				// Glide from whatever is on screen right now. A glide can't
+				// still be in flight here (300 < 1000), so this is the held
+				// value; the first window ever just snaps to its target.
+				flShownFrom = bSeeded
+					? fpsmath::GlideValue( flShownFrom, flShownTo, ulNowNanos - ulGlideStartNs )
+					: flTarget;
+				flShownTo = flTarget;
+				ulGlideStartNs = ulNowNanos;
+				bSeeded = true;
+				ulSmoothingStartNs = ulNowNanos;
+				ulSmoothingStartCount = ulCount;
+			}
+
+			if ( bImmediateMode || !bSeeded )
+			{
+				bGliding = false;
+				return flImmediateFps;
+			}
+
+			const uint64_t ulGlideElapsedNs = ulNowNanos - ulGlideStartNs;
+			bGliding = fpsmath::GlideMoving( ulGlideElapsedNs );
+			return fpsmath::GlideValue( flShownFrom, flShownTo, ulGlideElapsedNs );
+		}
+	};
+	static RateWindows s_GameWindows;   // the game's real frames (commit counter)
+	static RateWindows s_OutputWindows; // the output rate while generating, else the commit counter
 
 	// The lag-spike detector's own sample source: the per-commit frametime,
 	// consumed at most once per paint, as it always was. See
@@ -458,7 +540,8 @@ namespace gamescope
 	// regardless of which is selected, so switching modes in the settings
 	// panel never shows a stale value -- the bookkeeping is two timestamps
 	// and two counts, so there is nothing to save by pausing the other one.
-	static float UpdateAndGetDisplayFps()
+	struct DisplayRates { float flGame = 0.0f; float flOutput = 0.0f; bool bGenerating = false; };
+	static DisplayRates UpdateAndGetDisplayFps()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		// fpsmath::UpdateModeToInt's rule: "immediate" is Immediate, anything
@@ -483,98 +566,37 @@ namespace gamescope
 			PushFrametimeSample( flMs );
 		}
 
-		// ---- which rate is shown: the game's, or what is sent to the display ----
-		// Only the displayed number changes with "Count generated frames"; the
-		// lag-spike detector above and the frametime history stay on real
-		// frames. The output rate is used only while it is meaningful: frame
-		// generation on, the pacing status published at least once, and a
-		// multiplier actually in use (activeN >= 2). In pass-through
-		// (activeN < 2: warming up, game stalled, renderer unavailable, the game
-		// already at the output rate, or the cost guard) the output rate IS the
-		// game rate, so the commit counter is the right number there.
-		// presentedFps counts the output frames actually handed to present
-		// (generated frames plus the real frames pacing showed), never a repaint
-		// of an already-shown output (UI, cursor, HUD keepalive); with Pause at
-		// refresh rate off it can exceed the refresh (e.g. ~800).
-		bool bGenSource = false;
+		// ---- the output rate: what is sent to the display ----------------
+		// Used only while it is meaningful: frame generation on, the pacing
+		// status published at least once, and a multiplier actually in use
+		// (activeN >= 2). In pass-through (activeN < 2: warming up, game
+		// stalled, renderer unavailable, the game already at the output rate,
+		// or the cost guard) the output rate IS the game rate, so the commit
+		// counter is the right number there. presentedFps counts the output
+		// frames actually handed to present (generated frames plus the real
+		// frames pacing showed), never a repaint of an already-shown output
+		// (UI, cursor, HUD keepalive); with Pause at refresh rate off it can
+		// exceed the refresh (e.g. ~800).
+		// Both windows always run, whatever "FPS shown" says, so changing it
+		// never shows a stale value, and neither restarts the other.
+		bool bGenerating = false;
 		float flGenFps = 0.0f;
-		if ( cfg.count_generated_frames && fghost::Enabled() )
+		if ( fghost::Enabled() )
 		{
 			const fghost::PacingStatus st = fghost::GetPacingStatus();
 			if ( st.valid && st.activeN >= 2 )
 			{
-				bGenSource = true;
+				bGenerating = true;
 				flGenFps = st.presentedFps;
 			}
 		}
-		if ( bGenSource != s_bGenSource )
-		{
-			s_bGenSource = bGenSource;
-			s_ulImmediateWindowStartNs = 0;
-			s_ulSmoothingWindowStartNs = 0;
-			s_dImmediateGenSum = s_dSmoothingGenSum = 0.0;
-			s_nImmediateGenN = s_nSmoothingGenN = 0;
-		}
-		if ( bGenSource )
-		{
-			s_dImmediateGenSum += flGenFps;
-			s_nImmediateGenN++;
-			s_dSmoothingGenSum += flGenFps;
-			s_nSmoothingGenN++;
-		}
 
-		// ---- Immediate: ~100 ms tumbling window ---------------------------
-		if ( s_ulImmediateWindowStartNs == 0 )
-		{
-			s_ulImmediateWindowStartNs = ulNowNanos;
-			s_ulImmediateWindowStartCount = ulCount;
-		}
-		else if ( ulNowNanos - s_ulImmediateWindowStartNs >= fpsmath::kImmediateWindowNs )
-		{
-			s_flImmediateFps = bGenSource
-				? (float)( s_dImmediateGenSum / std::max( s_nImmediateGenN, 1 ) )
-				: fpsmath::RateFromCounts( ulCount - s_ulImmediateWindowStartCount, ulNowNanos - s_ulImmediateWindowStartNs );
-			s_ulImmediateWindowStartNs = ulNowNanos;
-			s_ulImmediateWindowStartCount = ulCount;
-			s_dImmediateGenSum = 0.0;
-			s_nImmediateGenN = 0;
-		}
-
-		// ---- Smoothing: 1 s window -> 300 ms glide -> 700 ms hold ----------
-		if ( s_ulSmoothingWindowStartNs == 0 )
-		{
-			s_ulSmoothingWindowStartNs = ulNowNanos;
-			s_ulSmoothingWindowStartCount = ulCount;
-		}
-		else if ( ulNowNanos - s_ulSmoothingWindowStartNs >= fpsmath::kSmoothingWindowNs )
-		{
-			const float flTarget = bGenSource
-				? (float)( s_dSmoothingGenSum / std::max( s_nSmoothingGenN, 1 ) )
-				: fpsmath::RateFromCounts( ulCount - s_ulSmoothingWindowStartCount, ulNowNanos - s_ulSmoothingWindowStartNs );
-			s_dSmoothingGenSum = 0.0;
-			s_nSmoothingGenN = 0;
-			// Glide from whatever is on screen right now. A glide can't
-			// still be in flight here (300 < 1000), so this is the held
-			// value; the first window ever just snaps to its target.
-			s_flShownFrom = s_bSmoothingSeeded
-				? fpsmath::GlideValue( s_flShownFrom, s_flShownTo, ulNowNanos - s_ulGlideStartNs )
-				: flTarget;
-			s_flShownTo = flTarget;
-			s_ulGlideStartNs = ulNowNanos;
-			s_bSmoothingSeeded = true;
-			s_ulSmoothingWindowStartNs = ulNowNanos;
-			s_ulSmoothingWindowStartCount = ulCount;
-		}
-
-		if ( bImmediateMode || !s_bSmoothingSeeded )
-		{
-			s_bGliding.store( false, std::memory_order_relaxed );
-			return s_flImmediateFps;
-		}
-
-		const uint64_t ulGlideElapsedNs = ulNowNanos - s_ulGlideStartNs;
-		s_bGliding.store( fpsmath::GlideMoving( ulGlideElapsedNs ), std::memory_order_relaxed );
-		return fpsmath::GlideValue( s_flShownFrom, s_flShownTo, ulGlideElapsedNs );
+		DisplayRates r;
+		r.flGame = s_GameWindows.Step( ulNowNanos, ulCount, false, 0.0f, bImmediateMode );
+		r.flOutput = s_OutputWindows.Step( ulNowNanos, ulCount, bGenerating, flGenFps, bImmediateMode );
+		r.bGenerating = bGenerating;
+		s_bGliding.store( s_GameWindows.bGliding || s_OutputWindows.bGliding, std::memory_order_relaxed );
+		return r;
 	}
 
 	// -------------------------------------------------------------------
@@ -942,7 +964,7 @@ namespace gamescope
 		float flOutlineRadius = 0.0f; // px, 0 = no outline
 		ImU32 outlineColor = 0;
 		ImU32 textColor = 0;
-		char szNum[8] = ""; // unpadded digits actually drawn -- see flTextOffsetX
+		char szNum[32] = ""; // unpadded text actually drawn ("144" or "40->280") -- see flTextOffsetX
 		ImVec2 numSize{};
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
@@ -1170,7 +1192,7 @@ namespace gamescope
 	// side of the box; centre keeps the old centred behaviour. The box
 	// itself (boxSize, and so ResolveAnchoredOrigin's placement of it) is
 	// unchanged by this -- only where the digits sit inside it.
-	static FpsModuleLayout MeasureFpsModule( int nFps, int nVert, int nHoriz )
+	static FpsModuleLayout MeasureFpsModule( int nFps, int nOut, int nVert, int nHoriz )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -1261,10 +1283,36 @@ namespace gamescope
 			szPadded[i] = '0';
 		szPadded[nDigits] = '\0';
 		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::min( nFps, 9999999 ) );
+		// "FPS shown" = Both while generating (nOut >= 0): "<game>-><output>".
+		// The pinned field becomes "<game zeros>-><output zeros>", each side
+		// padded to its own >= 3 cells exactly like a lone number, so the box
+		// never resizes until one side gains a digit. Plain ASCII "->": the
+		// overlay font atlas is Latin-1 only, an arrow glyph would be missing.
+		// szInkRef stays the game number's zero run in every mode: the vertical
+		// ink bearings are measured off digits only (the '>' and '-' glyphs
+		// must not move the top/bottom correction), and the horizontal ones
+		// come from the worst-case digit cache, so Game mode is byte-identical.
+		char szInkRef[8];
+		memcpy( szInkRef, szPadded, sizeof( szInkRef ) );
+		char szPaddedFull[24];
+		snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s", szPadded );
+		if ( nOut >= 0 )
+		{
+			nOut = std::min( nOut, 9999999 );
+			char szOutZeros[8];
+			const int nOutDigits = fpsmath::PinnedDigitCount( nOut );
+			for ( int i = 0; i < nOutDigits; i++ )
+				szOutZeros[i] = '0';
+			szOutZeros[nOutDigits] = '\0';
+			char szGame[16];
+			snprintf( szGame, sizeof( szGame ), "%s", L.szNum );
+			snprintf( L.szNum, sizeof( L.szNum ), "%s->%d", szGame, nOut );
+			snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s->%s", szPadded, szOutZeros );
+		}
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
 		const float flFontSize = cfg.font_size; // still user-configurable (M4's own font-size slider) -- ImGui scales the baked Hero glyphs to whatever size is requested
-		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szPadded );
+		L.numSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, szPaddedFull );
 		const ImVec2 unpaddedSize = pFont->CalcTextSizeA( flFontSize, FLT_MAX, 0.0f, L.szNum );
 		const float flGap = L.numSize.x - unpaddedSize.x;
 		// 0 (left anchor): flush against the box's left edge.
@@ -1349,7 +1397,7 @@ namespace gamescope
 		// both, and EdgeShift() adds the radius as before.
 		const int nInkFloor = fpsmath::InkCoverageFloor( bInvertedMode, L.bDrawOutline );
 		const HorizDigitBearings &horizBearings = CachedWorstCaseDigitBearingsHoriz( pFont, flFontSize, nInkFloor );
-		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szPadded, nInkFloor );
+		const InkExtent inkPinned = MeasureInkExtent( pFont, flFontSize, szInkRef, nInkFloor );
 		const float flBearingLeft   = horizBearings.left;
 		const float flBearingRight  = horizBearings.right;
 		const float flBearingTop    = std::round( inkPinned.top );
@@ -1532,7 +1580,16 @@ namespace gamescope
 		// frametime source independently) live, so releasing the force
 		// resumes on a real reading instead of a stale one. See
 		// s_nForcedFps's own comment.
-		const float flLiveDisplayFps = UpdateAndGetDisplayFps();
+		const DisplayRates rates = UpdateAndGetDisplayFps();
+		// "FPS shown" (fps_display.fps_shown): "game" is the game's own rate,
+		// "output" the rate sent to the display (frame-generated frames
+		// included), "both" draws "game->output" while generating and the lone
+		// game number otherwise. Hide-above compares against the game number in
+		// Both mode (the number the user means by "my frame rate"), and
+		// against the one shown number otherwise.
+		const bool bOutputOnly = cfg.fps_shown == "output";
+		const bool bPair = cfg.fps_shown == "both" && rates.bGenerating && s_nForcedFps < 0;
+		const float flLiveDisplayFps = bOutputOnly ? rates.flOutput : rates.flGame;
 		const float flDisplayFps = ( s_nForcedFps >= 0 ) ? (float)s_nForcedFps : flLiveDisplayFps;
 
 		// ---- "Hide if FPS above X", with hysteresis (Phase 2) ----------
@@ -1573,7 +1630,8 @@ namespace gamescope
 		int nVert = 0, nHoriz = 2;
 		ParsePlacement( cfg.anchor, nVert, nHoriz );
 
-		const FpsModuleLayout L = MeasureFpsModule( nFps, nVert, nHoriz );
+		const int nOut = bPair ? std::max( (int)std::lround( rates.flOutput ), 0 ) : -1;
+		const FpsModuleLayout L = MeasureFpsModule( nFps, nOut, nVert, nHoriz );
 		// The box is the pinned text field itself -- it used to be that
 		// plus backdrop_padding on every side, which the draw origin then
 		// added back in; both went with the backdrop (2026-09-09), and the
@@ -2078,6 +2136,12 @@ namespace gamescope
 			{ 1, "Immediate" },
 		};
 
+		constexpr ui::Option kFpsShownOptions[] = {
+			{ 0, "Game" },
+			{ 1, "Output" },
+			{ 2, "Both" },
+		};
+
 		int ColorModeToInt( const std::string &s ) { return s == "inverted" ? 1 : 0; }
 		const char *ColorModeFromInt( int n ) { return n == 1 ? "inverted" : "fixed"; }
 		constexpr ui::Option kColorModeOptions[] = {
@@ -2349,16 +2413,17 @@ namespace gamescope
 			.Keywords( "lag spike stutter hitch detection warning frametime" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
-		a.Switch( "hud.count_generated_frames", "Count generated frames",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.count_generated_frames; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.count_generated_frames = b; PersistSettings(); } ) )
-			.Key( "fps_display.count_generated_frames" )
-			.Help( "Show the rate actually sent to the display, including frames made by "
-			       "Frame generation, instead of the game's own frame rate. Still one number. "
-			       "With Frame generation off it changes nothing." )
-			.Default( config::FpsDisplaySettings{}.count_generated_frames )
-			.Keywords( "count generated fake frames frame generation framegen output fps real presented" )
+		a.Choice( "hud.fps_shown", "FPS shown",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return fpsmath::FpsShownToInt( s_Settings.fps_display.fps_shown ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_shown = fpsmath::FpsShownFromInt( n ); PersistSettings(); } ),
+			kFpsShownOptions, std::size( kFpsShownOptions ) )
+			.Key( "fps_display.fps_shown" )
+			.Help( "Game: the game's own frame rate. Output: what is actually sent to the "
+			       "display, including frames made by Frame generation. Both: game->output "
+			       "while Frame generation is generating." )
+			.Default( 0 )
+			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		a.Slider( "hud.outline_strength", "Outline size",

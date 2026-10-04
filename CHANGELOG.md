@@ -19,8 +19,8 @@ The newest version below is the one this build reports.
   Low latency or Smoothness priority, and fixed multipliers now go up to 8×.
 - **Crosshair protection**: frame generation keeps a still crosshair in the middle of
   the screen sharp (part of Static HUD protection).
-- **Count generated frames**: the HUD can show the rate actually sent to the display,
-  including frame-generated frames.
+- **FPS shown**: the HUD can show the game's frame rate, the output rate including
+  generated frames, or both as `game->output`.
 - **Passes real frames through when it cannot help**: it keeps generating until the
   game reaches your refresh rate or target, and passes real frames through then, for
   HDR content, or when the GPU is too slow.

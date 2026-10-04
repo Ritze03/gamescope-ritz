@@ -45,7 +45,7 @@ number, drawn well, not a second profiler.
 | Number colour | `color_fps` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Text opacity | `text_opacity` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Lag spike detection | `lag_detection_enabled` | Master switch for the whole spike reaction. Default **on**. |
-| Count generated frames | `count_generated_frames` | Switch, default **off** — show the output rate instead of the game's; see "Count generated frames" below. |
+| FPS shown | `fps_shown` | Choice: Game (default) / Output / Both; see "FPS shown" below. |
 | Outline size | `outline_strength` | 0–4 px of black outline; 0 means no outline drawn at all. |
 
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
@@ -132,40 +132,67 @@ the **generated** rate. The compositor only sees post-frame-gen presents —
 the same thing MangoHud shows when loaded after the layer — so the
 pre-frame-gen rate is not observable from here.
 
-## Count generated frames (2026-10-04)
+## FPS shown (2026-10-04)
 
-`fps_display.count_generated_frames` (row `hud.count_generated_frames`, default
-**off**, per profile like its siblings, additive — schema stays 5). The user:
-*"for the HUD, make sure that there's an option to count fake frames as real
-frames, and then it should just, in the bottom right, say the new number, which
-then are the fake frames. But still only a single number, just what's actually
-being outputted."* So it is still one integer at the HUD's usual anchor and
-margins; only the value changes.
+`fps_display.fps_shown` (row `hud.fps_shown`, a Choice: **Game** / **Output** /
+**Both**, stored as `"game"` / `"output"` / `"both"`, default **Game**, per
+profile like its siblings, additive — schema stays 5). Same Show-HUD-only gate
+as its siblings, never gated on frame generation being on. It replaced the
+morning's `count_generated_frames` switch. The user, first: *"for the HUD, make
+sure that there's an option to count fake frames as real frames, and then it
+should just, in the bottom right, say the new number ... But still only a single
+number, just what's actually being outputted."* Then: *"For the HUD, add toggle,
+to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
+40->280"*
 
-**Which number.** `UpdateAndGetDisplayFps()` uses
-`fghost::GetPacingStatus().presentedFps` instead of the commit counter when all
-of these hold: the option is on, `fghost::Enabled()`, the status is `valid`, and
-`activeN >= 2`. Otherwise the normal commit rate is shown.
+- **Game**: the game's real frame rate (the commit counter); exactly the HUD as
+  it was before this option.
+- **Output**: what `count_generated_frames=true` did. `presentedFps` while
+  generating, the commit rate otherwise.
+- **Both**: while generating, `<game>-><output>` (e.g. `40->280`); when not
+  generating, the single game number.
 
-`Why:` `presentedFps` is `Pacer::TakeStatus`'s paint count over the status
-window, and `OnPaint()` counts *every* composite, including in pass-through
-(warming up, game stalled, renderer unavailable, hold-back gave up) and
-including UI/HUD-keepalive repaints. There it is not the game's rate, so
-`activeN < 2` falls back to the commit counter. That fallback is still "what is
-actually being outputted", because with nothing generated the output rate equals
-the game rate. The row is gated on Show HUD only, never on frame generation
-being on, so it can be set once and left.
+"Generating" is `fghost::Enabled()` and `GetPacingStatus()` `valid` and
+`activeN >= 2`. `Why:` `presentedFps` is `Pacer::TakeStatus`'s paint count over
+the status window, and `OnPaint()` counts *every* composite, including in
+pass-through (warming up, game stalled, renderer unavailable, hold-back gave up)
+and UI/HUD-keepalive repaints. There it is not the game's rate, so
+`activeN < 2` falls back to the commit counter; with nothing generated the
+output rate equals the game rate anyway.
 
-**Smoothing and Immediate still apply.** The status is published about every
-250 ms and is already a rate, so there is no counter to difference; each window
-averages the per-paint samples of it instead (`s_dSmoothingGenSum` /
-`s_dImmediateGenSum`). When the source flips (option toggled, frame generation
-on/off, pass-through begins or ends) both windows restart, so a commit delta is
-never mixed with a rate. No second counter was added: the published status was
-usable.
+**Two independent windows.** `UpdateAndGetDisplayFps()` runs two `RateWindows`
+every call (`s_GameWindows`, `s_OutputWindows`), each with its own
+Smoothing/Immediate state. The status is published about every 250 ms and is
+already a rate, so the output windows average the per-paint samples of it
+instead of differencing a counter; when the output source flips (frame
+generation on/off, pass-through begins or ends) only the output windows
+restart. `Why:` in Both the game number must not jump or restart when
+generation starts or stops, and always stepping both means changing "FPS shown"
+never shows a stale value.
+
+**Layout.** `MeasureFpsModule( nFps, nOut, ... )` builds the string `"%d->%d"`
+(plain ASCII — the overlay font atlas is Latin-1 only, an arrow glyph would be a
+missing glyph). The pinned box is `<game zeros>-><output zeros>`, each side
+padded to its own >= 3 cells like a lone number, so the box only widens when a
+side gains a digit. The box is placed by the same `ResolveAnchoredOrigin()` and
+the digits hug the anchored side via `flTextOffsetX` as before, so at a right
+anchor the string grows leftwards from the margin and cannot clip. The margin
+and ink-bearing correction is measured off the game number's zero run in every
+mode (`szInkRef`), not off `->`, so Game mode is byte-identical and the `>`/`-`
+glyphs cannot shift the vertical correction. The outline and Inverted modes
+need no change: the outline is drawn from the same string, and Inverted samples
+one pixel at the box centre (now the middle of the wider string). The font is
+monospaced, so the widths are stable.
 
 **Unchanged:** lag-spike detection and the frametime history keep running on
-real frames; Hide above X compares against whichever number is shown.
+real frames. Hide above X compares against the game number in Both (and in
+Game), and against the output number in Output. A forced reading
+(`fps_display_force`) always draws the single number.
+
+**Legacy key.** A profile with `count_generated_frames: true` and no
+`fps_shown` loads as `"output"`; the old key is read for that, never written
+again (`fps_shown` is written instead), the same stop-writing precedent as other
+superseded HUD keys.
 
 ## Update modes
 
