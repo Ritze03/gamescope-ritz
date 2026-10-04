@@ -964,7 +964,7 @@ namespace gamescope
 		float flOutlineRadius = 0.0f; // px, 0 = no outline
 		ImU32 outlineColor = 0;
 		ImU32 textColor = 0;
-		char szNum[32] = ""; // unpadded text actually drawn ("144" or "40>280") -- see flTextOffsetX
+		char szNum[32] = ""; // unpadded text actually drawn ("144" or "40 > 280") -- see flTextOffsetX
 		ImVec2 numSize{};
 		ImVec2 textSize{};
 		float flContentWidth = 0.0f;
@@ -1306,8 +1306,8 @@ namespace gamescope
 			szOutZeros[nOutDigits] = '\0';
 			char szGame[16];
 			snprintf( szGame, sizeof( szGame ), "%s", L.szNum );
-			snprintf( L.szNum, sizeof( L.szNum ), "%s>%d", szGame, nOut );
-			snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s>%s", szPadded, szOutZeros );
+			snprintf( L.szNum, sizeof( L.szNum ), "%s > %d", szGame, nOut );
+			snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s > %s", szPadded, szOutZeros );
 		}
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
@@ -1583,7 +1583,7 @@ namespace gamescope
 		const DisplayRates rates = UpdateAndGetDisplayFps();
 		// "FPS shown" (fps_display.fps_shown): "game" is the game's own rate,
 		// "output" the rate sent to the display (frame-generated frames
-		// included), "both" draws "game>output" while generating and the lone
+		// included), "both" draws "game > output" while generating and the lone
 		// game number otherwise. Hide-above compares against the game number in
 		// Both mode (the number the user means by "my frame rate"), and
 		// against the one shown number otherwise.
@@ -2420,7 +2420,7 @@ namespace gamescope
 			kFpsShownOptions, std::size( kFpsShownOptions ) )
 			.Key( "fps_display.fps_shown" )
 			.Help( "Game: the game's own frame rate. Output: what is actually sent to the "
-			       "display, including frames made by Frame generation. Both: game>output "
+			       "display, including frames made by Frame generation. Both: game > output "
 			       "while Frame generation is generating." )
 			.Default( 0 )
 			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )

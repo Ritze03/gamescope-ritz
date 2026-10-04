@@ -143,13 +143,13 @@ sure that there's an option to count fake frames as real frames, and then it
 should just, in the bottom right, say the new number ... But still only a single
 number, just what's actually being outputted."* Then: *"For the HUD, add toggle,
 to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
-40->280"* (the `->` was later shortened to a single `>`, 2026-10-04: `40>280`)
+40->280"* (the `->` was later shortened to a single `>`, 2026-10-04: `40 > 280`)
 
 - **Game**: the game's real frame rate (the commit counter); exactly the HUD as
   it was before this option.
 - **Output**: what `count_generated_frames=true` did. `presentedFps` while
   generating, the commit rate otherwise.
-- **Both**: while generating, `<game>><output>` (e.g. `40>280`); when not
+- **Both**: while generating, `<game> > <output>` (e.g. `40 > 280`); when not
   generating, the single game number.
 
 "Generating" is `fghost::Enabled()` and `GetPacingStatus()` `valid` and
