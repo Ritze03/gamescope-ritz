@@ -10,7 +10,7 @@ Code map:
 
 | What | Where |
 | --- | --- |
-| The library (optical flow + synth shaders) | `subprojects/FrameGen/` (git submodule, MIT, `github.com/Ritze03/FrameGen`) |
+| The library (optical flow + synth shaders) | `subprojects/FrameGen/` (git submodule, MIT, `github.com/Ritze03/frame-gen-ritz`) |
 | Library build glue | `src/FrameGen/FrameGenLib.cpp` + the `custom_target()`s in `src/meson.build` |
 | Renderer host (`fghost`) | `src/FrameGen/FrameGenHost.{h,cpp}` |
 | Pacing (`fgpacing::Pacer`) | `src/FrameGen/Pacing.h` (header-only) |
@@ -107,7 +107,7 @@ screen) keeps a still crosshair, or with Whole screen every solid still HUD elem
 pixel-exact on generated frames. It is **independent of Static HUD protection**.
 
 **It lives in the FrameGen library, not in this repository.** The library work is
-[Ritze03/FrameGen PR #1](https://github.com/Ritze03/FrameGen/pull/1) (branch
+[Ritze03/frame-gen-ritz PR #1](https://github.com/Ritze03/frame-gen-ritz/pull/1) (branch
 `ui-protection`, merged; pinned here at FrameGen main `b699301`, which includes PR #1, UI protection); the host only maps the setting and feeds frames
 in. The first version of this feature was host code (three shaders of our own, ROI-sized
 textures per ring slot). `Why` it moved: the user, on where it belongs: *"It should really

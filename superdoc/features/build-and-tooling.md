@@ -189,7 +189,7 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 ### FrameGen submodule (2026-10-04)
 
 The frame-generation library is a git submodule, `subprojects/FrameGen`
-(github.com/Ritze03/FrameGen, MIT), pinned at FrameGen main `b699301` (includes PR #1, UI protection). **A fresh checkout or worktree
+(github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `b699301` (includes PR #1, UI protection). **A fresh checkout or worktree
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
