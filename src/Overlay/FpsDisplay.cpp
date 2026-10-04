@@ -58,6 +58,7 @@
 #include "Palette.h"
 #include "UI/Registry.h"
 #include "Crosshair.h"
+#include "FrameGen/FrameGenHost.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -343,6 +344,20 @@ namespace gamescope
 	static uint64_t s_ulImmediateWindowStartCount = 0;
 	static float s_flImmediateFps = 0.0f;
 
+	// "Count generated frames" (fps_display.count_generated_frames). While the
+	// shown number comes from Frame generation's published presentedFps rather
+	// than from the commit counter, each window below averages the samples taken
+	// per call instead of dividing a commit delta by time -- presentedFps is
+	// already a rate (published about every 250 ms), so it has no count to
+	// diff. s_bGenSource remembers which source the windows were filled from, so
+	// a switch (option toggled, frame generation on/off, pass-through begins)
+	// restarts both windows instead of mixing a commit delta with a rate.
+	static bool  s_bGenSource = false;
+	static double s_dImmediateGenSum = 0.0;
+	static int    s_nImmediateGenN = 0;
+	static double s_dSmoothingGenSum = 0.0;
+	static int    s_nSmoothingGenN = 0;
+
 	// The lag-spike detector's own sample source: the per-commit frametime,
 	// consumed at most once per paint, as it always was. See
 	// ComputeIsSpike() and commit.cpp's note on how batching fools it.
@@ -468,6 +483,44 @@ namespace gamescope
 			PushFrametimeSample( flMs );
 		}
 
+		// ---- which rate is shown: the game's, or what is sent to the display ----
+		// Only the displayed number changes with "Count generated frames"; the
+		// lag-spike detector above and the frametime history stay on real
+		// frames. The output rate is used only while it is meaningful: frame
+		// generation on, the pacing status published at least once, and a
+		// multiplier actually in use (activeN >= 2). In pass-through
+		// (activeN < 2: warming up, game stalled, renderer unavailable, or the
+		// hold-back gave up) presentedFps counts every composite -- UI and
+		// HUD-keepalive repaints included -- and is not the game's rate, while
+		// with nothing generated the output rate IS the game rate, so the
+		// commit counter is the right number there.
+		bool bGenSource = false;
+		float flGenFps = 0.0f;
+		if ( cfg.count_generated_frames && fghost::Enabled() )
+		{
+			const fghost::PacingStatus st = fghost::GetPacingStatus();
+			if ( st.valid && st.activeN >= 2 )
+			{
+				bGenSource = true;
+				flGenFps = st.presentedFps;
+			}
+		}
+		if ( bGenSource != s_bGenSource )
+		{
+			s_bGenSource = bGenSource;
+			s_ulImmediateWindowStartNs = 0;
+			s_ulSmoothingWindowStartNs = 0;
+			s_dImmediateGenSum = s_dSmoothingGenSum = 0.0;
+			s_nImmediateGenN = s_nSmoothingGenN = 0;
+		}
+		if ( bGenSource )
+		{
+			s_dImmediateGenSum += flGenFps;
+			s_nImmediateGenN++;
+			s_dSmoothingGenSum += flGenFps;
+			s_nSmoothingGenN++;
+		}
+
 		// ---- Immediate: ~100 ms tumbling window ---------------------------
 		if ( s_ulImmediateWindowStartNs == 0 )
 		{
@@ -476,9 +529,13 @@ namespace gamescope
 		}
 		else if ( ulNowNanos - s_ulImmediateWindowStartNs >= fpsmath::kImmediateWindowNs )
 		{
-			s_flImmediateFps = fpsmath::RateFromCounts( ulCount - s_ulImmediateWindowStartCount, ulNowNanos - s_ulImmediateWindowStartNs );
+			s_flImmediateFps = bGenSource
+				? (float)( s_dImmediateGenSum / std::max( s_nImmediateGenN, 1 ) )
+				: fpsmath::RateFromCounts( ulCount - s_ulImmediateWindowStartCount, ulNowNanos - s_ulImmediateWindowStartNs );
 			s_ulImmediateWindowStartNs = ulNowNanos;
 			s_ulImmediateWindowStartCount = ulCount;
+			s_dImmediateGenSum = 0.0;
+			s_nImmediateGenN = 0;
 		}
 
 		// ---- Smoothing: 1 s window -> 300 ms glide -> 700 ms hold ----------
@@ -489,7 +546,11 @@ namespace gamescope
 		}
 		else if ( ulNowNanos - s_ulSmoothingWindowStartNs >= fpsmath::kSmoothingWindowNs )
 		{
-			const float flTarget = fpsmath::RateFromCounts( ulCount - s_ulSmoothingWindowStartCount, ulNowNanos - s_ulSmoothingWindowStartNs );
+			const float flTarget = bGenSource
+				? (float)( s_dSmoothingGenSum / std::max( s_nSmoothingGenN, 1 ) )
+				: fpsmath::RateFromCounts( ulCount - s_ulSmoothingWindowStartCount, ulNowNanos - s_ulSmoothingWindowStartNs );
+			s_dSmoothingGenSum = 0.0;
+			s_nSmoothingGenN = 0;
 			// Glide from whatever is on screen right now. A glide can't
 			// still be in flight here (300 < 1000), so this is the held
 			// value; the first window ever just snaps to its target.
@@ -2284,6 +2345,18 @@ namespace gamescope
 			       "inverted number has no second colour to flip to." )
 			.Default( config::FpsDisplaySettings{}.lag_detection_enabled )
 			.Keywords( "lag spike stutter hitch detection warning frametime" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Switch( "hud.count_generated_frames", "Count generated frames",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.count_generated_frames; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.count_generated_frames = b; PersistSettings(); } ) )
+			.Key( "fps_display.count_generated_frames" )
+			.Help( "Show the rate actually sent to the display, including frames made by "
+			       "Frame generation, instead of the game's own frame rate. Still one number. "
+			       "With Frame generation off it changes nothing." )
+			.Default( config::FpsDisplaySettings{}.count_generated_frames )
+			.Keywords( "count generated fake frames frame generation framegen output fps real presented" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		a.Slider( "hud.outline_strength", "Outline size",

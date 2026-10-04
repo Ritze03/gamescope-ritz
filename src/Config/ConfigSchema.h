@@ -224,6 +224,13 @@ namespace gamescope::config
         // PushFrametimeSample()/IsSpikeActive().
         bool lag_detection_enabled = true;
 
+        // "Count generated frames" (2026-10-04): when on, and Frame generation
+        // is actively multiplying, the one number shows the rate actually sent
+        // to the display (generated frames included) instead of the game's own
+        // frame rate. Off by default. Additive, no schema bump. See
+        // superdoc/features/fps-display.md.
+        bool count_generated_frames = false;
+
         // Issue #29: optional colour override for the FPS number's text.
         // std::optional, same nullable-field shape as OverlaySettings::
         // fade_ms -- unset (the common/default case) means "derive from

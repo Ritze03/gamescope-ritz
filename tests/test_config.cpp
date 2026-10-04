@@ -378,6 +378,30 @@ TEST_CASE( "fps_display.lag_detection_enabled round-trips", "[config]" )
     }
 }
 
+TEST_CASE( "fps_display.count_generated_frames round-trips and defaults off", "[config]" )
+{
+    REQUIRE( Settings{}.fps_display.count_generated_frames == false );
+
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.fps_display.count_generated_frames = bValue;
+
+        REQUIRE( SaveSections( s ) );
+
+        Settings loaded = LoadSections();
+        REQUIRE( loaded.fps_display.count_generated_frames == bValue );
+    }
+
+    // An existing config that predates the key loads as Off.
+    TempConfigHome home;
+    std::ofstream( GlobalConfigPath() ) << R"({"fps_display": {"enabled": true}})";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.fps_display.count_generated_frames == false );
+}
+
 // cursor_override_game (request #6, 2026-09-04): a separate opt-in from
 // cursor_everywhere that substitutes the overlay's own pointer on the live
 // compositing path (MouseCursor::getTexture(), steamcompmgr.cpp) instead of

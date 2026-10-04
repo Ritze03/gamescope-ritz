@@ -45,6 +45,7 @@ number, drawn well, not a second profiler.
 | Number colour | `color_fps` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Text opacity | `text_opacity` | Fixed mode only — see "Number colour and Text opacity" below. |
 | Lag spike detection | `lag_detection_enabled` | Master switch for the whole spike reaction. Default **on**. |
+| Count generated frames | `count_generated_frames` | Switch, default **off** — show the output rate instead of the game's; see "Count generated frames" below. |
 | Outline size | `outline_strength` | 0–4 px of black outline; 0 means no outline drawn at all. |
 
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
@@ -130,6 +131,41 @@ commit (the same `m_bMangoNudge` gate that feeds mangoapp), and
 the **generated** rate. The compositor only sees post-frame-gen presents —
 the same thing MangoHud shows when loaded after the layer — so the
 pre-frame-gen rate is not observable from here.
+
+## Count generated frames (2026-10-04)
+
+`fps_display.count_generated_frames` (row `hud.count_generated_frames`, default
+**off**, per profile like its siblings, additive — schema stays 5). The user:
+*"for the HUD, make sure that there's an option to count fake frames as real
+frames, and then it should just, in the bottom right, say the new number, which
+then are the fake frames. But still only a single number, just what's actually
+being outputted."* So it is still one integer at the HUD's usual anchor and
+margins; only the value changes.
+
+**Which number.** `UpdateAndGetDisplayFps()` uses
+`fghost::GetPacingStatus().presentedFps` instead of the commit counter when all
+of these hold: the option is on, `fghost::Enabled()`, the status is `valid`, and
+`activeN >= 2`. Otherwise the normal commit rate is shown.
+
+`Why:` `presentedFps` is `Pacer::TakeStatus`'s paint count over the status
+window, and `OnPaint()` counts *every* composite, including in pass-through
+(warming up, game stalled, renderer unavailable, hold-back gave up) and
+including UI/HUD-keepalive repaints. There it is not the game's rate, so
+`activeN < 2` falls back to the commit counter. That fallback is still "what is
+actually being outputted", because with nothing generated the output rate equals
+the game rate. The row is gated on Show HUD only, never on frame generation
+being on, so it can be set once and left.
+
+**Smoothing and Immediate still apply.** The status is published about every
+250 ms and is already a rate, so there is no counter to difference; each window
+averages the per-paint samples of it instead (`s_dSmoothingGenSum` /
+`s_dImmediateGenSum`). When the source flips (option toggled, frame generation
+on/off, pass-through begins or ends) both windows restart, so a commit delta is
+never mixed with a rate. No second counter was added: the published status was
+usable.
+
+**Unchanged:** lag-spike detection and the frametime history keep running on
+real frames; Hide above X compares against whichever number is shown.
 
 ## Update modes
 

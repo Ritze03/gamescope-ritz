@@ -198,6 +198,7 @@ namespace gamescope::config
                 // removed backdrop keys above follow.
                 s.fps_display.outline_strength = JGetFloat( *pFps, "outline_strength", s.fps_display.outline_strength );
                 s.fps_display.lag_detection_enabled = JGetBool( *pFps, "lag_detection_enabled", s.fps_display.lag_detection_enabled );
+                s.fps_display.count_generated_frames = JGetBool( *pFps, "count_generated_frames", s.fps_display.count_generated_frames );
             }
 
             if ( const nlohmann::json *pCross = JGetObject( j, "crosshair" ) )
@@ -619,6 +620,7 @@ namespace gamescope::config
             jFps[ "color_mode" ] = s.fps_display.color_mode;
             jFps[ "outline_strength" ] = s.fps_display.outline_strength;
             jFps[ "lag_detection_enabled" ] = s.fps_display.lag_detection_enabled;
+            jFps[ "count_generated_frames" ] = s.fps_display.count_generated_frames;
 
             const auto &c = s.crosshair;
             nlohmann::json jCross = nlohmann::json::object();
