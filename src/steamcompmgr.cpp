@@ -107,6 +107,8 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
+#include "FrameGen/FrameGenHost.h"
+#include "FrameGen/Pacing.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
 #include "Audio/Volume.h"
@@ -7779,6 +7781,171 @@ register_systray(xwayland_ctx_t *ctx)
 	XSetSelectionOwner(ctx->dpy, net_system_tray, ctx->ourWindow, 0);
 }
 
+// ---------------------------------------------------------------------------
+//  Frame generation pacing -- the steamcompmgr half (superdoc/planning/
+//  fidelityfx-opticalflow-framegen.md 5.1/5.2). All the decisions live in
+//  FrameGen/Pacing.h (pure, unit-tested); this is only the plumbing:
+//
+//    arrival  handle_done_commit(): a real frame became the focused window's
+//             newest usable commit -> s_FrameGen.pacer.OnArrival()
+//    paint    main loop, right before paint_all(): FrameGen_PrePaint() asks the
+//             pacer which image this refresh shows and hands (pairId, k, n) to
+//             fghost::SetSlot() -- paint_all() then builds layer 0 from the
+//             same commit and vulkan_composite() substitutes the generated frame
+//    repeat   main loop, right after hasRepaint is cleared: FrameGen_PostPaint()
+//             forces the repaint that the rest of the pair needs on the next
+//             vblank. It MUST come after `hasRepaint = false`, or that clear
+//             would eat the request; force_repaint() is vblank-gated, so it
+//             lands on the next refresh, which is the next slot.
+//
+//  Phase A: every backend is paced off the fixed-refresh vblank sequence. A
+//  later phase that times slots under VRR / nested replaces "the next vblank" in
+//  FrameGen_PrePaint()'s `bVblank` argument and in the force_repaint() below;
+//  nothing in Pacing.h cares where the tick comes from.
+//
+//  Off costs one relaxed atomic load per paint (fghost::Enabled()) and one plain
+//  bool read per focused-window commit: no extra repaint, no SetSlot, no
+//  status.
+// ---------------------------------------------------------------------------
+namespace
+{
+	// fghost::PassReason and fgpacing::Reason are the same list; Pacing.h cannot
+	// include the host header, so the mapping is a cast and this keeps it honest.
+	static_assert( uint8_t( fghost::PassReason::Normal ) == uint8_t( fgpacing::Reason::Normal ) );
+	static_assert( uint8_t( fghost::PassReason::Off ) == uint8_t( fgpacing::Reason::Off ) );
+	static_assert( uint8_t( fghost::PassReason::WarmingUp ) == uint8_t( fgpacing::Reason::WarmingUp ) );
+	static_assert( uint8_t( fghost::PassReason::RefreshLimit ) == uint8_t( fgpacing::Reason::RefreshLimit ) );
+	static_assert( uint8_t( fghost::PassReason::CostGuard ) == uint8_t( fgpacing::Reason::CostGuard ) );
+	static_assert( uint8_t( fghost::PassReason::GameTooFast ) == uint8_t( fgpacing::Reason::GameTooFast ) );
+	static_assert( uint8_t( fghost::PassReason::GameStalled ) == uint8_t( fgpacing::Reason::GameStalled ) );
+	static_assert( uint8_t( fghost::PassReason::RendererUnavailable ) == uint8_t( fgpacing::Reason::RendererUnavailable ) );
+
+	struct FrameGenPacing_t
+	{
+		fgpacing::Pacer pacer;
+		// FrameGen was on at the last paint. Also gates the arrival hook, so the
+		// off path never touches the pacer. steamcompmgr thread only.
+		bool bActive = false;
+		// The pair needs another refresh: FrameGen_PostPaint() forces it.
+		bool bRepaintNext = false;
+	};
+	FrameGenPacing_t s_FrameGen;
+}
+
+// A real frame of the focused window became its newest usable commit.
+//
+// "Arrival" = commit_t::present_time, stamped by commit_t::Signal() the moment
+// the commit's acquire fence signals (or, for a buffer that was already ready,
+// when it was imported): the earliest point at which the frame could be
+// displayed. NOT the time of this call, which is the main loop noticing it, and
+// not the vblank that latches it -- those are quantised to the refresh (+-7 ms
+// at 60 fps on 144 Hz), arrival is not.
+static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
+{
+	fgpacing::LayerKey layer;
+	if ( pCommit->vulkanTex )
+	{
+		layer.width = pCommit->vulkanTex->width();
+		layer.height = pCommit->vulkanTex->height();
+		layer.format = pCommit->vulkanTex->drmFormat();
+	}
+	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
+}
+
+// Right before paint_all(): decide what this refresh shows and tell the renderer.
+static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
+{
+	if ( !fghost::Enabled() )
+	{
+		if ( s_FrameGen.bActive )
+		{
+			// Switched off: stop paying for it and say so once.
+			s_FrameGen.bActive = false;
+			s_FrameGen.bRepaintNext = false;
+			s_FrameGen.pacer.Reset();
+			fghost::SetSlot( 0, 0, 0 );
+
+			fghost::PacingStatus status;
+			status.valid = false;
+			status.reason = fghost::PassReason::Off;
+			fghost::PublishPacingStatus( status );
+		}
+		return;
+	}
+	s_FrameGen.bActive = true;
+
+	// Only the connector the user is looking at takes part: the pacer's one
+	// sequence belongs to it. Another connector's paint leaves it alone.
+	if ( pPaintFocus != GetCurrentFocus() )
+	{
+		fghost::SetSlot( 0, 0, 0 );
+		return;
+	}
+
+	steamcompmgr_win_t *pFocusWindow = pPaintFocus ? pPaintFocus->focusWindow : nullptr;
+	uint64_t ulLayer0Id = 0;
+	if ( pFocusWindow && !pFocusWindow->isSteamStreamingClient &&
+		 !window_is_steam( pFocusWindow ) && !is_fading_out() )
+	{
+		// The commit paint_all() will take as layer 0 (paint_window(): the window's
+		// last done commit).
+		ulLayer0Id = (uint64_t)window_last_done_commit_id( pFocusWindow );
+	}
+
+	if ( ulLayer0Id == 0 )
+	{
+		// Layer 0 is not a plain game frame (a fade, the Steam UI, a streaming
+		// client, no commit yet): the renderer stays inert and the next game frame
+		// starts a fresh pair.
+		s_FrameGen.pacer.Discontinuity();
+		s_FrameGen.bRepaintNext = false;
+		fghost::SetSlot( 0, 0, 0 );
+		return;
+	}
+
+	const fghost::RenderStatus renderStatus = fghost::GetRenderStatus();
+
+	fgpacing::Pacer::Inputs in;
+	in.now = get_time_in_nanos();
+	in.chosenN = fghost::GetConfig().multiplier;
+	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):
+	// that is the rate at which slots tick.
+	in.refreshHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
+	in.costMs = renderStatus.lastPairGpuMs;
+	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
+
+	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank );
+
+	if ( d.reset )
+		fghost::Reset();
+	fghost::SetSlot( d.pairId, d.k, d.n );
+	s_FrameGen.bRepaintNext = d.repaintNext;
+
+	if ( s_FrameGen.pacer.StatusDue( in.now ) )
+	{
+		const fgpacing::Pacer::Report s = s_FrameGen.pacer.TakeStatus( in, in.now );
+		fghost::PacingStatus status;
+		status.valid = true;
+		status.gameFps = s.gameFps;
+		status.presentedFps = s.presentedFps;
+		status.chosenN = s.chosenN;
+		status.activeN = s.activeN;
+		status.delayMs = s.delayMs;
+		status.reason = fghost::PassReason( uint8_t( s.reason ) );
+		fghost::PublishPacingStatus( status );
+	}
+}
+
+// Right after hasRepaint was cleared (see the block comment above).
+static void FrameGen_PostPaint()
+{
+	if ( s_FrameGen.bRepaintNext )
+	{
+		s_FrameGen.bRepaintNext = false;
+		force_repaint();
+	}
+}
+
 bool handle_done_commit( steamcompmgr_win_t *w, xwayland_ctx_t *ctx, uint64_t commitID, uint64_t earliestPresentTime, uint64_t earliestLatchTime )
 {
 	bool bFoundWindow = false;
@@ -7839,6 +8006,9 @@ bool handle_done_commit( steamcompmgr_win_t *w, xwayland_ctx_t *ctx, uint64_t co
 					if ( !cv_paint_debug_pause_base_plane )
 						g_HeldCommits[ HELD_COMMIT_BASE ] = w->commit_queue[ j ];
 					hasRepaint = true;
+
+					if ( s_FrameGen.bActive && pFocus == GetCurrentFocus() )
+						FrameGen_OnArrival( w, w->commit_queue[ j ].get() );
 
 					focusWindow_engine = w->engineName;
 					focusWindow_pid = w->pid;
@@ -8271,7 +8441,12 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 								&& !bMangoappSocketDisable;
 
 	bool bValidPreemptiveScale = reslistentry.pAcquirePoint && pCurrentFocus && w == pCurrentFocus->focusWindow && cv_upscale_preemptive;
-	bool bPreemptiveUpscale = bValidPreemptiveScale && newCommit->ShouldPreemptivelyUpscale();
+	// Frame generation substitutes layer 0 BEFORE the upscaler (FSR/NIS then run in
+	// the present composite, on the generated frame), and its hook skips a layer
+	// that arrives already upscaled -- so no pre-emptive upscale while it is on.
+	// Left "valid" on purpose: the !bPreemptiveUpscale branch below then also
+	// frees the temp upscale images.
+	bool bPreemptiveUpscale = bValidPreemptiveScale && !fghost::Enabled() && newCommit->ShouldPreemptivelyUpscale();
 
 	bool bKnownReady = false;
 
@@ -10234,6 +10409,8 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bShouldPaint )
 			{
+				FrameGen_PrePaint( pPaintFocus, vblank );
+
 				paint_all( pPaintFocus, eFlipType == FlipType::Async );
 
 				bPainted = true;
@@ -10256,6 +10433,9 @@ steamcompmgr_main(int argc, char **argv)
 			hasRepaint = false;
 			hasRepaintNonBasePlane = false;
 			nIgnoredOverlayRepaints = 0;
+
+			// After the clear above, never before: see FrameGen_PostPaint().
+			FrameGen_PostPaint();
 
 			{
 				gamescope::CScriptScopedLock script;
