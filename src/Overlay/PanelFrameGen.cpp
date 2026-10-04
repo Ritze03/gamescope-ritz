@@ -380,8 +380,8 @@ namespace gamescope
 			       "through: the game already reaching the refresh rate or target, a GPU too slow "
 			       "to keep up, variable refresh, or HDR / 10-bit content. When the GPU is the "
 			       "limit it generates fewer frames before giving up. MangoHud with output timing "
-			       "shows the presented rate; this fork's HUD shows the game rate, or the "
-			       "presented rate with Count generated frames." )
+			       "shows the presented rate; this fork's HUD shows the game rate, the "
+			       "presented rate, or both, per its FPS shown choice (Game / Output / Both)." )
 			.Keywords( "frame generation status fps presented delay latency reason" );
 	}
 }

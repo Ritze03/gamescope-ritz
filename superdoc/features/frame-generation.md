@@ -108,7 +108,7 @@ pixel-exact on generated frames. It is **independent of Static HUD protection**.
 
 **It lives in the FrameGen library, not in this repository.** The library work is
 [Ritze03/FrameGen PR #1](https://github.com/Ritze03/FrameGen/pull/1) (branch
-`ui-protection`, pinned here at `cdc54bd`); the host only maps the setting and feeds frames
+`ui-protection`, merged; pinned here at FrameGen main `b699301`, which includes PR #1, UI protection); the host only maps the setting and feeds frames
 in. The first version of this feature was host code (three shaders of our own, ROI-sized
 textures per ring slot). `Why` it moved: the user, on where it belongs: *"It should really
 be part of the library ... especially since the repository will be public in the end ... so
@@ -200,8 +200,9 @@ total. **Memory**: three clean copies of the frame (44 MB at 1440p) in both mode
 destroyed or resized (switching the row Off stops the work, not the allocation).
 
 **BGRA validation warning (known, upstream).** The ring and every output are
-`B8G8R8A8_UNORM`; the library's `ui_patch.comp` loads from the output through an `rgba8`
-declaration, which the validation layer reports once as
+`B8G8R8A8_UNORM`; the library's `ui_detect.comp`, `ui_inpaint.comp` and `ui_patch.comp` declare
+their storage images as `rgba8` on those B8G8R8A8 views (emitted only while UI protection
+is on), which the validation layer reports as
 `Undefined-Value-StorageImage-FormatMismatch-ImageView`. It works on RADV (gamescope itself
 does the same on BGRA views); it is not fixed here because the library is not edited from
 this repository. Expect that line in a validation-layer run.
