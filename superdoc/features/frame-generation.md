@@ -645,15 +645,15 @@ keybind, config section `framegen` (schema stays 5; additive).
 | Key | Values | Meaning |
 | --- | --- | --- |
 | `framegen.enabled` | `false` (default) / `true` | the master switch, the row "Frame generation" (split out of `mode` 2026-10-04) |
-| `framegen.mode` | `fixed` (default) / `target` | which kind of multiplier, the row "Multiplier": 2x..8x / Target fps. Never `off` any more |
+| `framegen.mode` | `fixed` / `target` (default) | which kind of multiplier, the row "Multiplier": 2x..8x / Target fps. Never `off` any more |
 | `framegen.multiplier` | 2..8 (default 2) | fixed mode's multiplier; normalised to 2..8 on load (below 2 -> 2, above 8 -> 8) |
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
-| `framegen.priority` | `low_latency` (default) / `smoothness` | what pacing trades under jittery frame times |
+| `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
-| `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
-| `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
+| `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
+| `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
@@ -662,7 +662,19 @@ multiplier kept (normalised to 2..8); `mode: "fixed"` / `"target"` with no `enab
 `enabled = true` (a `fixed` with multiplier below 2 stays disabled, as it used to load as
 off); no `mode` and no `enabled` (written before Target fps) derives from the old
 `multiplier`: 0 -> disabled, 2..8 -> enabled + `fixed`, so an old 3x profile stays 3x. An
-explicit `enabled` always wins. Unknown strings keep the default.
+explicit `enabled` always wins. Unknown strings keep the default. Since the mode default
+became `target` (below): a section with **neither** `mode` nor `multiplier` keeps the
+compiled-in `target`; only a legacy section that carries a `multiplier` (with no or an
+unknown `mode`) loads as `fixed`, so what an existing user configured is unchanged.
+
+**Defaults are the user's tuned values (2026-10-04).** Why: the user tuned Frame generation,
+Motion blur and Lag spike buffer by hand in their `Test` profile and chose those as the
+out-of-the-box values; the master switches stay off (*"All of them are off by default, but
+the settings themselves are correct."*). Changed from before: `mode` `fixed` -> `target`,
+`priority` `low_latency` -> `smoothness`, `safety` `default` -> `off`, `hud_protection`
+`normal` -> `strong`; everything else already matched. Kept in step in `ConfigSchema.h`,
+`fghost::Config` (also `multiplier` 0 -> 2) and each row's `.Default()` in
+`PanelFrameGen.cpp`; Motion blur and Lag spike buffer already matched in all three places.
 
 Rows, in order: **Frame generation** (a switch, `framegen.enabled`; help *Generates extra
 frames between the game's own frames. Adds delay, so it is not suited to twitch

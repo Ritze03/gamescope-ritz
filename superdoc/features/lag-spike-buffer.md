@@ -69,7 +69,7 @@ the buffer reacts. The test mode pins the target at Max buffer through the same 
 ## Settings
 
 Area `image.lagbuffer` ("Lag spike buffer"), per profile (game profiles inherit), no keybind,
-config section `lag_buffer` (schema stays 5; additive; absent loads the defaults; clamped on
+config section `lag_buffer` (schema stays 5; additive; absent loads the defaults (the user's hand-tuned Test-profile values, 2026-10-04; unchanged here); clamped on
 load).
 
 | Key | Values | Meaning |

@@ -1650,19 +1650,19 @@ TEST_CASE( "null_binds: delay_ms and jitter_ms are clamped to their sliders' ran
 // under "framegen", additive (no schema bump), readable-string enums.
 // ---------------------------------------------------------------------
 
-TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Quality/Default/Normal", "[config]" )
+TEST_CASE( "framegen: every field round-trips, and an absent section is the Test-profile values", "[config]" )
 {
     TempConfigHome home;
 
     REQUIRE( Settings{}.framegen.enabled == false );
-    REQUIRE( Settings{}.framegen.mode == "fixed" );
+    REQUIRE( Settings{}.framegen.mode == "target" );
     REQUIRE( Settings{}.framegen.multiplier == 2 );
     REQUIRE( Settings{}.framegen.target_fps == 0 );
-    REQUIRE( Settings{}.framegen.priority == "low_latency" );
+    REQUIRE( Settings{}.framegen.priority == "smoothness" );
     REQUIRE( Settings{}.framegen.pause_at_refresh == true );
     REQUIRE( Settings{}.framegen.quality == "quality" );
-    REQUIRE( Settings{}.framegen.safety == "default" );
-    REQUIRE( Settings{}.framegen.hud_protection == "normal" );
+    REQUIRE( Settings{}.framegen.safety == "off" );
+    REQUIRE( Settings{}.framegen.hud_protection == "strong" );
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
 
     Settings s{};
@@ -1717,11 +1717,11 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     s.framegen.mode = "fixed";
     s.framegen.enabled = true;
     s.framegen.multiplier = 1;            // not a real choice -> normalised to 2; legacy fixed with < 2x had meant off
-    s.framegen.priority = "fastest";      // unknown -> stays "low_latency"
+    s.framegen.priority = "fastest";      // unknown -> stays "smoothness"
     s.framegen.target_fps = 7;            // below 30 -> 30
     s.framegen.quality = "ultra";         // unknown -> stays "quality"
-    s.framegen.safety = "";               // unknown -> stays "default"
-    s.framegen.hud_protection = "max";    // unknown -> stays "normal"
+    s.framegen.safety = "";               // unknown -> stays "off"
+    s.framegen.hud_protection = "max";    // unknown -> stays "strong"
     s.framegen.ui_protection = "all";     // unknown -> stays "crosshair"
     REQUIRE( SaveSections( s ) );
 
@@ -1729,11 +1729,11 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     REQUIRE( loaded.framegen.multiplier == 2 );
     REQUIRE( loaded.framegen.enabled == true );   // explicit `enabled` wins
     REQUIRE( loaded.framegen.mode == "fixed" );
-    REQUIRE( loaded.framegen.priority == "low_latency" );
+    REQUIRE( loaded.framegen.priority == "smoothness" );
     REQUIRE( loaded.framegen.target_fps == 30 );
     REQUIRE( loaded.framegen.quality == "quality" );
-    REQUIRE( loaded.framegen.safety == "default" );
-    REQUIRE( loaded.framegen.hud_protection == "normal" );
+    REQUIRE( loaded.framegen.safety == "off" );
+    REQUIRE( loaded.framegen.hud_protection == "strong" );
     REQUIRE( loaded.framegen.ui_protection == "crosshair" );
 
     s.framegen.mode = "fixed";
@@ -1766,7 +1766,7 @@ TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplie
     REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.multiplier == 3 );
     REQUIRE( loaded.framegen.target_fps == 0 );
-    REQUIRE( loaded.framegen.priority == "low_latency" );
+    REQUIRE( loaded.framegen.priority == "smoothness" );   // the compiled-in default
     REQUIRE( loaded.framegen.quality == "performance" );
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -1787,6 +1787,48 @@ TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplie
     REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.multiplier == 8 );
     REQUIRE( loaded.framegen.enabled == true );
+}
+
+// The user's hand-tuned Test profile became the compiled-in defaults
+// (2026-10-04); the master switches stay off.
+TEST_CASE( "motion defaults: absent framegen / motion_blur / lag_buffer sections give the Test-profile values", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general"
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.enabled == false );
+    REQUIRE( l.framegen.mode == "target" );
+    REQUIRE( l.framegen.target_fps == 0 );
+    REQUIRE( l.framegen.multiplier == 2 );
+    REQUIRE( l.framegen.priority == "smoothness" );
+    REQUIRE( l.framegen.pause_at_refresh == true );
+    REQUIRE( l.framegen.quality == "quality" );
+    REQUIRE( l.framegen.safety == "off" );
+    REQUIRE( l.framegen.hud_protection == "strong" );
+    REQUIRE( l.framegen.ui_protection == "crosshair" );
+    REQUIRE( l.framegen.gpu_limit == false );
+    REQUIRE( l.motion_blur.enabled == false );
+    REQUIRE( l.motion_blur.samples == 4 );
+    REQUIRE( l.motion_blur.amount == 50 );
+    REQUIRE( l.motion_blur.relative == "shown" );
+    REQUIRE( l.motion_blur.weights == "gaussian" );
+    REQUIRE( l.lag_buffer.enabled == false );
+    REQUIRE( l.lag_buffer.lookback_min == 5 );
+    REQUIRE( l.lag_buffer.max_ms == 50 );
+    REQUIRE( l.lag_buffer.test_mode == "off" );
+
+    // A present framegen section with neither mode nor multiplier also keeps them.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    const Settings l2 = LoadSections();
+    REQUIRE( l2.framegen.mode == "target" );
+    REQUIRE( l2.framegen.enabled == false );
 }
 
 TEST_CASE( "framegen: legacy mode off migrates to enabled=false", "[config]" )

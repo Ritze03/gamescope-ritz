@@ -312,10 +312,18 @@ namespace gamescope::config
                     f.mode = "fixed";
                     bEnabled = false;
                 }
-                else
+                else if ( pFrameGen->contains( "multiplier" ) )
                 {
+                    // No (or unknown) mode but an explicit multiplier: a legacy
+                    // config, which was a fixed multiplier by construction.
                     f.mode = "fixed";
                     bEnabled = nRawMult >= 2;
+                }
+                else
+                {
+                    // Neither mode nor multiplier: nothing was chosen, so the
+                    // compiled-in defaults (mode included) stand.
+                    bEnabled = f.enabled;
                 }
                 if ( pFrameGen->contains( "enabled" ) && ( *pFrameGen )[ "enabled" ].is_boolean() )
                     bEnabled = ( *pFrameGen )[ "enabled" ].get<bool>();

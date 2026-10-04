@@ -481,7 +481,7 @@ namespace gamescope::config
         // mode). ConfigManager.cpp migrates a legacy mode "off" / absent mode.
         bool enabled = false;
         // "fixed" | "target": which kind of multiplier. Never "off" any more.
-        std::string mode = "fixed";
+        std::string mode = "target";
         // Fixed mode: frames shown per real game frame, 2..8 (normalised on load).
         int multiplier = 2;
         // Target mode: the output frame rate to aim for, 30..1000. 0 = the
@@ -489,7 +489,7 @@ namespace gamescope::config
         int target_fps = 0;
         // What pacing trades when the game's frame times jitter:
         // "low_latency" | "smoothness".
-        std::string priority = "low_latency";
+        std::string priority = "smoothness";
         // "Pause at refresh rate" (2026-10-04). true: output is capped at the
         // refresh rate and generation stops once the game alone reaches it.
         // false: no refresh cap (a fixed multiplier keeps generating, a target
@@ -505,9 +505,9 @@ namespace gamescope::config
         std::string quality = "quality";
         // Artifact safety: "off" | "low" | "default" | "high" ("off" added 2026-10-04:
         // never falls back to the real frame)
-        std::string safety = "default";
+        std::string safety = "off";
         // Static HUD protection: "off" | "normal" | "strong"
-        std::string hud_protection = "normal";
+        std::string hud_protection = "strong";
         // UI protection (the FrameGen library's static-UI protection, 2026-10-04):
         // "off" | "crosshair" | "whole_screen". Independent of hud_protection.
         // ADDITIVE: an older config has none and resolves to "crosshair".

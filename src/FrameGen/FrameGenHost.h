@@ -155,14 +155,14 @@ namespace fghost
 	{
 		// The master switch. false: nothing runs (mode / multiplier are kept).
 		bool enabled = false;
-		Mode mode = Mode::Fixed;
+		Mode mode = Mode::Target;
 		// Fixed: 2..kMaxMultiplier. SetConfig() normalises (< 2 with mode Fixed
 		// -> disabled, > kMaxMultiplier -> kMaxMultiplier). Kept as chosen in the
-		// other modes (0 if never set).
-		int multiplier = 0;
+		// other modes.
+		int multiplier = 2;
 		// Target: the output fps to aim for, 30..1000; 0 = the display's refresh.
 		int targetFps = 0;
-		Priority priority = Priority::LowLatency;
+		Priority priority = Priority::Smoothness;
 		// "Pause at refresh rate". true (default): the output is capped at the
 		// refresh rate, so generation stops once the game alone reaches it. false:
 		// no refresh cap -- a fixed multiplier keeps generating N-1 frames per real
@@ -174,8 +174,8 @@ namespace fghost
 		// real frames through, when generation takes too much of the GPU).
 		bool gpuLimit = false;
 		Quality quality = Quality::Quality;
-		Safety safety = Safety::Default;
-		HudProtect hud = HudProtect::Normal;
+		Safety safety = Safety::Off;
+		HudProtect hud = HudProtect::Strong;
 		UiProt ui = UiProt::Crosshair;
 	};
 

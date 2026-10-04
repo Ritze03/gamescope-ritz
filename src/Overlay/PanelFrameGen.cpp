@@ -111,14 +111,14 @@ namespace gamescope
 			c.mode = f.mode == "target" ? fghost::Mode::Target : fghost::Mode::Fixed;
 			c.multiplier = f.multiplier;   // SetConfig() normalises (fixed below 2x -> disabled, above 8x -> 8x)
 			c.targetFps = f.target_fps;
-			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 0 ) == 1
+			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 1 ) == 1
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
 			c.pauseAtRefresh = f.pause_at_refresh;
 			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
-			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 1 );
-			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 1 );
+			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 3 );
+			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 3, 1 );
 			return c;
 		}
@@ -276,7 +276,7 @@ namespace gamescope
 			       "a Target fps. It keeps generating until the game reaches your refresh rate (or "
 			       "the target); a multiplier your display cannot show just fills every refresh. "
 			       "The Frame limiter caps the game and this multiplies the capped rate." )
-			.Default( 2 )
+			.Default( kTargetChoice )
 			.Keywords( "frame generation framegen fg multiplier 2x 3x 4x 5x 6x 7x 8x double triple quadruple target fps dynamic interpolation" )
 			.DisabledUnless( On, "frame generation is off" );
 
@@ -296,13 +296,13 @@ namespace gamescope
 
 		a.Choice( "framegen.priority", "Priority",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.priority, kPriorityKeys, 2, 0 ); },
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.priority, kPriorityKeys, 2, 1 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.priority = kPriorityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
 			kPriorityOptions, std::size( kPriorityOptions ) )
 			.Help( "Low latency adds the least delay, but motion can stutter when the game's "
 			       "frame times jitter. Smoothness spaces the frames perfectly evenly and adds "
 			       "about one game frame of delay." )
-			.Default( 0 )
+			.Default( 1 )
 			.Keywords( "frame generation priority low latency smoothness input lag jitter pacing" )
 			.DisabledUnless( On, "frame generation is off" );
 
@@ -346,7 +346,7 @@ namespace gamescope
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 4, 1 ); },
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 4, 3 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kSafetyOptions, std::size( kSafetyOptions ) )
 			.Help( "Decides when a pixel the motion estimate got wrong falls back to the real frame. "
@@ -355,20 +355,20 @@ namespace gamescope
 			       "frame when more than 15% of the picture is untrusted or on a scene cut. Off "
 			       "never falls back: smoothest, but expect smearing on fast flicks and blended "
 			       "scene cuts." )
-			.Default( 1 )
+			.Default( 3 )
 			.Keywords( "frame generation artifact safety artefacts ghosting trust fallback" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.hud_protection", "Static HUD protection",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.hud_protection, kHudKeys, 3, 1 ); },
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.hud_protection, kHudKeys, 3, 2 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.hud_protection = kHudKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kHudOptions, std::size( kHudOptions ) )
 			.Help( "A soft bias towards \"stay put\" when frames are generated, so a motionless "
 			       "or see-through HUD wobbles less. It only nudges the motion estimate: it "
 			       "cannot make a HUD pixel-exact (that is UI protection below). Strong "
 			       "can hold back genuinely slow motion near the HUD." )
-			.Default( 1 )
+			.Default( 2 )
 			.Keywords( "frame generation static hud protection ui wobble see-through" )
 			.DisabledUnless( On, "frame generation is off" );
 

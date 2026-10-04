@@ -57,7 +57,8 @@ the output that is the real frame itself.
 ## Settings
 
 Area `image.motionblur` ("Motion blur"), per profile (game profiles inherit), no keybind,
-config section `motion_blur` (schema stays 5; additive; absent loads the defaults).
+config section `motion_blur` (schema stays 5; additive; absent loads the defaults, which are the user's hand-tuned Test-profile values, 2026-10-04: the defaults below are those, and switches stay off).
+
 
 | Key | Values | Meaning |
 | --- | --- | --- |
