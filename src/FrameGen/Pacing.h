@@ -69,9 +69,31 @@
 // LATENCY. A newer real frame is seen by the very next paint: nothing is ever
 // queued except by Smoothness's deliberate delay.
 //
-// Phase A is vblank-driven for every backend. "The vblank" enters through
-// Inputs::vblankNs only, so a timer-paced Phase B can feed its own present
-// time with no other change: tau = V - D is exactly as valid for it.
+// "The vblank" enters through Inputs::vblankNs only, so a timer that is not
+// the vblank timer can feed its own present time with no other change:
+// tau = V - D is exactly as valid for it (see the next section).
+//
+// BEYOND THE REFRESH RATE ("Pause at refresh rate" off, 2026-10-04). The user:
+// "instead of just taking that decision for the user, whether it should stop
+// generating frames if the input frame rate is already above its set refresh
+// rate, we can add a switch". With Inputs::pauseAtRefresh true (default) all of
+// the above holds: the output is capped at the refresh and generation stops once
+// the game alone reaches it. With it false the refresh cap is GONE:
+//   * Fixed N : o = interval / N, no 1/refresh floor -- N-1 frames per real pair
+//     however fast the game is (200 fps at 4x = 800 output frames a second);
+//   * Target  : the target is not clamped to the refresh;
+//   * pass-through only when the game itself reaches the output rate (never for
+//     Fixed, since N >= 2; game fps >= target for Target), the renderer is
+//     unavailable, or the cost guard trips -- the cost guard is what then bounds
+//     the output.
+// An output interval shorter than a vblank cannot be driven by the vblank timer,
+// so the pacer asks for ExtraTimer(): the glue arms a timerfd for each output
+// frame's own time and paints on it (V = that time). That only makes sense where
+// a present between vblanks is shown or discarded without blocking -- a nested
+// Wayland window (the host shows the newest buffer), or a tearing DRM flip.
+// Where it is not (Inputs::canExceedRefresh false: a DRM display without
+// tearing, SDL, headless, VR) Off behaves exactly as On: capped at the refresh,
+// vblank-paced.
 
 #include <algorithm>
 #include <cmath>
@@ -97,6 +119,13 @@ namespace fgpacing
 	// back above kStartRatio. 98% .. 91% of the refresh at a fixed multiplier.
 	constexpr double kStopRatio       = 1.02;
 	constexpr double kStartRatio      = 1.10;
+	// ExtraTimer() band: paint on its own timer once the output interval is more
+	// than 2% shorter than a vblank, back to the vblank timer once it is more
+	// than 2% longer (kCadenceSlack, the same 2% PaintGenerated's cadence uses).
+	constexpr double kExtraEnter      = 0.98;
+	constexpr double kExtraLeave      = 1.02;
+	// No output interval is shorter than this: a fixed 8x of a 250 fps game.
+	constexpr double kMinOutputMs     = 0.5;
 	// D16: generation (estimate + synths) may use at most this share of a game
 	// interval.
 	constexpr double kCostBudget      = 0.25;
@@ -189,16 +218,32 @@ namespace fgpacing
 	// The output interval o in milliseconds, before the cost guard.
 	//   Fixed : max(interval / n, 1 / refresh)  -- never faster than the display
 	//   Target: 1 / min(target, refresh); target 0 = the display's refresh
-	inline double OutputIntervalMs( Mode eMode, int nMultiplier, int nTargetFps, double flIntervalMs, double flRefreshHz )
+	// bCapAtRefresh false (Pause at refresh rate off, on a backend that can show
+	// it) drops the refresh from both: Fixed = interval / n, Target = the target
+	// itself (0 still means the display's refresh).
+	inline double OutputIntervalMs( Mode eMode, int nMultiplier, int nTargetFps, double flIntervalMs, double flRefreshHz, bool bCapAtRefresh = true )
 	{
 		const double flVblankMs = 1000.0 / std::max( flRefreshHz, 1.0 );
 		if ( eMode == Mode::Target )
 		{
-			const double flTarget = nTargetFps > 0 ? std::min( double( nTargetFps ), flRefreshHz ) : flRefreshHz;
-			return 1000.0 / std::max( flTarget, 1.0 );
+			const double flTarget = nTargetFps > 0
+				? ( bCapAtRefresh ? std::min( double( nTargetFps ), flRefreshHz ) : double( nTargetFps ) )
+				: flRefreshHz;
+			return std::max( 1000.0 / std::max( flTarget, 1.0 ), kMinOutputMs );
 		}
 		const int n = std::max( nMultiplier, 1 );
-		return std::max( flIntervalMs / double( n ), flVblankMs );
+		const double flOut = flIntervalMs / double( n );
+		return bCapAtRefresh ? std::max( flOut, flVblankMs ) : std::max( flOut, kMinOutputMs );
+	}
+
+	// The time the next extra-timer output frame is painted for: one output
+	// interval after the previous one's, never in the past (a late wakeup does
+	// not make up lost slots with a burst), and at once when there is no previous.
+	inline Ns NextExtraTargetNs( Ns ulLastTarget, Ns ulNow, double flOutputMs )
+	{
+		if ( ulLastTarget == 0 )
+			return ulNow;
+		return std::max( ulLastTarget + Ns( flOutputMs * 1e6 ), ulNow );
 	}
 
 	// Low latency: the latest real interval minus the output interval, floored.
@@ -240,8 +285,15 @@ namespace fgpacing
 	// timer ticks paint -- the display is still asked for nothing (VRR stays on,
 	// the flip is simply a normal one at the tick), and while passing through the
 	// loop behaves exactly as without frame generation.
-	inline bool PaintTick( bool bGenerating, bool bFromTimer, bool bLoopVblank )
+	//
+	// When the pacer runs its own output timer (ExtraTimer(): Pause at refresh
+	// rate off and the output interval shorter than a vblank, bExtra) ONLY that
+	// timer's ticks paint -- the vblank timer's ticks would add output frames at
+	// times that are not the output cadence's.
+	inline bool PaintTick( bool bGenerating, bool bFromTimer, bool bLoopVblank, bool bExtra = false, bool bFromExtraTimer = false )
 	{
+		if ( bGenerating && bExtra )
+			return bFromExtraTimer;
 		return bGenerating ? bFromTimer : bLoopVblank;
 	}
 
@@ -321,6 +373,11 @@ namespace fgpacing
 			int    targetFps = 0;      // Target: 0 = the display's refresh, else 30..1000
 			Priority priority = Priority::LowLatency;
 			double refreshHz = 60.0;   // the refresh the vblank timer paces against
+			// "Pause at refresh rate" (true = capped at the refresh, the default) and
+			// whether the backend can show a present between vblanks (nested Wayland,
+			// a tearing DRM flip). The cap applies unless the switch is off AND it can.
+			bool   pauseAtRefresh = true;
+			bool   canExceedRefresh = false;
 			float  estimateMs = -1.0f; // RenderStatus::lastEstimateMs, < 0 = n/a
 			float  synthMs = -1.0f;    // RenderStatus::lastSynthMs, < 0 = n/a
 			uint32_t costSeq = 0;      // RenderStatus::costSeq: changes with every new measurement
@@ -351,8 +408,15 @@ namespace fgpacing
 			int    chosenN = 0;                // Fixed: the multiplier; Target: 0
 			int    activeN = 0;                // round(effective multiplier), >= 2 while generating, else 0
 			float  delayMs = 0.0f;             // D
+			bool   cappedAtRefresh = true;     // the output is capped at the refresh (Pause at refresh rate, or a backend that cannot go past it)
 			Reason reason = Reason::Normal;
 		};
+
+		// Is the output capped at the refresh rate under these inputs?
+		static bool CapAtRefresh( const Inputs &in )
+		{
+			return in.pauseAtRefresh || !in.canExceedRefresh;
+		}
 
 		// Forget everything (frame generation was switched off/on, or a new
 		// session). The next paint is "untracked" and starts clean.
@@ -473,6 +537,7 @@ namespace fgpacing
 		{
 			Report s;
 			s.chosenN = in.mode == Mode::Fixed ? in.multiplier : 0;
+			s.cappedAtRefresh = CapAtRefresh( in );
 
 			const bool bEst = m_Est.Valid();
 			if ( bEst )
@@ -487,7 +552,8 @@ namespace fgpacing
 			if ( in.mode == Mode::Target )
 			{
 				const double flRefresh = std::max( in.refreshHz, 1.0 );
-				s.targetFps = float( in.targetFps > 0 ? std::min( double( in.targetFps ), flRefresh ) : flRefresh );
+				s.targetFps = float( in.targetFps <= 0 ? flRefresh
+					: ( s.cappedAtRefresh ? std::min( double( in.targetFps ), flRefresh ) : double( in.targetFps ) ) );
 			}
 
 			if ( !in.rendererOk )
@@ -525,6 +591,10 @@ namespace fgpacing
 		bool   CostBlocked() const { return m_bCostBlocked; }
 		// The effective output interval (after the cost guard), ms; 0 when not generating.
 		double OutputMs() const { return m_Plan.state == State::Generate ? m_Plan.oMs : 0.0; }
+		// The output interval is shorter than a vblank and the display can show it
+		// (Pause at refresh rate off): the glue paints on its own timer, one tick per
+		// output frame, instead of on the vblank timer. False while not generating.
+		bool   ExtraTimer() const { return m_bExtra; }
 		double DelayMs() const { return m_flDelayMs; }
 		int    HistoryCount() const { return m_nHist; }
 		// The content time of the last output frame (tau, ns; 0 before any).
@@ -597,8 +667,9 @@ namespace fgpacing
 		// or generation (and at what output interval).
 		void Evaluate( const Inputs &in )
 		{
+			const bool bCap = CapAtRefresh( in );
 			const uint32_t uKey = uint32_t( in.mode ) | ( uint32_t( in.multiplier ) << 2 ) |
-				( uint32_t( in.targetFps ) << 8 ) | ( uint32_t( in.priority ) << 24 );
+				( uint32_t( in.targetFps ) << 8 ) | ( uint32_t( in.priority ) << 24 ) | ( uint32_t( bCap ) << 25 );
 			if ( uKey != m_uCfgKey )
 			{
 				// The user picked something else: forget the content time and the
@@ -612,6 +683,7 @@ namespace fgpacing
 			}
 
 			Plan p;
+			m_bExtra = false;
 			if ( !in.rendererOk )
 			{
 				// Keep telling the renderer (not inert): it only re-checks whether it
@@ -632,7 +704,7 @@ namespace fgpacing
 			}
 
 			const double flInterval = m_Est.IntervalMs();
-			const double flBaseMs = OutputIntervalMs( in.mode, in.multiplier, in.targetFps, flInterval, in.refreshHz );
+			const double flBaseMs = OutputIntervalMs( in.mode, in.multiplier, in.targetFps, flInterval, in.refreshHz, bCap );
 			const double flRatio = OutputRatio( flInterval, flBaseMs );
 
 			// The game reaches the output rate: nothing to generate. Hysteresis is a
@@ -737,6 +809,15 @@ namespace fgpacing
 			p.reason = eReason;
 			p.oMs = flOutMs;
 			m_Plan = p;
+
+			// Beyond the refresh: only when the cap is off, with a band so an output
+			// interval hovering at one vblank does not flap between the two timers.
+			if ( !bCap )
+			{
+				const double flVblankMs = 1000.0 / std::max( in.refreshHz, 1.0 );
+				m_bExtra = flOutMs < flVblankMs * ( m_bExtraPrev ? kExtraLeave : kExtraEnter );
+			}
+			m_bExtraPrev = m_bExtra;
 		}
 
 		// The delay D for the current plan, ms.
@@ -923,6 +1004,8 @@ namespace fgpacing
 		uint32_t m_uCfgKey = 0xFFFFFFFFu;
 		bool     m_bGenInit = false;
 		bool     m_bGen = false;
+		bool     m_bExtra = false;       // ExtraTimer(), as of the last Evaluate
+		bool     m_bExtraPrev = false;   // its hysteresis memory (survives pass-through gaps)
 
 		// -- cost guard --
 		bool     m_bCostBlocked = false;

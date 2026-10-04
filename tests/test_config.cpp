@@ -1628,6 +1628,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( Settings{}.framegen.multiplier == 0 );
     REQUIRE( Settings{}.framegen.target_fps == 0 );
     REQUIRE( Settings{}.framegen.priority == "low_latency" );
+    REQUIRE( Settings{}.framegen.pause_at_refresh == true );
     REQUIRE( Settings{}.framegen.quality == "quality" );
     REQUIRE( Settings{}.framegen.safety == "default" );
     REQUIRE( Settings{}.framegen.hud_protection == "normal" );
@@ -1637,12 +1638,14 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     s.framegen.multiplier = 8;
     s.framegen.target_fps = 240;
     s.framegen.priority = "smoothness";
+    s.framegen.pause_at_refresh = false;
     s.framegen.quality = "performance";
     s.framegen.safety = "high";
     s.framegen.hud_protection = "strong";
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.pause_at_refresh == false );
     REQUIRE( loaded.framegen.mode == "target" );
     REQUIRE( loaded.framegen.multiplier == 8 );
     REQUIRE( loaded.framegen.target_fps == 240 );
@@ -1657,6 +1660,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( IsSettingsKey( "framegen.multiplier" ) );
     REQUIRE( IsSettingsKey( "framegen.target_fps" ) );
     REQUIRE( IsSettingsKey( "framegen.priority" ) );
+    REQUIRE( IsSettingsKey( "framegen.pause_at_refresh" ) );
     REQUIRE( IsSettingsKey( "framegen.quality" ) );
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
@@ -1733,6 +1737,39 @@ TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplie
     loaded = LoadSections();
     REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.multiplier == 8 );
+}
+
+// "Pause at refresh rate" (2026-10-04) is additive: a profile written before it
+// loads as true (the capped behaviour), and both values round-trip. Artifact
+// safety gained "off".
+TEST_CASE( "framegen: a legacy config without pause_at_refresh loads as true; safety off round-trips", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 4, "priority": "smoothness" }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.pause_at_refresh == true );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 4, "pause_at_refresh": false, "safety": "off" }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.pause_at_refresh == false );
+    REQUIRE( loaded.framegen.safety == "off" );
+
+    Settings s{};
+    s.framegen.pause_at_refresh = true;
+    s.framegen.safety = "off";
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.pause_at_refresh == true );
+    REQUIRE( loaded.framegen.safety == "off" );
 }
 
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):

@@ -124,8 +124,9 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   Adaptive Brightness V2: the settings panel and the native build-time compute pre-pass
   that implements them.
 - [Frame generation (Frame generation settings area)](features/frame-generation.md) —
-  2x/3x/4x optical-flow frame interpolation: the `fghost` renderer, the `fgpacing` pacer,
-  settings, step-down rules, costs, limits.
+  optical-flow frame interpolation, a fixed 2x-8x or a Target fps, paced per vblank (Low
+  latency / Smoothness, Pause at refresh rate): the `fghost` renderer, the `fgpacing` pacer,
+  settings, costs, limits.
 - [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — screen capture via PipeWire.
 
 ### Tooling & runtime

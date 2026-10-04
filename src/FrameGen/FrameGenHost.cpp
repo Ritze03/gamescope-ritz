@@ -34,7 +34,7 @@ namespace fghost
 
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
-		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps.
+		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
@@ -52,7 +52,8 @@ namespace fghost
 				| ( uint32_t( c.hud ) << 8 )
 				| ( uint32_t( eMode ) << 10 )
 				| ( uint32_t( c.priority ) << 12 )
-				| ( uint32_t( nTarget ) << 13 );
+				| ( uint32_t( nTarget ) << 13 )
+				| ( uint32_t( c.pauseAtRefresh ? 1 : 0 ) << 23 );
 		}
 
 		Config Unpack( uint32_t u )
@@ -65,6 +66,7 @@ namespace fghost
 			c.mode = Mode( ( u >> 10 ) & 0x3u );
 			c.priority = Priority( ( u >> 12 ) & 0x1u );
 			c.targetFps = int( ( u >> 13 ) & 0x3FFu );
+			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
 			return c;
 		}
 
@@ -221,11 +223,21 @@ namespace fghost
 				s.subpixel = true;
 			}
 
+			// The whole-frame and scene-cut fallbacks keep the library's defaults
+			// (0.15, 30) for every preset but Off, which disables all three
+			// fallbacks (validate() accepts 254/255, 1.0 and 255).
+			s.globalFallback = 0.15f;
+			s.sceneCutSad = 30.0f;
 			switch ( c.safety )
 			{
 				case Safety::Low:     s.trustLow = 16.0f; s.trustHigh = 56.0f; break;
 				case Safety::Default: s.trustLow = 12.0f; s.trustHigh = 40.0f; break;
 				case Safety::High:    s.trustLow = 8.0f;  s.trustHigh = 28.0f; break;
+				case Safety::Off:
+					s.trustLow = 254.0f; s.trustHigh = 255.0f;
+					s.globalFallback = 1.0f;
+					s.sceneCutSad = 255.0f;
+					break;
 			}
 
 			switch ( c.hud )

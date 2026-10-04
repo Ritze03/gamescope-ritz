@@ -204,7 +204,7 @@ told you earlier."*
 - **V** is the vblank timer's predicted target for the paint
   (`g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank`, never in the past: `max(target,
   now)`; a missing or implausible value, or a non-vblank paint, falls back to `now`).
-- **Output interval `o`.** Fixed N: `max(interval / N, 1 / refresh)`. Target: `1 /
+- **Output interval `o`** (with Pause at refresh rate on; off: see below). Fixed N: `max(interval / N, 1 / refresh)`. Target: `1 /
   min(target, refresh)`, target 0 = the display's refresh. *refresh* is the rate the
   vblank timer ticks at (`g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh`, which is
   what `CVBlankTimer::GetRefresh()` returns -- it has no VRR branch, so under VRR it is the
@@ -273,9 +273,80 @@ There is no `VariableRefresh` pass reason any more -- nothing passes through for
 timer ever stopped ticking under VRR, generation would stall; it does not: the main loop
 re-arms it after every tick (`ArmNextVBlank( true )` at the end of a timer iteration).
 
-**Phase B (planned, not done)**: a per-output timer that is not the vblank timer (a
-timer-paced present path). The `tau = V - D` model generalises to it unchanged -- `V` is just
-that timer's present time -- so only the source of `V` and the repaint trigger change.
+**Phase B** (a per-output timer that is not the vblank timer) exists now, as the extra-frame timer
+of [Pause at refresh rate](#pause-at-refresh-rate-framegenpause_at_refresh): `tau = V - D`
+generalised unchanged, `V` being that timer's target time.
+
+### Pause at refresh rate (`framegen.pause_at_refresh`)
+
+The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
+equal to my refresh rate": *"So instead of just taking that decision for the user, whether
+it should stop generating frames if the input frame rate is already above its set refresh
+rate, we can add a switch that allows the user to enable that feature like auto turn off
+if... FPS higher than refresh or something like that, you'll find a better name for it,
+then we don't have to make the decision the user can choose whether he wants like 800 FPS
+or if he wants it to automatically limit itself if basically it's not doing anything."*
+(Earlier: *"It's fine if we generate way too many frames on a fixed multiplier, this system
+should handle that."*) Row **Pause at refresh rate**, per profile, default **On**, after
+Priority.
+
+- **On (default)** -- everything above, unchanged: the output is capped at the refresh
+  (fixed `o = max(i / N, 1 / refresh)`, target clamped to the refresh) and generation stops
+  once the game alone reaches it (the ratio band).
+- **Off** -- the refresh cap is gone. Fixed N: `o = i / N` (floor 0.5 ms), so an uncapped
+  200 fps game at 4x makes about 800 output frames a second; Target: the target is not
+  clamped (target 500 on 144 Hz = 500/s; 0 is still the refresh). Pass-through only when
+  the game itself reaches the output rate (fixed N >= 2 makes that impossible; Target:
+  game fps >= target), the renderer is unavailable, or the **cost guard** trips -- the guard
+  is what actually bounds the output. `presentedFps` keeps counting output frames handed
+  to present, so the HUD's *Count generated frames* shows ~800.
+- `Why` a switch and not a rule: whether 800 frames a second is wanted depends on the
+  display path (a tearing display or a desktop window shows only the newest, a plain
+  display cannot show more than its refresh) and on how much GPU the user wants to spend;
+  the pacer cannot know, the user can.
+
+**Presenting between vblanks (the extra-frame timer).** The vblank timer ticks once per
+refresh, so an output interval shorter than a vblank needs another wakeup. When
+`Pacer::ExtraTimer()` is true (Off, generating, `o` below 98% of a vblank; back to the
+vblank timer above 102%) `steamcompmgr.cpp` runs the output on `g_FrameGenExtraTimer`, a
+`gamescope::CTimerFunction` (timerfd) registered on `g_SteamCompMgrWaiter` next to the
+vblank timer:
+
+- **Arming** (`FrameGen_ArmExtraTimer()`, end of every main-loop iteration): when the pair in
+  progress needs its next output (`FrameGen_PostPaint()` sets `bExtraWantNext` instead of
+  `force_repaint()`), or a new real frame / UI repaint / fade is pending, arm for
+  `NextExtraTargetNs(lastV, now, o)` = the previous paint's V + `o`, never in the past (a late
+  wakeup does not make up lost slots with a burst).
+- **Firing**: the callback only disarms and records the target; the main loop picks it up
+  (`FrameGen_TakeExtraTick()`), and `PaintTick()` lets **only** these ticks paint while it is
+  active -- vblank-timer ticks keep running (presented events, cursor, re-arm) but do not paint,
+  or output frames would also land at vblank times that are not the output cadence.
+- **V** for the paint is the timer's target time (`Inputs::vblankNs`), so `tau = V - D` is
+  evenly spaced; the paint goes through the same `FrameGen_PrePaint` -> `SetFrame` ->
+  `paint_all` path with `bPaintTick` true. `g_SteamCompMgrVBlankTime.ulWakeupTime` is set to the
+  tick's wakeup so the backends' draw-time feedback measures this paint, not the time since the
+  last vblank.
+- **Disarm / hand back**: when the cap goes back on, the mode changes, generation stops or the
+  cost guard raises `o` past a vblank, `FrameGen_ExtraPaced()` is false and the next iteration
+  disarms; the vblank path then paints exactly as before. With the switch On, or FG off, no timer
+  is ever armed.
+
+**Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
+accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
+connector's name, `"Wayland"`):
+
+| Backend | Predicate | Flip |
+| --- | --- | --- |
+| Nested Wayland | connector name `Wayland` | normal commit at once; the host shows the newest buffer and discards the rest (`Wayland_PresentationFeedback_Discarded`); `Present()` never blocks |
+| DRM | `SupportsTearing()` and a tearing flip would be chosen for this paint (`cv_tearing_enabled`, the surface wants async, no overlay up) | `FlipType::Async` for the extra ticks |
+| DRM without tearing | -- | capped at the refresh: Off behaves as On (a second atomic commit while a flip is pending fails with `EBUSY`) |
+| SDL, OpenVR, headless | -- | capped at the refresh: Off behaves as On |
+
+So on a real display without tearing it cannot go past the refresh; the row's help says so. The
+DRM tearing path is written from the code and **not tested on hardware**. Caveat on Wayland: the
+output image ring is 3 images and, faster than the host releases buffers, gamescope may render
+into one the host still holds; this is the existing backend behaviour, only exercised more often.
+
 
 ## Settings and status
 
@@ -288,8 +359,9 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.multiplier` | 0, 2..8 | fixed mode's multiplier; 1 reads as 0 (a `fixed` mode with it loads as `off`), above 8 clamps to 8 |
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
 | `framegen.priority` | `low_latency` (default) / `smoothness` | what pacing trades under jittery frame times |
+| `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: about a third cheaper, can miss thin fast detail |
-| `framegen.safety` | `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28): how readily doubtful pixels fall back to the real frame |
+| `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28): how readily doubtful pixels fall back to the real frame. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: keeps a static HUD from wobbling; any value but `off` also switches on [Crosshair protection](#crosshair-protection) |
 
 **Migration:** a config with no `mode` (written before Target fps) derives it from the old
@@ -300,8 +372,8 @@ Rows, in order: **Frame generation** (Off / 2x / 3x / 4x / 5x / 6x / 7x / 8x / T
 sets `mode`, and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the
 Shell's overridden-dot follows one key per row), **Target fps** (a slider, 0 shown as
 "Display refresh", disabled unless the mode is Target; a drag into 1..29 snaps to 0 or 30),
-**Priority** (Low latency / Smoothness), Quality, Artifact safety, Static HUD protection,
-Status. The sub-rows are disabled while Off. Priority help: *Low latency adds the least
+**Priority** (Low latency / Smoothness), **Pause at refresh rate** (a switch), Quality, Artifact
+safety (Off / Low / Default / High), Static HUD protection, Status. The sub-rows are disabled while Off. Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*
 
@@ -390,7 +462,8 @@ load/store per generated frame; about 1.5 MB VRAM.
   force-repaint flag.
 - Under VRR, FG paints on timer ticks while generating, so the display runs at the timer's
   rate rather than following the game's frame times; FG does not turn VRR off.
-- Phase B (a timer that is not the vblank timer) is not implemented yet.
+- With Pause at refresh rate off, going past the refresh works only on nested Wayland and (untested)
+  a tearing DRM display; elsewhere it behaves as On.
 
 ## Build
 
@@ -412,8 +485,12 @@ output rate with its ratio band, Low latency snapping on an early frame and Smoo
 holding at t = 1 on a late one, the cost guard (lowering the rate, passing through, the
 probe, no guard without timings), the synth clamp, presented fps ignoring repaints, timer
 ticks only while generating under VRR/tearing (`PaintTick`), the D12 resets and the interval
-estimator. `tests/test_config.cpp` covers the `framegen` keys and the legacy-multiplier
-migration. The renderer needs a GPU and is verified by eye on a real game (status line +
+estimator. Pause at refresh rate: the uncapped output interval, the extra timer being
+requested (Off, fixed 4x at 200 fps on 144 Hz = 800/s; target 500), Off on a backend that cannot
+exceed the refresh being capped like On, On unchanged, the cost guard still bounding Off, and
+`PaintTick` with the extra timer. `tests/test_config.cpp` covers the `framegen` keys (including
+`pause_at_refresh`, defaulting to true on a legacy config, and `safety: off`) and the
+legacy-multiplier migration. The renderer needs a GPU and is verified by eye on a real game (status line +
 MangoHud output timing).
 
 ## Related

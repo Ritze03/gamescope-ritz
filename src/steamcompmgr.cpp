@@ -7813,9 +7813,20 @@ register_systray(xwayland_ctx_t *ctx)
 //  (g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank), the one place the
 //  display's clock enters.
 //
+//  Beyond the refresh ("Pause at refresh rate" off, Pacing.h's "BEYOND THE
+//  REFRESH RATE"): when the pacer's output interval is shorter than a vblank
+//  (Pacer::ExtraTimer()) the vblank timer cannot drive the output, so
+//  g_FrameGenExtraTimer -- a timerfd on g_SteamCompMgrWaiter -- is armed for each
+//  output frame's own time (previous target + o, never in the past) and ONLY its
+//  ticks paint (fgpacing::PaintTick()); V for that paint is the timer's target.
+//  The vblank timer keeps ticking for everything else. Only where a present
+//  between vblanks is shown or discarded without blocking: the nested Wayland
+//  backend (the host shows the newest buffer) and a tearing DRM flip
+//  (FrameGen_CanExceedRefresh()); everywhere else Off behaves as On.
+//
 //  Off costs one relaxed atomic load per paint (fghost::Enabled()) and one plain
 //  bool read per focused-window commit: no extra repaint, no SetFrame, no
-//  status.
+//  status, no timer armed.
 // ---------------------------------------------------------------------------
 namespace
 {
@@ -7843,8 +7854,36 @@ namespace
 		bool bActive = false;
 		// Another output frame is due: FrameGen_PostPaint() forces the next vblank.
 		bool bRepaintNext = false;
+
+		// -- the extra-frame timer (Pause at refresh rate off) --
+		// The backend could show a present between vblanks at the last paint.
+		bool bCanExceed = false;
+		// V of the last paint (the timer's target for an extra tick, else the
+		// vblank's): the next extra frame is due one output interval after it.
+		uint64_t ulLastV = 0;
+		// g_FrameGenExtraTimer is armed for ulArmedTarget.
+		bool bExtraArmed = false;
+		uint64_t ulArmedTarget = 0;
+		// The timer has fired; its target is ulFiredTarget. Consumed by the main
+		// loop (FrameGen_TakeExtraTick()).
+		bool bExtraFired = false;
+		uint64_t ulFiredTarget = 0;
+		// A paint on the timer is due even though nothing else asked for one (the
+		// rest of the pair in progress: what force_repaint() is on the vblank path).
+		bool bExtraWantNext = false;
 	};
 	FrameGenPacing_t s_FrameGen;
+
+	// The timer that paces output frames shorter than a vblank. Created with the
+	// process (one fd), registered on g_SteamCompMgrWaiter in steamcompmgr_main().
+	// The callback only records that it fired: the main loop acts on it.
+	gamescope::CTimerFunction g_FrameGenExtraTimer{ []
+	{
+		g_FrameGenExtraTimer.DisarmTimer();
+		s_FrameGen.bExtraArmed = false;
+		s_FrameGen.bExtraFired = true;
+		s_FrameGen.ulFiredTarget = s_FrameGen.ulArmedTarget;
+	}};
 
 	// On-change logging state (FrameGen_LogStatus()). steamcompmgr thread only.
 	struct FrameGenLog_t
@@ -7854,6 +7893,8 @@ namespace
 		int nMultiplier = -1;
 		int nTarget = -1;
 		int nPriority = -1;
+		bool bPause = true;
+		bool bExtra = false;
 		bool bGenerating = false;
 		fghost::PassReason ePass = fghost::PassReason::Off;
 		fghost::Unavailable eUnavailable = fghost::Unavailable::Ok;
@@ -7875,6 +7916,70 @@ namespace
 	bool FrameGen_TimerPaced()
 	{
 		return fghost::Enabled() && s_FrameGen.bActive && s_FrameGen.pacer.Generating();
+	}
+
+	// Is the output paced on g_FrameGenExtraTimer instead of the vblank timer?
+	// (Pause at refresh rate off, the output interval shorter than a vblank, the
+	// backend able to show it.) The config is read fresh so that switching the
+	// setting back on takes effect at once, without waiting for a paint that, in
+	// this mode, only the extra timer would trigger.
+	bool FrameGen_ExtraPaced()
+	{
+		return FrameGen_TimerPaced() && s_FrameGen.pacer.ExtraTimer() && !fghost::GetConfig().pauseAtRefresh;
+	}
+
+	// The extra timer fired since the last call: its target time, else 0.
+	uint64_t FrameGen_TakeExtraTick()
+	{
+		if ( !s_FrameGen.bExtraFired )
+			return 0;
+		s_FrameGen.bExtraFired = false;
+		return s_FrameGen.ulFiredTarget ? s_FrameGen.ulFiredTarget : 1;
+	}
+
+	// Can this backend show a present that is not on a vblank, without blocking
+	// or queueing? Nested Wayland: yes -- gamescope commits at once and the host
+	// shows the newest buffer, discarding the others (Wayland_PresentationFeedback_
+	// Discarded). DRM: only a tearing (async) flip; a second atomic commit while a
+	// flip is pending fails with EBUSY, so without tearing it is capped at the
+	// refresh. SDL (Vulkan swapchain), OpenVR and headless: no. There is no
+	// backend-type accessor (and Backends/ is not ours to extend), so Wayland is
+	// recognised by its connector's name; every backend with SupportsTearing() is
+	// DRM. bTearingNow = a tearing flip would be chosen for this paint.
+	bool FrameGen_CanExceedRefresh( bool bTearingNow )
+	{
+		gamescope::IBackend *pBackend = GetBackend();
+		gamescope::IBackendConnector *pConnector = pBackend ? pBackend->GetCurrentConnector() : nullptr;
+		if ( !pConnector )
+			return false;
+		if ( const char *pszName = pConnector->GetName(); pszName && strcmp( pszName, "Wayland" ) == 0 )
+			return true;
+		return pBackend->SupportsTearing() && bTearingNow;
+	}
+
+	// After every main-loop iteration: arm the timer for the next output frame
+	// when one is wanted (a new real frame, a UI repaint, the rest of the pair in
+	// progress), disarm it when the extra mode has ended. Only the timer paints in
+	// this mode, so without this nothing would ever wake the next paint.
+	void FrameGen_ArmExtraTimer( bool bWantsPaint )
+	{
+		FrameGenPacing_t &F = s_FrameGen;
+		if ( !FrameGen_ExtraPaced() )
+		{
+			if ( F.bExtraArmed )
+			{
+				g_FrameGenExtraTimer.DisarmTimer();
+				F.bExtraArmed = false;
+			}
+			F.bExtraWantNext = false;
+			return;
+		}
+		if ( F.bExtraArmed || !( bWantsPaint || F.bExtraWantNext ) )
+			return;
+		const uint64_t ulTarget = fgpacing::NextExtraTargetNs( F.ulLastV, get_time_in_nanos(), F.pacer.OutputMs() );
+		F.ulArmedTarget = ulTarget;
+		F.bExtraArmed = true;
+		g_FrameGenExtraTimer.ArmTimer( ulTarget );
 	}
 
 	// "fixed 3x" / "target 240 fps" / "target display refresh", for the log.
@@ -7901,23 +8006,26 @@ namespace
 		FrameGenLog_t &L = s_FrameGenLog;
 		const fghost::Config cfg = fghost::GetConfig();
 		const bool bGenerating = status.activeN >= 2;
+		const bool bExtra = FrameGen_ExtraPaced();
 		const bool bChanged = !L.bValid || int( cfg.mode ) != L.nMode || cfg.multiplier != L.nMultiplier ||
-			cfg.targetFps != L.nTarget || int( cfg.priority ) != L.nPriority || bGenerating != L.bGenerating ||
+			cfg.targetFps != L.nTarget || int( cfg.priority ) != L.nPriority || cfg.pauseAtRefresh != L.bPause ||
+			bExtra != L.bExtra || bGenerating != L.bGenerating ||
 			status.reason != L.ePass || eUnavailable != L.eUnavailable;
 		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
 		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
 		if ( !bChanged && !bPeriodic )
 			return;
 
-		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), bGenerating, status.reason, eUnavailable, ulNow };
+		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), cfg.pauseAtRefresh, bExtra, bGenerating, status.reason, eUnavailable, ulNow };
 
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
 		const char *pszPriority = cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency";
 
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s, %s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
-				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier,
+			fg_log.infof( "frame generation: %s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
+				szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
+				status.gameFps, status.presentedFps, status.effectiveMultiplier,
 				bGenerating ? "generating" : "passing through", status.delayMs,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
 		else
@@ -7963,7 +8071,10 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 }
 
 // Right before paint_all(): decide what this vblank shows and tell the renderer.
-static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
+// ulExtraTarget: the extra timer's target when this paint is one of its ticks
+// (V for it), else 0. bCanExceed: the backend could show a present between
+// vblanks for this paint (FrameGen_CanExceedRefresh()).
+static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64_t ulExtraTarget, bool bCanExceed )
 {
 	if ( !fghost::Enabled() )
 	{
@@ -7972,6 +8083,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 			// Switched off: stop paying for it and say so once.
 			s_FrameGen.bActive = false;
 			s_FrameGen.bRepaintNext = false;
+			s_FrameGen.bExtraWantNext = false;
 			s_FrameGen.pacer.Reset();
 			fghost::SetFrame( fghost::FrameRequest{} );
 
@@ -8019,6 +8131,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 		// starts a fresh sequence.
 		s_FrameGen.pacer.Discontinuity();
 		s_FrameGen.bRepaintNext = false;
+		s_FrameGen.bExtraWantNext = false;
 		fghost::SetFrame( fghost::FrameRequest{} );
 		return;
 	}
@@ -8038,11 +8151,17 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 		constexpr uint64_t kPlausibleNs = 1000ull * 1000ull * 1000ull;
 		const bool bPlausible = bVblank && ulTarget != 0 && ulTarget < ulNow + kPlausibleNs && ulTarget + kPlausibleNs > ulNow;
 		in.vblankNs = bPlausible ? std::max( ulTarget, ulNow ) : ulNow;
+		// An extra-timer tick is presented at the time the timer was armed for.
+		if ( ulExtraTarget > 1 )
+			in.vblankNs = ulExtraTarget;
 	}
 	in.mode = fgpacing::Mode( uint8_t( cfg.mode ) );
 	in.multiplier = cfg.multiplier;
 	in.targetFps = cfg.targetFps;
 	in.priority = fgpacing::Priority( uint8_t( cfg.priority ) );
+	in.pauseAtRefresh = cfg.pauseAtRefresh;
+	in.canExceedRefresh = bCanExceed;
+	s_FrameGen.bCanExceed = bCanExceed;
 	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):
 	// that is the rate at which output frames tick.
 	in.refreshHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
@@ -8063,6 +8182,8 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 	request.t = d.inert ? -1.0f : d.t;
 	fghost::SetFrame( request );
 	s_FrameGen.bRepaintNext = d.repaintNext;
+	s_FrameGen.bExtraWantNext = false;   // this paint answered it; PostPaint sets it again if more is due
+	s_FrameGen.ulLastV = in.vblankNs;
 
 	if ( s_FrameGen.pacer.StatusDue( in.now ) )
 	{
@@ -8084,7 +8205,13 @@ static void FrameGen_PostPaint()
 	if ( s_FrameGen.bRepaintNext )
 	{
 		s_FrameGen.bRepaintNext = false;
-		force_repaint();
+		// Paced on the extra timer, the next output frame is that timer's business
+		// (FrameGen_ArmExtraTimer()); force_repaint() would wake the vblank path,
+		// which does not paint in this mode.
+		if ( FrameGen_ExtraPaced() )
+			s_FrameGen.bExtraWantNext = true;
+		else
+			force_repaint();
 	}
 }
 
@@ -9876,6 +10003,7 @@ steamcompmgr_main(int argc, char **argv)
 
 	g_SteamCompMgrWaiter.AddWaitable( &GetVBlankTimer() );
 	g_SteamCompMgrWaiter.AddWaitable( &g_FPSLimitVRRTimer );
+	g_SteamCompMgrWaiter.AddWaitable( &g_FrameGenExtraTimer );
 	GetVBlankTimer().ArmNextVBlank( true );
 
 	{
@@ -9950,6 +10078,15 @@ steamcompmgr_main(int argc, char **argv)
 			g_SteamCompMgrVBlankTime = *pendingVBlank;
 			vblank = true;
 		}
+
+		// Frame generation's own output timer (Pause at refresh rate off): 0 when it
+		// did not fire, else the time it was armed for.
+		const uint64_t ulFGExtraTarget = FrameGen_TakeExtraTick();
+		// The draw-time feedback (CWaylandConnector::Present() and the backends) is
+		// measured from the wakeup that started the frame, and an extra tick is not a
+		// vblank wakeup: without this it would measure back to the last vblank.
+		if ( ulFGExtraTarget && !vblank )
+			g_SteamCompMgrVBlankTime.ulWakeupTime = get_time_in_nanos();
 
 		if ( g_bRun == false )
 		{
@@ -10457,7 +10594,11 @@ steamcompmgr_main(int argc, char **argv)
 			// tearing surface -- see fgpacing::PaintTick(). Without frame generation
 			// bPaintTick == vblank, so nothing here changes.
 			const bool bFGTimerPaced = FrameGen_TimerPaced();
-			const bool bPaintTick = fgpacing::PaintTick( bFGTimerPaced, bIsVBlankFromTimer, vblank );
+			const bool bFGExtraPaced = bFGTimerPaced && FrameGen_ExtraPaced();
+			const bool bPaintTick = fgpacing::PaintTick( bFGTimerPaced, bIsVBlankFromTimer, vblank, bFGExtraPaced, ulFGExtraTarget != 0 );
+			// A tick of the output timer paints when the pair in progress needs its
+			// next output frame; a UI / new-frame repaint is hasRepaint / forced.
+			const bool bFGExtraDue = bFGExtraPaced && ulFGExtraTarget != 0 && s_FrameGen.bExtraWantNext;
 			const bool bForceRepaint = bPaintTick && g_bForceRepaint.exchange(false);
 			const bool bForceSyncFlip = bForceRepaint || is_fading_out();
 
@@ -10478,6 +10619,8 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bForceSyncFlip )
 				eFlipType = FlipType::Normal;
+			else if ( bFGExtraPaced && ulFGExtraTarget != 0 && bTearing && !bHasOverlay && !nIgnoredOverlayRepaints )
+				eFlipType = FlipType::Async;    // output frames shorter than a vblank on a tearing display: an immediate flip
 			else if ( bFGTimerPaced )
 				eFlipType = FlipType::Normal;   // frame generation is generating: paint on timer ticks, a normal flip, even under VRR or tearing
 			else if ( bVRR )
@@ -10505,13 +10648,13 @@ steamcompmgr_main(int argc, char **argv)
 				{
 					case FlipType::Normal:
 					{
-						bShouldPaint = bPaintTick && ( hasRepaint || hasRepaintNonBasePlane || bForceSyncFlip );
+						bShouldPaint = bPaintTick && ( hasRepaint || hasRepaintNonBasePlane || bForceSyncFlip || bFGExtraDue );
 						break;
 					}
 
 					case FlipType::Async:
 					{
-						bShouldPaint = hasRepaint;
+						bShouldPaint = hasRepaint || bFGExtraDue;
 
 						if ( vblank && !bShouldPaint && hasRepaintNonBasePlane )
 							nIgnoredOverlayRepaints++;
@@ -10560,7 +10703,8 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bShouldPaint )
 			{
-				FrameGen_PrePaint( pPaintFocus, bPaintTick );
+				FrameGen_PrePaint( pPaintFocus, bPaintTick, ulFGExtraTarget,
+					FrameGen_CanExceedRefresh( bTearing && !bHasOverlay && !nIgnoredOverlayRepaints ) );
 
 				paint_all( pPaintFocus, eFlipType == FlipType::Async );
 
@@ -10593,6 +10737,10 @@ steamcompmgr_main(int argc, char **argv)
 				script.Manager().CallHook( "OnPostPaint" );
 			}
 		}
+
+		// Frame generation's output timer, if it paces the output right now (a
+		// no-op, and no timer armed, otherwise).
+		FrameGen_ArmExtraTimer( hasRepaint || hasRepaintNonBasePlane || g_bForceRepaint.load() || is_fading_out() );
 
 		if ( bIsVBlankFromTimer )
 		{

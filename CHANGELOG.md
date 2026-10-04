@@ -24,6 +24,8 @@ The newest version below is the one this build reports.
 - **Passes real frames through when it cannot help**: it keeps generating until the
   game reaches your refresh rate or target, and passes real frames through then, for
   HDR content, or when the GPU is too slow.
+- **Pause at refresh rate**: choose whether frame generation stops once the game
+  reaches your refresh rate, or keeps generating above it.
 
 ## [0.10.2] – 2026-09-29
 

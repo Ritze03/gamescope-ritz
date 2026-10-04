@@ -489,11 +489,13 @@ namespace gamescope
 		// frames. The output rate is used only while it is meaningful: frame
 		// generation on, the pacing status published at least once, and a
 		// multiplier actually in use (activeN >= 2). In pass-through
-		// (activeN < 2: warming up, game stalled, renderer unavailable, or the
-		// hold-back gave up) presentedFps counts every composite -- UI and
-		// HUD-keepalive repaints included -- and is not the game's rate, while
-		// with nothing generated the output rate IS the game rate, so the
-		// commit counter is the right number there.
+		// (activeN < 2: warming up, game stalled, renderer unavailable, the game
+		// already at the output rate, or the cost guard) the output rate IS the
+		// game rate, so the commit counter is the right number there.
+		// presentedFps counts the output frames actually handed to present
+		// (generated frames plus the real frames pacing showed), never a repaint
+		// of an already-shown output (UI, cursor, HUD keepalive); with Pause at
+		// refresh rate off it can exceed the refresh (e.g. ~800).
 		bool bGenSource = false;
 		float flGenFps = 0.0f;
 		if ( cfg.count_generated_frames && fghost::Enabled() )

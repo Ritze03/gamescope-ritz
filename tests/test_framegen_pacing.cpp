@@ -44,6 +44,10 @@ namespace
 		float synthMs = -1.0f;
 		uint32_t costSeq = 0;
 		bool rendererOk = true;
+		// "Pause at refresh rate" and whether the backend can show a present between
+		// vblanks (the defaults are the capped, vblank-paced behaviour).
+		bool pauseAtRefresh = true;
+		bool canExceed = false;
 		bool uiRepaints = false;       // a cursor / overlay repaint on every vblank
 		uint64_t focusKey = 1;
 		LayerKey layer{ 1920, 1080, 87 };
@@ -73,6 +77,8 @@ namespace
 			in.synthMs = synthMs;
 			in.costSeq = costSeq;
 			in.rendererOk = rendererOk;
+			in.pauseAtRefresh = pauseAtRefresh;
+			in.canExceedRefresh = canExceed;
 			return in;
 		}
 
@@ -1224,4 +1230,232 @@ TEST_CASE( "framegen pacing: Reset forgets everything", "[framegen_pacing]" )
 	CHECK( drv.pacer.ContentNs() == 0 );
 	const Pacer::Report s = drv.Status();
 	CHECK( s.reason == Reason::WarmingUp );
+}
+
+// ---------------------------------------------------------------------------
+//  Pause at refresh rate (Pacer::Inputs::pauseAtRefresh / canExceedRefresh)
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen pacing: output interval without the refresh cap", "[framegen_pacing]" )
+{
+	// Fixed: interval / N with no 1/refresh floor (200 fps at 4x = 800/s on 144 Hz).
+	CHECK( std::fabs( OutputIntervalMs( Mode::Fixed, 4, 0, 5.0, 144.0, false ) - 1.25 ) < 1e-9 );
+	// ...while the capped form is unchanged.
+	CHECK( std::fabs( OutputIntervalMs( Mode::Fixed, 4, 0, 5.0, 144.0, true ) - 1000.0 / 144.0 ) < 1e-9 );
+	CHECK( std::fabs( OutputIntervalMs( Mode::Fixed, 4, 0, 5.0, 144.0 ) - 1000.0 / 144.0 ) < 1e-9 );
+	// Target: not clamped to the refresh (500 fps on 144 Hz = 2 ms); 0 is still the refresh.
+	CHECK( OutputIntervalMs( Mode::Target, 2, 500, 16.0, 144.0, false ) == 2.0 );
+	CHECK( std::fabs( OutputIntervalMs( Mode::Target, 2, 0, 16.0, 144.0, false ) - 1000.0 / 144.0 ) < 1e-9 );
+	CHECK( std::fabs( OutputIntervalMs( Mode::Target, 2, 500, 16.0, 144.0, true ) - 1000.0 / 144.0 ) < 1e-9 );
+	// Never below the 0.5 ms floor (8x of a 250 fps game).
+	CHECK( OutputIntervalMs( Mode::Fixed, 8, 0, 4.0, 60.0, false ) == kMinOutputMs );
+}
+
+TEST_CASE( "framegen pacing: the extra timer's next target is one output interval on, never in the past", "[framegen_pacing]" )
+{
+	CHECK( NextExtraTargetNs( 0, 50 * MS, 1.25 ) == 50 * MS );                    // no previous: at once
+	CHECK( NextExtraTargetNs( 100 * MS, 100 * MS, 1.25 ) == 100 * MS + 1250000 ); // on schedule
+	CHECK( NextExtraTargetNs( 100 * MS, 130 * MS, 1.25 ) == 130 * MS );           // late: no burst of lost slots
+}
+
+TEST_CASE( "framegen pacing: only the extra timer paints while it paces the output", "[framegen_pacing]" )
+{
+	// Not generating: the loop as without frame generation.
+	CHECK( PaintTick( false, false, true, true, false ) );
+	CHECK_FALSE( PaintTick( false, false, false, true, true ) );
+	// Generating, no extra timer: vblank-timer ticks only (unchanged).
+	CHECK( PaintTick( true, true, true ) );
+	CHECK_FALSE( PaintTick( true, false, true ) );
+	// Generating on the extra timer: its ticks only, vblank ticks do not paint.
+	CHECK( PaintTick( true, false, false, true, true ) );
+	CHECK_FALSE( PaintTick( true, true, true, true, false ) );
+}
+
+TEST_CASE( "framegen pacing: Off, fixed 4x at 200 fps on 144 Hz outputs 800/s and asks for the extra timer", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 144.0;
+	drv.multiplier = 4;
+	drv.pauseAtRefresh = false;
+	drv.canExceed = true;
+	WarmUp( drv, 5.0 );
+
+	REQUIRE( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1.25 ) < 1e-6 );
+	CHECK( std::fabs( 1000.0 / drv.pacer.OutputMs() - 800.0 ) < 1e-3 );
+	CHECK( drv.pacer.ExtraTimer() );
+	CHECK( drv.Status().reason == Reason::Normal );
+
+	// The same game with the switch ON passes through: it reaches the refresh by itself.
+	Driver on;
+	on.refreshHz = 144.0;
+	on.multiplier = 4;
+	WarmUp( on, 5.0 );
+	CHECK_FALSE( on.pacer.Generating() );
+	CHECK_FALSE( on.pacer.ExtraTimer() );
+	CHECK( on.Status().reason == Reason::GameTooFast );
+}
+
+TEST_CASE( "framegen pacing: Off on a backend that cannot exceed the refresh is capped like On", "[framegen_pacing]" )
+{
+	// 100 fps, 4x, 144 Hz: o = max(2.5, 6.94) = one vblank, vblank-paced.
+	Driver drv;
+	drv.refreshHz = 144.0;
+	drv.multiplier = 4;
+	drv.pauseAtRefresh = false;
+	drv.canExceed = false;     // e.g. DRM without tearing
+	WarmUp( drv, 10.0 );
+	REQUIRE( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 144.0 ) < 1e-6 );
+	CHECK_FALSE( drv.pacer.ExtraTimer() );
+
+	// ...and a 200 fps game still passes through (the refresh cap's ratio rule).
+	Driver fast;
+	fast.refreshHz = 144.0;
+	fast.multiplier = 4;
+	fast.pauseAtRefresh = false;
+	fast.canExceed = false;
+	WarmUp( fast, 5.0 );
+	CHECK_FALSE( fast.pacer.Generating() );
+	CHECK( fast.Status().reason == Reason::GameTooFast );
+
+	// With the backend able to exceed it, the same Off setting generates and uses the timer.
+	Driver can;
+	can.refreshHz = 144.0;
+	can.multiplier = 4;
+	can.pauseAtRefresh = false;
+	can.canExceed = true;
+	WarmUp( can, 10.0 );
+	REQUIRE( can.pacer.Generating() );
+	CHECK( std::fabs( can.pacer.OutputMs() - 2.5 ) < 1e-6 );
+	CHECK( can.pacer.ExtraTimer() );
+}
+
+TEST_CASE( "framegen pacing: Off + target 500 on 144 Hz aims at 500/s", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 144.0;
+	drv.mode = Mode::Target;
+	drv.targetFps = 500;
+	drv.pauseAtRefresh = false;
+	drv.canExceed = true;
+	WarmUp( drv, 10.0 );
+	REQUIRE( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 2.0 ) < 1e-6 );
+	CHECK( drv.pacer.ExtraTimer() );
+	CHECK( drv.Status().targetFps == 500.0f );
+
+	// On: capped to the refresh, as before.
+	Driver on;
+	on.refreshHz = 144.0;
+	on.mode = Mode::Target;
+	on.targetFps = 500;
+	WarmUp( on, 10.0 );
+	REQUIRE( on.pacer.Generating() );
+	CHECK( std::fabs( on.pacer.OutputMs() - 1000.0 / 144.0 ) < 1e-6 );
+	CHECK_FALSE( on.pacer.ExtraTimer() );
+	CHECK( std::fabs( on.Status().targetFps - 144.0f ) < 1e-3f );
+
+	// Off passes through only when the game itself reaches the target.
+	Driver game;
+	game.refreshHz = 144.0;
+	game.mode = Mode::Target;
+	game.targetFps = 200;
+	game.pauseAtRefresh = false;
+	game.canExceed = true;
+	WarmUp( game, 5.0 );     // a 200 fps game, a 200 fps target
+	CHECK_FALSE( game.pacer.Generating() );
+	CHECK( game.Status().reason == Reason::GameTooFast );
+}
+
+TEST_CASE( "framegen pacing: the cost guard still bounds Off", "[framegen_pacing]" )
+{
+	// 200 fps at 4x uncapped asks for 1.25 ms; the guard (25% of 5 ms = 1.25 ms of
+	// GPU per pair) raises it to what the GPU affords: estimate 0.25 + 2 synths of 0.5.
+	Driver drv;
+	drv.refreshHz = 144.0;
+	drv.multiplier = 4;
+	drv.pauseAtRefresh = false;
+	drv.canExceed = true;
+	drv.estimateMs = 0.25f;
+	drv.synthMs = 0.5f;
+	drv.costSeq++;
+	WarmUp( drv, 5.0 );
+	REQUIRE( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 5.0 / 3.0 ) < 1e-6 );
+	CHECK( drv.pacer.ExtraTimer() );
+	CHECK( drv.Status().reason == Reason::CostGuard );
+
+	// Too expensive for even one generated frame per pair: pass-through, no timer.
+	Driver heavy;
+	heavy.refreshHz = 144.0;
+	heavy.multiplier = 4;
+	heavy.pauseAtRefresh = false;
+	heavy.canExceed = true;
+	heavy.estimateMs = 0.9f;
+	heavy.synthMs = 1.0f;
+	heavy.costSeq++;
+	WarmUp( heavy, 5.0 );
+	CHECK_FALSE( heavy.pacer.Generating() );
+	CHECK_FALSE( heavy.pacer.ExtraTimer() );
+	CHECK( heavy.pacer.CostBlocked() );
+
+	// A guard that lifts the output interval past a vblank hands the pacing back
+	// to the vblank timer: 50 fps, 8x, one synth affordable = o 10 ms > 6.94 ms.
+	Driver slow;
+	slow.refreshHz = 144.0;
+	slow.multiplier = 8;
+	slow.pauseAtRefresh = false;
+	slow.canExceed = true;
+	slow.estimateMs = 2.0f;
+	slow.synthMs = 2.0f;
+	slow.costSeq++;
+	WarmUp( slow, 20.0 );
+	REQUIRE( slow.pacer.Generating() );
+	CHECK( std::fabs( slow.pacer.OutputMs() - 10.0 ) < 1e-6 );
+	CHECK_FALSE( slow.pacer.ExtraTimer() );
+}
+
+TEST_CASE( "framegen pacing: Off + extra timer produces a distinct output frame per tick", "[framegen_pacing]" )
+{
+	// Drive the pacer the way the glue does on the extra timer: one paint per
+	// output interval, V = the timer's target. 100 fps, 4x, 144 Hz -> 2.5 ms.
+	Pacer pacer;
+	Pacer::Inputs in;
+	in.mode = Mode::Fixed;
+	in.multiplier = 4;
+	in.refreshHz = 144.0;
+	in.pauseAtRefresh = false;
+	in.canExceedRefresh = true;
+
+	uint64_t id = 0;
+	int nNew = 0;
+	const Ns tEnd = 1500 * MS;
+	Ns nextArrival = 0;
+	Ns t = 1 * MS;   // not 0: NextExtraTargetNs() reads a 0 previous target as "none yet"
+	std::set<uint64_t> outs;
+	while ( t < tEnd )
+	{
+		// Real frames every 10 ms.
+		while ( nextArrival <= t )
+		{
+			pacer.OnArrival( ++id, nextArrival, 1, LayerKey{ 1920, 1080, 87 } );
+			nextArrival += 10 * MS;
+		}
+		in.now = t;
+		in.vblankNs = t;
+		const Pacer::Decision d = pacer.OnPaint( in, id, true );
+		if ( t > 1000 * MS && d.newOutput )
+		{
+			nNew++;
+			outs.insert( d.outId );
+		}
+		t = NextExtraTargetNs( t, t, pacer.Generating() ? pacer.OutputMs() : 2.5 );
+	}
+	REQUIRE( pacer.Generating() );
+	CHECK( pacer.ExtraTimer() );
+	// 0.5 s at 400 output frames a second.
+	CHECK( nNew > 180 );
+	CHECK( nNew < 220 );
+	CHECK( outs.size() > 150 );
 }

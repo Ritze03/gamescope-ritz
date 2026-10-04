@@ -1,7 +1,7 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Six per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
-// Target fps, Priority, Quality, Artifact safety, Static HUD protection -- plus
+// SHAPE. Seven per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
+// Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
@@ -47,12 +47,12 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kSafetyOptions[]  = { { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
+		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		constexpr const char *kSafetyKeys[]  = { "low", "default", "high" };
+		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 
 		int IndexOf( const std::string &s, const char *const *ppszKeys, int n, int nFallback )
@@ -111,9 +111,10 @@ namespace gamescope
 			c.targetFps = f.target_fps;
 			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 0 ) == 1
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
+			c.pauseAtRefresh = f.pause_at_refresh;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
-			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 3, 1 );
+			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 1 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 1 );
 			return c;
 		}
@@ -272,7 +273,7 @@ namespace gamescope
 			.Help( "The frame rate to aim for in Target fps mode. The number of generated frames "
 			       "follows the game's frame times on every frame: if the game drops from 120 to "
 			       "100 fps with a target of 240, it generates more per game frame at once. 0 "
-			       "aims at your display's refresh rate; a target above it is capped to it." )
+			       "aims at your display's refresh rate; a target above it is capped to it unless Pause at refresh rate is off." )
 			.Range( 0.0f, 1000.0f ).Step( 5.0f ).Unit( "fps" )
 			.ZeroMeans( "Display refresh" )
 			.Default( 0 )
@@ -291,6 +292,19 @@ namespace gamescope
 			.Keywords( "frame generation priority low latency smoothness input lag jitter pacing" )
 			.DisabledUnless( On, "frame generation is off" );
 
+		a.Switch( "framegen.pause_at_refresh", "Pause at refresh rate",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
+			.Help( "On stops generating once the game alone reaches your refresh rate, so the GPU "
+			       "does no pointless work. Off keeps generating even above it (e.g. 800 fps): "
+			       "useful with tearing or in a desktop window, where only the newest frame is "
+			       "shown; it costs GPU time, and on a real display without tearing it cannot go "
+			       "past the refresh rate." )
+			.Default( true )
+			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
+			.DisabledUnless( On, "frame generation is off" );
+
 		a.Choice( "framegen.quality", "Quality",
 			ui::AnyBind::Of<int>(
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
@@ -305,12 +319,14 @@ namespace gamescope
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 3, 1 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 4, 1 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kSafetyOptions, std::size( kSafetyOptions ) )
 			.Help( "How readily a doubtful area falls back to the real frame. High shows fewer "
 			       "smeared or warped spots but a little less smoothing; Low is smoother with "
-			       "more visible mistakes." )
+			       "more visible mistakes. Off never falls back to a real frame, not even on fast "
+			       "flicks or scene cuts: the smoothest, but expect visible smearing at edges and "
+			       "blended frames on cuts." )
 			.Default( 1 )
 			.Keywords( "frame generation artifact safety artefacts ghosting trust fallback" )
 			.DisabledUnless( On, "frame generation is off" );

@@ -295,11 +295,12 @@ namespace gamescope::config
                 const std::string sPriority = JGetString( *pFrameGen, "priority", f.priority );
                 if ( sPriority == "low_latency" || sPriority == "smoothness" )
                     f.priority = sPriority;
+                f.pause_at_refresh = JGetBool( *pFrameGen, "pause_at_refresh", f.pause_at_refresh );
                 const std::string sQuality = JGetString( *pFrameGen, "quality", f.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     f.quality = sQuality;
                 const std::string sSafety = JGetString( *pFrameGen, "safety", f.safety );
-                if ( sSafety == "low" || sSafety == "default" || sSafety == "high" )
+                if ( sSafety == "low" || sSafety == "default" || sSafety == "high" || sSafety == "off" )
                     f.safety = sSafety;
                 const std::string sHud = JGetString( *pFrameGen, "hud_protection", f.hud_protection );
                 if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
@@ -697,6 +698,7 @@ namespace gamescope::config
             jFrameGen[ "multiplier" ] = fg.multiplier;
             jFrameGen[ "target_fps" ] = fg.target_fps;
             jFrameGen[ "priority" ] = fg.priority;
+            jFrameGen[ "pause_at_refresh" ] = fg.pause_at_refresh;
             jFrameGen[ "quality" ] = fg.quality;
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;

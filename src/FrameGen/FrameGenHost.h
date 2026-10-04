@@ -54,8 +54,11 @@ namespace fghost
 	// "Artifact safety": the per-pixel trust ramp (trustLow, trustHigh) in
 	// 8-bit levels. Low = (16,56) smoother but more visible artefacts,
 	// Default = (12,40), High = (8,28) more pixels fall back to the real
-	// frame. Runtime (setSettings, no wait).
-	enum class Safety : uint8_t { Low, Default, High };
+	// frame. Off (last, so the packed values of the others stay put) disables every
+	// fallback the library has: trust ramp (254,255), globalFallback 1.0 and
+	// sceneCutSad 255 -- never the real frame, even on fast flicks and scene cuts.
+	// Runtime (setSettings, no wait).
+	enum class Safety : uint8_t { Low, Default, High, Off };
 
 	// "Static HUD protection": the zero-vector bonus. Off = 0, Normal = 1,
 	// Strong = 2.5. Runtime.
@@ -85,6 +88,13 @@ namespace fghost
 		// Target: the output fps to aim for, 30..1000; 0 = the display's refresh.
 		int targetFps = 0;
 		Priority priority = Priority::LowLatency;
+		// "Pause at refresh rate". true (default): the output is capped at the
+		// refresh rate, so generation stops once the game alone reaches it. false:
+		// no refresh cap -- a fixed multiplier keeps generating N-1 frames per real
+		// pair however fast the game is, and a Target fps may exceed the refresh;
+		// the extra frames are presented between vblanks where the backend can show
+		// them (Pacing.h's "BEYOND THE REFRESH RATE").
+		bool pauseAtRefresh = true;
 		Quality quality = Quality::Quality;
 		Safety safety = Safety::Default;
 		HudProtect hud = HudProtect::Normal;

@@ -484,9 +484,16 @@ namespace gamescope::config
         // What pacing trades when the game's frame times jitter:
         // "low_latency" | "smoothness".
         std::string priority = "low_latency";
+        // "Pause at refresh rate" (2026-10-04). true: output is capped at the
+        // refresh rate and generation stops once the game alone reaches it.
+        // false: no refresh cap (a fixed multiplier keeps generating, a target
+        // may exceed the refresh); extra frames are presented between vblanks
+        // where the backend can show them. ADDITIVE: an older config loads true.
+        bool pause_at_refresh = true;
         // "quality" | "performance"
         std::string quality = "quality";
-        // Artifact safety: "low" | "default" | "high"
+        // Artifact safety: "off" | "low" | "default" | "high" ("off" added 2026-10-04:
+        // never falls back to the real frame)
         std::string safety = "default";
         // Static HUD protection: "off" | "normal" | "strong"
         std::string hud_protection = "normal";
