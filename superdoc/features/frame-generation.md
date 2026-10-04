@@ -70,6 +70,63 @@ which FG cannot substitute per slot.
   library has no deferred free). So a **Quality** change (it alters the flow scale) causes
   one brief pause; the other presets apply live.
 
+## Crosshair protection
+
+Active whenever **Static HUD protection** is Normal or Strong; Off records none of it. No
+setting of its own. `Why:` the user, after testing in a real game ("looks REALLY good"):
+*"One thing that many frame gens get wrong is the crosshair [...] We won't optimize for
+like weird big crosshairs, but like the middle one to maybe three percent of the screen
+[...] It should analyze multiple frames and can easily tell if the crosshair isn't moving.
+And then it should detect it, that it is the crosshair. Then the image that is being used
+to generate frames should have this crosshair removed and at a later point patched on
+again. This of course doesn't work as well if there's transparency, but it should work for
+most games."* The library's `hudBonus` does not solve it: a static crosshair over a moving
+background drags or smears, or makes the background around it stick.
+
+Algorithm (all in `FrameGenHost.cpp`, three shaders, every pass over the ROI only):
+
+1. **ROI**: a centred square of 3% of the frame area, `side = round(sqrt(0.03 * w * h))`
+   (332 px at 2560x1440, 249 px at 1920x1080), clamped to the frame. `Why:` the user's
+   "middle one to maybe three percent of the screen", and they asked to cover a crosshair
+   two to three times the usual size. Off-centre reticles are not covered.
+2. **Detect** (`cs_fg_crosshair_detect.comp`, once per NEW real frame, in the ring-copy
+   command buffer): a per-ROI-pixel counter of consecutive real frames on which the pixel's
+   max channel changed by at most 3.5/255; any larger change resets it to 0 at once. A
+   pixel is **masked** at a count of 8, dilated by 2 px (full strength within 1 px, half
+   within 2 px, a one-pixel feather). `Why` no "is this a crosshair shape" test: "static
+   for 8 frames inside the central ROI" is the whole detector, which is the user's point
+   that the crosshair "isn't moving". A still camera also masks static background, which is
+   harmless (it is restored with identical pixels), and as soon as anything moves its
+   pixels leave the mask on that same pair. `Why` 8 frames: long enough that a stall of
+   the picture does not mask a whole scene, short enough to protect within ~0.1 s.
+   `Why` every real frame and not only generated pairs: the counters need consecutive real
+   frames.
+3. **Remove** (`cs_fg_inpaint.comp`): the new frame's original ROI pixels plus the mask are
+   saved to a ROI-sized **patch** texture (`.rgb` original, `.a` mask), then the masked
+   pixels of the ring slot are overwritten in place with a 1/distance^2-weighted average of
+   the nearest unmasked pixel along each of 8 directions (reach 12 px). Motion estimation
+   and the warp therefore see plain background where the crosshair was. The previous
+   frame's slot was inpainted in its own turn and is only ever `prev`, so nothing is redone
+   for it; the next detect compares against the patch texture's ORIGINAL pixels, never the
+   inpainted ring. `Why` a directional search and not a push-pull pyramid: a crosshair is
+   thin, and this is one dispatch with no scratch levels. A pixel with no unmasked
+   neighbour in reach (the whole ROI is still) is left as it is.
+4. **Patch back** (`cs_fg_crosshair_patch.comp`): after each `recordSynth` into its output
+   texture, `out = mix(out, patch.rgb, mask)` over the ROI. Outputs are cached per
+   (pair, k), so repaints keep the crosshair at no extra cost. The real frame shown at slot
+   N is the game's own texture and is never touched.
+
+Textures: two ping-pong counter textures and the patch texture, all ARGB8888 ROI-sized
+(about 0.44 MB each at 1440p), created lazily and released with the ring (after
+`g_device.waitIdle()`). The counters restart from 0 on any gap: `fghost::Reset()`, a
+size/format change, FG toggled, HUD protection switched Off and on.
+
+Limits: a semi-transparent crosshair (its pixels change with the background, so it never
+reaches the mask); a crosshair that changes shape (spread, hit markers) stays unmasked
+while it changes; off-centre reticles; a still camera masks the background too, so a big
+moving object crossing the ROI of an otherwise still scene is interpolated from slightly
+smeared neighbours. The fork's own Crosshair is drawn after FG and is unaffected.
+
 ## Backends
 
 Generated slots must go through the composite, so full composite is forced while FG is on.
@@ -130,7 +187,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.multiplier` | 0 / 2 / 3 / 4 (Off default) | frames shown per game frame |
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: about a third cheaper, can miss thin fast detail |
 | `framegen.safety` | `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28): how readily doubtful pixels fall back to the real frame |
-| `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: keeps a static HUD from wobbling |
+| `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: keeps a static HUD from wobbling; any value but `off` also switches on [Crosshair protection](#crosshair-protection) |
 
 The three sub-rows are disabled while Off. `Why:` the library's expert dials
 (searchPenalty, smoothBonus, sceneCutSad, globalFallback) are deliberately not exposed --
@@ -169,13 +226,19 @@ Library measurements on a 7900 XTX, ms of GPU per real pair:
 
 About 12 MB VRAM at 1080p plus the frame ring (about 8 MB per slot at 1080p).
 
+Crosshair protection (estimated from the texel-fetch count, not measured on a GPU): per real
+frame about 0.03 ms typical and up to about 0.1 ms on a still scene at 1440p (~110k ROI
+pixels; detect 4 fetches, mask 26, inpaint up to 96 on masked pixels only), plus a ~110k-pixel
+load/store per generated frame; about 1.3 MB VRAM.
+
 ## Limitations
 
 - SDR, 8-bit only.
 - Compute on the same queue, no async: FG time adds to composite time.
 - Adds delay; not suited to twitch shooters.
 - Fast flicks can leave seams; a semi-transparent HUD over motion artifacts; scene cuts
-  hold the nearer real frame.
+  hold the nearer real frame. A game's own still centred crosshair is protected (see
+  above) except when semi-transparent or changing shape.
 - With several virtual connectors (VR) a slot repaint could be swallowed by the shared
   force-repaint flag.
 - Phase B (timer pacing for VRR / nested windows) is not implemented yet.

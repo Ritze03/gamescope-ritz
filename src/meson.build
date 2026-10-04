@@ -95,6 +95,9 @@ shader_src = [
   'shaders/cs_nis_fp16.comp',
   'shaders/cs_rgb_to_nv12.comp',
   'shaders/cs_fg_copy.comp',
+  'shaders/cs_fg_crosshair_detect.comp',
+  'shaders/cs_fg_inpaint.comp',
+  'shaders/cs_fg_crosshair_patch.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
