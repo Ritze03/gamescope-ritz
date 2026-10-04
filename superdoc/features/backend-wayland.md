@@ -88,8 +88,8 @@ initialize.
 - `SupportsExplicitSync()` is unconditionally `true`
   (`src/Backends/WaylandBackend.cpp:2306`) and `SupportsPlaneHardwareCursor()` is `false`
   (`src/Backends/WaylandBackend.cpp:2285`, same reasoning as SDL: cursor goes through
-  `INestedHints`, not a real cursor plane) and `SupportsTearing()` is `false`
-  (`:2292`) — there's no CRTC to schedule a tearing flip against.
+  `INestedHints`, not a real cursor plane). `SupportsTearing()` is true only when the host
+  offers `wp_tearing_control_manager_v1` — see [Tearing](#tearing) below.
 - **Settings-overlay cursor** — `INestedHints::PresentOverlayCursor( bool ) -> bool`, driven
   every frame from `paint_all()`, folded into `UpdateCursor()`. While the overlay owns the
   pointer this shows `m_pDefaultCursorSurface` — the host's *system* cursor, snapshotted from
@@ -110,6 +110,46 @@ initialize.
   `LibDecor_Frame_Configure()` does, with our number first. A tiled host answers with its own
   configure, which overwrites the globals again; the overlay reads those back rather than the
   request. See [resolution-and-refresh.md](resolution-and-refresh.md).
+
+## Tearing
+
+Since 2026-10-04 the **Allow tearing** setting (`gamescope.tearing_enabled`) works when
+gamescope runs as a window. The backend binds the standard `wp_tearing_control_manager_v1`
+(wayland-protocols `staging/tearing-control/tearing-control-v1.xml`, taken from
+`wl_protocol_dir` in `protocol/meson.build` like `fractional-scale-v1`; no vendored copy)
+if the host offers it.
+
+- **Where the hint is set.** `CWaylandPlane::Init()` creates one `wp_tearing_control_v1`
+  for the **toplevel plane only** (plane 0, the libdecor surface; the sync subsurfaces
+  latch with it, and a host decides tearing from the window's root surface).
+  `CWaylandConnector::Present( pFrameInfo, bAsync )` calls
+  `m_Planes[0].SetPresentationHint( bAsync )` just before the commit loop: `async` for an
+  async/tearing present, `vsync` otherwise, sent **only when it changes** (the protocol's
+  own default is vsync). The hint is double-buffered, so plane 0's commit — the last of the
+  loop — applies it.
+- **`SupportsTearing()`** returns `m_pTearingControlManager != nullptr`, i.e. "the host
+  offers the protocol". The main loop's `bTearing` (`cv_tearing_enabled &&
+  SupportsTearing() && the base commit wants async`) therefore becomes true nested exactly as
+  on DRM, which also lets frame generation's timer-paced paints present async
+  (`bFGTearPresent`, see [frame-generation.md](frame-generation.md)) and sets
+  `STEAM_GAMESCOPE_TEARING_SUPPORTED` for Steam. Nothing in the Shell gates its tearing row
+  on `SupportsTearing()` (only the startup log line `Supports Tearing:` does), so the row is
+  unchanged. It is a **request**: the host decides whether the window really tears.
+- **Tearing off, or a host without the protocol:** `async` is only ever requested when
+  `bTearing` holds, so with the setting off the hint stays at its initial `vsync` and no
+  request is sent; without the protocol no object is created. Wire behaviour is as before.
+- **Hyprland** (the user's host) needs all of: `general { allow_tearing = true }`; the
+  gamescope window **fullscreen** (Hyprland only tears fullscreen windows); and, to force it
+  rather than rely on the client's hint, a window rule `immediate` for the gamescope window
+  (its class/app-id is `gamescope`, set in `CWaylandPlane::Init()`), e.g.
+  `windowrule = immediate, class:^(gamescope)$` (older config syntax) / the equivalent
+  `immediate` rule in newer Hyprland versions. Without them Hyprland accepts the hint and
+  keeps vsyncing. This repo does not touch the user's Hyprland config; these are for the
+  user to set.
+- `Why:` before this, every nested frame — real and frame-generated alike — waited for the
+  host's next refresh to be shown, up to one refresh of extra delay, with no way for the
+  user's tearing setting to change that. The protocol is the host-side contract for exactly
+  this ("show this buffer as soon as possible, tearing allowed").
 
 ## Using it
 

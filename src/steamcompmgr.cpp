@@ -10812,8 +10812,8 @@ steamcompmgr_main(int argc, char **argv)
 			// the existing output-timer Async branch above already presents composites
 			// async. A kernel that refuses the async commit takes the same retry path as
 			// any failed drm_prepare().
-			// Nested Wayland: SupportsTearing() is false (no wp_tearing_control), so
-			// bTearing is false there and this never triggers -- see
+			// Nested Wayland: SupportsTearing() is true when the host offers
+			// wp_tearing_control, so this triggers there as well -- see
 			// superdoc/features/frame-generation.md.
 			const bool bFGTearPresent = bFGTimerPaced && !bFGExtraPaced && bTearing &&
 				!bHasOverlay && !nIgnoredOverlayRepaints && !is_fading_out() &&

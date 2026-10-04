@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
+- **Tearing in a desktop window**: the tearing setting now works when gamescope runs
+  as a window, where the host compositor allows it.
 - **HDR frame generation**: frame generation, motion blur and UI protection now also
   work in HDR and 10-bit games.
 - **Lag spike buffer**: a new tab in the Motion group bridges repeating game stutters

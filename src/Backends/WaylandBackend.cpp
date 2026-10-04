@@ -39,6 +39,7 @@
 #include <keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h>
 #include <primary-selection-unstable-v1-client-protocol.h>
 #include <fractional-scale-v1-client-protocol.h>
+#include <tearing-control-v1-client-protocol.h>
 #include <xdg-toplevel-icon-v1-client-protocol.h>
 #include <ext-data-control-v1-client-protocol.h>
 #include <wlr-data-control-unstable-v1-client-protocol.h>
@@ -232,6 +233,11 @@ namespace gamescope
 
         void CommitLibDecor( libdecor_configuration *pConfiguration );
         void Commit();
+        // wp_tearing_control_v1: the NEXT Commit() of this surface asks the
+        // host to show the buffer without waiting for a refresh (bAsync) or on
+        // the next one. Sent only when it changes. A no-op when the host does
+        // not offer the protocol. Toplevel only -- see SupportsTearing().
+        void SetPresentationHint( bool bAsync );
         // INestedHints::RequestOutputSize(): make the next Commit() send a
         // libdecor state carrying the (already updated) g_nOutputWidth/Height,
         // the same way LibDecor_Frame_Commit() re-arms one.
@@ -308,6 +314,9 @@ namespace gamescope
         wp_color_management_surface_v1 *m_pWPColorManagedSurface = nullptr;
         wp_color_management_surface_feedback_v1 *m_pWPColorManagedSurfaceFeedback = nullptr;
         wp_fractional_scale_v1 *m_pFractionalScale = nullptr;
+        wp_tearing_control_v1 *m_pTearingControl = nullptr;
+        // Last hint sent. The protocol's own default (until set) is vsync.
+        bool m_bSentAsyncHint = false;
         wl_subsurface *m_pSubsurface = nullptr;
         libdecor_frame *m_pFrame = nullptr;
         libdecor_window_state m_eWindowState = LIBDECOR_WINDOW_STATE_NONE;
@@ -780,6 +789,7 @@ namespace gamescope
         wp_color_manager_v1 *GetWPColorManager() const { return m_pWPColorManager; }
         wp_image_description_v1 *GetWPImageDescription( GamescopeAppTextureColorspace eColorspace ) const { return m_pWPImageDescriptions[ (uint32_t)eColorspace ]; }
         wp_fractional_scale_manager_v1 *GetFractionalScaleManager() const { return m_pFractionalScaleManager; }
+        wp_tearing_control_manager_v1 *GetTearingControlManager() const { return m_pTearingControlManager; }
         xdg_toplevel_icon_manager_v1 *GetToplevelIconManager() const { return m_pToplevelIconManager; }
         libdecor *GetLibDecor() const { return m_pLibDecor; }
 
@@ -903,6 +913,9 @@ namespace gamescope
         // this to report Unsupported rather than silently doing nothing).
         zwp_keyboard_shortcuts_inhibit_manager_v1 *m_pKeyboardShortcutsInhibitManager = nullptr;
         wp_fractional_scale_manager_v1 *m_pFractionalScaleManager = nullptr;
+        // Null on a host that never advertises wp_tearing_control_manager_v1;
+        // SupportsTearing() is exactly "this is non-null".
+        wp_tearing_control_manager_v1 *m_pTearingControlManager = nullptr;
         xdg_toplevel_icon_manager_v1 *m_pToplevelIconManager = nullptr;
 
         // TODO: Restructure and remove the need for this.
@@ -1383,6 +1396,10 @@ namespace gamescope
             }
         }
 
+        // Double-buffered on the toplevel, applied by the commit just below (plane 0
+        // commits last, and latches the sync subsurfaces committed before it).
+        m_Planes[0].SetPresentationHint( bAsync );
+
         for ( int i = 7; i >= 0; i-- )
             m_Planes[i].Commit();
 
@@ -1660,6 +1677,8 @@ namespace gamescope
             wl_subsurface_destroy( m_pSubsurface );
         if ( m_pFractionalScale )
             wp_fractional_scale_v1_destroy( m_pFractionalScale );
+        if ( m_pTearingControl )
+            wp_tearing_control_v1_destroy( m_pTearingControl );
         if ( m_pWPColorManagedSurface )
             wp_color_management_surface_v1_destroy( m_pWPColorManagedSurface );
         if ( m_pWPColorManagedSurfaceFeedback )
@@ -1708,6 +1727,11 @@ namespace gamescope
             if ( !pParent )
                 wp_fractional_scale_v1_add_listener( m_pFractionalScale, &s_FractionalScaleListener, this );
         }
+
+        // Toplevel only: the host decides tearing from the window's root
+        // surface; the sync subsurfaces latch with it.
+        if ( !pParent && m_pBackend->GetTearingControlManager() )
+            m_pTearingControl = wp_tearing_control_manager_v1_get_tearing_control( m_pBackend->GetTearingControlManager(), m_pSurface );
 
         if ( !pParent )
         {
@@ -1980,6 +2004,16 @@ namespace gamescope
         }
 
         wl_surface_commit( m_pSurface );
+    }
+
+    void CWaylandPlane::SetPresentationHint( bool bAsync )
+    {
+        if ( !m_pTearingControl || bAsync == m_bSentAsyncHint )
+            return;
+
+        m_bSentAsyncHint = bAsync;
+        wp_tearing_control_v1_set_presentation_hint( m_pTearingControl,
+            bAsync ? WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC : WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC );
     }
 
     xdg_toplevel *CWaylandPlane::GetXdgToplevel() const
@@ -2662,7 +2696,10 @@ namespace gamescope
 
     bool CWaylandBackend::SupportsTearing() const
     {
-        return false;
+        // Only when the host offers wp_tearing_control_v1. Whether it then really
+        // tears is the host's call (Hyprland: allow_tearing + an immediate rule +
+        // fullscreen) -- see superdoc/features/backend-wayland.md.
+        return m_pTearingControlManager != nullptr;
     }
     bool CWaylandBackend::UsesVulkanSwapchain() const
     {
@@ -3088,6 +3125,10 @@ namespace gamescope
         else if ( !strcmp( pInterface, wp_fractional_scale_manager_v1_interface.name ) )
         {
             m_pFractionalScaleManager = (wp_fractional_scale_manager_v1 *)wl_registry_bind( pRegistry, uName, &wp_fractional_scale_manager_v1_interface, 1u );
+        }
+        else if ( !strcmp( pInterface, wp_tearing_control_manager_v1_interface.name ) )
+        {
+            m_pTearingControlManager = (wp_tearing_control_manager_v1 *)wl_registry_bind( pRegistry, uName, &wp_tearing_control_manager_v1_interface, 1u );
         }
         else if ( !strcmp( pInterface, wl_shm_interface.name ) )
         {

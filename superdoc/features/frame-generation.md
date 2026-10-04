@@ -529,11 +529,13 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    tearing off for good; `CDRMBackend::Present()` waits for the composite before it commits
    (`vulkan_wait()`), which is what the historic "if we are compositing, force sync flips" guard
    protects, and the output-timer branch already presents composites async. **Nested Wayland:
-   nothing to do and nothing changes** -- `CWaylandBackend::SupportsTearing()` returns false, the
-   backend ignores `bAsync` and binds no `wp_tearing_control`, so `bTearing` is false there for
-   real frames and generated ones alike (a nested window presents by commit and the host decides).
-   Adding the tearing-control hint would be a new backend feature that also changes the
-   non-frame-generation path; it was left out. SDL / OpenVR / headless: `SupportsTearing()` is
+   works since 2026-10-04** -- `CWaylandBackend::SupportsTearing()` is true when the host offers
+   `wp_tearing_control_manager_v1`, and `Present()` sends the `async`/`vsync` presentation hint
+   (see [backend-wayland.md](backend-wayland.md#tearing)), so `bTearing` and `bFGTearPresent`
+   hold there as on DRM and generated frames tear too, where the host allows it (Hyprland:
+   `allow_tearing`, an `immediate` rule, fullscreen). The first version of this change left it
+   out because it also changes the non-frame-generation path; it was added at the user's
+   request with the same hint covering real frames. SDL / OpenVR / headless: `SupportsTearing()` is
    false or the flag unused.
 
 **Measured** (headless sway, nested Wayland, `vkcube` capped by MangoHud, FG on, Target = display
@@ -769,7 +771,7 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
   protection](#ui-protection) except when semi-transparent or changing.
 - With several virtual connectors (VR) an output repaint could be swallowed by the shared
   force-repaint flag.
-- Tearing for generated frames is DRM-only (see "Latency"); the nested Wayland backend has no tearing at all.
+- Tearing for generated frames works on DRM and, when the host offers `wp_tearing_control` and allows it, on nested Wayland (see "Latency"); it is a request the host may ignore.
 - Under VRR, FG paints on timer ticks while generating, so the display runs at the timer's
   rate rather than following the game's frame times; FG does not turn VRR off.
 - With Pause at refresh rate off, going past the refresh works only on nested Wayland and (untested)
