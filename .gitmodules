@@ -19,3 +19,6 @@
 [submodule "thirdparty/SPIRV-Headers"]
 	path = thirdparty/SPIRV-Headers
 	url = https://github.com/KhronosGroup/SPIRV-Headers/
+[submodule "subprojects/FrameGen"]
+	path = subprojects/FrameGen
+	url = https://github.com/Ritze03/FrameGen
