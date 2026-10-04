@@ -8139,6 +8139,8 @@ namespace
 		status.outliersIgnored = r.outliersIgnored;
 		status.historyFrames = r.historyFrames;
 		status.reason = fghost::PassReason( uint8_t( r.reason ) );
+		status.steadyMultiplier = r.steadyMultiplier;
+		status.generating = r.generating;
 		return status;
 	}
 }

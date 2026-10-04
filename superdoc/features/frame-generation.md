@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`615a2d1`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`83d1bb0`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -667,6 +667,16 @@ the game rate (30.08 commits/s at a 30 fps game, identical before and after).
 of [Pause at refresh rate](#pause-at-refresh-rate-framegenpause_at_refresh): `tau = V - D`
 generalised unchanged, `V` being that timer's target time.
 
+### A steadier generate / pass decision (2026-10-05, library PR #15)
+
+A game near the target (CS2 at 210-330 fps on 280 Hz, Target = refresh, Smoothness, Pause at
+refresh off) used to switch between generating and passing through about once a second, so the
+HUD's Both readout kept flipping. The library now decides on a steady EMA of the game rate
+instead of the 8-frame median, with a 1 s dwell to stop and 0.3 s to start (flips in the
+simulation of that setup: hundreds a minute to under 1), and adds `Report::generating` /
+`steadyMultiplier` for a HUD. Details and measurements: `subprojects/FrameGen/INTEGRATION.md`,
+"The generate / pass decision". gamescope only plumbs the two new fields into `PacingStatus`.
+
 ### Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
@@ -822,9 +832,10 @@ overloaded at the moment. Reduce it to (example values): 60->280 * target 280 (x
 semantics:** `presentedFps` counts output frames actually presented (generated frames plus
 the real frames pacing decided to show) and **not** repaints of an already-shown output
 (cursor, overlay) -- it used to be a paint count; `activeN` = the effective multiplier
-rounded, at least 2 while generating and 0 when passing through, so "`activeN >= 2`" means
-"generating" (the HUD's *FPS shown* Output / Both choices rely on that, via
-`GetPacingStatus().presentedFps`); `chosenN` = the fixed N, 0 in target mode; `delayMs` = D.
+rounded, at least 2 while generating and 0 when passing through, but that is the pacer's instantaneous
+plan (it reads 2 at an effective 0.9x too); the steady "visibly generating" signal is
+`generating` / `steadyMultiplier` (library PR #15), stamped with `publishedNs`, which the
+HUD's *FPS shown* Both separator uses (see [fps-display](fps-display.md)); `chosenN` = the fixed N, 0 in target mode; `delayMs` = D.
 A vblank that holds a real frame while the next one is still to come re-presents it and is
 not counted, so under Low latency with a saturated display the distinct-frame rate is a
 little below the refresh (Smoothness fills it).

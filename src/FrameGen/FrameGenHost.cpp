@@ -1319,6 +1319,7 @@ namespace fghost
 	{
 		std::lock_guard<std::mutex> lock( g_PacingMutex );
 		g_Pacing = status;
+		g_Pacing.publishedNs = get_time_in_nanos();
 	}
 
 	PacingStatus GetPacingStatus()

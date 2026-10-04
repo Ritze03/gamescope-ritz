@@ -438,7 +438,8 @@ namespace gamescope
 		}
 	};
 	static RateWindows s_GameWindows;   // the game's real frames (commit counter)
-	static RateWindows s_OutputWindows; // the output rate while generating, else the commit counter
+	static RateWindows s_OutputWindows; // the output rate (pacing's presentedFps while it is published), else the commit counter
+	static fpsmath::GeneratingLatch s_GeneratingLatch; // Both mode's '>' vs '-'
 
 	// The lag-spike detector's own sample source: the per-commit frametime,
 	// consumed at most once per paint, as it always was. See
@@ -567,34 +568,45 @@ namespace gamescope
 		}
 
 		// ---- the output rate: what is sent to the display ----------------
-		// Used only while it is meaningful: frame generation on, the pacing
-		// status published at least once, and a multiplier actually in use
-		// (activeN >= 2). In pass-through (activeN < 2: warming up, game
-		// stalled, renderer unavailable, the game already at the output rate,
-		// or the cost guard) the output rate IS the game rate, so the commit
-		// counter is the right number there. presentedFps counts the output
-		// frames actually handed to present (generated frames plus the real
-		// frames pacing showed), never a repaint of an already-shown output
+		// Measured the same way whether or not frame generation is generating
+		// (2026-10-05): while the pacer is driven (frame generation, motion blur or
+		// the lag spike buffer on) and has published a fresh status with a rate,
+		// the output rate is that status's presentedFps -- the output frames
+		// actually handed to present (generated frames plus the real frames pacing
+		// showed; also while it passes the game's frames straight through, then
+		// about min(game, refresh)), never a repaint of an already-shown output
 		// (UI, cursor, HUD keepalive); with Pause at refresh rate off it can
-		// exceed the refresh (e.g. ~800).
+		// exceed the refresh (e.g. ~800). Otherwise (everything off, no status yet,
+		// a stale one) nothing is generated and the output rate IS the game rate,
+		// so the commit counter is the number and the output reads the game's own
+		// value. The source follows "is there a fresh status", NOT "is it
+		// generating", so the output windows restart only when the pacer starts or
+		// stops being driven, never when the separator flips.
 		// Both windows always run, whatever "FPS shown" says, so changing it
 		// never shows a stale value, and neither restarts the other.
-		bool bGenerating = false;
-		float flGenFps = 0.0f;
-		if ( fghost::Enabled() )
+		bool bRateSource = false;
+		bool bSignal = false;
+		float flPacedFps = 0.0f;
+		if ( fghost::Active() )
 		{
 			const fghost::PacingStatus st = fghost::GetPacingStatus();
-			if ( st.valid && st.activeN >= 2 )
+			const bool bFresh = st.valid && ulNowNanos >= st.publishedNs && ulNowNanos - st.publishedNs <= fpsmath::kPacingStaleNs;
+			if ( bFresh && st.presentedFps > 0.0f )
 			{
-				bGenerating = true;
-				flGenFps = st.presentedFps;
+				bRateSource = true;
+				flPacedFps = st.presentedFps;
 			}
+			bSignal = fpsmath::GeneratingSignal( fghost::Enabled(), st.valid, st.generating, st.publishedNs, ulNowNanos );
 		}
 
 		DisplayRates r;
 		r.flGame = s_GameWindows.Step( ulNowNanos, ulCount, false, 0.0f, bImmediateMode );
-		r.flOutput = s_OutputWindows.Step( ulNowNanos, ulCount, bGenerating, flGenFps, bImmediateMode );
-		r.bGenerating = bGenerating;
+		const float flOutput = s_OutputWindows.Step( ulNowNanos, ulCount, bRateSource, flPacedFps, bImmediateMode );
+		// Without a rate source the output window above only re-measures the game's
+		// own commit counter from a different phase, which would read "120 - 119"
+		// for one quantity: show the game's number itself.
+		r.flOutput = bRateSource ? flOutput : r.flGame;
+		r.bGenerating = s_GeneratingLatch.Step( bSignal, ulNowNanos );
 		s_bGliding.store( s_GameWindows.bGliding || s_OutputWindows.bGliding, std::memory_order_relaxed );
 		return r;
 	}
@@ -1192,7 +1204,7 @@ namespace gamescope
 	// side of the box; centre keeps the old centred behaviour. The box
 	// itself (boxSize, and so ResolveAnchoredOrigin's placement of it) is
 	// unchanged by this -- only where the digits sit inside it.
-	static FpsModuleLayout MeasureFpsModule( int nFps, int nOut, int nVert, int nHoriz )
+	static FpsModuleLayout MeasureFpsModule( int nFps, int nOut, bool bGenerating, int nVert, int nHoriz )
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
 		FpsModuleLayout L;
@@ -1283,10 +1295,13 @@ namespace gamescope
 			szPadded[i] = '0';
 		szPadded[nDigits] = '\0';
 		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::min( nFps, 9999999 ) );
-		// "FPS shown" = Both while generating (nOut >= 0): "<game>><output>".
-		// The pinned field becomes "<game zeros>><output zeros>", each side
-		// padded to its own >= 3 cells exactly like a lone number, so the box
-		// never resizes until one side gains a digit. Plain ASCII ">": the
+		// "FPS shown" = Both (nOut >= 0): "<game> > <output>" while generating,
+		// "<game> - <output>" otherwise (2026-10-05). The pinned field becomes
+		// "<game zeros> X <output zeros>", each side padded to its own >= 3 cells
+		// exactly like a lone number, so the box never resizes until one side
+		// gains a digit. X is whichever of '>' / '-' is WIDER in the font, in both
+		// states, so a flip of the separator never moves the box (the HUD sits
+		// bottom-right: the user's "so it doesn't move around"). Plain ASCII: the
 		// overlay font atlas is Latin-1 only, an arrow glyph would be missing.
 		// szInkRef stays the game number's zero run in every mode: the vertical
 		// ink bearings are measured off digits only (the '>' glyph
@@ -1306,8 +1321,14 @@ namespace gamescope
 			szOutZeros[nOutDigits] = '\0';
 			char szGame[16];
 			snprintf( szGame, sizeof( szGame ), "%s", L.szNum );
-			snprintf( L.szNum, sizeof( L.szNum ), "%s > %d", szGame, nOut );
-			snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s > %s", szPadded, szOutZeros );
+			snprintf( L.szNum, sizeof( L.szNum ), "%s%s%d", szGame, fpsmath::BothSeparator( bGenerating ), nOut );
+			char szPaddedGt[24], szPaddedDash[24];
+			snprintf( szPaddedGt, sizeof( szPaddedGt ), "%s%s%s", szPadded, fpsmath::BothSeparator( true ), szOutZeros );
+			snprintf( szPaddedDash, sizeof( szPaddedDash ), "%s%s%s", szPadded, fpsmath::BothSeparator( false ), szOutZeros );
+			ImFont *pMeasureFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
+			const float flGtW = pMeasureFont->CalcTextSizeA( cfg.font_size, FLT_MAX, 0.0f, szPaddedGt ).x;
+			const float flDashW = pMeasureFont->CalcTextSizeA( cfg.font_size, FLT_MAX, 0.0f, szPaddedDash ).x;
+			snprintf( szPaddedFull, sizeof( szPaddedFull ), "%s", flGtW >= flDashW ? szPaddedGt : szPaddedDash );
 		}
 
 		ImFont *pFont = gamescope::fonts::Get( gamescope::fonts::Style::Hero );
@@ -1583,12 +1604,12 @@ namespace gamescope
 		const DisplayRates rates = UpdateAndGetDisplayFps();
 		// "FPS shown" (fps_display.fps_shown): "game" is the game's own rate,
 		// "output" the rate sent to the display (frame-generated frames
-		// included), "both" draws "game > output" while generating and the lone
-		// game number otherwise. Hide-above compares against the game number in
+		// included), "both" always draws two numbers: "game > output" while generating
+		// (rates.bGenerating, library signal + latch) and "game - output" otherwise. Hide-above compares against the game number in
 		// Both mode (the number the user means by "my frame rate"), and
 		// against the one shown number otherwise.
 		const bool bOutputOnly = cfg.fps_shown == "output";
-		const bool bPair = cfg.fps_shown == "both" && rates.bGenerating && s_nForcedFps < 0;
+		const bool bPair = cfg.fps_shown == "both" && s_nForcedFps < 0;
 		const float flLiveDisplayFps = bOutputOnly ? rates.flOutput : rates.flGame;
 		const float flDisplayFps = ( s_nForcedFps >= 0 ) ? (float)s_nForcedFps : flLiveDisplayFps;
 
@@ -1631,7 +1652,7 @@ namespace gamescope
 		ParsePlacement( cfg.anchor, nVert, nHoriz );
 
 		const int nOut = bPair ? std::max( (int)std::lround( rates.flOutput ), 0 ) : -1;
-		const FpsModuleLayout L = MeasureFpsModule( nFps, nOut, nVert, nHoriz );
+		const FpsModuleLayout L = MeasureFpsModule( nFps, nOut, rates.bGenerating, nVert, nHoriz );
 		// The box is the pinned text field itself -- it used to be that
 		// plus backdrop_padding on every side, which the draw origin then
 		// added back in; both went with the backdrop (2026-09-09), and the
@@ -2420,8 +2441,8 @@ namespace gamescope
 			kFpsShownOptions, std::size( kFpsShownOptions ) )
 			.Key( "fps_display.fps_shown" )
 			.Help( "Game: the game's own frame rate. Output: what is actually sent to the "
-			       "display, including frames made by Frame generation. Both: game > output "
-			       "while Frame generation is generating." )
+			       "display, including frames made by Frame generation. Both: always two numbers, "
+			       "game > output while Frame generation is generating, game - output otherwise." )
 			.Default( 0 )
 			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )
 			.DisabledUnless( MonitorOn, kOffReason );

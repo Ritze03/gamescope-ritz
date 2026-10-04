@@ -147,42 +147,78 @@ to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
 
 - **Game**: the game's real frame rate (the commit counter); exactly the HUD as
   it was before this option.
-- **Output**: what `count_generated_frames=true` did. `presentedFps` while
-  generating, the commit rate otherwise.
-- **Both**: while generating, `<game> > <output>` (e.g. `40 > 280`); when not
-  generating, the single game number.
+- **Output**: what `count_generated_frames=true` did. `presentedFps` while the
+  pacer is driven and has a fresh status, the commit rate otherwise.
+- **Both** (always two numbers since 2026-10-05): `<game> > <output>` (e.g.
+  `40 > 280`) while Frame generation is generating, `<game> - <output>` (e.g.
+  `120 - 144`) otherwise. With the pacer not driven at all (Frame generation,
+  Motion blur and Lag spike buffer all off) nothing is generated and the output
+  rate *is* the game rate, so it reads `120 - 120`: the output number is the
+  game's own value there, not a second measurement of the same counter from a
+  different window phase (which would read `120 - 119`).
 
-"Generating" is `fghost::Enabled()` and `GetPacingStatus()` `valid` and
-`activeN >= 2`. `Why:` `presentedFps` is `Pacer::TakeStatus`'s paint count over
-the status window, and `OnPaint()` counts *every* composite, including in
-pass-through (warming up, game stalled, renderer unavailable, hold-back gave up)
-and UI/HUD-keepalive repaints. There it is not the game's rate, so
-`activeN < 2` falls back to the commit counter; with nothing generated the
-output rate equals the game rate anyway.
+`Why:` the user, on the HUD flapping in Both with Pause at refresh rate off:
+*"it sometimes shows the generated frames and sometimes it just switches off for
+no apparent reason ... it's really annoying that it switches back and forth. And
+instead of, if it's not generating, instead of hiding one of the values, just
+switch there, like bigger than symbol, the arrow, to just a simple dash so it
+doesn't move around as much in the bottom right of the corner of the screen."*
+
+**What "generating" means** (`UpdateAndGetDisplayFps()`, pure parts in
+`fpsmath`: `GeneratingSignal`, `GeneratingLatch`, `BothSeparator`):
+
+1. **The library's steady signal**, `PacingStatus::generating` (frame-gen-ritz
+   `Pacer::Report::generating`, PR #15): the pacer is generating AND a generated
+   frame (an output with `t < 1` made from a pair) was presented within the last
+   1 s AND outputs per real frame over the last ~1 s >= 1.2 (>= 1.1 to stay on).
+   It replaced `activeN >= 2`: `activeN` is the pacer's *instantaneous* plan,
+   clamped to at least 2, so an effective 0.89x pass counted as generating.
+2. **Staleness**: the status is stamped `publishedNs` by `PublishPacingStatus()`
+   and one older than 1 s (`kPacingStaleNs`) counts as not generating. `Why:` it
+   is republished only about every 250 ms while the pacer is driven, and not at
+   all while paints are skipped or the pacer is idle, so the last value can
+   outlive the truth.
+3. **A host-side latch**, `s_GeneratingLatch`: `>` comes back immediately, but
+   the separator changes to `-` only after the signal has been false for 1.5 s
+   (`kGeneratingLatchNs`). A safety net on top of (1): even a signal that does
+   dip never flickers the separator faster than that.
+
+**The output number is measured independently of the separator.** Its source is
+"the pacer is driven and has a fresh status with `presentedFps > 0`" (that is
+the output frames actually presented: generated frames plus the real frames the
+pacer showed, so about min(game, refresh) while it passes the game through),
+otherwise the commit counter. `Why:` the old rule switched the source on
+`activeN >= 2`, and `RateWindows::Step` restarts the output windows on every
+source change, so each flip also made the output number jump; now they restart
+only when the pacer starts or stops being driven.
 
 **Two independent windows.** `UpdateAndGetDisplayFps()` runs two `RateWindows`
 every call (`s_GameWindows`, `s_OutputWindows`), each with its own
 Smoothing/Immediate state. The status is published about every 250 ms and is
 already a rate, so the output windows average the per-paint samples of it
-instead of differencing a counter; when the output source flips (frame
-generation on/off, pass-through begins or ends) only the output windows
+instead of differencing a counter; when the output source flips (the
+pacer starts or stops being driven or publishing) only the output windows
 restart. `Why:` in Both the game number must not jump or restart when
 generation starts or stops, and always stepping both means changing "FPS shown"
 never shows a stale value.
 
-**Layout.** `MeasureFpsModule( nFps, nOut, ... )` builds the string `"%d>%d"`
-(plain ASCII — the overlay font atlas is Latin-1 only, an arrow glyph would be a
-missing glyph). The pinned box is `<game zeros>><output zeros>`, each side
-padded to its own >= 3 cells like a lone number, so the box only widens when a
-side gains a digit. The box is placed by the same `ResolveAnchoredOrigin()` and
+**Layout.** `MeasureFpsModule( nFps, nOut, bGenerating, ... )` builds the string
+`"%d > %d"` or `"%d - %d"` (`fpsmath::BothSeparator`; plain ASCII — the overlay
+font atlas is Latin-1 only, an arrow glyph would be a missing glyph). The
+pinned box is `<game zeros> X <output zeros>`, each side padded to its own >= 3
+cells like a lone number, so the box only widens when a side gains a digit. X is
+whichever of `>` / `-` measures **wider** in the font, in both states, so a flip
+of the separator never resizes or moves the box (the text is flush to the
+anchored side, so at the bottom-right the output number stays put and only the
+game number shifts by the glyph width difference). The box is placed by the same `ResolveAnchoredOrigin()` and
 the digits hug the anchored side via `flTextOffsetX` as before, so at a right
 anchor the string grows leftwards from the margin and cannot clip. The margin
 and ink-bearing correction is measured off the game number's zero run in every
 mode (`szInkRef`), not off the `>`, so Game mode is byte-identical and the `>`
 glyph cannot shift the vertical correction. The outline and Inverted modes
 need no change: the outline is drawn from the same string, and Inverted samples
-one pixel at the box centre (now the middle of the wider string). The font is
-monospaced, so the widths are stable.
+one pixel at the box centre (now the middle of the wider string). The digits are
+monospaced, so their widths are stable.
 
 **Unchanged:** lag-spike detection and the frametime history keep running on
 real frames. Hide above X compares against the game number in Both (and in

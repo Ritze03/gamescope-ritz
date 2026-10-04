@@ -363,3 +363,66 @@ TEST_CASE( "ScanInk boxes the pixels at or above the floor", "[fps_counter][marg
         REQUIRE_FALSE( ScanInk( p, 0, 5, 6, 1, 1 ).bAny );
     }
 }
+
+// ---- Both mode's separator (2026-10-05) -------------------------------------
+
+TEST_CASE( "BothSeparator is '>' while generating and '-' otherwise", "[fps_counter]" )
+{
+    REQUIRE( std::string( BothSeparator( true ) ) == " > " );
+    REQUIRE( std::string( BothSeparator( false ) ) == " - " );
+    // Same length, so the pinned string needs no per-state width bookkeeping beyond the font's own.
+    REQUIRE( std::string( BothSeparator( true ) ).size() == std::string( BothSeparator( false ) ).size() );
+}
+
+TEST_CASE( "GeneratingSignal needs frame generation on, a valid generating status, and a fresh one", "[fps_counter]" )
+{
+    const uint64_t kNow = 100 * 1000 * kMs;
+    REQUIRE( GeneratingSignal( true, true, true, kNow - 250 * kMs, kNow ) );
+    REQUIRE( GeneratingSignal( true, true, true, kNow - kPacingStaleNs, kNow ) );
+    REQUIRE_FALSE( GeneratingSignal( true, true, true, kNow - kPacingStaleNs - 1, kNow ) );   // stale
+    REQUIRE_FALSE( GeneratingSignal( false, true, true, kNow, kNow ) );   // frame generation off
+    REQUIRE_FALSE( GeneratingSignal( true, false, true, kNow, kNow ) );   // no status yet
+    REQUIRE_FALSE( GeneratingSignal( true, true, false, kNow, kNow ) );   // the library says no
+}
+
+TEST_CASE( "GeneratingLatch shows '>' at once and '-' only after 1.5 s of not generating", "[fps_counter]" )
+{
+    GeneratingLatch l;
+    uint64_t t = 10 * 1000 * kMs;
+    REQUIRE_FALSE( l.Step( false, t ) );              // starts on '-'
+    REQUIRE( l.Step( true, t += 16 * kMs ) );         // immediately '>'
+    // A dip shorter than the latch never shows.
+    for ( int i = 0; i < 80; i++ )                    // 80 x 16 ms = 1.28 s of false
+        REQUIRE( l.Step( false, t += 16 * kMs ) );
+    REQUIRE( l.Step( true, t += 16 * kMs ) );         // back up: the clock restarts
+    // ... and a steady false flips it after kGeneratingLatchNs, not before.
+    const uint64_t tFalse = t + 16 * kMs;
+    REQUIRE( l.Step( false, tFalse ) );
+    REQUIRE( l.Step( false, tFalse + kGeneratingLatchNs - 1 ) );
+    REQUIRE_FALSE( l.Step( false, tFalse + kGeneratingLatchNs ) );
+    REQUIRE_FALSE( l.Step( false, tFalse + 5 * kGeneratingLatchNs ) );
+}
+
+TEST_CASE( "a flapping signal never flickers the separator", "[fps_counter]" )
+{
+    // true 0.3 s / false 1.0 s, repeating: every false run is under the latch.
+    GeneratingLatch l;
+    uint64_t t = 10 * 1000 * kMs;
+    REQUIRE( l.Step( true, t ) );
+    int nFlips = 0;
+    bool bPrev = true;
+    for ( int cycle = 0; cycle < 20; cycle++ )
+    {
+        for ( int i = 0; i < 63; i++ )   // ~1.0 s false
+        {
+            const bool b = l.Step( false, t += 16 * kMs );
+            nFlips += b != bPrev; bPrev = b;
+        }
+        for ( int i = 0; i < 19; i++ )   // ~0.3 s true
+        {
+            const bool b = l.Step( true, t += 16 * kMs );
+            nFlips += b != bPrev; bPrev = b;
+        }
+    }
+    REQUIRE( nFlips == 0 );
+}

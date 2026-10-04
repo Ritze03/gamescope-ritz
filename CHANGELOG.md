@@ -18,6 +18,10 @@ The newest version below is the one this build reports.
   a live picture of the game pixels under it in the Inspector.
 
 ### Fixed
+- **Frame generation flicker**: it no longer switches on and off about once a second
+  when the game's frame rate is close to the target.
+- **HUD Both mode**: it always shows both numbers, with `>` while generating and `-`
+  otherwise, so the readout stops jumping.
 - **Smaller default crosshair box**: the protected box is now 2.5% of the game's height
   instead of 3% of its area, which removes most specks even with the original Crosshair.
 

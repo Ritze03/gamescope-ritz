@@ -134,6 +134,58 @@ namespace gamescope
 			return n == 1 ? "output" : n == 2 ? "both" : "game";
 		}
 
+		// "FPS shown" = Both always draws two numbers, "<game> > <output>" while frame
+		// generation is visibly generating and "<game> - <output>" otherwise
+		// (2026-10-05): the lone game number it used to fall back to made the readout
+		// jump. Plain ASCII, the overlay font atlas is Latin-1 only.
+		inline const char *BothSeparator( bool bGenerating )
+		{
+			return bGenerating ? " > " : " - ";
+		}
+
+		// A pacing status older than this counts as "not generating": it is republished
+		// about every 250 ms while the pacer is driven, and not at all while it is idle
+		// or its paints are skipped.
+		constexpr uint64_t kPacingStaleNs = 1000ull * 1000ull * 1000ull;
+		// The separator goes back from '>' to '-' only after "generating" has been
+		// false this long; the other way it is immediate. A safety net on top of the
+		// library's own steady signal (pacing.h Report::generating).
+		constexpr uint64_t kGeneratingLatchNs = 1500ull * 1000ull * 1000ull;
+
+		// Is the library's "generating" signal usable right now: frame generation on,
+		// a status that says so, and that status not stale. ulPublishedNs / ulNowNanos
+		// are get_time_in_nanos() values.
+		inline bool GeneratingSignal( bool bFrameGenOn, bool bValid, bool bGenerating, uint64_t ulPublishedNs, uint64_t ulNowNanos )
+		{
+			return bFrameGenOn && bValid && bGenerating
+			    && ulNowNanos >= ulPublishedNs && ulNowNanos - ulPublishedNs <= kPacingStaleNs;
+		}
+
+		// '>' immediately, '-' only after kGeneratingLatchNs of continuous "not
+		// generating". Starts on '-'.
+		struct GeneratingLatch
+		{
+			bool     bShown = false;
+			uint64_t ulFalseSinceNs = 0;   // 0 = the signal is currently true (or never seen false)
+
+			bool Step( bool bSignal, uint64_t ulNowNanos )
+			{
+				if ( bSignal )
+				{
+					bShown = true;
+					ulFalseSinceNs = 0;
+				}
+				else
+				{
+					if ( ulFalseSinceNs == 0 )
+						ulFalseSinceNs = ulNowNanos;
+					if ( bShown && ulNowNanos - ulFalseSinceNs >= kGeneratingLatchNs )
+						bShown = false;
+				}
+				return bShown;
+			}
+		};
+
 		// 2026-09-07 margin fix's pure arithmetic (FpsDisplay.cpp's
 		// MeasureFpsModule(), "margin fix" comment, and fps-display.md's
 		// "Margin" section carry the full reasoning): how far to shift the

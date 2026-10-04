@@ -400,9 +400,10 @@ namespace fghost
 		float effectiveMultiplier = 0.0f; // presentedFps / gameFps while generating, else 0
 		float targetFps = 0.0f;   // Target mode: the rate aimed for (clamped to the refresh); else 0
 		int   chosenN = 0;        // Fixed mode: the multiplier the user chose; Target mode: 0
-		// round(effectiveMultiplier), at least 2 while generating, 0 while passing
-		// real frames through. "activeN >= 2" therefore means "generating" -- the
-		// HUD's Count generated frames option relies on that.
+		// round(effectiveMultiplier), at least 2 while the pacer's plan is Generate, 0
+		// while passing real frames through. It is the pacer's INSTANTANEOUS state: it
+		// reads 2 at an effective 0.9x-1.27x too, so it is NOT "frame generation is
+		// visibly adding frames" -- `generating` below is (the HUD's separator uses it).
 		int   activeN = 0;
 		float delayMs = 0.0f;     // D: the extra latency pacing adds, in milliseconds
 		// Each feature separately (pacing's Report), for its own settings line.
@@ -417,6 +418,16 @@ namespace fghost
 		int   outliersIgnored = 0;   // spikes in the window above Max buffer: ignored for sizing
 		int   historyFrames = 3;     // real frames the host keeps (pacer's HistoryDepth())
 		PassReason reason = PassReason::Normal; // why it is not generating as asked, or pass-through
+		// The library's steady "generating" signal (pacing.h Report::generating /
+		// steadyMultiplier, PR #15): fgActive AND a generated frame was presented
+		// within the last ~1 s AND outputs per real frame over the last ~1 s >= 1.2
+		// (>= 1.1 to stay on). Never true while passing through.
+		float steadyMultiplier = 0.0f;
+		bool  generating = false;
+		// get_time_in_nanos() when this status was published (PublishPacingStatus stamps
+		// it): the status is only republished about every 250 ms while the pacer is
+		// being driven, so a reader treats an old one as "not generating".
+		uint64_t publishedNs = 0;
 	};
 
 	// Mutex-protected snapshot, one writer (pacing), any reader (the panel).
