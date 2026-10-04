@@ -27,6 +27,9 @@ The newest version below is the one this build reports.
 - **Pause at refresh rate**: choose whether frame generation stops once the game
   reaches your refresh rate, or keeps generating above it.
 
+### Info
+- **Vibrancy range**: the Vibrancy strength slider now goes up to 3 instead of 2.
+
 ## [0.10.2] – 2026-09-29
 
 ### Added

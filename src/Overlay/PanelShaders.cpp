@@ -526,8 +526,8 @@ namespace gamescope
 					[]( float f ) { SetEffectFloat( &Cfg().reshade.vibrancy.strength, f ); } ) )
 				.Key( "reshade.vibrancy.strength" )
 				.Help( "How much punchier the already-punchy colours get. 0 is unchanged." )
-				.Range( 0.0f, 2.0f )
-				.Step( 0.05f )   // 41 positions; 0.00, the default, is neutral
+				.Range( 0.0f, 3.0f )
+				.Step( 0.05f )   // 61 positions; 0.00, the default, is neutral
 				.Default( 0.0f );
 
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",

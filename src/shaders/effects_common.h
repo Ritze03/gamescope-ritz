@@ -18,7 +18,7 @@ layout(binding = 0, scalar)
 uniform effects_t {
     uint  u_flags;         // EFFECT_* bits below
     float u_saturation;    // 0.0..3.0, 1.0 neutral -- renamed from u_vibrancy 2026-09-08
-    float u_vibrancy;      // 0.0..2.0, 0.0 neutral -- NEW 2026-09-08, see grade() below
+    float u_vibrancy;      // 0.0..3.0, 0.0 neutral -- NEW 2026-09-08, see grade() below
     float u_shadowLift;    // 0.0..1.0, 0.0 neutral
     uint  u_rcasCon;       // floatBitsToUint(con.x) for FsrRcasF; 0 = no sharpen
 

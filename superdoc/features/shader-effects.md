@@ -214,7 +214,7 @@ grades its pixels.
 | --- | --- |
 | `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<8` Bloom (added 2026-09-08 — gates only the composite; the three dispatches that build the glow are simply not recorded when it is clear); `1<<9` was the experimental Brightness Map effect (removed 2026-09-14, left unused rather than reassigned), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_saturation` | 0..3, 1 neutral (renamed from `u_vibrancy` 2026-09-08 — same meaning, see below) |
-| `float u_vibrancy` | 0..2, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
+| `float u_vibrancy` | 0..3, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
 | `float u_abTarget, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's own parameters, straight from config (both modes read all of them — see the Dynamic section for what each means there) |
@@ -369,7 +369,7 @@ direction ever feels backwards in practice, that is the thing to revisit; the ma
 below is not a misunderstanding, it is the literal spec.
 
 **Config**: `ReshadeVibrancySettings` — `enabled` (default false), `strength` (float,
-0.0..2.0, default 0.0/neutral). One param — no skin-tone toggle: skin tones sit at a
+0.0..3.0, default 0.0/neutral). One param — no skin-tone toggle: skin tones sit at a
 moderate, not extreme, saturation, so this effect already gives them a moderate rather
 than maximal boost on its own; adding a second toggle to suppress an effect this mild on
 skin was not worth a second control (see the panel's own comment for the same point).
@@ -409,6 +409,8 @@ enough headroom to push a moderately-saturated colour hard; `strength` is additi
 of the always-present `1.0`, unlike Saturation's `0.0..3.0` multiplier which has to reach
 all the way down to `0.0` (full grey) as one of its endpoints. `0.0` here is simply "off",
 not a second special value to reach.
+
+`Why:` raised from 2.0 to 3.0 on 2026-10-04 at the user's request (at 3.0 the gain is 4).
 
 **Where it sits in the Effects band, and why:** registered immediately after Saturation
 (`PanelShaders.cpp`), so the two colour-intensity effects read together — a user
