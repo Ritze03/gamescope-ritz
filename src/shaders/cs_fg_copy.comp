@@ -10,6 +10,13 @@
 // ring never needs a per-format variant; the "X" formats' undefined alpha is
 // replaced by 1.0 (the FrameGen library reads rgb only).
 //
+// The ring is in the game's own bit depth (FrameGen/FrameGenFormat.h): this one
+// source is compiled three times (src/meson.build) -- rgba8 `dst` (the default,
+// B8G8R8A8), -DDST_FORMAT=rgb10_a2 (A2B10G10R10, 10-bit games) and
+// -DDST_FORMAT=rgba16f (R16G16B16A16_SFLOAT, fp16 / scRGB games) -- so the store
+// is declared in the format of the image it lands in. The value is the same
+// logical rgba in all three; an fp16 value above 1.0 or below 0 (scRGB) is kept.
+//
 // Slot 0 is bound the way every layer-0 pass binds it: raw UNORM view (values
 // still encoded -- NOT the _SRGB view, which would decode them and the library
 // would then see the wrong luma), unnormalised nearest sampler, so this is an

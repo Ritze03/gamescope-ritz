@@ -6,6 +6,7 @@
 //   3. RecordBaseLayer()    (the one per-composite entry point)
 
 #include "FrameGenHost.h"
+#include "FrameGenFormat.h"
 
 #include <algorithm>
 #include <atomic>
@@ -170,6 +171,7 @@ namespace fghost
 		std::atomic<bool> g_bResetRequested{ false };
 
 		std::atomic<uint8_t> g_eReason{ uint8_t( Unavailable::Ok ) };
+		std::atomic<const char *> g_pszFormatTag{ "" };   // string literals only (PlanTag)
 		std::atomic<float> g_flLastPairGpuMs{ -1.0f };
 		std::atomic<float> g_flLastEstimateMs{ -1.0f };
 		std::atomic<float> g_flLastSynthMs{ -1.0f };
@@ -183,12 +185,59 @@ namespace fghost
 		//  2. Render-thread state
 		// -------------------------------------------------------------
 
-		// The ring and every output are ALWAYS DRM_FORMAT_ARGB8888
-		// (VK_FORMAT_B8G8R8A8_UNORM), whatever the game's own 8-bit format is:
-		// cs_fg_copy.comp samples the logical rgba and writes it, so channel
-		// order never matters and the library sees one fixed viewFormat.
-		constexpr uint32_t kHostDrmFormat = DRM_FORMAT_ARGB8888;
-		constexpr VkFormat kHostVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
+		// The ring and every output are in ONE format per FormatPlan
+		// (FrameGenFormat.h), fixed for as long as the Interpolator lives:
+		//   8-bit game   DRM_FORMAT_ARGB8888       (B8G8R8A8_UNORM)
+		//   10-bit game  DRM_FORMAT_ABGR2101010    (A2B10G10R10_UNORM_PACK32)
+		//   fp16 game    DRM_FORMAT_ABGR16161616F  (R16G16B16A16_SFLOAT)
+		// whatever the game's own channel order is: cs_fg_copy.comp samples the
+		// logical rgba and writes it, so order never matters and the library sees
+		// one fixed viewFormat. A game that changes format class re-creates the
+		// Interpolator (EnsureReady), after a waitIdle like every other teardown.
+		uint32_t RingDrmFormat( const FormatPlan &plan )
+		{
+			return VulkanFormatToDRM( plan.eRingVk, true );
+		}
+
+		ShaderType CopyShader( const FormatPlan &plan )
+		{
+			switch ( plan.eFormat )
+			{
+				case framegen::Format::Rgb10:   return SHADER_TYPE_FG_COPY_RGB10;
+				case framegen::Format::RgbaF16: return SHADER_TYPE_FG_COPY_F16;
+				default:                        return SHADER_TYPE_FG_COPY;
+			}
+		}
+
+		// What this device can do beyond 8-bit, decided once: the storage format
+		// feature (rgb10_a2 needs shaderStorageImageExtendedFormats, enabled at device
+		// creation only where offered) and sampled + linear filter + storage on the
+		// ring format -- the same three the library's own init() checks, so a "no"
+		// here is the same "no" it would give, with the reason known up front. The
+		// library's shader variants are always built (src/meson.build).
+		const FormatCaps &DeviceCaps()
+		{
+			static const FormatCaps caps = []
+			{
+				auto Usable = []( VkFormat eFormat )
+				{
+					VkFormatProperties props;
+					g_device.vk.GetPhysicalDeviceFormatProperties( g_device.physDev(), eFormat, &props );
+					constexpr VkFormatFeatureFlags uNeeded = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
+						| VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+					return ( props.optimalTilingFeatures & uNeeded ) == uNeeded;
+				};
+				FormatCaps c;
+				c.bRgb10 = g_device.supportsStorageImageExtendedFormats() && Usable( VK_FORMAT_A2B10G10R10_UNORM_PACK32 );
+				c.bF16 = Usable( VK_FORMAT_R16G16B16A16_SFLOAT );
+				fg_log.infof( "frame generation formats: 8-bit yes, 10-bit %s%s, fp16 %s",
+					c.bRgb10 ? "yes" : "no",
+					c.bRgb10 || g_device.supportsStorageImageExtendedFormats() ? "" : " (no shaderStorageImageExtendedFormats)",
+					c.bF16 ? "yes" : "no" );
+				return c;
+			}();
+			return caps;
+		}
 
 		// The ring holds the last real frames: three (framegen::pacing::kHistory)
 		// normally -- Low latency only ever uses the newest pair, Smoothness may still
@@ -236,6 +285,13 @@ namespace fghost
 			framegen::Interpolator interp;
 			bool bLive = false;
 			uint32_t uWidth = 0, uHeight = 0;
+			// The format the Interpolator, the ring and the outputs were created for
+			// (valid while bLive, and for a failed init's key).
+			FormatPlan plan;
+			// The colourspace tag of the frames in the ring. A change (SDR <-> HDR10 on the
+			// same 10-bit surface) makes the old frames a different picture: drop them.
+			bool bHaveColorspace = false;
+			GamescopeAppTextureColorspace eColorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB;
 
 			// D11: the private ring. Real frames fill the slots in turn; the newest
 			// is `nCurSlot`. Each slot remembers the commit id it holds (0 = empty),
@@ -425,16 +481,18 @@ namespace fghost
 			g_flLastEstimateMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastSynthMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastUiMs.store( -1.0f, std::memory_order_relaxed );
+			g_pszFormatTag.store( "", std::memory_order_relaxed );
+			H.bHaveColorspace = false;
 		}
 
-		bool CreateTexture( gamescope::Rc<CVulkanTexture> &out, uint32_t w, uint32_t h )
+		bool CreateTexture( gamescope::Rc<CVulkanTexture> &out, uint32_t w, uint32_t h, const FormatPlan &plan )
 		{
 			CVulkanTexture::createFlags flags;
 			flags.bSampled = true;   // the library samples prev/curr; the composite samples outputs
 			flags.bStorage = true;   // the copy shader / the library writes them
 
 			gamescope::Rc<CVulkanTexture> pTex = new CVulkanTexture();
-			if ( !pTex->BInit( w, h, 1u, kHostDrmFormat, flags, nullptr ) )
+			if ( !pTex->BInit( w, h, 1u, RingDrmFormat( plan ), flags, nullptr ) )
 				return false;
 			out = std::move( pTex );
 			return true;
@@ -459,7 +517,7 @@ namespace fghost
 			int n = 0;
 			for ( ; n < nNew - nOld; n++ )
 			{
-				if ( !CreateTexture( pTex[ n ], H.uWidth, H.uHeight ) )
+				if ( !CreateTexture( pTex[ n ], H.uWidth, H.uHeight, H.plan ) )
 					return false;   // never used by the GPU: freed at once by the locals
 			}
 			const int nCurEff = H.bHaveCur ? H.nCurSlot : nOld - 1;
@@ -481,18 +539,30 @@ namespace fghost
 			return true;
 		}
 
-		uint64_t FailKey( uint32_t w, uint32_t h, const Config &c )
+		// The plan is part of the key: a 10-bit game that fails to start must not
+		// block the 8-bit game the user switches to (or the other way round).
+		uint64_t FailKey( uint32_t w, uint32_t h, const Config &c, const FormatPlan &plan )
 		{
-			return ( uint64_t( w ) << 32 ) ^ ( uint64_t( h ) << 8 ) ^ uint64_t( c.quality == Quality::Performance ? 4 : 2 ) ^ 0x8000000000000000ull;
+			return ( uint64_t( w ) << 32 ) ^ ( uint64_t( h ) << 8 ) ^ uint64_t( c.quality == Quality::Performance ? 4 : 2 )
+				^ ( uint64_t( plan.eFormat ) << 50 ) ^ ( uint64_t( plan.eTransfer ) << 53 ) ^ 0x8000000000000000ull;
 		}
 
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
 		// change, apply a changed preset. False = not usable this frame.
-		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur )
+		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const FormatPlan &plan, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur )
 		{
-			const uint64_t ulKey = FailKey( w, h, c );
+			const uint64_t ulKey = FailKey( w, h, c, plan );
 			if ( H.ulFailedKey == ulKey )
 				return false;
+
+			// The game changed format class (8-bit <-> 10-bit <-> fp16, or fp16 scRGB <->
+			// fp16 encoded): the library's pipelines belong to ONE format (resize() cannot
+			// change it), so start over. Teardown() waits for the GPU first.
+			if ( H.bLive && H.plan != plan )
+			{
+				fg_log.infof( "frame generation: the game's format changed; restarting the interpolator" );
+				Teardown( H );
+			}
 
 			const framegen::Settings want = ToLibrarySettings( c, b, H.nUiHist );
 
@@ -512,16 +582,23 @@ namespace fghost
 				info.gdpa = g_device.vk.GetDeviceProcAddr;
 				info.width = w;
 				info.height = h;
-				info.viewFormat = kHostVkFormat;
+				info.viewFormat = plan.eRingVk;
 				info.getMemProps = g_device.vk.GetPhysicalDeviceMemoryProperties;
+				// Lets the library refuse a format this device cannot use WITH a reason
+				// (never consulted for Rgba8, so the 8-bit path is unchanged).
+				info.getFormatProps = g_device.vk.GetPhysicalDeviceFormatProperties;
+				info.transfer = plan.eTransfer;
+				info.linearWhiteNits = plan.flLinearWhiteNits;
 				info.pipelineCache = VK_NULL_HANDLE;
 				info.settings = want;
 
+				H.plan = plan;
 				H.uWidth = w;
 				H.uHeight = h;
 				if ( !H.interp.init( info ) || !ResizeRing( H, kRingMin ) )
 				{
-					fg_log.errorf( "frame generation unavailable: could not create the interpolator or its frame ring at %ux%u", w, h );
+					fg_log.errorf( "frame generation unavailable: could not create the interpolator or its frame ring at %ux%u (format %u): %s", w, h,
+						unsigned( plan.eFormat ), H.interp.initError() ? H.interp.initError() : "see the log above" );
 					Teardown( H );
 					H.ulFailedKey = ulKey;
 					return false;
@@ -531,8 +608,12 @@ namespace fghost
 				g_uGate.fetch_or( kGateLive, std::memory_order_relaxed );
 				H.uAppliedConfig = uLibraryConfig;
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
-				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s",
-					w, h, want.flowScale, H.bProfiling ? "on" : "n/a" );
+				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
+					w, h, want.flowScale, H.bProfiling ? "on" : "n/a",
+					plan.eFormat == framegen::Format::Rgb10 ? "10-bit"
+						: plan.eFormat == framegen::Format::RgbaF16
+							? ( plan.eTransfer == framegen::Transfer::Linear ? "fp16 linear (scRGB)" : "fp16 encoded" ) : "8-bit",
+					ColorspaceIsHDR( H.eColorspace ) ? ", HDR layer" : "" );
 				return true;
 			}
 
@@ -548,7 +629,7 @@ namespace fghost
 				H.nRing = 0;
 				for ( OutSlot_t &o : H.out )
 					o.pTex = nullptr;
-				if ( !H.interp.resize( w, h, kHostVkFormat ) || !ResizeRing( H, kRingMin ) )
+				if ( !H.interp.resize( w, h, plan.eRingVk ) || !ResizeRing( H, kRingMin ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u", w, h );
 					Teardown( H );
@@ -935,9 +1016,10 @@ namespace fghost
 		switch ( eReason )
 		{
 			case Unavailable::Ok:        return "";
-			case Unavailable::Hdr:         return "Not available with HDR";
+			case Unavailable::Hdr:         return "Not available for this HDR pass-through surface";
 			case Unavailable::YCbCr:       return "Not available for video (YCbCr) surfaces";
-			case Unavailable::NotEightBit: return "Needs an 8-bit game format (10-bit is not supported)";
+			case Unavailable::Format:      return "Not available for this game pixel format";
+			case Unavailable::HdrFormat:   return "HDR / 10-bit format not supported by this GPU";
 			case Unavailable::TooSmall:    return "Game resolution is too small";
 			case Unavailable::InitFailed:  return "Could not start on this GPU";
 			case Unavailable::RecordFailed:return "A generation step failed; showing real frames";
@@ -974,6 +1056,7 @@ namespace fghost
 			s.lastUiMs = g_flLastUiMs.load( std::memory_order_relaxed );
 		}
 		s.costSeq = g_uCostSeq.load( std::memory_order_relaxed );
+		s.formatTag = g_pszFormatTag.load( std::memory_order_relaxed );
 		return s;
 	}
 
@@ -1049,29 +1132,39 @@ namespace fghost
 		// so generation resumes one real frame after the condition clears.
 		const uint32_t uWidth = pLayer0->width();
 		const uint32_t uHeight = pLayer0->height();
-		Unavailable eWhy = Unavailable::Ok;
-		if ( g_bOutputHDREnabled || ColorspaceIsHDR( eColorspace ) || eColorspace == GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU )
-			eWhy = Unavailable::Hdr;
-		else if ( pLayer0->isYcbcr() )
-			eWhy = Unavailable::YCbCr;
-		else if ( pLayer0->format() != VK_FORMAT_B8G8R8A8_UNORM && pLayer0->format() != VK_FORMAT_R8G8B8A8_UNORM )
-			eWhy = Unavailable::NotEightBit;
-		else if ( uWidth < framegen::Interpolator::kMinSize || uHeight < framegen::Interpolator::kMinSize )
+		// The output being HDR (g_bOutputHDREnabled) is NOT a reason by itself: SDR
+		// content on an HDR output is a plain 8-bit layer 0 and runs as always. What
+		// matters is the layer's own format and colourspace tag (FrameGenFormat.h).
+		FormatPlan plan;
+		Unavailable eWhy = ClassifyLayer( pLayer0->format(), pLayer0->isYcbcr(), eColorspace, DeviceCaps(), &plan );
+		if ( eWhy == Unavailable::Ok && ( uWidth < framegen::Interpolator::kMinSize || uHeight < framegen::Interpolator::kMinSize ) )
 			eWhy = Unavailable::TooSmall;
 
 		if ( eWhy != Unavailable::Ok )
 		{
 			SetReason( eWhy );
+			g_pszFormatTag.store( "", std::memory_order_relaxed );
 			DropFrames( H );
 			return nullptr;
 		}
 
-		if ( !EnsureReady( H, uWidth, uHeight, cfg, uPackedConfig, blurCfg, uPackedBlur ) )
+		// A colourspace change on the same format class (SDR <-> HDR10 on a 10-bit
+		// surface) makes the ring's frames a different picture: forget them.
+		if ( H.bHaveColorspace && H.eColorspace != eColorspace )
+			DropFrames( H );
+		H.bHaveColorspace = true;
+		H.eColorspace = eColorspace;
+
+		if ( !EnsureReady( H, uWidth, uHeight, plan, cfg, uPackedConfig, blurCfg, uPackedBlur ) )
 		{
-			SetReason( Unavailable::InitFailed );
+			// A 10-bit / fp16 game that cannot start says why in terms of the format,
+			// not the generic "could not start": the cause is almost always the format.
+			SetReason( plan.eFormat == framegen::Format::Rgba8 ? Unavailable::InitFailed : Unavailable::HdrFormat );
+			g_pszFormatTag.store( "", std::memory_order_relaxed );
 			return nullptr;
 		}
 		SetReason( Unavailable::Ok );
+		g_pszFormatTag.store( PlanTag( plan, eColorspace ), std::memory_order_relaxed );
 
 		const bool bUi = cfg.ui != UiProt::Off;
 
@@ -1115,7 +1208,7 @@ namespace fghost
 				H.bEstimateValid = false;
 
 			CVulkanCmdBuffer *pCb = Cmd();
-			pCb->bindPipeline( g_device.pipeline( SHADER_TYPE_FG_COPY ) );
+			pCb->bindPipeline( g_device.pipeline( CopyShader( H.plan ) ) );
 			pCb->bindTexture( 0, pLayer0 );
 			pCb->setTextureSrgb( 0, true );             // raw UNORM view: encoded values, as the effects passes read it
 			pCb->setSamplerUnnormalized( 0, true );
@@ -1243,7 +1336,7 @@ namespace fghost
 				{
 					OutSlot_t *pSlot = PickOutSlot( H );
 					if ( !pSlot->pTex )
-						bOk = CreateTexture( pSlot->pTex, uWidth, uHeight );
+						bOk = CreateTexture( pSlot->pTex, uWidth, uHeight, H.plan );
 
 					if ( bOk )
 					{

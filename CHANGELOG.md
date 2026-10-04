@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
+- **HDR frame generation**: frame generation, motion blur and UI protection now also
+  work in HDR and 10-bit games.
 - **Lag spike buffer**: a new tab in the Motion group bridges repeating game stutters
   with generated frames, at the cost of a small, adaptive delay.
 - **Motion blur**: a new Motion blur tab blends generated in-between frames into each
@@ -27,8 +29,8 @@ The newest version below is the one this build reports.
   generated frames, or both as `game>output`.
 - **Passes real frames through when it cannot help**: it keeps generating until the
   game reaches your refresh rate or target, and passes real frames through then, for
-  HDR content, or (with the off-by-default "Limit to GPU speed") when the GPU is too
-  slow.
+  video (YCbCr) surfaces, or (with the off-by-default "Limit to GPU speed") when the
+  GPU is too slow.
 - **Pause at refresh rate**: choose whether frame generation stops once the game
   reaches your refresh rate, or keeps generating above it.
 

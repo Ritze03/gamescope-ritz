@@ -91,7 +91,7 @@ audio is not delayed, so above about 50-80 ms lip-sync drifts; memory is about o
 per 16 ms of buffer at 60 fps; test mode forces the minimum or maximum so you can feel both
 ends.
 
-**Status line** (always one line): `Off`; the renderer's reason while it refuses (HDR, ...);
+**Status line** (always one line): `Off`; the renderer's reason while it refuses (YCbCr, an unsupported format, ...);
 `Waiting for frames` before the first publish; otherwise `buffer 32 ms · 4 frames · last spike
 28 ms`, with `no spikes yet` in place of the last part, ` · ignored 1 outlier (>max)` when
 spikes above Max buffer are in the window, and ` · test: min` / ` · test: max` while a test mode
@@ -136,8 +136,8 @@ periodic debug line.
 - **Library PR #5/#6 absorbed**: `fghost::PassReason::WaitingForDecoder` mirrors
   `fgpacing::Reason::WaitingForDecoder` (text "Waiting for the next video frame"; never occurs
   for gamescope's arrival mode, static_asserted); `OnFrame` and the format variants (Rgb10,
-  RgbaF16, Nv12, P010: `InitInfo` defaults left, no variant shaders built) are unused; HDR is a
-  separate later task, gamescope stays Rgba8.
+  RgbaF16, Nv12, P010) are used for Rgba8, Rgb10 and RgbaF16 since 2026-10-04 (HDR frame generation, see
+  [frame-generation](frame-generation.md#hdr-and-10-bit-games)); Nv12 / P010 are not built.
 
 ## Costs and limits
 
@@ -146,7 +146,7 @@ periodic debug line.
 - **Audio** is **not** delayed. Up to about 50 ms nobody sees the drift; above roughly 50-80 ms
   lip-sync becomes visible (Force maximum at 250 ms is for feeling the buffer).
 - **Memory** per buffered frame: the host keeps `HistoryDepth()` real frames (4 B/px at 8-bit
-  RGBA: 4.9 MB at 1280x960, 14.7 MB at 1440p) and, with UI protection, one clean copy per frame
+  RGBA and 10-bit, 8 B/px at fp16 / scRGB: 4.9 MB at 1280x960, 14.7 MB at 1440p) and, with UI protection, one clean copy per frame
   (4 B/px, WholeScreen +1 B/px of mask). About one frame per 16 ms of buffer at 60 fps; 250 ms
   at 60 fps = 17 frames. It scales with the *current* buffer, so it is only paid while it is up.
 - **Composite**: like the other two features, an enabled lag spike buffer forces a full composite
@@ -165,7 +165,7 @@ periodic debug line.
   the very first paints (100 ms) and settles to 5-6 after the 2 s + 4 s dwells (the smoke log
   shows `frame ring: shrunk from 27 to 6 frames`). A buffer sized from spikes starts at 0 and does
   not do this.
-- Limits are the library's: SDR, 8-bit only; the first spike freezes; a game-rate change looks
+- Limits are the library's: RGB only (8-bit, 10-bit, fp16; SDR or HDR); the first spike freezes; a game-rate change looks
   like a few spikes for about 4 frames.
 
 ## Related

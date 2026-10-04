@@ -127,3 +127,7 @@ a restart, in all three routing situations.
   `frog-color-management-v1` protocol surface that feeds the values this page tracks.
 - [scripting-convars.md](scripting-convars.md) — the general convar/property
   mechanism used to tune color management at runtime.
+- [frame-generation.md](frame-generation.md#hdr-and-10-bit-games) — frame generation, motion
+  blur and the lag spike buffer run on HDR (scRGB fp16, HDR10 PQ 10-bit) and 10-bit layer 0
+  since 2026-10-04: the generated frame is substituted for layer 0 with the game's colourspace
+  tag unchanged, so this page's colour management treats it exactly like the real frame.

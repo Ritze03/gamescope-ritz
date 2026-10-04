@@ -1062,6 +1062,8 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_V2_BOX1_FINE,
 	SHADER_TYPE_EFFECTS_V2_BOX2_FINE,
 	SHADER_TYPE_FG_COPY, // cs_fg_copy.comp: the frame generation host's ring copy of the game's frame (src/FrameGen/FrameGenHost.cpp)
+	SHADER_TYPE_FG_COPY_RGB10, // ... the same source compiled with a rgb10_a2 `dst` (10-bit games)
+	SHADER_TYPE_FG_COPY_F16,   // ... and with an rgba16f `dst` (fp16 / scRGB games)
 
 	SHADER_TYPE_COUNT
 };
@@ -1320,6 +1322,10 @@ public:
 	inline bool hasDrmPrimaryDevId() {return m_bHasDrmPrimaryDevId;}
 	inline dev_t primaryDevId() {return m_drmPrimaryDevId;}
 	inline bool supportsFp16() {return m_bSupportsFp16;}
+	// shaderStorageImageExtendedFormats, enabled at device creation when the physical
+	// device offers it: storage images of rgb10_a2 / r8 / rg8 / r16 / rg16 (frame
+	// generation's 10-bit ring and copy shader; src/FrameGen/FrameGenHost.cpp).
+	inline bool supportsStorageImageExtendedFormats() {return m_bSupportsStorageImageExtendedFormats;}
 	inline std::vector<VkExtensionProperties>& supportedExtensions() {return m_supportedExts;}
 	// GPU timestamps (NEW 2026-09-14, adaptive-brightness-v2-plan.md Stage
 	// 0): true only when the device advertises timestampComputeAndGraphics
@@ -1395,6 +1401,7 @@ protected:
 	dev_t m_drmPrimaryDevId = 0;
 
 	bool m_bSupportsFp16 = false;
+	bool m_bSupportsStorageImageExtendedFormats = false;
 	bool m_bHasDrmPrimaryDevId = false;
 	bool m_bSupportsModifiers = false;
 	bool m_bInitialized = false;

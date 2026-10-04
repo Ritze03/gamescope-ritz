@@ -169,7 +169,8 @@ namespace gamescope
 		//   generating (activeN >= 2) -> target: "60->280 · target 280 (×4.6) · +13 ms"
 		//                                fixed:  "60->120 · 2× · +8 ms"
 		//                                (a fixed multiplier the display saturates reads
-		//                                 "60->280 · 8× (×4.6) · +13 ms")
+		//                                 "60->280 · 8× (×4.6) · +13 ms"; a 10-bit / HDR
+		//                                 game appends " · 10-bit" / " · HDR")
 		//   otherwise the reason      -> the renderer's (HDR, 10-bit, YCbCr, ...) when it
 		//                                 refuses, else pacing's (game already at the
 		//                                 refresh or target, GPU too slow, VRR, warming
@@ -208,6 +209,12 @@ namespace gamescope
 				}
 				std::snprintf( sz, sizeof( sz ), " · +%.0f ms", ps.delayMs );
 				s += sz;
+				// The game's format when it is not plain 8-bit: "HDR", "10-bit", "16-bit float".
+				if ( rs.formatTag && rs.formatTag[ 0 ] )
+				{
+					s += " · ";
+					s += rs.formatTag;
+				}
 				return s;
 			}
 

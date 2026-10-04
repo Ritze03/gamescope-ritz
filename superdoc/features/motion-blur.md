@@ -86,8 +86,8 @@ it is blurred.
 
 **Status line** (always one line): `4 samples · 1.8 ms window` while applied (the window is
 the last output's shutter length in ms of content time, the pacer's `Report::blurWindowMs`);
-`Off`; `Blur amount is 0: no blur`; otherwise the reason (the renderer's first -- HDR,
-10-bit, YCbCr, ... -- then pacing's: warming up, a frame gap, the GPU too slow); `Waiting for
+`Off`; `Blur amount is 0: no blur`; otherwise the reason (the renderer's first -- YCbCr, an
+unsupported pixel format, ... -- then pacing's: warming up, a frame gap, the GPU too slow); `Waiting for
 frames` before the first publish. Pacing's reason `Off` (what it reports for a blur-only
 plan with frame generation off) is deliberately not shown as a reason.
 
@@ -107,8 +107,8 @@ time is per *sample* for blurred outputs so that product is right.
 Limits: blur averages interpolation errors, it does not hide them -- an artefact in a
 sub-frame is spread over the window, softer but wider. It reduces clarity in motion by
 design, so competitive players will often want it off or a short shutter. The library's usual
-limits apply per sub-frame: SDR, 8-bit only (HDR / 10-bit / YCbCr is refused and the status
-says why), very fast motion, repetitive structures, scene cuts and flicks present the
+limits apply per sub-frame: RGB only, 8-bit, 10-bit or fp16, SDR or HDR (YCbCr is refused and the status
+says why; see [frame-generation](frame-generation.md#hdr-and-10-bit-games)), very fast motion, repetitive structures, scene cuts and flicks present the
 nearer real frame. With 2 samples a fast object shows two ghost copies rather than a
 ramp -- use more samples for a longer smear.
 

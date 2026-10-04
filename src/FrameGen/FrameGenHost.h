@@ -268,9 +268,10 @@ namespace fghost
 	enum class Unavailable : uint8_t
 	{
 		Ok,
-		Hdr,          // HDR output enabled, or the game layer is HDR/scRGB/passthrough
-		YCbCr,        // the game layer is a YCbCr (NV12) video surface
-		NotEightBit,  // the game layer is not B8G8R8A8 / R8G8B8A8 (10-bit, 16-bit float, 565)
+		Hdr,          // the game layer is a pass-through surface (never the case for a game's own layer 0 in practice)
+		YCbCr,        // the game layer is a YCbCr (NV12) video surface (not offered, see frame-generation.md)
+		Format,       // the game layer's pixel format is none of 8-bit RGB, 10-bit RGB, fp16 RGB (565, 16-bit UNORM)
+		HdrFormat,    // 10-bit or fp16 game, but this GPU / driver cannot do that format for frame generation
 		TooSmall,     // below Interpolator::kMinSize (16) on an axis
 		InitFailed,   // the library (or its textures) could not be created / resized
 		RecordFailed, // a record call returned false for this frame
@@ -300,6 +301,10 @@ namespace fghost
 		// one observe (ui_detect + ui_inpaint) plus one patch (ui_patch), ms.
 		// < 0 = n/a (protection off, or not measured yet).
 		float lastUiMs = -1.0f;
+		// The game format the renderer is running in, for the Status line: "" for
+		// plain 8-bit, else a short tag ("10-bit", "16-bit float", "HDR"). A string
+		// literal; "" while the renderer is not live.
+		const char *formatTag = "";
 		// Increments with every new measurement, so pacing can tell a fresh
 		// reading from the stale one it already acted on.
 		uint32_t costSeq = 0;
@@ -383,7 +388,9 @@ namespace fghost
 	//                 pass, a layer already carrying the effects) -- null makes
 	//                 this a no-op except that it still tears FG down if it was
 	//                 switched off.
-	//   eColorspace : that layer's colourspace (HDR is refused, decision D4).
+	//   eColorspace : that layer's colourspace. With the layer's VkFormat it picks the
+	//                 library format (FrameGenFormat.h): 8-bit, 10-bit and fp16 (HDR or
+	//                 not) all run; YCbCr and pass-through surfaces are refused.
 	//
 	// Returns the texture to use as layer 0 INSTEAD of pLayer0 (the caller
 	// substitutes it in its private copy of the frame info), or null to show

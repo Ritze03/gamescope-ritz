@@ -147,6 +147,60 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
   endif
 endforeach
 
+# The library's per-format colour-shader variants (frame-gen-ritz INTEGRATION.md,
+# "Shader variants"): the SAME sources as above, compiled again with
+# -DFG_FORMAT_<FMT>=1 into <name>_<fmt>_spv.h / <name>_<fmt>_spv, which framegen.cpp
+# picks up through __has_include (without them it refuses that format at init()).
+# rgb10 = A2B10G10R10 / A2R10G10B10 (10-bit and HDR10 games), f16 =
+# R16G16B16A16_SFLOAT (scRGB and fp16 games). NV12 / P010 are deliberately NOT
+# built: gamescope would have to hand the library a multi-planar game buffer as
+# two plane views and write one back, and the only layer-0 YCbCr surfaces are video
+# players (superdoc/features/frame-generation.md, "HDR and 10-bit games").
+framegen_colour_shaders = ['luma', 'error', 'resolve', 'fallback', 'ui_detect', 'ui_box_update', 'ui_inpaint', 'ui_patch',
+                           'blur_error', 'blur_resolve']
+foreach fmt : ['rgb10', 'f16']
+  foreach name : framegen_colour_shaders
+    fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '-DFG_FORMAT_' + fmt.to_upper() + '=1',
+               '--vn', name + '_' + fmt + '_spv', '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
+    if framegen_has_depfile
+      framegen_shaders += custom_target(
+        'framegen_' + name + '_' + fmt + '_spv',
+        output  : name + '_' + fmt + '_spv.h',
+        command : [glsl_compiler, fg_args, '--depfile', '@DEPFILE@'],
+        depfile : name + '_' + fmt + '_spv.h.d',
+      )
+    else
+      framegen_shaders += custom_target(
+        'framegen_' + name + '_' + fmt + '_spv',
+        output  : name + '_' + fmt + '_spv.h',
+        command : [glsl_compiler, fg_args],
+      )
+    endif
+  endforeach
+endforeach
+
+# cs_fg_copy.comp again, with a `dst` in the game's own bit depth (see the shader's
+# header and descriptor_set.h's DST_FORMAT): the ring copy of a 10-bit / fp16 game.
+# (appended to framegen_shaders: a generator list cannot be extended with a custom_target)
+fg_copy_src = meson.current_source_dir() / 'shaders/cs_fg_copy.comp'
+foreach v : [['rgb10', 'rgb10_a2'], ['f16', 'rgba16f']]
+  fg_args = ['-V', '--quiet', '-DDST_FORMAT=' + v[1], '--vn', 'cs_fg_copy_' + v[0], '-o', '@OUTPUT@', fg_copy_src]
+  if framegen_has_depfile
+    framegen_shaders += custom_target(
+      'cs_fg_copy_' + v[0],
+      output  : 'cs_fg_copy_' + v[0] + '.h',
+      command : [glsl_compiler, fg_args, '--depfile', '@DEPFILE@'],
+      depfile : 'cs_fg_copy_' + v[0] + '.h.d',
+    )
+  else
+    framegen_shaders += custom_target(
+      'cs_fg_copy_' + v[0],
+      output  : 'cs_fg_copy_' + v[0] + '.h',
+      command : [glsl_compiler, fg_args],
+    )
+  endif
+endforeach
+
 # M8 typography (issue #13, swapped to Geist by issue #53): embeds the
 # bundled Geist Sans/Mono weights (OFL-licensed, see
 # Overlay/fonts/LICENSE-OFL.txt) as C byte arrays, the same generated-header

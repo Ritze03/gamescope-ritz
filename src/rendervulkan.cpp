@@ -57,6 +57,8 @@
 #include "cs_effects_bloom_down.h"
 #include "cs_zoom.h"
 #include "cs_fg_copy.h"
+#include "cs_fg_copy_rgb10.h"
+#include "cs_fg_copy_f16.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -573,6 +575,10 @@ bool CVulkanDevice::createDevice()
 		vk.GetPhysicalDeviceFeatures2( physDev(), &features2 );
 
 		m_bSupportsFp16 = vulkan12Features.shaderFloat16 && features2.features.shaderInt16;
+		// Frame generation's 10-bit ring is written through an rgb10_a2 storage image
+		// (a shader format outside the base set). Enabled only where offered; without
+		// it 10-bit games simply stay pass-through (FrameGenHost.cpp's FormatCaps).
+		m_bSupportsStorageImageExtendedFormats = features2.features.shaderStorageImageExtendedFormats;
 	}
 
 	float queuePriorities = 1.0f;
@@ -702,6 +708,7 @@ bool CVulkanDevice::createDevice()
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
 		.pNext = &presentIdFeatures,
 		.features = {
+			.shaderStorageImageExtendedFormats = m_bSupportsStorageImageExtendedFormats,
 			.shaderInt16 = m_bSupportsFp16,
 		},
 	};
@@ -1012,7 +1019,7 @@ bool CVulkanDevice::createShaders()
 		uint32_t size;
 	};
 
-	std::array<ShaderInfo_t, SHADER_TYPE_COUNT> shaderInfos;
+	std::array<ShaderInfo_t, SHADER_TYPE_COUNT> shaderInfos{};
 #define SHADER(type, array) shaderInfos[SHADER_TYPE_##type] = {array , sizeof(array)}
 	SHADER(BLIT, cs_composite_blit);
 	SHADER(BLUR, cs_composite_blur);
@@ -1043,10 +1050,21 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_V2_BOX1_FINE, cs_effects_v2_box1_fine);
 	SHADER(EFFECTS_V2_BOX2_FINE, cs_effects_v2_box2_fine);
 	SHADER(FG_COPY, cs_fg_copy);
+	// rgb10_a2 stores need shaderStorageImageExtendedFormats: a module that declares
+	// the capability on a device without the feature is invalid, so it is not created.
+	if ( m_bSupportsStorageImageExtendedFormats )
+		SHADER(FG_COPY_RGB10, cs_fg_copy_rgb10);
+	SHADER(FG_COPY_F16, cs_fg_copy_f16);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
 	{
+		if ( !shaderInfos[i].spirv )
+		{
+			m_shaderModules[i] = VK_NULL_HANDLE;
+			continue;
+		}
+
 		VkShaderModuleCreateInfo shaderCreateInfo = {
 			.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
 			.codeSize = shaderInfos[i].size,
@@ -1314,6 +1332,12 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	// on the render thread. (The FrameGen library builds its own pipelines
 	// at init, which is a one-off on that same switch.)
 	SHADER(FG_COPY, 1, 1, 1);
+	// The 10-bit / fp16 variants: only a 10-bit / fp16 game ever uses them, but a
+	// pipeline compile must not happen on the render thread mid-game. (The rgb10 one
+	// has no module without the device feature, so it is not listed then.)
+	if ( m_bSupportsStorageImageExtendedFormats )
+		SHADER(FG_COPY_RGB10, 1, 1, 1);
+	SHADER(FG_COPY_F16, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {

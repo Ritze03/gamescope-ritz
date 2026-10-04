@@ -92,7 +92,8 @@ which FG cannot substitute per output frame.
   `FrameRequest::historyDepth`, up to the library's `kHistoryMax` = 65 with the lag spike
   buffer: grown at once, shrunk only after a 4 s dwell at a deliberate `waitIdle`, with the
   library's `Settings::uiHistory` kept equal to it while UI protection is on -- see
-  [lag-spike-buffer](lag-spike-buffer.md)'s "gamescope wiring"), always `B8G8R8A8_UNORM`, filled by the tiny compute copy
+  [lag-spike-buffer](lag-spike-buffer.md)'s "gamescope wiring"), in the game's bit depth (`B8G8R8A8_UNORM` /
+  `A2B10G10R10` / `R16G16B16A16_SFLOAT`, see [HDR and 10-bit games](#hdr-and-10-bit-games)), filled by the tiny compute copy
   `cs_fg_copy.comp`; each slot remembers its commit id. `Why:` game buffers are never
   pinned (pinning another commit starves 3-image swapchains and lowers the real frame
   rate); commit dmabufs are SAMPLED-only so `vkCmdCopyImage` is impossible; the copy also
@@ -106,9 +107,11 @@ which FG cannot substitute per output frame.
   and counts the not-yet-retired submissions too). Beyond the cap the nearest cached output,
   or the real frame, is shown. `Why 3`: one composite shows an output while the next paints
   into another; the old per-k pool also needed up to 3 (4x).
-- **Skipped** (the real frame is shown and the status says why) for HDR output or content,
-  YCbCr, non-8-bit formats, a frame below 16x16, and init/record failure. `Why:` the library
-  is 8-bit SDR only, and a hard failure would black the screen.
+- **Skipped** (the real frame is shown and the status says why) for YCbCr surfaces, a game pixel
+  format that is none of 8-bit RGB / 10-bit RGB / fp16 RGB (565, 16-bit UNORM), a 10-bit / fp16
+  game on a GPU that cannot do that format, a pass-through-tagged surface, a frame below 16x16,
+  and init/record failure. HDR and 10-bit games are NOT skipped any more -- see
+  [HDR and 10-bit games](#hdr-and-10-bit-games). `Why:` a hard failure would black the screen.
 - **GPU time** is read from the library's timestamps, only when the device supports
   timestamps, without stalling (only after the GPU timeline has passed that submission);
   otherwise the status shows "n/a". Per pair the renderer publishes the **estimate's** time
@@ -130,6 +133,64 @@ which FG cannot substitute per output frame.
   [Logging](#logging)). They are two scopes because every `LogScope` registers a
   ConCommand of its own name and the console asserts on a duplicate -- two scopes called
   `framegen` aborted the binary in static init.
+
+## HDR and 10-bit games
+
+(2026-10-04, library PR #6.) The renderer no longer refuses HDR or 10-bit content: the library's
+`Format` is chosen per game layer, once at `init()`, from the layer 0 texture's `VkFormat` and
+`GamescopeAppTextureColorspace`, by the pure helper `ClassifyLayer()` in
+`src/FrameGen/FrameGenFormat.h` (pinned by `tests/test_framegen_format.cpp`).
+
+| Layer 0 texture | Colourspace tag | Library `Format` | `Transfer` | Ring / outputs |
+| --- | --- | --- | --- | --- |
+| `B8G8R8A8` / `R8G8B8A8` UNORM | any but pass-through | `Rgba8` (as before, byte-identical) | - | `B8G8R8A8_UNORM` (4 B/px) |
+| `A2B10G10R10` / `A2R10G10B10` UNORM | SRGB (SDR 10-bit) or HDR10_PQ | `Rgb10` | - (codes are display-encoded, PQ included) | `A2B10G10R10_UNORM_PACK32` (4 B/px) |
+| `R16G16B16A16_SFLOAT` | SCRGB | `RgbaF16` | `Linear`, `linearWhiteNits` 80 | `R16G16B16A16_SFLOAT` (8 B/px) |
+| `R16G16B16A16_SFLOAT` | SRGB / LINEAR / HDR10_PQ | `RgbaF16` | `Encoded` | same |
+| YCbCr (NV12 ...) | - | refused: `YCbCr` | | |
+| pass-through tagged | - | refused: `Hdr` | | |
+| anything else (565, 16-bit UNORM) | - | refused: `Format` | | |
+
+- **The ring carries the game's own bits.** `cs_fg_copy.comp` is compiled three times
+  (`DST_FORMAT` = `rgba8` / `rgb10_a2` / `rgba16f`, a macro in `shaders/descriptor_set.h` that
+  expands to the old `rgba8` for every other shader) and `SHADER_TYPE_FG_COPY{,_RGB10,_F16}` is
+  picked from the plan. It stays a texel-exact copy of the logical rgba, so channel order, an
+  fp16 value above 1.0 and a negative scRGB value all survive. The substituted layer 0 keeps the
+  game's colourspace tag (`SubstituteLayer0` replaces only the texture), so the compositor decodes
+  the generated frame exactly like a real one: PQ / scRGB reach the output colour management
+  unchanged. `Why` the ring is always `A2B10G10R10` for 10-bit, whatever the game's order: storage
+  on `A2R10G10B10` is optional (NVIDIA lacks it) and the copy samples logical rgba anyway.
+- **Transfer.** Only the library's *measurement* depends on it (mismatch, stillness, luma), never
+  the warp or blend, which run in the picture's own space. scRGB is linear, 1.0 = 80 nits
+  (`colorimetry.h`'s `c_scRGBLightScale`, not gamescope's SDR-on-HDR brightness: that one is
+  applied by the output colour management after our substitution). Thresholds stay "8-bit levels"
+  in every format, so every preset (Artifact safety, UI protection ...) applies unchanged.
+- **Device feature.** `rgb10_a2` stores need `shaderStorageImageExtendedFormats`. gamescope now
+  reads it from the physical device (`CVulkanDevice::supportsStorageImageExtendedFormats()`) and
+  enables it only where offered; the 10-bit copy shader module and pipeline exist only then.
+  `FrameGenHost.cpp`'s `DeviceCaps()` (once, logged as `frame generation formats: ...`) also
+  checks sampled + linear filter + storage on the ring format; fp16 needs no extra feature.
+  Without it, 10-bit games stay pass-through with the status "HDR / 10-bit format not supported
+  by this GPU" (`Unavailable::HdrFormat`; an init failure of a 10-bit / fp16 plan reports the same,
+  the library's `initError()` is in the log).
+- **Re-init on a format change.** `resize()` cannot change the `Format`, so a changed plan (8-bit <->
+  10-bit <-> fp16, or scRGB <-> encoded fp16) does `Teardown()` (a `waitIdle`, like every other free)
+  and a fresh `init()`; the failure key includes the plan, so a 10-bit game that cannot start does
+  not block the 8-bit game the user switches to. A change of the colourspace tag alone (SDR <->
+  HDR10 on one 10-bit surface) just drops the ring's frames. Focus flapping between games of
+  different formats therefore costs one pipeline build per switch (not per frame).
+- **HDR output with SDR content is not special**: `g_bOutputHDREnabled` no longer forces
+  pass-through; the layer is a plain 8-bit one and runs as always.
+- **Memory** scales with bytes per pixel: ring slot and clean copy are 4 B/px at 8-bit and 10-bit,
+  8 B/px at fp16 (29.5 MB per frame at 1440p, 66 MB at 4K). With a lag spike buffer the ring can grow
+  to 65 frames; a grow that cannot allocate is logged and keeps the old depth (`FollowDepth`).
+- **Not built: NV12 / P010.** Layer 0 is a YCbCr texture only for video players; supporting it
+  needs the game buffer split into two plane views and a plane-aware copy and output, for a
+  use (interpolating a video) the library's video path covers better. `isYcbcr()` stays refused.
+- **Status.** The Frame generation status line appends the format when it is not plain 8-bit:
+  ` · HDR`, ` · 10-bit` or ` · 16-bit float` (`RenderStatus::formatTag`).
+- **Untested on real hardware at the time of writing**: the headless smoke covers 8-bit (unchanged);
+  HDR / 10-bit need a real HDR game.
 
 ## UI protection
 
@@ -553,7 +614,7 @@ values and spam the log.
 | --- | --- |
 | the game's rate reaches the output rate (refresh or target) | real frames, renderer inert, no added latency |
 | per-pair GPU time over 25% of the game interval | output rate lowered, then pass-through; retried every 10 s |
-| HDR output/content, YCbCr, non-8-bit, under 16x16, init failure | real frame, status names the reason |
+| YCbCr, a pixel format outside 8-bit / 10-bit / fp16 RGB, a 10-bit / fp16 format the GPU cannot do, under 16x16, init failure | real frame, status names the reason |
 | focus/size/format change, gap over 100 ms, fade, Steam UI, streaming client | one frame without FG, then resumes after warm-up |
 
 ## Interaction with the Frame limiter
@@ -580,7 +641,8 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 ## Limitations
 
-- SDR, 8-bit only.
+- YCbCr (video) layer 0 is not offered (NV12 / P010 are not built); everything RGB runs, SDR or HDR, see
+  [HDR and 10-bit games](#hdr-and-10-bit-games).
 - Compute on the same queue, no async: FG time adds to composite time.
 - Adds delay (Low latency: (N-1)/N of a game frame at a fixed N; Smoothness: about one game
   frame); not suited to twitch shooters.
@@ -600,7 +662,7 @@ The library has no root `meson.build`, and Meson's sandbox forbids handing files
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
 nested subproject`), so `subproject()` is impossible. Its 20 shaders (11 for the interpolation, 6 for UI protection, 3 for motion blur --
 `blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
-test-only `gpu/blendbench.comp` is not built) are compiled with
+test-only `gpu/blendbench.comp` is not built), plus 10 colour-shader variants each for `rgb10` and `f16` (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work
