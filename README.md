@@ -2,12 +2,12 @@
 
 # gamescope-ritz
 
-**An in-game settings overlay for Valve's [gamescope](https://github.com/ValveSoftware/gamescope) compositor.**
+**A fork of Valve's [gamescope](https://github.com/ValveSoftware/gamescope) compositor with an in-game settings overlay, frame generation, motion blur, live shaders and more.**
 
 Change scaling, HDR, shader effects, or a game's nested resolution and refresh rate
 without alt-tabbing out or restarting anything, save it as a per-game profile that
-inherits from a general one, and glance at an FPS number or a crosshair drawn by the
-compositor itself.
+inherits from a general one, add generated frames and motion blur, and glance at an FPS
+number or a crosshair drawn by the compositor itself.
 
 📖 **[Full documentation »](superdoc/README.md)** — start at
 [`superdoc/architecture/overview.md`](superdoc/architecture/overview.md) to navigate the code.
@@ -15,10 +15,78 @@ compositor itself.
 *(No logo yet — the screenshots below are this section's visual, until there's real artwork.)*
 
 <p align="center">
-  <img src="docs/images/shell-upscaling.png" width="820" alt="gamescope-ritz's settings Shell open on Display > Upscaling, showing the sidebar, the scaling filter/sharpness/scaler controls, and the live inspector rail on the right">
+  <img src="docs/images/shell-upscaling.png" width="820" alt="gamescope-ritz's settings Shell open on Display > Upscaling with the FSR filter selected and Sharpness at 25 %, showing the rail on the left, the scaling controls, and the inspector on the right">
 </p>
 
 </div>
+
+## What gamescope-ritz adds
+
+The features below are this fork's own; upstream gamescope does not have them. Each
+links to its page in the docs.
+
+<p align="center">
+  <img src="docs/images/shell-framegen.png" width="820" alt="gamescope-ritz's settings Shell with the MOTION group expanded (Frame generation, Motion blur, Lag spike buffer); Frame generation is on at 2x and its status line reads 30->55, 2x, +21 ms">
+</p>
+
+**Motion** (the MOTION group in the Shell)
+
+- **[Frame generation](superdoc/features/frame-generation.md)**: extra frames between the
+  game's own, from the [frame-gen-ritz](https://github.com/Ritze03/frame-gen-ritz)
+  library, at a fixed 2x to 8x or aimed at a Target fps, with a Low latency or
+  Smoothness priority, Quality and Artifact safety settings, optional UI protection
+  (a still crosshair, or the whole screen) and a live status line. It stops at your
+  refresh rate unless you choose otherwise, and works with VRR and tearing.
+- **[Motion blur](superdoc/features/motion-blur.md)**: blends interpolated in-between
+  frames into each shown frame like a camera shutter, with or without frame generation.
+- **[Lag spike buffer](superdoc/features/lag-spike-buffer.md)**: bridges repeating game
+  stutters with generated frames, at the cost of a small adaptive delay.
+
+<p align="center">
+  <img src="docs/images/shell-motionblur.png" width="820" alt="gamescope-ritz's settings Shell on Motion > Motion blur, switched on with 4 samples; the status line reads 4 samples, 8.3 ms window">
+</p>
+
+**Visuals**
+
+- **[Live shader effects](superdoc/features/shader-effects.md)**: Saturation, Vibrancy,
+  Shadow Control, Pre-Sharpen, Bloom and three adaptive effects (Adaptive Brightness,
+  Adaptive Gamma, Adaptive Brightness V2), applied live with no restart, plus a Preview
+  split to compare against the untouched picture.
+- **[Crosshair](superdoc/features/crosshair.md)**: drawn by the compositor, so it stays
+  sharp under frame generation.
+- **[FPS HUD](superdoc/features/fps-display.md)**: an on-screen FPS number that can show
+  the game's rate, the output rate, or both (`game>output`).
+- **[Zoom](superdoc/features/zoom.md)**: a magnifier cut to a circle, rectangle or
+  square, shown while a key is held or toggled.
+
+<p align="center">
+  <img src="docs/images/hud-crosshair.png" width="820" alt="A game frame with gamescope-ritz's FPS HUD in Both mode (31>59) and the compositor-drawn crosshair at the centre">
+</p>
+
+**Input**
+
+- **[Null binds](superdoc/features/null-binds.md)**: WASD last-input-priority (SOCD)
+  cleaning, with an adjustable delay and jitter.
+- **[Autoclicker](superdoc/features/autoclicker.md)**: a paced click train at 1 to 1000
+  clicks per second, held or toggled by a key.
+- **[Keybinds](superdoc/features/keybinds.md)**: every overlay hotkey is rebindable from
+  the Shell.
+
+**Overlay, profiles and extras**
+
+- **Settings Shell and Launcher**: a full in-game settings overlay, and a searchable
+  command palette that opens alone over the game.
+- **[Profiles](superdoc/features/profiles.md)**: general and per-game settings profiles
+  with live inheritance; every edit is saved at once.
+- **[Launch-option lock](superdoc/features/launch-option-lock.md)**: a setting you pass
+  on the command line is shown as such and cannot be changed in the overlay.
+- **[Runtime resolution and refresh](superdoc/features/resolution-and-refresh.md)**:
+  change a game's resolution and refresh rate live.
+- **[Steam friends list](superdoc/features/steam-friends.md)**: join friends' lobbies in
+  the game you are running.
+- **[Mixer](superdoc/features/audio-mixer.md)**: per-app PipeWire volume for the game.
+- **[Clipboard sync](superdoc/features/clipboard-sync.md)** and an **About** page with
+  the changelog and licences.
 
 ## Fork of gamescope
 
@@ -26,8 +94,8 @@ compositor itself.
 Its base commit is exactly upstream `ValveSoftware/gamescope` HEAD
 ([`fcc1341`](https://github.com/ValveSoftware/gamescope/commit/fcc1341)) — everything below
 that commit is unchanged upstream code; everything above it is this fork's own, additive
-work: the settings overlay, the FPS HUD, the crosshair, profiles, and the rest covered
-below. Upstream's own README content (the compositor's own description, its usage
+work: the settings overlay, frame generation and motion blur, the FPS HUD, the
+crosshair, shader effects, profiles, and the rest covered above and below. Upstream's own README content (the compositor's own description, its usage
 examples, its full option reference, and its Reshade/keyboard-shortcut docs) is preserved
 verbatim in [`README.upstream.md`](README.upstream.md) rather than deleted.
 
@@ -119,7 +187,10 @@ warning to rename it.)
 `./install.sh` checks every hard dependency **before** it starts building, and names the
 ones you are missing along with the command that installs them — so a missing package
 fails in a second, not several minutes into a compile. You do **not** need to run
-`git submodule update` yourself; `install.sh` initialises missing submodules for you.
+`git submodule update` yourself; `install.sh` initialises missing submodules for you. If you build by hand with meson
+instead, run `git submodule update --init --recursive` first: frame generation's
+[frame-gen-ritz](https://github.com/Ritze03/frame-gen-ritz) library lives in
+`subprojects/FrameGen`.
 
 **Arch / CachyOS**
 
@@ -206,20 +277,25 @@ instructions, which `install.sh` still follows underneath.
 
 </details>
 
-## What this fork adds
+## The settings Shell and its other additions
+
+The Shell's rail has seven groups: DISPLAY, MOTION, OVERLAY, INPUT, MISC, SETTINGS and
+OTHER. Each is an accordion tab that opens to its areas.
 
 <p align="center">
-  <img src="docs/images/shell-appearance.png" width="820" alt="gamescope-ritz's settings Shell open on Setup > Appearance, showing the accent-colour picker and the backdrop/transparency sliders">
+  <img src="docs/images/shell-appearance.png" width="820" alt="gamescope-ritz's settings Shell open on Settings > Appearance, showing the accent colour, backdrop, transparency and toast placement settings">
 </p>
 
 | Feature | | Docs |
 |---|---|---|
 | **Shell & Launcher** | A full in-game settings overlay (the **Shell**) and a standalone, searchable command palette (the **Launcher**) that opens alone over the game with no shell behind it. | [`planning/redesign/round-2/e2-inspector-plus/`](superdoc/planning/redesign/round-2/e2-inspector-plus/) |
-| **FPS HUD** | A single on-screen FPS number: a 9-point anchor, pixel margins, a chosen font size, text-colour modes, an outline, and a lag-spike colour reaction. | [`features/fps-display.md`](superdoc/features/fps-display.md) |
-| **Crosshair** | A compositor-drawn crosshair that composites *after* an external frame-generation layer such as `lsfg-vk`, so unlike an in-game crosshair it never smears. | [`features/crosshair.md`](superdoc/features/crosshair.md) |
+| **Frame generation, Motion blur, Lag spike buffer** | The MOTION group; see the overview above. | [`features/frame-generation.md`](superdoc/features/frame-generation.md) |
+| **FPS HUD** | A single on-screen FPS number (the game's rate, the output rate, or both): a 9-point anchor, pixel margins, a chosen font size, text-colour modes, an outline, and a lag-spike colour reaction. | [`features/fps-display.md`](superdoc/features/fps-display.md) |
+| **Crosshair** | A compositor-drawn crosshair that composites *after* frame generation (this fork's own, or an external layer such as `lsfg-vk`), so unlike an in-game crosshair it never smears. | [`features/crosshair.md`](superdoc/features/crosshair.md) |
 | **Profiles** | General and per-game settings profiles with live, diff-based inheritance — every edit saves immediately, no load/save step. | [`features/profiles.md`](superdoc/features/profiles.md) |
 | **Editable keybinds** | Rebind the Shell/Launcher chords from inside the Shell itself, with one chord that can never be taken away. | [`features/keybinds.md`](superdoc/features/keybinds.md) |
-| **Native shader effects** | Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Adaptive Brightness, Adaptive Gamma and Bloom, compiled into the binary as one compute pre-pass. | [`features/shader-effects.md`](superdoc/features/shader-effects.md) |
+| **Native shader effects** | Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma and Adaptive Brightness V2, compiled into the binary as one compute pre-pass, with a Preview split. | [`features/shader-effects.md`](superdoc/features/shader-effects.md) |
+| **Zoom, Autoclicker, Null binds** | A magnifier, a paced click train and WASD SOCD cleaning. | [`features/zoom.md`](superdoc/features/zoom.md), [`features/autoclicker.md`](superdoc/features/autoclicker.md), [`features/null-binds.md`](superdoc/features/null-binds.md) |
 | **Clipboard sync** | One `CLIPBOARD` value kept in step across every Xwayland game, gamescope's own Wayland clients, and the host session when nested. | [`features/clipboard-sync.md`](superdoc/features/clipboard-sync.md) |
 | **Runtime nested resolution & refresh** | Change a game's own resolution and paced refresh rate live from the Shell — nothing restarts, not even Xwayland. | [`features/resolution-and-refresh.md`](superdoc/features/resolution-and-refresh.md) |
 | **Steam friends list** | `Ctrl+Shift+Tab` lists friends who are in a game right now, read straight from the Steam client already running — join one marked `[Join]` with a click. | [`features/steam-friends.md`](superdoc/features/steam-friends.md) |
@@ -228,7 +304,7 @@ instructions, which `install.sh` still follows underneath.
 ## Keyboard shortcuts
 
 These are this fork's own defaults; all but the last are rebindable from the Shell's
-Setup > Keybinds area (`gamescopectl ritz_keybinds_reset` puts them back if a rebind
+Settings > Keybinds area (`gamescopectl ritz_keybinds_reset` puts them back if a rebind
 goes wrong):
 
 | Chord | Action |
@@ -237,6 +313,9 @@ goes wrong):
 | `Ctrl+Shift+O` | Open/close the Shell (alternate — for when Right Shift alone is inconvenient) |
 | `Left Ctrl` + `Right Shift` | Open/close the Launcher (the command palette, alone over the game) |
 | `Ctrl+Shift+Tab` | Open/close the Steam friends list (join a friend marked `[Join]`) |
+| `Ctrl+Shift+M` | Open/close the Mixer |
+| `RMB` (held) | Zoom |
+| `Mouse4` (held) | Autoclicker |
 | `Ctrl+Alt+Shift+O` | Always opens the Shell — reserved, cannot be rebound or taken by another action |
 
 Upstream gamescope also has its own `Super`-prefixed shortcuts (fullscreen, filtering,
