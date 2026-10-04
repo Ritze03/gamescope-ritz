@@ -162,22 +162,22 @@ namespace gamescope
 		}
 
 		// ---- the Status line (decision D18) -----------------------------------
-		// One line, always. Pure over its inputs so the strings are one place;
-		// the live caller below feeds it the two fghost snapshots.
+		// One compact line, always. Pure over its inputs so the strings are one
+		// place; the live caller below feeds it the two fghost snapshots.
 		//   Off                       -> "Off"
-		//   generating (activeN >= 2) -> fixed:  "game 60 fps -> presented ~120 fps · 2×
-		//                                          · FG 0.42 ms · +8.3 ms delay"
+		//   generating (activeN >= 2) -> target: "60->280 · target 280 (×4.6) · +13 ms"
+		//                                fixed:  "60->120 · 2× · +8 ms"
 		//                                (a fixed multiplier the display saturates reads
-		//                                 "2× (1.4× actual)")
-		//                                target: "game 100 fps -> presented ~240 fps ·
-		//                                          target 240 (2.4×) · FG 0.50 ms · +6.3 ms delay"
+		//                                 "60->280 · 8× (×4.6) · +13 ms")
 		//   otherwise the reason      -> the renderer's (HDR, 10-bit, YCbCr, ...) when it
 		//                                 refuses, else pacing's (game already at the
 		//                                 refresh or target, GPU too slow, VRR, warming
 		//                                 up, ...)
 		//   nothing published yet     -> "Waiting for frames"
 		// The font is Basic Latin + Latin-1 only, so the arrow is "->" (U+2192
-		// is not in the atlas); "·" and "×" are Latin-1 and render.
+		// is not in the atlas); "·" and "×" are Latin-1 and render. The FG / UI GPU
+		// times used to be on this line; the user found it overloaded and they now
+		// live only in the debug log.
 		std::string StatusLine( const config::FrameGenSettings &f, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
 		{
 			if ( !f.enabled )
@@ -187,12 +187,11 @@ namespace gamescope
 			if ( ps.valid && ps.activeN >= 2 )
 			{
 				char sz[ 192 ];
-				int n = std::snprintf( sz, sizeof( sz ), "game %.0f fps -> presented ~%.0f fps",
-					ps.gameFps, ps.presentedFps );
+				int n = std::snprintf( sz, sizeof( sz ), "%.0f->%.0f", ps.gameFps, ps.presentedFps );
 				std::string s( sz, n > 0 ? (size_t)n : 0 );
 				if ( nChoice == kTargetChoice )
 				{
-					std::snprintf( sz, sizeof( sz ), " · target %.0f (%.1f×)", ps.targetFps, ps.effectiveMultiplier );
+					std::snprintf( sz, sizeof( sz ), " · target %.0f (×%.1f)", ps.targetFps, ps.effectiveMultiplier );
 					s += sz;
 				}
 				else
@@ -202,25 +201,11 @@ namespace gamescope
 					// The display cannot show N x the game: say what it actually does.
 					if ( ps.effectiveMultiplier > 0.0f && ps.effectiveMultiplier < float( nChoice ) - 0.15f )
 					{
-						std::snprintf( sz, sizeof( sz ), " (%.1f× actual)", ps.effectiveMultiplier );
+						std::snprintf( sz, sizeof( sz ), " (×%.1f)", ps.effectiveMultiplier );
 						s += sz;
 					}
 				}
-				if ( rs.lastPairGpuMs < 0.0f )
-					s += " · FG n/a";
-				else
-				{
-					std::snprintf( sz, sizeof( sz ), " · FG %.2f ms", rs.lastPairGpuMs );
-					s += sz;
-					// The UI-protection share of that (already included above); only
-					// while it is on and has been measured.
-					if ( f.ui_protection != "off" && rs.lastUiMs >= 0.0f )
-					{
-						std::snprintf( sz, sizeof( sz ), " · UI %.2f ms", rs.lastUiMs );
-						s += sz;
-					}
-				}
-				std::snprintf( sz, sizeof( sz ), " · +%.1f ms delay", ps.delayMs );
+				std::snprintf( sz, sizeof( sz ), " · +%.0f ms", ps.delayMs );
 				s += sz;
 				return s;
 			}
@@ -331,9 +316,10 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
 			kQualityOptions, std::size( kQualityOptions ) )
-			.Help( "Performance estimates motion at a lower resolution: about a third cheaper on "
-			       "the GPU, but it can miss thin, fast detail. Switching pauses the picture for "
-			       "an instant." )
+			.Help( "Performance is roughly 35-50% cheaper on the GPU (1440p 2x: 0.50 -> 0.25 ms per "
+			       "game frame; 4x: 0.71 -> 0.46 ms, RX 7900 XTX) but estimates motion at a quarter "
+			       "resolution and can miss thin, fast detail. Quality is the default look. "
+			       "Switching pauses the picture for an instant." )
 			.Default( 0 )
 			.Keywords( "frame generation quality performance cost gpu motion estimation" )
 			.DisabledUnless( On, "frame generation is off" );
@@ -343,11 +329,12 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 4, 1 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kSafetyOptions, std::size( kSafetyOptions ) )
-			.Help( "How readily a doubtful area falls back to the real frame. High shows fewer "
-			       "smeared or warped spots but a little less smoothing; Low is smoother with "
-			       "more visible mistakes. Off never falls back to a real frame, not even on fast "
-			       "flicks or scene cuts: the smoothest, but expect visible smearing at edges and "
-			       "blended frames on cuts." )
+			.Help( "Decides when a pixel the motion estimate got wrong falls back to the real frame. "
+			       "Each level sets the mismatch range (0-255 levels) between fully interpolated and "
+			       "fully real: High 8-28, Default 12-40, Low 16-56. All three also show the real "
+			       "frame when more than 15% of the picture is untrusted or on a scene cut. Off "
+			       "never falls back: smoothest, but expect smearing on fast flicks and blended "
+			       "scene cuts." )
 			.Default( 1 )
 			.Keywords( "frame generation artifact safety artefacts ghosting trust fallback" )
 			.DisabledUnless( On, "frame generation is off" );

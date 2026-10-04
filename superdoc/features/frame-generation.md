@@ -181,10 +181,9 @@ the `curr` view it is given. All of these are runtime `Settings` fields; the hos
 (per synth) to its profile, and an observe opens a profile that the next estimate
 continues. `HarvestProfile()` therefore classifies stamps by name: the observe's two
 passes are added to the **estimate's** time (per real frame, like the estimate) and
-`ui_patch` to each **synth's**, so the cost guard and the Status line's "FG X ms" include
+`ui_patch` to each **synth's**, so the cost guard (and the debug log's FG time) include
 them; the UI share alone is published as `RenderStatus::lastUiMs` (one observe plus one
-patch) and the Status line appends `· UI 0.05 ms` only while UI protection is on and has
-been measured. Idle gaps are the hazard: a delta whose previous stamp was recorded in an
+patch) (the Status line no longer shows either figure). Idle gaps are the hazard: a delta whose previous stamp was recorded in an
 earlier command buffer contains up to a frame of nothing, so it is dropped (a `ui_detect`
 that does not directly follow the profile's start stamp; `luma` behind an observe unless the
 estimate was recorded in the observe's own command buffer; the first stamp of a synth that
@@ -444,8 +443,8 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
 | `framegen.priority` | `low_latency` (default) / `smoothness` | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
-| `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: about a third cheaper, can miss thin fast detail |
-| `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28): how readily doubtful pixels fall back to the real frame. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
+| `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
+| `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it |
 
@@ -483,15 +482,19 @@ sliders would invite settings nobody has looked at.
 
 **Status line** (always one line):
 
-- generating, fixed: `game 60 fps -> presented ~120 fps · 2× · FG 0.42 ms · +8.3 ms delay`;
-  when the display cannot show N x the game: `... · 2× (1.4× actual) · ...`
-- generating, target: `game 100 fps -> presented ~240 fps · target 240 (2.4×) · FG 0.50 ms
-  · +6.3 ms delay`
-- with UI protection on, `· UI 0.05 ms` follows the FG time (that share is already inside it)
+- generating, target: `60->280 · target 280 (×4.6) · +13 ms` (game fps -> presented fps,
+  the target, the effective multiplier to one decimal, the delay in whole ms);
+- generating, fixed: `60->120 · 2× · +8 ms`; when the display cannot show N x the game the
+  effective multiplier follows: `60->280 · 8× (×4.6) · +13 ms`;
+- the FG / UI GPU times are **not** on the line any more (`Facts` rows have no details pane);
+  they remain in the `framegen` debug log and `RenderStatus::lastPairGpuMs` / `lastUiMs`;
 - otherwise the reason (renderer's first, then pacing's), `Off`, or `Waiting for frames`.
 
 It writes `->` and 1/2 in help text because the overlay font atlas is Latin-1 only (no
-U+2192 or the vulgar-fraction glyphs); `·` and `×` are Latin-1 and render. **Status
+U+2192 or the vulgar-fraction glyphs); `·` and `×` are Latin-1 and render. `Why:` the line
+was trimmed 2026-10-04 because the user found it overloaded: *"The Status line is pretty
+overloaded at the moment. Reduce it to (example values): 60->280 * target 280 (x4.6) * +13ms"*.
+**Status
 semantics:** `presentedFps` counts output frames actually presented (generated frames plus
 the real frames pacing decided to show) and **not** repaints of an already-shown output
 (cursor, overlay) -- it used to be a paint count; `activeN` = the effective multiplier
