@@ -31,10 +31,17 @@
 //
 // DELAY D, per Priority (the user's "one for low latency and one for maximum
 // smoothness"):
-//   Low latency : D = latest real interval - o, floored at 0. At a fixed N this
-//     is today's (N-1)/N of a game interval. A real frame arriving early or
-//     late SNAPS the content time to the new pair rather than sliding (D9's
-//     latency-first rule), so uneven motion on jittery frame times is accepted.
+//   Low latency : D = smoothed interval - o, floored at 0, plus the largest recent
+//     arrival jitter (0 for a steady game, at most 4 ms) plus the lead by which the
+//     paint wakes before its vblank (at most 4 ms). At a fixed N this is
+//     today's (N-1)/N of a game interval. The latest interval replaces the
+//     smoothed one only when it is genuinely early or late (more than
+//     max(2 ms, 15%) off): such a frame SNAPS the content time to the new pair
+//     (D9's latency-first rule), so uneven motion on really jittery frame times
+//     is accepted. Why the smoothed interval and the jitter margin: with D from
+//     the latest interval alone, ordinary arrival jitter (+-1 ms on a capped
+//     game) moved D from pair to pair, and a late arrival left a vblank with no
+//     new real frame to show, losing an output a steady game should have had.
 //   Smoothness  : D = median interval + margin (margin = max(2 ms, the spread
 //     of recent intervals), capped at half an interval). tau advances evenly at
 //     the output rate; the pair being played may be one OLDER than the newest
@@ -193,6 +200,11 @@ namespace fgpacing
 		return n;
 	}
 
+	// The largest ORDINARY deviation from the median in v[0..n) (0 for fewer than
+	// 3): the jitter an arrival can show, which Low latency's margin covers. A
+	// deviation past max(2 ms, 15%) is a hitch and is left out.
+	inline double MaxDevOf( const double *v, int n );
+
 	// Median of v[0..n): the middle value, or the mean of the two middle ones
 	// for an even count.
 	inline double MedianOf( const double *v, int n )
@@ -202,6 +214,23 @@ namespace fgpacing
 		double s[ kIntervalWindow ];
 		n = SortedCopy( v, n, s );
 		return ( n & 1 ) ? s[ n / 2 ] : 0.5 * ( s[ n / 2 - 1 ] + s[ n / 2 ] );
+	}
+
+	inline double MaxDevOf( const double *v, int n )
+	{
+		if ( n < 3 )
+			return 0.0;
+		const double flMed = MedianOf( v, std::min( n, kIntervalWindow ) );
+		double flMax = 0.0;
+		for ( int i = 0; i < std::min( n, kIntervalWindow ); i++ )
+		{
+			// Only ordinary jitter: a deviation past the snap threshold is a hitch
+			// (a real early/late frame), which Low latency snaps to, not pads for.
+			const double flDev = std::fabs( v[ i ] - flMed );
+			if ( flDev <= std::max( 2.0, 0.15 * flMed ) )
+				flMax = std::max( flMax, flDev );
+		}
+		return flMax;
 	}
 
 	// A robust spread of v[0..n): second-largest minus median, so one hitch in
@@ -250,6 +279,36 @@ namespace fgpacing
 	inline double LowLatencyDelayMs( double flLatestIntervalMs, double flOutputMs )
 	{
 		return std::max( 0.0, flLatestIntervalMs - flOutputMs );
+	}
+
+	// Low latency's interval for D (2026-10-04): the SMOOTHED interval, unless the
+	// latest real interval is genuinely early or late -- off the smoothed one by
+	// more than max(2 ms, 15%) -- in which case D snaps to the latest. Using the
+	// latest interval always made D jump from pair to pair with ordinary arrival
+	// jitter (a steady 30 fps game capped by MangoHud arrives +-1 ms), so the
+	// content time overshot the newest frame early and an output frame was lost.
+	inline double LowLatencyIntervalMs( double flSmoothMs, double flLatestMs )
+	{
+		if ( flLatestMs <= 0.0 )
+			return flSmoothMs;
+		return std::fabs( flLatestMs - flSmoothMs ) > std::max( 2.0, 0.15 * flSmoothMs ) ? flLatestMs : flSmoothMs;
+	}
+
+	// Low latency's jitter margin: D is the (interval - o) the content lags by, which
+	// puts the real frame of a pair exactly where the NEXT real frame is expected
+	// (a steady game: the last output of a pair is the real frame, one vblank
+	// later the next pair starts). An arrival later than that by even a little
+	// leaves nothing to show for that vblank and the output is lost. So D carries
+	// the measured arrival jitter (the largest deviation from the median interval in the window, no floor)
+	// on top: the latency Low latency adds is 'one interval minus o plus the jitter
+	// actually seen', so a perfectly steady game pays nothing extra.
+	// The paint also wakes BEFORE the vblank it is for (the vblank timer's draw-time
+	// red zone, about 4 ms in a nested window): a real frame that arrives in that
+	// lead cannot be used, however close to the vblank it came, so the lead counts
+	// like jitter. flLeadMs = vblank time V minus the time of the paint.
+	inline double LowLatencyMarginMs( double flJitterMs, double flLeadMs = 0.0 )
+	{
+		return std::min( std::max( flJitterMs, 0.0 ) + std::max( flLeadMs, 0.0 ), 8.0 );
 	}
 
 	// Smoothness: the median interval plus the margin.
@@ -339,6 +398,8 @@ namespace fgpacing
 
 		// Jitter of the recent intervals (SpreadOf), in milliseconds.
 		double SpreadMs() const { return SpreadOf( m_flMs, m_nCount ); }
+		// The largest deviation from the median in the window, ms.
+		double MaxDevMs() const { return MaxDevOf( m_flMs, m_nCount ); }
 
 	private:
 		double m_flMs[ kIntervalWindow ] = {};
@@ -396,6 +457,11 @@ namespace fgpacing
 			bool reset = false;        // call fghost::Reset() BEFORE this composite
 			bool repaintNext = false;  // another output is due: force a repaint on the next vblank
 			bool newOutput = false;    // this paint presents a new output frame (counted in presentedFps)
+			// A cadence-skip vblank (the output interval is longer than a vblank and no
+			// new output is due): nothing to paint or commit, the display keeps the last
+			// buffer. Only ever set when OnPaint() was told the paint is skippable. The
+			// pacer consumed nothing: the next paint sees the same fresh real frame.
+			bool skip = false;
 		};
 
 		// D18, in the glue's terms.
@@ -472,7 +538,11 @@ namespace fgpacing
 		// a fixed-refresh display every paint is, and each one may consume one
 		// output frame. A paint that is NOT a vblank only advances when a new real
 		// frame is waiting; otherwise it repeats what is being shown.
-		Decision OnPaint( const Inputs &in, uint64_t ulLayer0Id, bool bVblank )
+		//
+		// `bSkippable`: nothing but frame generation itself asked for this paint (no
+		// UI / cursor / fade repaint), so a vblank that is not due a new output may
+		// be dropped (Decision::skip) instead of re-presenting the cached image.
+		Decision OnPaint( const Inputs &in, uint64_t ulLayer0Id, bool bVblank, bool bSkippable = false )
 		{
 			if ( ulLayer0Id != m_ulNewestId )
 			{
@@ -515,7 +585,9 @@ namespace fgpacing
 					break;
 
 				case State::Generate:
-					PaintGenerated( in, d, bFresh, bVblank );
+					PaintGenerated( in, d, bFresh, bVblank, bSkippable );
+					if ( d.skip )
+						m_bPending = bFresh;
 					break;
 			}
 
@@ -826,8 +898,14 @@ namespace fgpacing
 			const double flInterval = m_Est.IntervalMs();
 			if ( in.priority == Priority::Smoothness )
 				return SmoothnessDelayMs( flInterval, m_Est.SpreadMs() );
-			const double flLatest = m_flLastIntervalMs > 0.0 ? m_flLastIntervalMs : flInterval;
-			return LowLatencyDelayMs( flLatest, m_Plan.oMs );
+			double flBase = LowLatencyDelayMs( LowLatencyIntervalMs( flInterval, m_flLastIntervalMs ), m_Plan.oMs );
+			// At a high ratio (the game just under the output rate: 1.1 .. 2) i - o is
+			// less than one output interval and no generated frame would fit between two
+			// real ones; the floor of one o makes room for at least one.
+			if ( m_Plan.oMs > 0.0 && flInterval / m_Plan.oMs >= kStartRatio )
+				flBase = std::max( flBase, m_Plan.oMs );
+			const double flLeadMs = in.vblankNs > in.now ? double( in.vblankNs - in.now ) / double( kNsPerMs ) : 0.0;
+			return flBase > 0.0 ? flBase + LowLatencyMarginMs( std::min( m_Est.MaxDevMs(), 4.0 ), std::min( flLeadMs, 4.0 ) ) : 0.0;
 		}
 
 		void Repeat( Decision &d, const Decision &last, bool bRepaintNext ) const
@@ -841,8 +919,21 @@ namespace fgpacing
 			d.repaintNext = bRepaintNext;
 		}
 
-		void PaintGenerated( const Inputs &in, Decision &d, bool bFresh, bool bVblank )
+		void PaintGenerated( const Inputs &in, Decision &d, bool bFresh, bool bVblank, bool bSkippable )
 		{
+			// A cadence-skip vblank, decided before anything is consumed.
+			if ( bSkippable && bVblank && !d.reset && m_nHist >= 2 && m_nNextDue != 0 && m_Last.t < 1.0f && m_Last.outId != 0 )
+			{
+				const double flVblankMs = 1000.0 / std::max( in.refreshHz, 1.0 );
+				const int64_t V = int64_t( in.vblankNs ? in.vblankNs : in.now );
+				if ( m_Plan.oMs > flVblankMs * 1.02 && V + int64_t( flVblankMs * 1e6 ) / 2 < m_nNextDue )
+				{
+					Repeat( d, m_Last, true );
+					d.skip = true;
+					return;
+				}
+			}
+
 			PushNewest( d.newestId );
 
 			if ( m_nHist < 2 )

@@ -7871,6 +7871,14 @@ namespace
 		// A paint on the timer is due even though nothing else asked for one (the
 		// rest of the pair in progress: what force_repaint() is on the vblank path).
 		bool bExtraWantNext = false;
+
+		// -- cadence-skip vblanks (FrameGen_PrePaint() returns true) --
+		// The last force_repaint() came from FrameGen_PostPaint() / a skip, not from
+		// the UI: only then may a forced repaint be skipped over.
+		bool bOwnForce = false;
+		// A real frame arrived since the last paint: the hasRepaint that goes with it
+		// is not a genuine (UI) repaint request.
+		bool bArrivalRepaint = false;
 	};
 	FrameGenPacing_t s_FrameGen;
 
@@ -8068,13 +8076,17 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 		layer.format = pCommit->vulkanTex->drmFormat();
 	}
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
+	s_FrameGen.bArrivalRepaint = true;
 }
 
 // Right before paint_all(): decide what this vblank shows and tell the renderer.
 // ulExtraTarget: the extra timer's target when this paint is one of its ticks
 // (V for it), else 0. bCanExceed: the backend could show a present between
-// vblanks for this paint (FrameGen_CanExceedRefresh()).
-static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64_t ulExtraTarget, bool bCanExceed )
+// vblanks for this paint (FrameGen_CanExceedRefresh()). bGenuineRepaint: a UI /
+// cursor / fade / unknown repaint wants this paint, so it must not be skipped.
+// Returns true when this vblank is a cadence skip (no new output is due): the
+// caller must NOT paint -- the display keeps the last buffer.
+static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64_t ulExtraTarget, bool bCanExceed, bool bGenuineRepaint )
 {
 	if ( !fghost::Enabled() )
 	{
@@ -8094,7 +8106,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			s_FrameGenLog = FrameGenLog_t();
 			fg_log.infof( "frame generation: off" );
 		}
-		return;
+		return false;
 	}
 	const fghost::Config cfg = fghost::GetConfig();
 	if ( !s_FrameGen.bActive )
@@ -8111,7 +8123,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	if ( pPaintFocus != GetCurrentFocus() )
 	{
 		fghost::SetFrame( fghost::FrameRequest{} );
-		return;
+		return false;
 	}
 
 	steamcompmgr_win_t *pFocusWindow = pPaintFocus ? pPaintFocus->focusWindow : nullptr;
@@ -8133,7 +8145,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		s_FrameGen.bRepaintNext = false;
 		s_FrameGen.bExtraWantNext = false;
 		fghost::SetFrame( fghost::FrameRequest{} );
-		return;
+		return false;
 	}
 
 	const fghost::RenderStatus renderStatus = fghost::GetRenderStatus();
@@ -8170,7 +8182,16 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.costSeq = renderStatus.costSeq;
 	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
 
-	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank );
+	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
+	if ( d.skip )
+	{
+		// Nothing is due: leave the renderer's request and the pacing status alone
+		// (the previous output is still the one on screen) and ask for the next vblank.
+		s_FrameGen.bOwnForce = true;
+		force_repaint();
+		return true;
+	}
+	s_FrameGen.bArrivalRepaint = false;
 
 	if ( d.reset )
 		fghost::Reset();
@@ -8197,6 +8218,7 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		// periods: log it now, against the last published pacing status.
 		FrameGen_LogStatus( fghost::GetPacingStatus(), renderStatus.reason, in.now );
 	}
+	return false;
 }
 
 // Right after hasRepaint was cleared (see the block comment above).
@@ -8211,7 +8233,10 @@ static void FrameGen_PostPaint()
 		if ( FrameGen_ExtraPaced() )
 			s_FrameGen.bExtraWantNext = true;
 		else
+		{
+			s_FrameGen.bOwnForce = true;
 			force_repaint();
+		}
 	}
 }
 
@@ -10600,6 +10625,15 @@ steamcompmgr_main(int argc, char **argv)
 			// next output frame; a UI / new-frame repaint is hasRepaint / forced.
 			const bool bFGExtraDue = bFGExtraPaced && ulFGExtraTarget != 0 && s_FrameGen.bExtraWantNext;
 			const bool bForceRepaint = bPaintTick && g_bForceRepaint.exchange(false);
+			// A forced repaint that frame generation asked for itself (the rest of the
+			// pair in progress, or a skipped vblank asking for the next one) is not a
+			// genuine repaint request: it may be skipped over (FrameGen_PrePaint()).
+			// Anything else that forced one while it was pending makes it genuine only
+			// if the flag was not ours -- the two are indistinguishable once merged, so
+			// a UI repaint landing in the same instant waits one more vblank at most.
+			const bool bFGOwnForce = bForceRepaint && s_FrameGen.bOwnForce;
+			if ( bForceRepaint )
+				s_FrameGen.bOwnForce = false;
 			const bool bForceSyncFlip = bForceRepaint || is_fading_out();
 
 			// If we are compositing, always force sync flips because we currently wait
@@ -10703,12 +10737,21 @@ steamcompmgr_main(int argc, char **argv)
 
 			if ( bShouldPaint )
 			{
-				FrameGen_PrePaint( pPaintFocus, bPaintTick, ulFGExtraTarget,
-					FrameGen_CanExceedRefresh( bTearing && !bHasOverlay && !nIgnoredOverlayRepaints ) );
+				// Genuine = something other than frame generation wants this paint.
+				const bool bGenuineRepaint = hasRepaintNonBasePlane || is_fading_out() ||
+					( bForceRepaint && !bFGOwnForce ) ||
+					( hasRepaint && !s_FrameGen.bArrivalRepaint ) ||
+					ulFGExtraTarget != 0;
+				const bool bFGSkip = FrameGen_PrePaint( pPaintFocus, bPaintTick, ulFGExtraTarget,
+					FrameGen_CanExceedRefresh( bTearing && !bHasOverlay && !nIgnoredOverlayRepaints ),
+					bGenuineRepaint );
 
-				paint_all( pPaintFocus, eFlipType == FlipType::Async );
+				if ( !bFGSkip )
+				{
+					paint_all( pPaintFocus, eFlipType == FlipType::Async );
 
-				bPainted = true;
+					bPainted = true;
+				}
 			}
 		}
 

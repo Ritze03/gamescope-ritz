@@ -214,11 +214,26 @@ told you earlier."*
   made up with a burst); the others re-present the previous output. So a fixed multiplier
   never steps down: 2x at 100 fps on 144 Hz simply fills every refresh the content allows.
 - **Delay `D`, per Priority.**
-  - **Low latency** (default): `D = latest real interval - o`, floored at 0. At a fixed N
-    that is the old (N-1)/N of a game frame. A real frame arriving early or late *snaps*
-    the content time to the new pair instead of sliding (D9's latency-first rule); only the
-    newest pair is ever played. Uneven motion on jittery frame times is accepted. `Why`
-    default: the user asked for latency first.
+  - **Low latency** (default): `D = (smoothed interval - o) + margin`, floored at 0 (and at
+    one `o` while the ratio is >= 1.1). At a fixed N that is the old (N-1)/N of a game frame
+    for a steady game. The smoothed (median) interval is replaced by the latest one only
+    when that is genuinely early or late (more than `max(2 ms, 15%)` off): such a frame
+    *snaps* the content time to the new pair instead of sliding (D9's latency-first rule);
+    only the newest pair is ever played. `margin` = the largest ordinary arrival jitter in
+    the window (deviations past the snap threshold are hitches and left out; at most 4 ms)
+    plus the lead by which the paint wakes before its vblank (`V - now`, at most 4 ms): 0 for
+    a perfectly steady game. `Why` default: the user asked for latency first. `Why` the
+    smoothed interval and the margin (2026-10-04, from a steady-state smoke: vkcube held at
+    30 fps on a nested 120 Hz, fixed 8x / target 120 gave about 105 output frames a second
+    instead of 120): with `D = latest interval - o`, D jumped from pair to pair with ordinary
+    arrival jitter, and the real frame of a pair sits exactly where the next real frame is
+    expected, so any late arrival -- and the paint wakes about 4 ms before the vblank it is
+    for, so a frame arriving in that lead is not seen by that paint either -- left a vblank
+    with nothing new to show and lost an output. The margin buys exactly that slack, no more.
+    `Why` the floor of one `o` at ratio >= 1.1: a game just under the output rate (the
+    user's CS2: 212 fps on about 280 Hz) has `i - o` below one output interval, so no
+    generated frame fitted between two real ones and Low latency presented FEWER frames than
+    the game; the floor makes room for one.
   - **Smoothness**: `D = median interval + margin`, margin = `max(2 ms, spread of the recent
     intervals)` (second-largest minus median, so one hitch is ignored), at most half an
     interval. Content time advances evenly at the output rate; the pair played may be one
@@ -247,6 +262,17 @@ told you earlier."*
   renderer's sequence number), and gives up after 3 s without one. It never changes the
   user's Quality preset (a flow-scale change needs a GPU wait, which would stutter if it
   flapped). No guard without timestamps.
+- **Cadence-skip vblanks do not paint** (2026-10-04). When `o` is longer than a vblank and no
+  new output is due, the pacer says `Decision::skip` (only if nothing but frame generation
+  asked for the paint: no UI / cursor / fade repaint, no repaint that is not the arrival of a
+  real frame or its own `force_repaint()`): `FrameGen_PrePaint()` returns true, the loop does
+  not call `paint_all()` and nothing is committed; the host keeps the last buffer. A skip
+  consumes nothing (the fresh real frame stays pending for the due paint) and asks for the
+  next vblank. `Why`: the previous behaviour re-presented the cached output on every such
+  vblank, which made a 30 fps game at 2x commit 83 times a second instead of 60 (host and
+  GPU work for an identical image). A genuine repaint -- or one that cannot be told apart from
+  the pacer's own forced repaint in the same instant -- waits at most until the next due
+  vblank.
 - **Synth clamp**: at most 24 generated frames per pair (`kMaxSynthsPerPair`); a pair at
   its cap repeats its last output.
 
@@ -476,6 +502,13 @@ own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 with no copy to drift. `fgtest` is not built. See [build-and-tooling](build-and-tooling.md).
 
 ## Testing
+
+Steady-state numbers measured from inside the compositor (headless sway, nested `-r 120`,
+vkcube held at 30 fps by MangoHud, the `framegen_pacing` status line enabled with
+`gamescopectl log_framegen_pacing debug` against the private instance): fixed 2x presented
+about 60 (62 commits/s), fixed 8x about 120 (122), target 120 about 121 for both priorities
+(122 / 123), and fixed 8x with Pause at refresh rate off about 226 (the host discards the
+rest).
 
 `tests/test_framegen_pacing.cpp` covers the pure pacer: the content time and `t` for both
 priorities (and that tau never goes backwards), a fixed multiplier saturating at the

@@ -48,6 +48,13 @@ namespace
 		// vblanks (the defaults are the capped, vblank-paced behaviour).
 		bool pauseAtRefresh = true;
 		bool canExceed = false;
+		// The main loop lets frame generation skip a vblank that is not due a new
+		// output when nothing else (UI, cursor, fade) asked for the paint.
+		bool skipVblanks = false;
+		// The paint wakes this long BEFORE the vblank it is for (the vblank timer's
+		// lead): V is the vblank, `now` is earlier, and an arrival in between is not
+		// seen by that paint.
+		Ns leadNs = 0;
 		bool uiRepaints = false;       // a cursor / overlay repaint on every vblank
 		uint64_t focusKey = 1;
 		LayerKey layer{ 1920, 1080, 87 };
@@ -66,7 +73,7 @@ namespace
 		Pacer::Inputs Inputs( Ns t ) const
 		{
 			Pacer::Inputs in;
-			in.now = t;
+			in.now = t >= leadNs ? t - leadNs : 0;
 			in.vblankNs = t;
 			in.mode = mode;
 			in.multiplier = multiplier;
@@ -92,7 +99,7 @@ namespace
 
 		Pacer::Decision Paint( Ns t, bool bVblank = true )
 		{
-			const Pacer::Decision d = pacer.OnPaint( Inputs( t ), newestId, bVblank );
+			const Pacer::Decision d = pacer.OnPaint( Inputs( t ), newestId, bVblank, skipVblanks && !uiRepaints );
 			log.push_back( { t, d } );
 			forced = d.repaintNext;
 			return d;
@@ -102,8 +109,11 @@ namespace
 		{
 			if ( wantPaint || forced || uiRepaints )
 			{
+				const bool bHadArrival = wantPaint;
 				wantPaint = false;
-				Paint( NextVblank() );
+				const Pacer::Decision d = Paint( NextVblank() );
+				if ( d.skip )
+					wantPaint = bHadArrival;   // hasRepaint is not cleared by a skipped paint
 			}
 			vblankIdx++;
 		}
@@ -116,7 +126,7 @@ namespace
 			for ( ;; )
 			{
 				const Ns tA = i < arrivals.size() ? arrivals[ i ] : ~Ns( 0 );
-				if ( tA <= NextVblank() && tA < tEnd )
+				if ( tA + leadNs <= NextVblank() && tA < tEnd )
 				{
 					now = tA;
 					Arrive( tA );
@@ -124,7 +134,7 @@ namespace
 				}
 				else if ( NextVblank() < tEnd )
 				{
-					now = NextVblank();
+					now = NextVblank() >= leadNs ? NextVblank() - leadNs : 0;
 					Vblank();
 				}
 				else
@@ -178,6 +188,25 @@ namespace
 			for ( const Painted &p : log )
 				n += ( p.t >= t0 && p.t < t1 && p.d.newOutput ) ? 1 : 0;
 			return n;
+		}
+
+		// Paints that reach the display (a skipped vblank commits nothing).
+		int CountCommits( Ns t0, Ns t1 ) const
+		{
+			int n = 0;
+			for ( const Painted &p : log )
+				n += ( p.t >= t0 && p.t < t1 && !p.d.skip ) ? 1 : 0;
+			return n;
+		}
+
+		// Distinct output images in [t0, t1).
+		int CountDistinct( Ns t0, Ns t1 ) const
+		{
+			std::set<uint64_t> ids;
+			for ( const Painted &p : log )
+				if ( p.t >= t0 && p.t < t1 && p.d.newOutput )
+					ids.insert( p.d.outId );
+			return int( ids.size() );
 		}
 
 		Pacer::Report Status() { return pacer.TakeStatus( Inputs( now ), now ); }
@@ -1458,4 +1487,188 @@ TEST_CASE( "framegen pacing: Off + extra timer produces a distinct output frame 
 	CHECK( nNew > 180 );
 	CHECK( nNew < 220 );
 	CHECK( outs.size() > 150 );
+}
+
+// ---------------------------------------------------------------------------
+//  Steady-state output rate (cadence-skip vblanks, Low latency's smoothed D)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	// A game with deterministic arrival jitter (a MangoHud-capped one).
+	std::vector<Ns> JitteredArrivals( double intervalMs, double jitterMs, Ns tEnd )
+	{
+		std::vector<Ns> v;
+		uint32_t seed = 12345;
+		for ( uint64_t n = 1;; n++ )
+		{
+			seed = seed * 1664525u + 1013904223u;
+			const double j = ( double( ( seed >> 8 ) & 0xFFFF ) / 65535.0 * 2.0 - 1.0 ) * jitterMs;
+			const Ns t = Ns( ( double( n ) * intervalMs + j ) * double( MS ) );
+			if ( t >= tEnd )
+				break;
+			v.push_back( t );
+		}
+		return v;
+	}
+}
+
+TEST_CASE( "framegen pacing: a cadence-skip vblank commits nothing (fixed 2x, 30 fps, 120 Hz -> 60 commits/s)", "[framegen_pacing]" )
+{
+	for ( bool bSkip : { false, true } )
+	{
+		Driver drv;
+		drv.refreshHz = 120.0;
+		drv.multiplier = 2;
+		drv.skipVblanks = bSkip;
+		drv.RunArrivals( Driver::Periodic( 5 * MS, 1000.0 / 30.0, 6000 * MS ), 6000 * MS );
+		REQUIRE( drv.pacer.Generating() );
+		const int nCommits = drv.CountCommits( 3000 * MS, 5000 * MS );
+		const int nOutputs = drv.CountOutputs( 3000 * MS, 5000 * MS );
+		INFO( "skip " << bSkip << " commits " << nCommits << " outputs " << nOutputs );
+		CHECK( std::abs( nOutputs - 120 ) <= 4 );    // 60/s for 2 s
+		if ( bSkip )
+			CHECK( std::abs( nCommits - 120 ) <= 6 );
+		else
+			CHECK( nCommits > 150 );                 // the cached output was re-presented
+	}
+}
+
+TEST_CASE( "framegen pacing: skipping is only for a repaint nobody else asked for", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 120.0;
+	drv.multiplier = 2;
+	drv.uiRepaints = true;       // a UI repaint on every vblank (the driver then passes bSkippable false)
+	drv.skipVblanks = true;
+	drv.RunArrivals( Driver::Periodic( 5 * MS, 1000.0 / 30.0, 2500 * MS ), 2500 * MS );
+	REQUIRE( drv.pacer.Generating() );
+	for ( const Painted &p : drv.log )
+		CHECK_FALSE( p.d.skip );
+}
+
+TEST_CASE( "framegen pacing: Low latency delivers every output for a steady jittered game", "[framegen_pacing]" )
+{
+	// 30 fps +-1 ms, fixed 8x on 120 Hz: o = one vblank -> 120 distinct outputs/s.
+	Driver drv;
+	drv.refreshHz = 120.0;
+	drv.multiplier = 8;
+	drv.skipVblanks = true;
+	drv.RunArrivals( JitteredArrivals( 1000.0 / 30.0, 1.0, 8000 * MS ), 8000 * MS );
+	REQUIRE( drv.pacer.Generating() );
+	const int nDistinct = drv.CountDistinct( 4000 * MS, 6000 * MS );
+	INFO( "distinct outputs in 2 s: " << nDistinct );
+	CHECK( std::abs( nDistinct - 240 ) <= 4 );        // 120/s
+
+	// The same for Target 120.
+	Driver tgt;
+	tgt.refreshHz = 120.0;
+	tgt.mode = Mode::Target;
+	tgt.targetFps = 120;
+	tgt.skipVblanks = true;
+	tgt.RunArrivals( JitteredArrivals( 1000.0 / 30.0, 1.0, 8000 * MS ), 8000 * MS );
+	const int nTgt = tgt.CountDistinct( 4000 * MS, 6000 * MS );
+	INFO( "target 120 distinct outputs in 2 s: " << nTgt );
+	CHECK( std::abs( nTgt - 240 ) <= 4 );
+}
+
+TEST_CASE( "framegen pacing: Low latency reaches the full output rate: 60 fps on 144 Hz, target = refresh", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.refreshHz = 144.0;
+	drv.mode = Mode::Target;
+	drv.targetFps = 0;
+	drv.skipVblanks = true;
+	drv.RunArrivals( JitteredArrivals( 1000.0 / 60.0, 0.5, 8000 * MS ), 8000 * MS );
+	REQUIRE( drv.pacer.Generating() );
+	const int nDistinct = drv.CountDistinct( 4000 * MS, 6000 * MS );
+	INFO( "distinct outputs in 2 s: " << nDistinct );
+	CHECK( std::abs( nDistinct - 288 ) <= 6 );        // 144/s
+}
+
+TEST_CASE( "framegen pacing: Low latency still snaps on a genuinely early or late frame", "[framegen_pacing]" )
+{
+	// The smoothed interval is used while the latest one is within max(2 ms, 15%).
+	CHECK( LowLatencyIntervalMs( 33.3, 34.3 ) == 33.3 );
+	CHECK( LowLatencyIntervalMs( 33.3, 31.0 ) == 33.3 );
+	CHECK( LowLatencyIntervalMs( 33.3, 20.0 ) == 20.0 );
+	CHECK( LowLatencyIntervalMs( 33.3, 45.0 ) == 45.0 );
+	CHECK( LowLatencyIntervalMs( 8.0, 9.9 ) == 8.0 );      // 2 ms floor
+	CHECK( LowLatencyIntervalMs( 8.0, 10.5 ) == 10.5 );
+	CHECK( LowLatencyIntervalMs( 16.0, 0.0 ) == 16.0 );    // no latest interval yet
+}
+
+TEST_CASE( "framegen pacing: Low latency covers the paint's lead before the vblank (4 ms) and arrival jitter", "[framegen_pacing]" )
+{
+	// The vblank timer wakes about 4 ms ahead of the vblank it paints for: a real
+	// frame arriving in that lead is only seen by the next vblank. Fixed 8x on 120 Hz
+	// must still give one output per vblank for a 30 fps +-1 ms game.
+	Driver drv;
+	drv.refreshHz = 120.0;
+	drv.multiplier = 8;
+	drv.skipVblanks = true;
+	drv.leadNs = 4 * MS;
+	drv.RunArrivals( JitteredArrivals( 1000.0 / 30.0, 1.0, 8000 * MS ), 8000 * MS );
+	REQUIRE( drv.pacer.Generating() );
+	const int nDistinct = drv.CountDistinct( 4000 * MS, 6000 * MS );
+	INFO( "distinct outputs in 2 s: " << nDistinct );
+	CHECK( std::abs( nDistinct - 240 ) <= 4 );
+
+	// The margin is bounded: a perfectly steady game with no lead pays nothing extra.
+	CHECK( LowLatencyMarginMs( 0.0, 0.0 ) == 0.0 );
+	CHECK( LowLatencyMarginMs( 1.5, 4.0 ) == 5.5 );
+	CHECK( LowLatencyMarginMs( 20.0, 20.0 ) == 8.0 );
+}
+
+// ---------------------------------------------------------------------------
+//  High ratios on a fast display (the user's CS2 session: 280 Hz, 212 / 234 fps)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	// Target = refresh at 280 Hz: the presented rate must reach (nearly) the
+	// refresh and never fall below the game's own rate, whatever the jitter.
+	void CheckHighRatio( double gameFps, Priority prio, Ns leadNs, double jitterMs, bool bGenerates )
+	{
+		Driver drv;
+		drv.refreshHz = 280.0;
+		drv.mode = Mode::Target;
+		drv.targetFps = 0;
+		drv.priority = prio;
+		drv.skipVblanks = true;
+		drv.leadNs = leadNs;
+		const std::vector<Ns> arr = JitteredArrivals( 1000.0 / gameFps, jitterMs, 8000 * MS );
+		drv.RunArrivals( arr, 8000 * MS );
+		const Ns t0 = 4000 * MS, t1 = 6000 * MS;
+		int nGame = 0;
+		for ( Ns a : arr )
+			nGame += ( a >= t0 && a < t1 ) ? 1 : 0;
+		const int nOut = drv.CountOutputs( t0, t1 );
+		INFO( "game " << gameFps << " fps, prio " << int( prio ) << ", lead " << leadNs / MS << " ms: arrivals " << nGame
+			<< " / 2 s, outputs " << nOut << " / 2 s, generating " << drv.pacer.Generating() );
+		CHECK( nOut >= nGame );                         // never fewer than the game
+		if ( bGenerates )
+		{
+			REQUIRE( drv.pacer.Generating() );
+			CHECK( nOut >= 540 );                       // >= 270/s
+		}
+	}
+}
+
+TEST_CASE( "framegen pacing: 212 fps on 280 Hz, target = refresh, Low latency never presents fewer than the game", "[framegen_pacing]" )
+{
+	CheckHighRatio( 212.0, Priority::LowLatency, 0, 1.0, true );
+	CheckHighRatio( 212.0, Priority::LowLatency, 2 * MS, 1.0, true );
+	CheckHighRatio( 212.0, Priority::LowLatency, 0, 0.0, true );
+	CheckHighRatio( 212.0, Priority::LowLatency, 0, 2.0, true );
+	CheckHighRatio( 212.0, Priority::LowLatency, 2 * MS, 2.0, true );
+}
+
+TEST_CASE( "framegen pacing: 234 fps on 280 Hz, target = refresh, Smoothness never presents fewer than the game", "[framegen_pacing]" )
+{
+	CheckHighRatio( 234.0, Priority::Smoothness, 0, 0.5, false );
+	CheckHighRatio( 234.0, Priority::Smoothness, 2 * MS, 0.5, false );
+	CheckHighRatio( 234.0, Priority::Smoothness, 0, 0.0, false );
+	CheckHighRatio( 234.0, Priority::Smoothness, 0, 1.5, false );
+	CheckHighRatio( 234.0, Priority::Smoothness, 2 * MS, 1.5, false );
 }
