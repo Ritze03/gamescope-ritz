@@ -91,7 +91,7 @@ audio is not delayed, so above about 50-80 ms lip-sync drifts; memory is about o
 per 16 ms of buffer at 60 fps; Force maximum holds the buffer at Max buffer so you can feel the worst case; Off
 sizes it from the game's own spikes and its smallest value is 0 ms.
 
-**Status line** (always one line): `Off · buffer 0 ms` (the live buffer the pacer reports, so the user can see "off" really is 0; it ramps down first if the buffer was running, and is 0 when nothing runs at all); the renderer's reason while it refuses (YCbCr, an unsupported format, ...);
+**Status line** (always one line): `Off · buffer 0 ms` (the live buffer the pacer reports, so the user can see "off" really is 0; switching the buffer off removes it immediately rather than ramping down, and it is 0 when nothing runs at all); the renderer's reason while it refuses (YCbCr, an unsupported format, ...);
 `Waiting for frames` before the first publish; otherwise `buffer 32 ms · 4 frames · last spike
 28 ms`, with `no spikes yet` in place of the last part, ` · ignored 1 outlier (>max)` when
 spikes above Max buffer are in the window, and ` · test: max` while Force maximum pins the target. "frames" is the real frames the host keeps (`Report::historyFrames`): what the
