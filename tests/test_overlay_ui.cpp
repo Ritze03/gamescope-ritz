@@ -2597,69 +2597,86 @@ TEST_CASE( "rail accordion: clicking a group shut before it finishes opening rev
 }
 
 // =========================================================================
-//  Slider handle width -- requests-2026-09-06.md item 4
+//  Slider value -> x -- the handle sits where the fill ends
 // =========================================================================
-// "Outline Width", "Dot > Size" and "Line > Width" all drew a grab far
-// wider than every other slider's -- ImGui's own SliderBehaviorT widens a
-// non-decimal (every SliderInt) grab past GrabMinSize on purpose, for a
-// coarse small-range int slider "to represent one unit". The fix
-// (Controls.cpp's SliderGrab()) is not itself testable without a live
-// SliderBehavior() call, but its pure half -- recentre the returned grab
-// to a constant width around its own centre -- is extracted as
-// ui::controls::ConstantWidthGrab() exactly so it can be pinned here,
-// without an ImGui context.
-TEST_CASE( "slider: the grab is recentred to a constant width", "[overlay_ui]" )
+// "The motion blur slider, the dragger is wrong compared to where the line
+// actually fills to." The fill was mapped over the full track while the
+// handle followed ImGui's int grab, whose travel is inset by half of a grab
+// widened to track / (range + 1) -- for Samples 2..8, 1/14 of the track at
+// each end. Controls.cpp now places the fill end, the handle centre and the
+// default tick with ui::controls::SliderValueX(), and drives SliderBehavior
+// with a float so its click/drag travel is that same map. Pinned here.
+namespace
 {
-	// A stand-in for what SliderBehaviorT hands back for a coarse int
-	// range: much wider than kHandleW, off-centre in its row (x in
-	// [40..220], centre 130), some arbitrary height.
-	const ImRect wide( 40.0f, 100.0f, 220.0f, 120.0f );
-
-	const ImRect narrowed = ui::controls::ConstantWidthGrab( wide, 8.0f, 400.0f );
-
-	// The centre SliderBehavior computed is untouched -- only the width
-	// changes. This is the property that keeps the drag/click/keyboard
-	// math (already resolved by the time this runs) correct.
-	REQUIRE_THAT( narrowed.GetCenter().x, WithinAbs( wide.GetCenter().x, 1e-4f ) );
-	REQUIRE_THAT( narrowed.GetWidth(), WithinAbs( 8.0f, 1e-4f ) );
-	// The height is the grab's own -- never touched, only x moves.
-	REQUIRE_THAT( narrowed.Min.y, WithinAbs( wide.Min.y, 1e-4f ) );
-	REQUIRE_THAT( narrowed.Max.y, WithinAbs( wide.Max.y, 1e-4f ) );
+	// The fraction PaintSlider() feeds SliderValueX() for an int slider.
+	float SliderFrac( int n, int nMin, int nMax )
+	{
+		return (float)( n - nMin ) / (float)( nMax - nMin );
+	}
 }
 
-TEST_CASE( "slider: a grab already narrower than the constant is left alone", "[overlay_ui]" )
+TEST_CASE( "slider: handle centre and fill end are one value -> x map", "[overlay_ui]" )
 {
-	// A decimal (float) Slider's own grab is already exactly GrabMinSize --
-	// this must be a no-op for it, not a second source of drift.
-	const ImRect exact( 100.0f, 0.0f, 108.0f, 20.0f );   // 8px wide, centre 104
-	const ImRect result = ui::controls::ConstantWidthGrab( exact, 8.0f, 400.0f );
-	REQUIRE_THAT( result.GetWidth(), WithinAbs( 8.0f, 1e-4f ) );
-	REQUIRE_THAT( result.GetCenter().x, WithinAbs( 104.0f, 1e-4f ) );
+	const float flMinX = 100.0f, flW = 492.0f, flHandleW = 8.0f;
+	const float flTravel = flW - flHandleW;   // the centre's travel
+
+	struct Case { int nMin, nMax, n; float flExpectedX; };
+	const Case cases[] = {
+		// Motion blur Samples 2..8 -- the reported slider.
+		{ 2, 8, 2, flMinX + 4.0f },
+		{ 2, 8, 5, flMinX + 4.0f + flTravel * 0.5f },
+		{ 2, 8, 8, flMinX + flW - 4.0f },
+		// A 0..100 slider (Blur amount, Sharpness).
+		{ 0, 100,   0, flMinX + 4.0f },
+		{ 0, 100,  50, flMinX + 4.0f + flTravel * 0.5f },
+		{ 0, 100, 100, flMinX + flW - 4.0f },
+	};
+	for ( const Case &c : cases )
+	{
+		INFO( c.nMin << ".." << c.nMax << " at " << c.n );
+		const float flX = ui::controls::SliderValueX( SliderFrac( c.n, c.nMin, c.nMax ), flMinX, flW, flHandleW );
+		REQUIRE_THAT( flX, WithinAbs( c.flExpectedX, 1e-3f ) );
+	}
+
+	// At the ends the handle's edges sit flush with the track's caps
+	// (issue #86): left edge on trackMin at 0, right edge on trackMax at 1.
+	REQUIRE_THAT( ui::controls::SliderValueX( 0.0f, flMinX, flW, flHandleW ) - flHandleW * 0.5f,
+	              WithinAbs( flMinX, 1e-3f ) );
+	REQUIRE_THAT( ui::controls::SliderValueX( 1.0f, flMinX, flW, flHandleW ) + flHandleW * 0.5f,
+	              WithinAbs( flMinX + flW, 1e-3f ) );
 }
 
-TEST_CASE( "slider: the constant width never exceeds a narrow track", "[overlay_ui]" )
+TEST_CASE( "slider: equal value steps are equal x steps, whatever the minimum", "[overlay_ui]" )
 {
-	// A pathologically narrow row (30px) asking for the usual 8px handle:
-	// clamped to the hit rect's own width rather than overflowing it.
-	const ImRect grab( 10.0f, 0.0f, 40.0f, 20.0f );   // 30 wide, centre 25
-	const ImRect result = ui::controls::ConstantWidthGrab( grab, 8.0f, /* flHitW */ 4.0f );
-	REQUIRE_THAT( result.GetWidth(), WithinAbs( 4.0f, 1e-4f ) );
-	REQUIRE_THAT( result.GetCenter().x, WithinAbs( 25.0f, 1e-4f ) );
+	// The int-grab bug made a non-zero-minimum, small-range slider's steps
+	// uneven against the fill. On one linear map every step is the same.
+	const float flMinX = 0.0f, flW = 600.0f, flHandleW = 8.0f;
+	const float flStep = ( flW - flHandleW ) / 6.0f;
+	for ( int n = 2; n < 8; n++ )
+	{
+		INFO( "step " << n << " -> " << n + 1 );
+		const float flA = ui::controls::SliderValueX( SliderFrac( n, 2, 8 ), flMinX, flW, flHandleW );
+		const float flB = ui::controls::SliderValueX( SliderFrac( n + 1, 2, 8 ), flMinX, flW, flHandleW );
+		REQUIRE_THAT( flB - flA, WithinAbs( flStep, 1e-3f ) );
+	}
 }
 
-TEST_CASE( "slider: the same constant applies at every display_scale", "[overlay_ui]" )
+TEST_CASE( "slider: the value -> x map clamps its fraction and a narrow track", "[overlay_ui]" )
 {
-	// Px(kHandleW) is what SliderGrab() actually passes -- this pins that
-	// the helper itself is scale-agnostic (the caller scales the constant,
-	// not this function), so a future scale-aware rewrite of Px() cannot
-	// silently change what "constant" means here.
+	// Out-of-range fractions land on the ends, never past them.
+	REQUIRE_THAT( ui::controls::SliderValueX( -0.5f, 10.0f, 200.0f, 8.0f ), WithinAbs( 14.0f, 1e-4f ) );
+	REQUIRE_THAT( ui::controls::SliderValueX(  1.5f, 10.0f, 200.0f, 8.0f ), WithinAbs( 206.0f, 1e-4f ) );
+	// A track narrower than the handle: the handle is clamped to the track,
+	// so its centre is the track's centre at every value.
+	REQUIRE_THAT( ui::controls::SliderValueX( 0.0f, 10.0f, 4.0f, 8.0f ), WithinAbs( 12.0f, 1e-4f ) );
+	REQUIRE_THAT( ui::controls::SliderValueX( 1.0f, 10.0f, 4.0f, 8.0f ), WithinAbs( 12.0f, 1e-4f ) );
+	// Scale-agnostic: the caller scales the handle (Px(kHandleW)).
 	for ( float flScale : { 0.5f, 1.0f, 1.5f, 2.0f } )
 	{
 		INFO( "scale " << flScale );
 		const float flHandleW = 8.0f * flScale;
-		const ImRect wide( 0.0f, 0.0f, 400.0f, 20.0f );
-		const ImRect result = ui::controls::ConstantWidthGrab( wide, flHandleW, 800.0f );
-		REQUIRE_THAT( result.GetWidth(), WithinAbs( flHandleW, 1e-4f ) );
+		REQUIRE_THAT( ui::controls::SliderValueX( 0.0f, 0.0f, 400.0f, flHandleW ),
+		              WithinAbs( flHandleW * 0.5f, 1e-4f ) );
 	}
 }
 
@@ -2673,7 +2690,7 @@ TEST_CASE( "slider: the same constant applies at every display_scale", "[overlay
 // spaces N swatch CENTRES evenly across the full width instead, so the
 // first and last land exactly on the rail's own endpoints (the same two
 // points PlaceFull()'s rail already spans). HueSwatchRect() is the pure
-// half of that fix, pinned here the same way ConstantWidthGrab() above is.
+// half of that fix, pinned here the same way SliderValueX() above is.
 TEST_CASE( "hue swatches: nine centres evenly span the full width", "[overlay_ui]" )
 {
 	constexpr int kSwatches = 9;
@@ -2758,7 +2775,7 @@ TEST_CASE( "parameters header: reads the live budget, not a hardcoded 6",
 // into it") and cannot be driven from a test directly. The one line of
 // logic the fix adds -- "select on a click OR on a value change" -- is
 // extracted as ui::controls::ShouldSelectRow() for the same reason
-// ConstantWidthGrab() above is, and pinned here as a truth table.
+// SliderValueX() above is, and pinned here as a truth table.
 TEST_CASE( "selection: a value change selects the row exactly like a click does",
            "[overlay_ui]" )
 {

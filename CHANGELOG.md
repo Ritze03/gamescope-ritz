@@ -34,6 +34,9 @@ The newest version below is the one this build reports.
 - **Pause at refresh rate**: choose whether frame generation stops once the game
   reaches your refresh rate, or keeps generating above it.
 
+### Fixed
+- **Slider handle**: the slider's handle now sits exactly where its filled track ends.
+
 ### Info
 - **MOTION group**: Frame generation and Motion blur moved to a new MOTION group
   between Display and Overlay.

@@ -780,19 +780,19 @@ namespace gamescope::ui
 		// =================================================================
 		//  Slider -- SPEC §3.4
 		// =================================================================
-		// See Controls.h's own comment on ConstantWidthGrab() for the bug
-		// and the fix; this is just the arithmetic, kept free of ImGui so
+		// See Controls.h's own comment on SliderValueX() for the bug and the
+		// fix; this is just the arithmetic, kept free of ImGui so
 		// test_overlay_ui.cpp's ImGui-free binary can pin it directly.
-		ImRect ConstantWidthGrab( const ImRect &grab, float flConstantW, float flHitW )
+		float SliderValueX( float flFraction, float flTrackMinX, float flTrackW, float flHandleW )
 		{
-			const float flCenterX = grab.GetCenter().x;
-			const float flHalfW   = std::min( flConstantW, flHitW ) * 0.5f;
-			return ImRect( flCenterX - flHalfW, grab.Min.y, flCenterX + flHalfW, grab.Max.y );
+			const float flHandle = std::min( flHandleW, flTrackW );
+			const float flFrac   = std::clamp( flFraction, 0.0f, 1.0f );
+			return flTrackMinX + flHandle * 0.5f + flFrac * ( flTrackW - flHandle );
 		}
 
 		// See Controls.h's own comment on ShouldSelectRow() for the bug and
 		// the fix; this is the whole rule, kept free of ImGui and of
-		// Shell.cpp's own privacy for the same reason ConstantWidthGrab()
+		// Shell.cpp's own privacy for the same reason SliderValueX()
 		// above is.
 		bool ShouldSelectRow( bool bClicked, bool bValueChanged, bool bControlEngaged )
 		{
@@ -819,84 +819,67 @@ namespace gamescope::ui
 
 		namespace
 		{
-			// THE ONE PLACE A SLIDER GRAB IS SIZED.
+			// THE ONE PLACE A SLIDER IS HIT-TESTED.
 			//
-			// SliderBehavior() derives the draggable grab from
-			// style.GrabMinSize and hands the resulting rect back. This pushes
-			// the token into GrabMinSize, calls it, pops, and returns that
-			// rect. The painter below draws *that rect* -- it is never told
-			// how wide a handle is supposed to be.
+			// SliderBehavior() resolves click, drag and keyboard step over a
+			// travel range derived from style.GrabMinSize. This pushes the
+			// kHandleW token into GrabMinSize, calls it, pops. It hands no
+			// rect back: the painter places the handle with SliderValueX(),
+			// the same function that places the fill end, and with the
+			// grab-size and padding corrections below SliderBehavior's own
+			// travel range is exactly that function's [0..1] -> x map. So
+			// clicking at x yields the value whose handle is drawn at x.
 			//
-			// That is what makes issue #23's bug class unrepresentable rather
-			// than fixed: there is one number, and the code that draws cannot
-			// see it, so a future edit to the token moves the drawn handle and
-			// the hit target together or not at all.
-			bool SliderGrab( const ImRect &rcTrackHit, ImGuiID id, ImGuiDataType eType,
-			                 void *pValue, const void *pMin, const void *pMax,
-			                 const char *pszFormat, ImRect *pOutGrab )
+			// ALWAYS FLOAT. ImGui's SliderBehaviorT widens the grab of a
+			// non-decimal data type past GrabMinSize on purpose -- "if
+			// possible have the grab size represent 1 unit"
+			// (imgui_widgets.cpp), i.e. track / (range + 1) -- and there is
+			// no style var that caps it, only a floor. Its travel range is
+			// inset by half of THAT grab at each end, so for a small int
+			// range (Motion blur Samples 2..8: 1/14 of the track at each
+			// end) the handle -- even once repainted 8px wide -- sat far in
+			// from the fill end, and clicks mapped through the same inset.
+			// SliderInt() therefore drives this with a float and the
+			// "%.0f" format, which ImGui rounds to the nearest whole number
+			// exactly as its own int path does, and whose keyboard step is
+			// still one unit per press (decimal precision 0, range <= 100)
+			// -- the same branch the int path took.
+			bool SliderGrab( const ImRect &rcTrackHit, ImGuiID id, float *pflValue,
+			                 float flMin, float flMax, const char *pszFormat )
 			{
 				// issue #86: SliderBehaviorT hardcodes `grab_padding = 2.0f`
 				// (imgui_widgets.cpp, its own comment: "FIXME: Should be part
 				// of style.") and insets the grab's travel by it at BOTH ends
 				//   [bb.Min + pad + gs/2 .. bb.Max - pad - gs/2]
-				// so the handle halts 2px short of each cap and the track juts
-				// out past it -- the "~2px sticking out on the outer edge" in
-				// the report. Measured off the user's 3x screenshot: handle
-				// 192..215 against a track starting at 186, and 1461..1484
-				// against a track ending at 1490. 6 image px == 2 real px at
-				// both ends.
-				//
 				// The padding is a raw literal, NOT scale-aware, so the
 				// cancellation is raw too -- Px() here would over-correct at
 				// every scale but 1.0. Growing the rect handed to
-				// SliderBehavior by exactly that padding makes its inset land
-				// back on the track: at 0 the grab's left edge sits on
-				// trackMin, at 1 its right edge on trackMax.
-				//
-				// Widening this rect rather than nudging the returned grab is
-				// deliberate: the same rect drives `clicked_t`, so the drag
-				// mapping moves with the drawn geometry instead of drifting
-				// 2px away from it.
+				// SliderBehavior by exactly that padding makes its travel
+				// [trackMin + gs/2 .. trackMax - gs/2], SliderValueX()'s own.
 				constexpr float kImGuiGrabPadding = 2.0f;
 				ImRect rcBehaviour( rcTrackHit );
 				rcBehaviour.Min.x -= kImGuiGrabPadding;
 				rcBehaviour.Max.x += kImGuiGrabPadding;
 
 				ImGui::PushStyleVar( ImGuiStyleVar_GrabMinSize, Px( tok::kHandleW ) );
+				ImRect rcUnused;
 				const bool bChanged = ImGui::SliderBehavior(
-					rcBehaviour, id, eType, pValue, pMin, pMax, pszFormat,
-					ImGuiSliderFlags_AlwaysClamp, pOutGrab );
+					rcBehaviour, id, ImGuiDataType_Float, pflValue, &flMin, &flMax, pszFormat,
+					ImGuiSliderFlags_AlwaysClamp, &rcUnused );
 				ImGui::PopStyleVar();
-
-				// requests-2026-09-06.md item 4: "Outline Width", "Dot >
-				// Size" and "Line > Width" all drew a grab far wider than
-				// every other slider's. GrabMinSize is a MINIMUM, and for a
-				// non-decimal data type (every SliderInt) ImGui's own
-				// SliderBehaviorT widens the grab past it on purpose --
-				// "if possible have the grab size represent 1 unit"
-				// (imgui_widgets.cpp) -- so a coarse, small-range int
-				// slider gets a grab spanning a large fraction of the
-				// track. No style var caps that growth, only a floor.
-				//
-				// Recentring pOutGrab here, AFTER SliderBehavior has
-				// already used its own (possibly wider) grab rect to
-				// resolve this frame's click/drag and step the value, is
-				// what keeps the keyboard step and drag math untouched --
-				// only the PAINTED width changes. Clamped to the hit
-				// rect's own width so a pathologically narrow track still
-				// cannot overflow it.
-				if ( pOutGrab )
-					*pOutGrab = ConstantWidthGrab( *pOutGrab, Px( tok::kHandleW ), rcTrackHit.GetWidth() );
 				return bChanged;
 			}
 
-			// The shared paint. `rcGrab` is SliderBehavior()'s own output.
-			void PaintSlider( const ImRect &rcHit, const ImRect &rcGrab,
-			                  float flFraction, float flDefaultFraction, bool bHasDefault )
+			// The shared paint. The fill end and the handle centre are both
+			// SliderValueX( flFraction ) -- one value -> x map, so they cannot
+			// disagree.
+			void PaintSlider( const ImRect &rcHit, float flFraction,
+			                  float flDefaultFraction, bool bHasDefault )
 			{
-				const float flTrackH = Px( tok::kTrack );
-				const float flRound  = Px( tok::kTrackRound );
-				const float flCy     = rcHit.GetCenter().y;
+				const float flTrackH  = Px( tok::kTrack );
+				const float flRound   = Px( tok::kTrackRound );
+				const float flCy      = rcHit.GetCenter().y;
+				const float flHandleW = Px( tok::kHandleW );
 
 				const ImVec2 trackMin( rcHit.Min.x, flCy - flTrackH * 0.5f );
 				const ImVec2 trackMax( rcHit.Max.x, flCy + flTrackH * 0.5f );
@@ -906,19 +889,22 @@ namespace gamescope::ui
 				// control that tells you where the range ends".
 				Dl()->AddRectFilled( trackMin, trackMax, Col( Role::TrackOff ), flRound );
 
-				// issue #86: the fill spans the whole track, not the grab's
-				// inset travel range. Deriving it from rcGrab.GetCenter() --
-				// an earlier "one source of truth" attempt -- is wrong at the
-				// ends: the grab centre can only reach half a handle in from
-				// each cap (grab_sz/2 == 4px at 1x, once SliderGrab has
-				// cancelled grab_padding), so 100% left a 4px unfilled sliver
-				// of TrackOff at the right cap and 0% painted a 4px stub of
-				// fill at the left one. Away from the
-				// ends the two maps differ by at most half a handle width and
-				// the 8px-wide opaque handle sits over the seam, so the linear
-				// map is exact at 0/1 and invisible in between.
-				const float flFillMax =
-					rcHit.Min.x + rcHit.GetWidth() * ImClamp( flFraction, 0.0f, 1.0f );
+				// The fill ends at the handle's centre, everywhere strictly
+				// between the ends -- always under the handle. An earlier
+				// version mapped the fill over the full width instead, which
+				// is exact at 0/1 but drifts up to half a handle off the
+				// handle in between -- and, while int sliders still used
+				// ImGui's widened int grab, far more than that.
+				//
+				// Exactly at the ends the fill snaps to empty / full. A
+				// DISABLED slider paints its handle translucent, and there
+				// the half-handle stub at 0 showed through as a sliver of
+				// fill on an empty slider (measured off a headless shot of
+				// Frame generation's greyed-out Target fps at 0).
+				const float flHandleX = SliderValueX( flFraction, rcHit.Min.x, rcHit.GetWidth(), flHandleW );
+				const float flFillMax = flFraction <= 0.0f ? trackMin.x
+				                      : flFraction >= 1.0f ? trackMax.x
+				                      : flHandleX;
 				if ( flFillMax > trackMin.x )
 				{
 					// B's left-to-right gradient, accent@50% -> AccentGradHi.
@@ -930,18 +916,21 @@ namespace gamescope::ui
 
 				if ( bHasDefault )
 				{
-					// SPEC §3.4's 1px default tick, at 52%.
-					const float flTickX = rcHit.Min.x + rcHit.GetWidth() * ImClamp( flDefaultFraction, 0.0f, 1.0f );
+					// SPEC §3.4's 1px default tick, at 52% -- on the same map,
+					// so the handle covers it exactly when at the default.
+					const float flTickX = SliderValueX( flDefaultFraction, rcHit.Min.x, rcHit.GetWidth(), flHandleW );
 					Dl()->AddRectFilled( ImVec2( flTickX, trackMin.y ),
 					                     ImVec2( flTickX + Hairline(), trackMax.y ),
 					                     palette::White( 0.52f ) );
 				}
 
-				// The handle: x from SliderBehavior's grab, height from the
-				// token. Nothing here restates the grab's width.
+				// The handle: centred on the same x as the fill end, width and
+				// height from the tokens (clamped to a pathologically narrow
+				// track, as SliderValueX() clamps its travel).
+				const float flHalfW   = std::min( flHandleW, rcHit.GetWidth() ) * 0.5f;
 				const float flHandleH = Px( tok::kHandleH );
-				const ImVec2 hMin( rcGrab.Min.x, flCy - flHandleH * 0.5f );
-				const ImVec2 hMax( rcGrab.Max.x, flCy + flHandleH * 0.5f );
+				const ImVec2 hMin( flHandleX - flHalfW, flCy - flHandleH * 0.5f );
+				const ImVec2 hMax( flHandleX + flHalfW, flCy + flHandleH * 0.5f );
 				const float flHalo = Px( tok::kHandleHalo );
 				// B's "0 0 0 2px accent@18%" is a spread-only box-shadow, so
 				// its corners follow the handle's radius grown by the spread.
@@ -962,9 +951,7 @@ namespace gamescope::ui
 			if ( !a )
 				return false;
 
-			ImRect grab;
-			const bool bChanged = SliderGrab( a.rc, a.id, ImGuiDataType_Float, pflValue,
-			                                  &flMin, &flMax, "%.3f", &grab );
+			const bool bChanged = SliderGrab( a.rc, a.id, pflValue, flMin, flMax, "%.3f" );
 			if ( bChanged )
 				ImGui::MarkItemEdited( a.id );
 			NoteDragOnLastItem();
@@ -972,7 +959,7 @@ namespace gamescope::ui
 			const float flSpan = ( flMax - flMin );
 			const float flFrac = flSpan != 0.0f ? ( *pflValue - flMin ) / flSpan : 0.0f;
 			const float flDef  = flSpan != 0.0f ? ( flDefault - flMin ) / flSpan : 0.0f;
-			PaintSlider( a.rc, grab, flFrac, flDef, bHasDefault );
+			PaintSlider( a.rc, flFrac, flDef, bHasDefault );
 			return bChanged;
 		}
 
@@ -983,9 +970,15 @@ namespace gamescope::ui
 			if ( !a )
 				return false;
 
-			ImRect grab;
-			const bool bChanged = SliderGrab( a.rc, a.id, ImGuiDataType_S32, pnValue,
-			                                  &nMin, &nMax, "%d", &grab );
+			// Float-driven on purpose -- see SliderGrab()'s ALWAYS FLOAT.
+			float flValue = (float)*pnValue;
+			bool bChanged = SliderGrab( a.rc, a.id, &flValue, (float)nMin, (float)nMax, "%.0f" );
+			if ( bChanged )
+			{
+				const int nNew = (int)std::lround( flValue );
+				bChanged = nNew != *pnValue;
+				*pnValue = nNew;
+			}
 			if ( bChanged )
 				ImGui::MarkItemEdited( a.id );
 			NoteDragOnLastItem();
@@ -993,7 +986,7 @@ namespace gamescope::ui
 			const float flSpan = (float)( nMax - nMin );
 			const float flFrac = flSpan != 0.0f ? (float)( *pnValue - nMin ) / flSpan : 0.0f;
 			const float flDef  = flSpan != 0.0f ? (float)( nDefault - nMin ) / flSpan : 0.0f;
-			PaintSlider( a.rc, grab, flFrac, flDef, bHasDefault );
+			PaintSlider( a.rc, flFrac, flDef, bHasDefault );
 			return bChanged;
 		}
 

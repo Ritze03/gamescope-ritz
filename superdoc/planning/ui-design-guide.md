@@ -146,6 +146,18 @@ not something shown directly**, flag it as such to implementers.
   already resolved the frame's click/drag/keyboard step, so only the *painted* width changes — see
   `ui::controls::ConstantWidthGrab()` (pure arithmetic, pinned in `test_overlay_ui.cpp` without an
   ImGui context) and `Controls.h`'s own comment on it for the full mechanism.
+- **Handle and fill share one value -> x map (2026-10-04 fix).** The re-centring above fixed the
+  handle's *width* but kept ImGui's int-grab *centre*, whose travel is inset by half of a grab
+  widened to track / (range + 1) — so on a small-range int slider the handle sat far from where the
+  fill ended (Motion blur Samples 2..8: 1/14 of the track off at each end; the user: *"the dragger is
+  wrong compared to where the line actually fills to"*). Now `ui::controls::SliderValueX()` places
+  the fill end, the handle centre and the default tick alike, travel `[min + handle/2 .. max -
+  handle/2]`, and `SliderGrab()` always drives `SliderBehavior` with a float (`SliderInt` rounds via
+  `"%.0f"`), so ImGui's click/drag travel is that same map. `ConstantWidthGrab()` was removed.
+  `Why the fill ends under the handle, not at the full-width fraction:` the full-width map is exact
+  at 0/1 but drifts up to half a handle off it in between. Exactly at 0 and 1 the fill snaps to
+  empty / full instead, because a disabled slider's handle is translucent and the half-handle stub
+  showed through it as fill on an empty slider.
 
 **Toggles (switches)**
 - **30×15px** track (26×13 or 24×12 in denser variants — 30×15 is the canonical size per 2b), no radius
