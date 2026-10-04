@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../../subprojects/FrameGen/gpu/framegen.h"
+#include "../../subprojects/FrameGen/gpu/pacing.h"
 
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
@@ -78,12 +79,63 @@ namespace fghost
 
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
 
-		// The gate word. bit 0: enabled. bit 1: the render thread
-		// holds resources. RenderWanted() is `!= 0`, so with FG off and everything
-		// released the per-frame cost is this one load.
+		// The motion-blur config, its own word (the frame generation word is full):
+		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
+		// (1 = gaussian), 13 enabled. Kept apart from g_uConfig so a blur edit never
+		// reconfigures frame generation and vice versa; a reader that sees one
+		// updated and not the other just gets the previous other half for one frame.
+		constexpr uint32_t kBlurEnabledBit = 1u << 13;
+
+		uint32_t PackBlur( const BlurConfig &b )
+		{
+			const int nSamples = std::min( std::max( b.samples, kMinBlurSamples ), kMaxBlurSamples );
+			const int nAmount = std::min( std::max( b.amountPercent, 0 ), 100 );
+			return uint32_t( nSamples )
+				| ( uint32_t( nAmount ) << 4 )
+				| ( uint32_t( b.relative == BlurRel::Game ? 1 : 0 ) << 11 )
+				| ( uint32_t( b.weights == BlurWeighting::Gaussian ? 1 : 0 ) << 12 )
+				| ( b.enabled ? kBlurEnabledBit : 0u );
+		}
+
+		BlurConfig UnpackBlur( uint32_t u )
+		{
+			BlurConfig b;
+			b.samples = int( u & 0xFu );
+			b.amountPercent = int( ( u >> 4 ) & 0x7Fu );
+			b.relative = ( ( u >> 11 ) & 1u ) ? BlurRel::Game : BlurRel::Shown;
+			b.weights = ( ( u >> 12 ) & 1u ) ? BlurWeighting::Gaussian : BlurWeighting::Even;
+			b.enabled = ( u & kBlurEnabledBit ) != 0;
+			return b;
+		}
+
+		std::atomic<uint32_t> g_uBlur{ PackBlur( BlurConfig{} ) };
+
+		// The gate word. bit 0: frame generation OR motion blur is on. bit 1: the
+		// render thread holds resources. RenderWanted() is `!= 0`, so with both off
+		// and everything released the per-frame cost is this one load.
 		constexpr uint32_t kGateEnabled = 1u << 0;
 		constexpr uint32_t kGateLive = 1u << 1;
 		std::atomic<uint32_t> g_uGate{ 0 };
+
+		// Recomputes bit 0 after either config changed.
+		void UpdateGate()
+		{
+			const bool bFg = ( ( g_uConfig.load( std::memory_order_relaxed ) >> 26 ) & 1u ) != 0;
+			const bool bBlur = ( g_uBlur.load( std::memory_order_relaxed ) & kBlurEnabledBit ) != 0;
+			if ( bFg || bBlur )
+			{
+				g_uGate.fetch_or( kGateEnabled, std::memory_order_relaxed );
+			}
+			else
+			{
+				const uint32_t uOld = g_uGate.fetch_and( ~kGateEnabled, std::memory_order_relaxed );
+				// Switched off while holding resources: the release happens inside the
+				// next vulkan_composite(), so make sure one comes (direct scanout may
+				// resume the moment the backends stop forcing a full composite).
+				if ( uOld & kGateLive )
+					force_repaint();
+			}
+		}
 
 		std::mutex g_FrameMutex;
 		FrameRequest g_Frame;   // t < 0 (inert) until pacing drives the renderer
@@ -111,10 +163,15 @@ namespace fghost
 		constexpr uint32_t kHostDrmFormat = DRM_FORMAT_ARGB8888;
 		constexpr VkFormat kHostVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-		// The ring holds the last three real frames: Low latency only ever uses the
-		// newest pair (two of them), Smoothness may still be inside the pair before
-		// it while the newest has already arrived (see Pacing.h).
-		constexpr int kRingSize = 3;
+		// The ring holds the last real frames: three (framegen::pacing::kHistory) for
+		// now -- Low latency only ever uses the newest pair, Smoothness may still be
+		// inside the pair before it -- and up to kRingMax once the pacer asks for more
+		// (its HistoryDepth(), with a lag-spike buffer; FrameRequest::historyDepth).
+		// The ring only grows. NB the library's UI protection keeps only
+		// Interpolator::kUiFrames (3) observed frames, so a pair older than that is
+		// refused by recordSynth with UI protection on (handled: the real frame shows).
+		constexpr int kRingMin = framegen::pacing::kHistory;
+		constexpr int kRingMax = framegen::pacing::kHistoryMax;
 
 		// Pooled outputs. One composite shows one output; the next paint records
 		// into another while the previous composite may still be sampling its own
@@ -146,8 +203,9 @@ namespace fghost
 			// is `nCurSlot`. Each slot remembers the commit id it holds (0 = empty),
 			// which is how a pair is found: pacing names its frames by id. Nothing
 			// here is ever a game buffer.
-			gamescope::Rc<CVulkanTexture> pRing[ kRingSize ];
-			uint64_t ulSlotId[ kRingSize ] = {};
+			gamescope::Rc<CVulkanTexture> pRing[ kRingMax ];
+			uint64_t ulSlotId[ kRingMax ] = {};
+			int nRing = 0;           // slots created (kRingMin..kRingMax)
 			int nCurSlot = 0;
 			bool bHaveCur = false;   // pRing[nCurSlot] holds a valid real frame
 			uint64_t ulCurId = 0;    // the commit id of pRing[nCurSlot]
@@ -162,7 +220,7 @@ namespace fghost
 			uint64_t ulUseClock = 0;
 
 			// What the library is currently configured with.
-			uint32_t uAppliedConfig = 0;
+			uint64_t uAppliedConfig = 0;
 			// A failed init/reconfigure is not retried until the size or the
 			// structural setting changes (or FG is switched off and on): init
 			// builds pipelines, so retrying per frame would be a stutter machine.
@@ -173,6 +231,7 @@ namespace fghost
 			bool bProfileOpen = false;
 			uint64_t ulProfileSeq = 0;   // submission sequence of the last cb that wrote into it
 			int nProfileSynths = 0;
+			int nProfileBlurSamples = 0;   // samples of the blurred outputs recorded in the open profile (0 = none)
 
 			// UI protection (superdoc/features/frame-generation.md) is the FrameGen
 			// library's own; the host only has to observe every new real frame
@@ -196,7 +255,7 @@ namespace fghost
 			return *g_pHost;
 		}
 
-		framegen::Settings ToLibrarySettings( const Config &c )
+		framegen::Settings ToLibrarySettings( const Config &c, const BlurConfig &b )
 		{
 			framegen::Settings s;   // everything else stays at the library's approved defaults
 
@@ -243,6 +302,12 @@ namespace fghost
 				case UiProt::Crosshair:   s.uiProtection = framegen::UiProtection::Crosshair; break;
 				case UiProt::WholeScreen: s.uiProtection = framegen::UiProtection::WholeScreen; break;
 			}
+
+			// Motion blur: the sample count and weights (runtime, no wait). The window
+			// and the cadence are the pacer's business; the library only averages.
+			// 0 = off: recordSynthBlur then collapses to recordSynth at the window's end.
+			s.blurSamples = b.enabled ? uint32_t( std::min( std::max( b.samples, kMinBlurSamples ), kMaxBlurSamples ) ) : 0u;
+			s.blurWeights = b.weights == BlurWeighting::Even ? framegen::BlurWeights::Even : framegen::BlurWeights::Gaussian;
 			return s;
 		}
 
@@ -278,7 +343,7 @@ namespace fghost
 		{
 			if ( !ulId )
 				return -1;
-			for ( int i = 0; i < kRingSize; i++ )
+			for ( int i = 0; i < H.nRing; i++ )
 			{
 				if ( H.ulSlotId[ i ] == ulId )
 					return i;
@@ -295,6 +360,7 @@ namespace fghost
 			H.interp.destroy();    // also cleans up a half-built init; a no-op when never initialised
 			for ( auto &p : H.pRing )
 				p = nullptr;
+			H.nRing = 0;
 			for ( OutSlot_t &o : H.out )
 				o.pTex = nullptr;
 			H.bLive = false;
@@ -322,12 +388,16 @@ namespace fghost
 			return true;
 		}
 
-		bool CreateRing( Host_t &H )
+		// Brings the ring to n slots (never fewer than it has). False = a texture
+		// could not be created; the slots made so far stay.
+		bool GrowRing( Host_t &H, int n )
 		{
-			for ( auto &p : H.pRing )
+			n = std::min( std::max( n, kRingMin ), kRingMax );
+			for ( int i = H.nRing; i < n; i++ )
 			{
-				if ( !CreateTexture( p, H.uWidth, H.uHeight ) )
+				if ( !CreateTexture( H.pRing[ i ], H.uWidth, H.uHeight ) )
 					return false;
+				H.nRing = i + 1;
 			}
 			return true;
 		}
@@ -339,18 +409,21 @@ namespace fghost
 
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
 		// change, apply a changed preset. False = not usable this frame.
-		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const Config &c, uint32_t uPackedConfig )
+		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur )
 		{
 			const uint64_t ulKey = FailKey( w, h, c );
 			if ( H.ulFailedKey == ulKey )
 				return false;
 
-			const framegen::Settings want = ToLibrarySettings( c );
+			const framegen::Settings want = ToLibrarySettings( c, b );
 
 			// Only the library's own presets (quality, safety, HUD protection, UI
-			// protection) matter to what is already applied; mode, priority and target
-			// are pacing's business and never reconfigure it.
-			const uint32_t uLibraryConfig = uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) );
+			// protection, and the blur's sample count and weights) matter to what is
+			// already applied; mode, priority, target and the blur's amount / relative
+			// are pacing's business and never reconfigure it. The blur sample count is
+			// 0 while the blur is off, so its enabled bit is part of the key.
+			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) ) ) | ( uint64_t( uBlurLib ) << 32 );
 
 			if ( !H.bLive )
 			{
@@ -367,7 +440,7 @@ namespace fghost
 
 				H.uWidth = w;
 				H.uHeight = h;
-				if ( !H.interp.init( info ) || !CreateRing( H ) )
+				if ( !H.interp.init( info ) || !GrowRing( H, kRingMin ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not create the interpolator or its frame ring at %ux%u", w, h );
 					Teardown( H );
@@ -391,11 +464,13 @@ namespace fghost
 				H.uWidth = w;
 				H.uHeight = h;
 				DropFrames( H );
+				const int nRingWas = H.nRing;
 				for ( auto &p : H.pRing )
 					p = nullptr;
+				H.nRing = 0;
 				for ( OutSlot_t &o : H.out )
 					o.pTex = nullptr;
-				if ( !H.interp.resize( w, h, kHostVkFormat ) || !CreateRing( H ) )
+				if ( !H.interp.resize( w, h, kHostVkFormat ) || !GrowRing( H, nRingWas ) )
 				{
 					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u", w, h );
 					Teardown( H );
@@ -486,6 +561,12 @@ namespace fghost
 			//   start, [ui_detect, ui_inpaint]*      one pair per observed real frame
 			//   luma .. pixel field                  the motion estimate
 			//   [lookup,] mismatch, resolve, fallback[, ui_patch]    one per synth
+			//   blur lookup, blur mismatch, blur resolve, blur fixup[, ui_patch]
+			//                                        one per BLURRED output: counted as
+			//                                        its sample count (H.nProfileBlurSamples),
+			//                                        so "one synth" stays the cost of one
+			//                                        sample and pacing's blurSamples x synth
+			//                                        budget (pacing.h's cost guard) is right
 			// A delta is only usable when the previous stamp was recorded straight
 			// before it. Idle time (up to a frame) hides in the ones that are not, and
 			// those are dropped -- an under-count of a pass (~0.01-0.05 ms) instead of
@@ -498,7 +579,7 @@ namespace fghost
 			//     (the first synth is recorded in the estimate's command buffer).
 			uint64_t ulEstTicks = 0, ulSynthTicks = 0;
 			uint64_t ulDetect = 0, ulInpaint = 0, ulPatch = 0;
-			int nSynth = 0, nDetect = 0, nInpaint = 0, nPatch = 0;
+			int nSynth = 0, nBlurOutputs = 0, nDetect = 0, nInpaint = 0, nPatch = 0;
 			bool bHaveEst = false, bInEst = false;
 			const char *pszPrev = "";
 			for ( size_t i = 0; i < names.size(); i++ )
@@ -506,7 +587,7 @@ namespace fghost
 				const char *pszName = names[i];
 				const bool bObserve = !strcmp( pszName, "ui_detect" ) || !strcmp( pszName, "ui_inpaint" );
 				const bool bSynthStart = !bObserve
-					&& ( !strcmp( pszName, "lookup" )
+					&& ( !strcmp( pszName, "lookup" ) || !strcmp( pszName, "blur lookup" )
 						|| ( !strcmp( pszName, "mismatch" ) && strcmp( pszPrev, "lookup" ) != 0 ) );
 				const bool bLuma = !strcmp( pszName, "luma" );
 				const bool bAfterObserve = !strcmp( pszPrev, "ui_inpaint" );
@@ -536,6 +617,8 @@ namespace fghost
 				if ( bSynthStart )
 				{
 					nSynth++;
+					if ( !strcmp( pszName, "blur lookup" ) )
+						nBlurOutputs++;
 					const bool bContiguous = bInEst;
 					bInEst = false;
 					if ( !bContiguous )
@@ -568,7 +651,11 @@ namespace fghost
 			if ( nDetect + nInpaint + nPatch > 0 )
 				g_flLastUiMs.store( float( flObserveMs + flPatchMs ), std::memory_order_relaxed );
 
-			const double flSynthMs = nSynth > 0 ? double( ulSynthTicks ) * flToMs / double( nSynth ) : -1.0;
+			// A blurred output is nProfileBlurSamples synths' worth of work (one more
+			// sample than it costs when its window ends on the real frame: pacing.h's
+			// "conservative count").
+			const int nSynthEquiv = nSynth - nBlurOutputs + nBlurOutputs * std::max( H.nProfileBlurSamples, 1 );
+			const double flSynthMs = nSynth > 0 ? double( ulSynthTicks ) * flToMs / double( nSynthEquiv ) : -1.0;
 			if ( bHaveEst )
 			{
 				// The observe is per real frame, like the estimate: it belongs to the
@@ -594,9 +681,9 @@ namespace fghost
 			// a run can be checked without the overlay: what each share costs.
 			static uint32_t s_uLogCount = 0;
 			if ( ( s_uLogCount++ % 100 ) == 0 )
-				fg_log.debugf( "timing: estimate %.3f ms (observe %.3f), synth %.3f ms (patch %.3f), %d synth(s) in the profile",
+				fg_log.debugf( "timing: estimate %.3f ms (observe %.3f), synth %.3f ms (patch %.3f), %d synth(s) in the profile, %d blurred output(s) x %d samples",
 					g_flLastEstimateMs.load( std::memory_order_relaxed ), flObserveMs,
-					g_flLastSynthMs.load( std::memory_order_relaxed ), flPatchMs, nSynth );
+					g_flLastSynthMs.load( std::memory_order_relaxed ), flPatchMs, nSynth, nBlurOutputs, H.nProfileBlurSamples );
 		}
 
 		// The pool slot an output is to be recorded into: a free one, else the
@@ -623,20 +710,18 @@ namespace fghost
 	{
 		const uint32_t uPacked = Pack( cfg );
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
+		UpdateGate();
+	}
 
-		if ( ( uPacked >> 26 ) & 1u )
-		{
-			g_uGate.fetch_or( kGateEnabled, std::memory_order_relaxed );
-		}
-		else
-		{
-			const uint32_t uOld = g_uGate.fetch_and( ~kGateEnabled, std::memory_order_relaxed );
-			// Switched off while holding resources: the release happens inside the
-			// next vulkan_composite(), so make sure one comes (direct scanout may
-			// resume the moment the backends stop forcing a full composite).
-			if ( uOld & kGateLive )
-				force_repaint();
-		}
+	void SetBlurConfig( const BlurConfig &cfg )
+	{
+		g_uBlur.store( PackBlur( cfg ), std::memory_order_relaxed );
+		UpdateGate();
+	}
+
+	BlurConfig GetBlurConfig()
+	{
+		return UnpackBlur( g_uBlur.load( std::memory_order_relaxed ) );
 	}
 
 	Config GetConfig()
@@ -645,6 +730,11 @@ namespace fghost
 	}
 
 	bool Enabled()
+	{
+		return ( ( g_uConfig.load( std::memory_order_relaxed ) >> 26 ) & 1u ) != 0;
+	}
+
+	bool Active()
 	{
 		return ( g_uGate.load( std::memory_order_relaxed ) & kGateEnabled ) != 0;
 	}
@@ -731,11 +821,14 @@ namespace fghost
 	{
 		const uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
 		const Config cfg = Unpack( uPackedConfig );
+		const uint32_t uPackedBlur = g_uBlur.load( std::memory_order_relaxed );
+		const BlurConfig blurCfg = UnpackBlur( uPackedBlur );
 
-		// Switched off (or never on): release everything. The first branch is the
-		// whole cost of the off path once resources are gone, and
-		// vulkan_composite() does not even reach it then (RenderWanted() == 0).
-		if ( !cfg.enabled )
+		// Frame generation and motion blur both off (or never on): release
+		// everything. The first branch is the whole cost of the off path once
+		// resources are gone, and vulkan_composite() does not even reach it then
+		// (RenderWanted() == 0).
+		if ( !cfg.enabled && !blurCfg.enabled )
 		{
 			if ( g_pHost )
 			{
@@ -796,12 +889,20 @@ namespace fghost
 			return nullptr;
 		}
 
-		if ( !EnsureReady( H, uWidth, uHeight, cfg, uPackedConfig ) )
+		if ( !EnsureReady( H, uWidth, uHeight, cfg, uPackedConfig, blurCfg, uPackedBlur ) )
 		{
 			SetReason( Unavailable::InitFailed );
 			return nullptr;
 		}
 		SetReason( Unavailable::Ok );
+
+		// The pacer may ask for a deeper ring (a lag-spike buffer): it only grows.
+		if ( req.historyDepth > H.nRing && !GrowRing( H, req.historyDepth ) )
+		{
+			fg_log.errorf( "frame generation: could not grow the frame ring to %d slots", req.historyDepth );
+			SetReason( Unavailable::InitFailed );
+			return nullptr;
+		}
 
 		// ---- everything below records into one command buffer of our own ----
 		// (created lazily: a pass-through composite of an already-seen frame records nothing)
@@ -827,7 +928,7 @@ namespace fghost
 		// later pairs always have it.
 		if ( !H.bHaveCur || req.newestId != H.ulCurId )
 		{
-			const int nNewSlot = H.bHaveCur ? ( H.nCurSlot + 1 ) % kRingSize : 0;
+			const int nNewSlot = H.bHaveCur ? ( H.nCurSlot + 1 ) % H.nRing : 0;
 			H.nCurSlot = nNewSlot;
 			H.bHaveCur = true;
 			H.ulCurId = req.newestId;
@@ -868,6 +969,7 @@ namespace fghost
 				{
 					HarvestProfile( H, true, false );
 					H.nProfileSynths = 0;
+					H.nProfileBlurSamples = 0;
 				}
 				if ( H.interp.recordObserve( pCb->rawBuffer(), H.pRing[ nNewSlot ]->srgbView() ) )
 				{
@@ -881,9 +983,13 @@ namespace fghost
 			}
 		}
 
-		// ---- the generated frame, if this output is one ----
+		// ---- the generated (or blurred) frame, if this output is one ----
+		// THE ONE RENDERER RULE (pacing's Decision, see FrameRequest): a pair means
+		// recordSynthBlur( prev, curr, out, t0, t1 ) -- a plain synth when t0 == t1,
+		// the (blurred) real frame currId when the window ends at 1; no pair means no
+		// renderer work, the real frame showId is shown (below).
 		bool bPairPlaying = false;   // this composite shows a synth of the profile's pair
-		if ( req.t > 0.0f && req.t < 1.0f && req.prevId && req.currId && req.prevId != req.currId )
+		if ( req.prevId && req.currId && req.prevId != req.currId )
 		{
 			const int nPrevSlot = FindSlot( H, req.prevId );
 			const int nCurrSlot = FindSlot( H, req.currId );
@@ -921,6 +1027,7 @@ namespace fghost
 					{
 						HarvestProfile( H, true, false );
 						H.nProfileSynths = 0;
+						H.nProfileBlurSamples = 0;
 					}
 
 					CVulkanCmdBuffer *pCb = Cmd();
@@ -973,7 +1080,10 @@ namespace fghost
 						pSlot->bValid = false;
 						pCb->prepareDestImage( pOut );
 						pCb->insertBarrier();
-						bOk = H.interp.recordSynth( pCb->rawBuffer(), pPrev->srgbView(), pCurr->srgbView(), pOut->srgbView(), req.t );
+						// A window of zero length (blur off, or amount 0) is one instant: the
+						// library's own plain-synth path, identical to recordSynth( t1 ).
+						const bool bBlurred = req.t0 < req.t1 && H.interp.settings().blurSamples >= 2;
+						bOk = H.interp.recordSynthBlur( pCb->rawBuffer(), pPrev->srgbView(), pCurr->srgbView(), pOut->srgbView(), req.t0, req.t1 );
 						bSynthRefused = !bOk;
 						if ( bOk )
 						{
@@ -986,6 +1096,8 @@ namespace fghost
 							if ( H.bProfileOpen )
 							{
 								H.nProfileSynths++;
+								if ( bBlurred )
+									H.nProfileBlurSamples = int( H.interp.settings().blurSamples );
 								bProfileWritten = true;
 							}
 							pResult = pSlot->pTex;
@@ -1017,6 +1129,15 @@ namespace fghost
 				}
 			}
 			// else: a frame of the pair is gone from the ring -- the real frame is shown.
+		}
+		else if ( req.showId && req.showId != req.newestId )
+		{
+			// A real frame that is not the newest (a lag-spike buffer plays behind real
+			// time): the ring still holds it, so show that copy instead of layer 0.
+			// (Gone from the ring: layer 0, the newest, stays.)
+			const int nShowSlot = FindSlot( H, req.showId );
+			if ( nShowSlot >= 0 )
+				pResult = H.pRing[ nShowSlot ];
 		}
 
 		if ( pCmd )

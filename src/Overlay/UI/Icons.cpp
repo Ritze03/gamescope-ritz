@@ -175,6 +175,19 @@ namespace gamescope::ui
 			Rect( 15.5f, 6.0f, 21.5f, 18.0f ),
 			Bar( 10.5f, 9.0f, 13.5f, 15.0f ) } },
 
+		{ "image.motionblur", 4, {
+			// A ball with its speed lines: one stroked circle on the right, three
+			// horizontal streaks trailing off it to the left (the middle one the
+			// shortest, like a blur's falling-off weight). Freehand (2026-10-04).
+			// Read against its neighbours: image.framegen is three rectangles,
+			// system.crosshair a ring with arms ACROSS its edge, display.frame_limiter
+			// a ring with hands INSIDE -- no other glyph pairs a lone circle with
+			// parallel streaks off to one side.
+			Circ( 16.5f, 12.0f, 4.5f ),
+			Line( { 3.5f, 8.5f }, { 10.0f, 8.5f } ),
+			Line( { 5.5f, 12.0f }, { 10.0f, 12.0f } ),
+			Line( { 3.5f, 15.5f }, { 10.0f, 15.5f } ) } },
+
 		// ---- SYSTEM -------------------------------------------------------
 		{ "system.general", 5, {
 			// A chip: a square body with one pin centred on each of its
@@ -448,7 +461,7 @@ namespace gamescope::ui
 		// =================================================================
 		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3; regrouped to six, I7)
 		// =================================================================
-		// Six glyphs, one per RailGroup (Display/Overlay/Input/Misc/
+		// Seven glyphs, one per RailGroup (Display/Motion/Overlay/Input/Misc/
 		// Settings/Other, in that order -- see the switch in
 		// IconForRailGroup() below, which is what actually binds each entry
 		// to its group rather than array position). Freehand, like every
@@ -535,6 +548,14 @@ namespace gamescope::ui
 				Line( { 12.0f, 15.5f }, { 12.0f, 18.5f } ),
 				Line( { 7.5f, 19.5f }, { 16.5f, 19.5f } ) } },
 
+			// MOTION (2026-10-04): two overlapping rings side by side -- the same
+			// ball seen at two instants, i.e. a ghost trail. Two Circles and nothing
+			// else; no other group glyph draws a circle at all (Settings' hex-nut is
+			// a Loop and a Circle, Display/Overlay/Input/Other are rectangles).
+			{ "railgroup.motion", 2, {
+				Circ( 9.0f, 12.0f, 5.5f ),
+				Circ( 15.0f, 12.0f, 5.5f ) } },
+
 			{ "railgroup.overlay", 3, {
 				Rect( 3.5f, 3.5f, 20.5f, 20.5f ),
 				Line( { 8.5f, 12.0f }, { 15.5f, 12.0f } ),
@@ -579,11 +600,12 @@ namespace gamescope::ui
 		switch ( eGroup )
 		{
 			case RailGroup::Display:  return &kGroupIcons[ 0 ];
-			case RailGroup::Overlay:  return &kGroupIcons[ 1 ];
-			case RailGroup::Input:    return &kGroupIcons[ 2 ];
-			case RailGroup::Misc:     return &kGroupIcons[ 3 ];
-			case RailGroup::Settings: return &kGroupIcons[ 4 ];
-			case RailGroup::Other:    return &kGroupIcons[ 5 ];
+			case RailGroup::Motion:   return &kGroupIcons[ 1 ];
+			case RailGroup::Overlay:  return &kGroupIcons[ 2 ];
+			case RailGroup::Input:    return &kGroupIcons[ 3 ];
+			case RailGroup::Misc:     return &kGroupIcons[ 4 ];
+			case RailGroup::Settings: return &kGroupIcons[ 5 ];
+			case RailGroup::Other:    return &kGroupIcons[ 6 ];
 			case RailGroup::Nothing:     return nullptr;
 		}
 		return nullptr;

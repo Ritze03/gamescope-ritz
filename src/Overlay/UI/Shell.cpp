@@ -60,6 +60,7 @@
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
 #include "Overlay/PanelFrameGen.h"
+#include "Overlay/PanelMotionBlur.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
@@ -871,9 +872,13 @@ namespace gamescope::ui::shell
 			// tab bar redrawn as headings. AUTONOMOUS-DECISIONS.md D13.1.
 			PanelDisplay_RegisterAreas( reg );
 			PanelShaders_RegisterArea( reg );
-			// Frame generation (2026-10-04): the next area down the DISPLAY
-			// group, per-profile like the Shaders above it.
+			// Frame generation (2026-10-04): per-profile like the Shaders above
+			// it; its rail group is MOTION (Registry.cpp's kRailOrder), not
+			// DISPLAY -- registration order is not rail order.
 			PanelFrameGen_RegisterArea( reg );
+			// Motion blur (2026-10-04): the second MOTION-group area, its own
+			// switch next to Frame generation's (they work alone and together).
+			PanelMotionBlur_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
 			// The System tab (2026-09-05, requests-2026-09-05.md item 5)

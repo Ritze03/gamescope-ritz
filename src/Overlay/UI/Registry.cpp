@@ -932,6 +932,7 @@ namespace gamescope::ui
 		switch ( eGroup )
 		{
 			case RailGroup::Display:  return "DISPLAY";
+			case RailGroup::Motion:   return "MOTION";
 			case RailGroup::Overlay:  return "OVERLAY";
 			case RailGroup::Input:    return "INPUT";
 			case RailGroup::Misc:     return "MISC";
@@ -947,7 +948,7 @@ namespace gamescope::ui
 
 	namespace
 	{
-		// Six groups since 2026-09-27 (I7) -- see the section comment above
+		// Seven groups since 2026-10-04 (MOTION; six since 2026-09-27, I7) -- see the section comment above
 		// the RailGroup enum in Registry.h for the user's own table and the
 		// reasoning behind the split. input.general is not a registered
 		// Area yet (a sibling task adds it); its slot sits here anyway --
@@ -962,9 +963,13 @@ namespace gamescope::ui
 			{ "display.frame_limiter", RailGroup::Display },
 			{ "display.hdr",           RailGroup::Display },
 			{ "image.shaders",         RailGroup::Display },
-			// Frame generation (2026-10-04): directly below Shaders -- both
-			// change what the game picture looks like before it is scaled.
-			{ "image.framegen",        RailGroup::Display },
+			// ---- MOTION -- 2026-10-04: the two features that work on the
+			// game's FRAMES over time. Frame generation moved here from
+			// DISPLAY (where it sat below Shaders); Motion blur is new. Each is
+			// its own switch and they work alone or together (the library's
+			// pacer composes them).
+			{ "image.framegen",        RailGroup::Motion },
+			{ "image.motionblur",      RailGroup::Motion },
 			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
 			// moves here from Settings (it is the pointer's own on-screen
 			// appearance, the same "drawn over the game" concern as the

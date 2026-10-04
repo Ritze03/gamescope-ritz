@@ -577,10 +577,12 @@ Inherited rows draw nothing -- the parent's values are the baseline, and marking
 would bury the deviations the dot exists to show. The words (`inherited from Comp`,
 `overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
 
-### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7)
+### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7; seven since MOTION 2026-10-04)
 
-The rail's group headers mark **six** fixed groups today, in this order: **DISPLAY**
-(General, Resolution, Upscaling, Frame limiter, HDR, Shaders), **OVERLAY** (HUD, Crosshair,
+The rail's group headers mark **seven** fixed groups today, in this order: **DISPLAY**
+(General, Resolution, Upscaling, Frame limiter, HDR, Shaders), **MOTION** (Frame generation,
+Motion blur -- added 2026-10-04; Frame generation moved here out of DISPLAY, where it had sat
+below Shaders for a day), **OVERLAY** (HUD, Crosshair,
 Zoom, Cursor), **INPUT** (General, Autoclicker, Null binds), **MISC** (Friends, Mixer),
 **SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
 icon-collapsed rail draws one icon button per group (see "Rail accordion" below) rather than

@@ -1941,9 +1941,13 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// (moved out of display.general) and force grab keyboard, INPUT's
 		// own General area. See PanelInput.cpp and Icons.cpp.
 		"input.general",
-		// The twenty-second (2026-10-04): frame generation, directly below
-		// Shaders in DISPLAY. See PanelFrameGen.cpp and Icons.cpp.
+		// The twenty-second (2026-10-04): frame generation (MOTION group since
+		// the same day; first listed below Shaders in DISPLAY). See
+		// PanelFrameGen.cpp and Icons.cpp.
 		"image.framegen",
+		// The twenty-third (2026-10-04): motion blur, directly below Frame
+		// generation in MOTION. See PanelMotionBlur.cpp and Icons.cpp.
+		"image.motionblur",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2056,7 +2060,7 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 }
 
 // I2 (2026-09-27): the icon-collapsed rail's accordion group buttons (four
-// then, six since I7's 2026-09-27 regroup). A SEPARATE table from kIcons[]
+// then, six since I7's 2026-09-27 regroup, seven since MOTION 2026-10-04). A SEPARATE table from kIcons[]
 // (IconForRailGroup(), not IconFor()) -- see Icons.h's own comment -- so
 // this is a separate small census rather than folding into the "every
 // registered area has one" test above, which must stay a strict
@@ -2064,11 +2068,11 @@ TEST_CASE( "icons: every glyph stays inside SPEC 8.0's 24-unit grid", "[overlay_
 TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing", "[overlay_ui]" )
 {
 	using ui::RailGroup;
-	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Overlay, RailGroup::Input,
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
 	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	const size_t nGroups = sizeof( eGroups ) / sizeof( eGroups[ 0 ] );
 
-	const ui::Icon *pIcons[ 6 ];
+	const ui::Icon *pIcons[ 7 ];
 	for ( size_t i = 0; i < nGroups; ++i )
 	{
 		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
@@ -2149,7 +2153,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // RailGroup enum and Registry::RailAreas() for the "a slot with no
 // registered area is skipped, not a crash" contract that makes landing the
 // table and the area in separate commits safe.
-TEST_CASE( "rail: the six groups are in the order the request named", "[overlay_ui]" )
+TEST_CASE( "rail: the seven groups are in the order the request named", "[overlay_ui]" )
 {
 	struct Expected { const char *pszId; ui::RailGroup eGroup; };
 	const Expected expected[] = {
@@ -2159,7 +2163,10 @@ TEST_CASE( "rail: the six groups are in the order the request named", "[overlay_
 		{ "display.frame_limiter", ui::RailGroup::Display },
 		{ "display.hdr",           ui::RailGroup::Display },
 		{ "image.shaders",         ui::RailGroup::Display },
-		{ "image.framegen",        ui::RailGroup::Display },
+		// MOTION (2026-10-04): Frame generation moved out of DISPLAY, Motion blur
+		// is new; between DISPLAY and OVERLAY.
+		{ "image.framegen",        ui::RailGroup::Motion },
+		{ "image.motionblur",      ui::RailGroup::Motion },
 		{ "system.hud",            ui::RailGroup::Overlay },
 		{ "system.crosshair",      ui::RailGroup::Overlay },
 		{ "system.zoom",           ui::RailGroup::Overlay },
@@ -2201,6 +2208,7 @@ TEST_CASE( "rail: the six groups are in the order the request named", "[overlay_
 TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" )
 {
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Display ) )  == "DISPLAY" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Motion ) )   == "MOTION" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Overlay ) )  == "OVERLAY" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Input ) )    == "INPUT" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
@@ -2303,7 +2311,8 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	// groups already overflow the rail at 1080p/scale 1 as a flat list
 	// (content ~= 896px against ~= 878px available -- see this task's own
 	// brief). I7 (2026-09-27) split those into six groups, so DISPLAY (6
-	// areas, unchanged) is now the busiest instead of the old MISC. Every
+	// areas) is now the busiest (MOTION, 2026-10-04, took Frame generation
+	// out of it and added Motion blur: seven groups) instead of the old MISC. Every
 	// real area, including input.general (PanelInput.cpp, landed
 	// 2026-09-27) -- this synthetic registry still builds its own Area for
 	// each id rather than linking the real panel files, so
@@ -2315,7 +2324,8 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	ui::Registry reg;
 	const char *pszAllAreas[] = {
 		"display.general", "display.resolution", "display.upscaling",
-		"display.frame_limiter", "display.hdr", "image.shaders", "image.framegen",
+		"display.frame_limiter", "display.hdr", "image.shaders",
+		"image.framegen", "image.motionblur",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
 		"input.general", "system.autoclicker", "system.null_binds",
 		"system.friends", "audio.mixer",
@@ -2339,7 +2349,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 	const float flAvailableHeight = flSurfaceH * 0.85f - flSlabBarH;
 
 	using ui::RailGroup;
-	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Overlay, RailGroup::Input,
+	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
 	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	for ( RailGroup eGroup : eGroups )
 	{
@@ -2348,7 +2358,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		REQUIRE( flHeight <= flAvailableHeight );
 	}
 
-	// Every group closed is the shortest state of all -- just the six
+	// Every group closed is the shortest state of all -- just the seven
 	// headers -- so it fits too, trivially, but is worth pinning since a
 	// future edit could add a seventh header advance somewhere and this
 	// would catch it before the "any one group open" case above got

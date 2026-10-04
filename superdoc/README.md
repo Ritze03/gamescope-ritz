@@ -125,8 +125,11 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   that implements them.
 - [Frame generation (Frame generation settings area)](features/frame-generation.md) —
   optical-flow frame interpolation, a fixed 2x-8x or a Target fps, paced per vblank (Low
-  latency / Smoothness, Pause at refresh rate): the `fghost` renderer, the `fgpacing` pacer,
-  settings, costs, limits.
+  latency / Smoothness, Pause at refresh rate): the `fghost` renderer, the library's
+  `framegen::pacing` pacer (gamescope only feeds it), settings, costs, limits.
+- [Motion blur (Motion blur settings area)](features/motion-blur.md) — interpolation-based
+  motion blur, with or without frame generation: the composition model (buffer = delay,
+  frame generation = cadence, blur = shutter window), the five settings, costs, limits.
 - [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — screen capture via PipeWire.
 
 ### Tooling & runtime

@@ -189,18 +189,22 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 ### FrameGen submodule (2026-10-04)
 
 The frame-generation library is a git submodule, `subprojects/FrameGen`
-(github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `b699301` (includes PR #1, UI protection). **A fresh checkout or worktree
+(github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `2eca330` (UI protection, motion blur (PR #2) and the pacing planner (PR #3)). **A fresh checkout or worktree
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
 (`Sandbox violation: Tried to grab file ... from a nested subproject`), and FrameGen has
-no root `meson.build`, so `subproject()` is impossible. Instead its 17 shaders (the
-interpolation's 11 plus UI protection's six, `ui_*.comp`, which share the include
-`ui_common.glsl`; the depfile re-runs glslang when it changes) are compiled with `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers
+no root `meson.build`, so `subproject()` is impossible. Instead its 20 shaders (the
+interpolation's 11, UI protection's six, `ui_*.comp`, which share the include
+`ui_common.glsl`, and motion blur's three, `blur_lookup`/`blur_error`/`blur_resolve`, which
+share `blur_common.glsl`; the depfile re-runs glslang when either changes; the test-only
+`gpu/blendbench.comp` is not built) are compiled with `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers
 as gamescope's own) using absolute paths, and `framegen.cpp` is compiled through the
 wrapper `src/FrameGen/FrameGenLib.cpp`, which `#include`s it. `Why:` bumping the submodule
 still pulls upstream library work, with no copy to drift. `fgtest` is not built. The
-pacing unit tests (`tests/test_framegen_pacing.cpp`) are part of `gamescope_tests`. See
+pacer is the library's header-only `gpu/pacing.h` (included by `FrameGenHost.cpp` and
+`steamcompmgr.cpp` by relative path, the sandbox rule again) and its tests live in the
+library (`pacingtest`); gamescope no longer has pacing tests. See
 [frame-generation](frame-generation.md).
 
 ### What is compiled into the binary, and by which rule

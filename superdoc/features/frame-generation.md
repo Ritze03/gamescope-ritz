@@ -3,8 +3,15 @@
 Shows extra frames on screen between the game's own, by synthesising them with
 optical-flow interpolation: a fixed multiplier of 2x to 8x, or a **Target fps**. Added
 2026-10-04, pacing reworked the same day (per-vblank fractional pacing, Target fps, Low
-latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate from the multiplier choice), per profile, DISPLAY rail group directly
-below Shaders.
+latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate from the multiplier choice), per profile. Rail group **MOTION**
+(first area; Motion blur is the second), moved there from DISPLAY the same day -- see
+[motion-blur](motion-blur.md) for the sibling feature the two share a pacer and a renderer with.
+
+**Architecture rule** (the user): *"you're basically only building the GUI in this chat and
+most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
+motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
+`2eca330`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+composite hook, the settings).
 
 Code map:
 
@@ -13,12 +20,12 @@ Code map:
 | The library (optical flow + synth shaders) | `subprojects/FrameGen/` (git submodule, MIT, `github.com/Ritze03/frame-gen-ritz`) |
 | Library build glue | `src/FrameGen/FrameGenLib.cpp` + the `custom_target()`s in `src/meson.build` |
 | Renderer host (`fghost`) | `src/FrameGen/FrameGenHost.{h,cpp}` |
-| Pacing (`fgpacing::Pacer`) | `src/FrameGen/Pacing.h` (header-only) |
+| Pacing (`framegen::pacing::Pacer`) | **the library**: `subprojects/FrameGen/gpu/pacing.h` (header-only; tests: its own `pacingtest`). gamescope's `src/FrameGen/Pacing.h` was deleted 2026-10-04 |
 | Pacing glue + the main-loop gate | `src/steamcompmgr.cpp` (`FrameGen_OnArrival` / `FrameGen_PrePaint` / `FrameGen_PostPaint` / `FrameGen_TimerPaced`, `PaintTick` in the paint decision) |
 | Composite hook | `src/rendervulkan.cpp` (`vulkan_composite()`, `fghost::RecordBaseLayer`) |
 | Frame-ring copy shader | `src/shaders/cs_fg_copy.comp` |
 | Settings area | `src/Overlay/PanelFrameGen.{h,cpp}` |
-| Tests | `tests/test_framegen_pacing.cpp` (pacing), `tests/test_config.cpp` (the `framegen` keys) |
+| Tests | `tests/test_config.cpp` (the `framegen` and `motion_blur` keys); pacing is tested in the library |
 
 Not to be confused with `lsfg-vk` (an external Vulkan layer): nothing in this tree uses
 it. FG here runs inside the compositor.
@@ -27,7 +34,7 @@ it. FG here runs inside the compositor.
 
 Between two real game frames P (previous) and C (newest) the library can make a generated
 frame at **any** t in (0,1) -- one motion estimate per pair, any number of synths after it.
-Pacing decides, for every output frame, which t to show (see [Pacing](#pacing-model-fgpacingpacer)).
+Pacing decides, for every output frame, which t to show (see [Pacing](#pacing-frame-gen-ritz-gpupacingh-framegenpacingpacer)).
 
 Pipeline order inside `vulkan_composite()`:
 
@@ -44,30 +51,41 @@ After the upscaler is impossible: the library works at the game's own resolution
 the fork's own Crosshair/HUD after FG keeps them sharp, while the game's own HUD may
 artifact unless UI protection holds it.
 
-The pre-emptive upscale is bypassed while FG is enabled: it bakes layer 0 at commit time,
+The pre-emptive upscale is bypassed while FG or motion blur is on (`fghost::Active()`): it bakes layer 0 at commit time,
 which FG cannot substitute per output frame.
 
 ## Renderer (`fghost`)
 
 - **Off = zero cost**: one relaxed atomic load per frame; no Interpolator, no ring, direct
-  scanout stays possible. The host object is created lazily on first use; turning FG off
-  frees everything after a `g_device.waitIdle()`.
-- **Backends force a full composite while `fghost::RenderWanted()`** -- FG enabled, *or* it
-  still holds resources -- so turning FG off releases them: the next composite runs
-  `RecordBaseLayer`, which tears down, instead of direct scanout skipping it forever.
-  (`SetConfig` to Off also asks for that composite with `force_repaint()`.)
-- **API**: `SetFrame(FrameRequest{ newestId, prevId, currId, outId, t })`. `t < 0` is inert
-  (not even the ring copy: settled pass-through), `t >= 1` the real frame (layer 0; the ring
-  copy still happens), `0 < t < 1` a synth between `prevId` and `currId`. The same `outId`
-  is the same image, so a repaint (cursor, overlay, screenshot) reuses the cached output.
-  `Why` the pair is named by id and not "the newest pair": Smoothness may still be playing
-  the pair before the newest one.
+  scanout stays possible. The host object is created lazily on first use; turning **both**
+  FG and motion blur off frees everything after a `g_device.waitIdle()`. The two share one
+  host (one Interpolator, one ring, one output pool): the gate is `Config::enabled ||
+  BlurConfig::enabled` (`fghost::Active()`; `Enabled()` stays "frame generation").
+- **Backends force a full composite while `fghost::RenderWanted()`** -- FG or blur enabled,
+  *or* it still holds resources -- so turning the last one off releases them: the next
+  composite runs `RecordBaseLayer`, which tears down, instead of direct scanout skipping it
+  forever. (`SetConfig` / `SetBlurConfig` to Off also ask for that composite with
+  `force_repaint()`.)
+- **API**: `SetFrame(FrameRequest{ newestId, prevId, currId, outId, t, t0, t1, showId,
+  historyDepth })`. `t < 0` is inert (not even the ring copy: settled pass-through). **The one
+  renderer rule** (the pacer's `Decision`, applied as it says): `prevId != 0` ->
+  `recordSynthBlur( prev, curr, out, t0, t1 )` into a pooled output (a plain synth when
+  `t0 == t1`, which also covers blur off; with blur on a *real* frame's output carries a pair
+  too, `t = 1`, and is blurred); `prevId == 0` -> no renderer work, the real frame `showId`
+  is shown (layer 0 when it is the newest, which with no buffer delay it always is; an older
+  one still in the ring is substituted). The ring copy of a new `newestId` always happens.
+  The same `outId` is the same image, so a repaint (cursor, overlay, screenshot) reuses the
+  cached output. `Why` the pair is named by id and not "the newest pair": Smoothness may
+  still be playing the pair before the newest one.
 - **Own command buffer**, submitted just before the composite on the same queue.
   `Why:` a GPU wait (needed before a resize/reconfigure) in the middle of the composite
   would reset the device's upload-buffer offset and corrupt it, and the hook must run
   before the ReShade block, which comes before the composite command buffer exists. A
   pass-through of an already-seen frame records nothing.
-- **Private 3-slot frame ring**, always `B8G8R8A8_UNORM`, filled by the tiny compute copy
+- **Private frame ring** (3 slots now; sized to the pacer's `HistoryDepth()` through
+  `FrameRequest::historyDepth`, grows only, up to the library's `kHistoryMax` = 16 for a
+  future lag-spike buffer; note the library's UI protection keeps 3 observed frames, so a
+  pair older than that is refused with UI protection on and the real frame shows), always `B8G8R8A8_UNORM`, filled by the tiny compute copy
   `cs_fg_copy.comp`; each slot remembers its commit id. `Why:` game buffers are never
   pinned (pinning another commit starves 3-image swapchains and lowers the real frame
   rate); commit dmabufs are SAMPLED-only so `vkCmdCopyImage` is impossible; the copy also
@@ -94,6 +112,12 @@ which FG cannot substitute per output frame.
 - **`g_device.waitIdle()`** before every Interpolator resize / reconfigure / teardown (the
   library has no deferred free). So a **Quality** change (it alters the flow scale) causes
   one brief pause; the other presets apply live.
+- **Motion blur settings** reach the renderer as `framegen::Settings::blurSamples` /
+  `blurWeights` (runtime `setSettings()`, no wait; `blurSamples = 0` while blur is off) and
+  the pacer as `Inputs::blur*`. The GPU timing harvest counts the library's "blur lookup" /
+  "blur mismatch" / "blur resolve" / "blur fixup" stamps as one blurred output = `blurSamples`
+  synths, so the published synth time stays *per sample* and the pacer's cost guard
+  (`blurSamples x synth`) is right.
 - **Logs**: the renderer logs under the `framegen` scope (ready / unavailable / UI protection
   warnings); the pacing glue logs under **`framegen_pacing`** (see
   [Logging](#logging)). They are two scopes because every `LogScope` registers a
@@ -223,14 +247,71 @@ direct scanout): a scanned-out buffer never passes `vulkan_composite()`, and a p
 composite has already dropped the base layer. Wayland and OpenVR force full composite; SDL
 always composites. See the backend pages.
 
-## Pacing model (`fgpacing::Pacer`)
+## Pacing (frame-gen-ritz `gpu/pacing.h`, `framegen::pacing::Pacer`)
 
-Pure decision logic, no clock or Vulkan of its own (times are passed in), so the tests
-drive it with a fake clock; `steamcompmgr.cpp` feeds it arrivals and paints and takes back
-what to show.
+**The pacer is the library's, not gamescope's** (2026-10-04, frame-gen-ritz `2eca330`,
+its PR #3). It used to be `src/FrameGen/Pacing.h` here, with its tests in
+`tests/test_framegen_pacing.cpp`; both are deleted, and the library's own `pacingtest`
+holds the full ported suite. The authoritative description of the model -- content time,
+the two priorities, pass-through, the cost guard, the beyond-refresh cadence, how the
+three features compose -- is the header comment of
+`subprojects/FrameGen/gpu/pacing.h` and the "Pacing" / "How the features combine"
+sections of `subprojects/FrameGen/INTEGRATION.md`. **This page does not restate it**;
+it keeps the *why* of the user's asks and what gamescope's side does.
 
-**Per-vblank fractional pacing.** Every output frame is generated for its own moment
-between the two latest real frames; no multiplier is chosen or held. The user's spec:
+`Why` it moved, the user's architecture rule: *"you're basically only building the GUI in
+this chat and most of the stuff should go into the frame gen itself"* -- so gamescope
+keeps GUI and platform glue. The second reason is composition: *"all of them are kind of
+separate, but they can all be turned on at the same time, and they actually act nicely
+together"* (frame generation, motion blur and the future lag-spike buffer). One planner in
+the library owns all three dimensions of the content timeline (buffer = how far behind,
+frame generation = which instants, blur = the shutter window), so gamescope has no feature
+logic of its own to keep consistent. See [motion-blur](motion-blur.md).
+
+**What gamescope does** (`src/steamcompmgr.cpp`, the "Frame generation / motion blur pacing"
+block; vocabulary per the library: `presentNs`, `FrameFormat`, `OnPaint( in, newestId,
+bPresentTick, bSkippable )`):
+
+- **Arrival** (`FrameGen_OnArrival`, from `handle_done_commit()`): `pacer.OnArrival( commitID,
+  commit_t::present_time, window seq, FrameFormat{ w, h, drmFormat } )`. The arrival time is
+  the commit's acquire fence signalling (stamped by `commit_t::Signal()`), **not** the vblank
+  that latches it. `Why:` latch times are vblank-quantised (about +/-7 ms for 60 fps on a
+  144 Hz display), which would wreck the interval estimate.
+- **Paint** (`FrameGen_PrePaint`, right before `paint_all()`): runs the pacer whenever **any**
+  of frame generation or motion blur is on (`fghost::Active()`), with `Inputs::frameGen` =
+  the Frame generation switch, `blur*` = the Motion blur config, `extraDelayNs` = 0 (the
+  lag-spike buffer's hook, unused until its detection exists). `presentNs` (V) is the vblank
+  timer's predicted target for this paint (`g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank`,
+  never in the past; a missing or implausible value, or a non-vblank paint, falls back to
+  `now`; an extra-timer tick uses its own target).
+- **Apply** (`fghost::SetFrame` -> `RecordBaseLayer`): the **single renderer rule** -- the
+  `Decision`'s `prevId != 0` means `recordSynthBlur( prev, curr, out, t0, t1 )` (a plain synth
+  when `t0 == t1`; with blur on a *real* frame's output also carries a pair, `t = 1`, and a
+  window); `prevId == 0` means no renderer work, show the real frame `showId` (the newest
+  unless a buffer delays, then an older ring frame is substituted). gamescope does not
+  interpret `t`.
+- **Status** (`TakeStatus` -> `fghost::PacingStatus`): the library's `Report`, each feature
+  separately (`fgActive`, `blurActive`, `blurWindowMs`, `blurSamples`, `bufferDelayMs`),
+  feeds each tab's own status line.
+- **Reset** (`Pacer::Discontinuity()` / `Decision::reset` -> `fghost::Reset()`): no FG for the
+  next frame, the previous real frames are forgotten, on a focus/window change, size/format
+  change, a gap over 100 ms, fades, Steam UI windows and streaming clients. `Why:` frames are
+  keyed by commit id, not texture pointer, because gamescope reuses one texture per
+  `wl_buffer` -- pointer equality misses re-commits, and without a reset two unrelated images
+  would be blended.
+- **Main-loop gate**: `FrameGen_TimerPaced()` = `fghost::Active() && pacer.Planning()` (not
+  `Generating()`, which is false in **real-rate** mode -- frame generation off, or the game
+  already at the output rate with blur on -- where VRR arrival paints would otherwise leak
+  through); it is also `PaintTick()`'s first argument.
+- **Cadence-skip vblanks do not paint.** When the output interval is longer than a vblank and
+  no new output is due the pacer says `Decision::skip` (only if nothing but pacing asked for
+  the paint): `FrameGen_PrePaint()` returns true, the loop does not call `paint_all()` and
+  nothing is committed; the host keeps the last buffer. `Why`: re-presenting the cached output
+  on every such vblank made a 30 fps game at 2x commit 83 times a second instead of 60 (host
+  and GPU work for an identical image).
+
+**The user's spec for the dynamic mode and the two priorities** (the origin of the
+pacer's shape, kept as rationale):
 
 > *"Also add something like a dynamic mode that lets me set a target FPS, and then it
 > should either set the multiplier dynamically and let the system handle the rest. So, for
@@ -242,113 +323,34 @@ between the two latest real frames; no multiplier is chosen or held. The user's 
 > he wants."*
 
 *"Shouldn't it only turn off when my raw FPS is equal to my refresh rate and not at 60% of
-my refresh rate?"* -- yes. *"Also let me change the multiplier to up to 8x."* *"It's fine if
-we generate way too many frames on a fixed multiplier, this system should handle that as I
-told you earlier."*
+my refresh rate?"* -- yes (generation stops only once the game reaches the output rate, with a
+ratio band). *"Also let me change the multiplier to up to 8x."* *"It's fine if we generate way
+too many frames on a fixed multiplier, this system should handle that as I told you earlier."*
 
-- **Content time.** A real frame carries its **arrival time** `A` (the commit's acquire
-  fence signalling, `commit_t::present_time`, set in `handle_done_commit`) -- not the vblank
-  latch. `Why:` latch times are vblank-quantised (about +/-7 ms at 60 fps on a 144 Hz
-  display), which would wreck the interval estimate. For the output frame painted at vblank
-  time **V** the content time is `tau = V - D`, and with the two real frames around it
-  `t = (tau - A0) / (A1 - A0)`. `t >= 1` (tau has caught up with the newest real frame, or
-  `t >= 0.98` of the newest pair) shows the real frame itself; otherwise a synth at `t`
-  (clamped to 0.02..0.98). `tau` is **monotonic**: never older than the last output's.
-  `Why` this shape: "how many generated frames per game frame" now falls out of `t` from
-  the latest arrivals -- the first pair after 120 -> 100 fps against a target of 240
-  already gets 2.4 outputs on average -- which is the "per frame accuracy" asked for.
-- **V** is the vblank timer's predicted target for the paint
-  (`g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank`, never in the past: `max(target,
-  now)`; a missing or implausible value, or a non-vblank paint, falls back to `now`).
-- **Output interval `o`** (with Pause at refresh rate on; off: see below). Fixed N: `max(interval / N, 1 / refresh)`. Target: `1 /
-  min(target, refresh)`, target 0 = the display's refresh. *refresh* is the rate the
-  vblank timer ticks at (`g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh`, which is
-  what `CVBlankTimer::GetRefresh()` returns -- it has no VRR branch, so under VRR it is the
-  mode's nominal (maximum) refresh). **Cadence:** when `o` is longer than a vblank only the
-  vblanks where a phase accumulator crosses `o` get a new image (Bresenham; the accumulator
-  never lags more than a vblank, so slots that lapsed while a real frame was held are not
-  made up with a burst); the others re-present the previous output. So a fixed multiplier
-  never steps down: 2x at 100 fps on 144 Hz simply fills every refresh the content allows.
-- **Delay `D`, per Priority.**
-  - **Low latency** (default): `D = (smoothed interval - o) + margin`, floored at 0 (and at
-    one `o` while the ratio is >= 1.1). At a fixed N that is the old (N-1)/N of a game frame
-    for a steady game. The smoothed (median) interval is replaced by the latest one only
-    when that is genuinely early or late (more than `max(2 ms, 15%)` off): such a frame
-    *snaps* the content time to the new pair instead of sliding (D9's latency-first rule);
-    only the newest pair is ever played. `margin` = the largest ordinary arrival jitter in
-    the window (deviations past the snap threshold are hitches and left out; at most 4 ms)
-    plus the lead by which the paint wakes before its vblank (`V - now`, at most 4 ms): 0 for
-    a perfectly steady game. `Why` default: the user asked for latency first. `Why` the
-    smoothed interval and the margin (2026-10-04, from a steady-state smoke: vkcube held at
-    30 fps on a nested 120 Hz, fixed 8x / target 120 gave about 105 output frames a second
-    instead of 120): with `D = latest interval - o`, D jumped from pair to pair with ordinary
-    arrival jitter, and the real frame of a pair sits exactly where the next real frame is
-    expected, so any late arrival -- and the paint wakes about 4 ms before the vblank it is
-    for, so a frame arriving in that lead is not seen by that paint either -- left a vblank
-    with nothing new to show and lost an output. The margin buys exactly that slack, no more.
-    `Why` the floor of one `o` at ratio >= 1.1: a game just under the output rate (the
-    user's CS2: 212 fps on about 280 Hz) has `i - o` below one output interval, so no
-    generated frame fitted between two real ones and Low latency presented FEWER frames than
-    the game; the floor makes room for one.
-  - **Smoothness**: `D = median interval + margin`, margin = `max(2 ms, spread of the recent
-    intervals)` (second-largest minus median, so one hitch is ignored), at most half an
-    interval. Content time advances evenly at the output rate; the pair played may be one
-    **older** than the newest (about one game frame is queued). A late real frame holds at
-    t = 1 instead of hitching; an early one is absorbed. `Why` the ring has three slots.
-- **Pass-through** (real frames shown at once, renderer inert) **only** when the game's rate
-  reaches the output rate -- game interval / `o` below **1.02**, generating again above
-  **1.10** (a ratio band, not a time hold; 98% .. 91% of the refresh at a fixed
-  multiplier) -- or the renderer is unavailable (HDR, 10-bit, ...; it is still driven, so it
-  re-checks), or the cost guard trips. `Why` the old refresh-fit step-down (game fps x N >
-  1.2 x refresh) and its 0.5 s hysteresis are gone: it passed through a 144 Hz game at 86 fps
-  with 2x, which the user rejected; a fixed multiplier now just saturates at the refresh.
-- **Game interval** (status line, Smoothness, the pass-through ratio) = median of the last 8
-  arrival intervals, clamped to 4-50 ms, trusted after 4 intervals (warm-up: real frames
-  are copied meanwhile so the first pair has its previous frame).
-- **Reset** (no FG for the next frame, the previous real frames are forgotten) on a
-  focus/window change, size/format change, a gap over 100 ms, fades, Steam UI windows and
-  streaming clients. `Why:` frames are keyed by commit id, not texture pointer, because
-  gamescope reuses one texture per `wl_buffer` -- pointer equality misses re-commits, and
-  without a reset two unrelated images would be blended.
-- **Cost guard.** The renderer reports the estimate's time and one synth's. A pair's cost
-  is `estimate + g x synth`; when that exceeds 25% of the game interval the **output rate is
-  lowered** (`o` raised to `interval / (g_max + 1)`) until it fits, and if not even one
-  generated frame per pair fits it passes through (reason CostGuard). A probe retries every
-  10 s with one generated frame per pair, judged on the next fresh measurement (the
-  renderer's sequence number), and gives up after 3 s without one. It never changes the
-  user's Quality preset (a flow-scale change needs a GPU wait, which would stutter if it
-  flapped). No guard without timestamps.
-  **Switch (2026-10-04, `framegen.gpu_limit`, row "Limit to GPU speed").** The user: *"I should
-  be able to disable the 'limit to keep up with GPU' feature."* Off sets
-  `Pacer::Inputs::costGuard = false` (packed config bit 27, `fghost::Config::gpuLimit`): the
-  pacer clears `m_bCostBlocked`/`m_bProbing` (so a cap or pass-through lifts at once), never raises
-  `o` for cost, never reports CostGuard and never probes; the renderer still measures, so turning
-  it back on caps immediately and the status/debug log keep their numbers. `Why:` the guard
-  trades the chosen output rate for the game's own frame rate; someone who wants the rate
-  regardless (and accepts a slower game) needs a way to say so. **Default off:** the user, on
-  the first cut (default on): *"turn it off by default. I personally believe, that it is
-  useless/defeats the whole purpose"*; so a fresh or older profile never caps or passes through
-  for cost unless the switch is turned on. The user's fuller reasoning: *"it's fine if it takes up more GPU time. So it actually decreases the real FPS because it's supposed to just make the whole experience move and not switch back and forth. ... For example, if I have 120 FPS and it turns off, that looks substantially worse than, for example, having 90 FPS and it being generated up to 280."* In short: a steady generated output beats protecting the game's own frame rate, because toggling generation on and off looks worse than a lower real rate that is always generated. (The pure `Pacer::Inputs::costGuard` still defaults
-  to true, and the pacing tests drive it explicitly.)
-- **Cadence-skip vblanks do not paint** (2026-10-04). When `o` is longer than a vblank and no
-  new output is due, the pacer says `Decision::skip` (only if nothing but frame generation
-  asked for the paint: no UI / cursor / fade repaint, no repaint that is not the arrival of a
-  real frame or its own `force_repaint()`): `FrameGen_PrePaint()` returns true, the loop does
-  not call `paint_all()` and nothing is committed; the host keeps the last buffer. A skip
-  consumes nothing (the fresh real frame stays pending for the due paint) and asks for the
-  next vblank. `Why`: the previous behaviour re-presented the cached output on every such
-  vblank, which made a 30 fps game at 2x commit 83 times a second instead of 60 (host and
-  GPU work for an identical image). A genuine repaint -- or one that cannot be told apart from
-  the pacer's own forced repaint in the same instant -- waits at most until the next due
-  vblank.
-- **Synth clamp**: at most 24 generated frames per pair (`kMaxSynthsPerPair`); a pair at
-  its cap repeats its last output.
+**Cost guard, and its switch (2026-10-04, `framegen.gpu_limit`, row "Limit to GPU speed").**
+The guard's mechanics are the library's (`Inputs::costGuard`; the budget is the estimate plus
+every synth, a blurred output counting as `blurSamples` of them -- the renderer's published
+"synth" time is per *sample* for that reason). The user: *"I should be able to disable the
+'limit to keep up with GPU' feature."* Off sets `Inputs::costGuard = false` (packed config bit
+27, `fghost::Config::gpuLimit`): a cap or pass-through lifts at once and it never probes; the
+renderer still measures, so turning it back on caps immediately and the status / debug log
+keep their numbers. `Why:` the guard trades the chosen output rate for the game's own frame
+rate; someone who wants the rate regardless (and accepts a slower game) needs a way to say so.
+**Default off:** the user, on the first cut (default on): *"turn it off by default. I personally
+believe, that it is useless/defeats the whole purpose"*; so a fresh or older profile never caps
+or passes through for cost unless the switch is turned on. The user's fuller reasoning: *"it's
+fine if it takes up more GPU time. So it actually decreases the real FPS because it's supposed
+to just make the whole experience move and not switch back and forth. ... For example, if I
+have 120 FPS and it turns off, that looks substantially worse than, for example, having 90 FPS
+and it being generated up to 280."* In short: a steady generated output beats protecting the
+game's own frame rate, because toggling generation on and off looks worse than a lower real
+rate that is always generated. (The library's `Inputs::costGuard` itself defaults to true.)
 
 ### VRR and tearing: timer-paced while generating
 
 While FG is **generating**, gamescope paces its own output frames on the **vblank timer**,
 exactly as on a fixed-refresh display, even with VRR or tearing enabled -- the main loop's
-`PaintTick()` (`Pacing.h`) lets only timer ticks paint, and the flip is a normal one;
+`PaintTick()` (`pacing.h`) lets only timer ticks paint, and the flip is a normal one;
 otherwise the loop would paint on every commit arrival (VRR treats every iteration as a
 vblank, a tearing surface paints at once) and the output frames would go out bunched at
 arrival times. VRR/tearing stay **enabled on the display** (D2: FG never forces VRR off);
@@ -415,7 +417,7 @@ vblank timer:
   (`FrameGen_TakeExtraTick()`), and `PaintTick()` lets **only** these ticks paint while it is
   active -- vblank-timer ticks keep running (presented events, cursor, re-arm) but do not paint,
   or output frames would also land at vblank times that are not the output cadence.
-- **V** for the paint is the timer's target time (`Inputs::vblankNs`), so `tau = V - D` is
+- **V** for the paint is the timer's target time (`Inputs::presentNs`), so `tau = V - D` is
   evenly spaced; the paint goes through the same `FrameGen_PrePaint` -> `SetFrame` ->
   `paint_all` path with `bPaintTick` true. `g_SteamCompMgrVBlankTime.ulWakeupTime` is set to the
   tick's wakeup so the backends' draw-time feedback measures this paint, not the time since the
@@ -486,7 +488,7 @@ frames perfectly evenly and adds about one game frame of delay.*
 single toggle to enable and disable framegen in general, and then below that should just
 be the multiplier. It shouldn't be combined into one."* Internally `fghost::Config` gained
 `bool enabled` (packed word bit 26, `Enabled()`/the gate follow it) and `Mode::Off` stays
-in the enum only because `Pacing.h`'s `Mode` mirrors it (`steamcompmgr.cpp` static_asserts
+in the enum only because `pacing.h`'s `Mode` mirrors it (`steamcompmgr.cpp` static_asserts
 the two match); the config never produces it.
 
 `Why:` the library's expert dials (searchPenalty, smoothBonus, sceneCutSad, globalFallback)
@@ -527,7 +529,11 @@ lines from `steamcompmgr.cpp`:
   through, of the pass reason or of the renderer's reason: `frame generation: <mode>,
   <priority>, game .. fps, presented .. fps (x, generating|passing through), delay .. ms,
   pacing: "<reason>" (n), renderer: <text>`;
-- info on `frame generation: on, <mode>, <priority>` and `frame generation: off`;
+- the status lines also carry the motion blur part (`motion blur off` / `motion blur 4
+  samples, 50% shown frame, gaussian, window 8.3 ms`) and are keyed on blur's settings and
+  whether it is applied too;
+- info on `frame generation: on, <mode>, <priority>, motion blur on|off` at start and
+  `frame generation and motion blur: off` when both are off;
 - debug, at most every 5 s while on: the same numbers (`frame generation status: ...`).
 
 Not keyed on the rounded multiplier: a game at a fractional ratio would flap between two
@@ -584,7 +590,9 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 The library has no root `meson.build`, and Meson's sandbox forbids handing files under
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
-nested subproject`), so `subproject()` is impossible. Its 17 shaders (11 for the interpolation, 6 for UI protection) are compiled with
+nested subproject`), so `subproject()` is impossible. Its 20 shaders (11 for the interpolation, 6 for UI protection, 3 for motion blur --
+`blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
+test-only `gpu/blendbench.comp` is not built) are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work
@@ -599,7 +607,9 @@ about 60 (62 commits/s), fixed 8x about 120 (122), target 120 about 121 for both
 (122 / 123), and fixed 8x with Pause at refresh rate off about 226 (the host discards the
 rest).
 
-`tests/test_framegen_pacing.cpp` covers the pure pacer: the content time and `t` for both
+The pacer's tests are the library's (`gpu/pacingtest.cpp`, built from `subprojects/FrameGen`);
+gamescope's own copy (`tests/test_framegen_pacing.cpp`) was deleted 2026-10-04 with the pacer.
+For reference, the deleted file covered the pure pacer: the content time and `t` for both
 priorities (and that tau never goes backwards), a fixed multiplier saturating at the
 refresh with no step-down, the Bresenham cadence giving exactly N x fps below it, Target
 mode following the latest interval on the next pair, pass-through only at game fps >= the

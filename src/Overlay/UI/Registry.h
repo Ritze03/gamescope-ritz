@@ -1199,7 +1199,15 @@ namespace gamescope::ui
 	// `#define None 0L`, so `RailGroup::None` failed to compile there even
 	// though this header alone never sees an X11 include. See the
 	// accordion section below.
-	enum class RailGroup : uint8_t { Display, Overlay, Input, Misc, Settings, Other, Nothing };
+	//
+	// MOTION (2026-10-04) is the seventh group, between DISPLAY and OVERLAY: Frame
+	// generation (moved out of DISPLAY) and Motion blur. The user's own words for
+	// the architecture it sits on: "you're basically only building the GUI in this
+	// chat and most of the stuff should go into the frame gen itself" -- the two
+	// features are separate switches that work alone and together ("all of them are
+	// kind of separate, but they can all be turned on at the same time"), so they
+	// are one group of their own rather than two more rows in DISPLAY.
+	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Misc, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 

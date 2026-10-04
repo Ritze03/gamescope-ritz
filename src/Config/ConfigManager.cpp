@@ -340,6 +340,22 @@ namespace gamescope::config
                     f.ui_protection = sUi;
             }
 
+            // Motion blur (2026-10-04). Additive, like framegen above: samples and
+            // amount are clamped, an unknown enum string keeps the default.
+            if ( const nlohmann::json *pBlur = JGetObject( j, "motion_blur" ) )
+            {
+                auto &m = s.motion_blur;
+                m.enabled = JGetBool( *pBlur, "enabled", m.enabled );
+                m.samples = std::clamp( JGetInt( *pBlur, "samples", m.samples ), 2, 8 );
+                m.amount = std::clamp( JGetInt( *pBlur, "amount", m.amount ), 0, 100 );
+                const std::string sRel = JGetString( *pBlur, "relative", m.relative );
+                if ( sRel == "shown" || sRel == "game" )
+                    m.relative = sRel;
+                const std::string sWeights = JGetString( *pBlur, "weights", m.weights );
+                if ( sWeights == "even" || sWeights == "gaussian" )
+                    m.weights = sWeights;
+            }
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -739,6 +755,14 @@ namespace gamescope::config
             jFrameGen[ "hud_protection" ] = fg.hud_protection;
             jFrameGen[ "ui_protection" ] = fg.ui_protection;
 
+            const auto &mb = s.motion_blur;
+            nlohmann::json jMotionBlur = nlohmann::json::object();
+            jMotionBlur[ "enabled" ] = mb.enabled;
+            jMotionBlur[ "samples" ] = mb.samples;
+            jMotionBlur[ "amount" ] = mb.amount;
+            jMotionBlur[ "relative" ] = mb.relative;
+            jMotionBlur[ "weights" ] = mb.weights;
+
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;
             jSaturation[ "strength" ] = s.reshade.saturation.strength;
@@ -831,6 +855,7 @@ namespace gamescope::config
             j[ "autoclicker" ] = std::move( jAutoclicker );
             j[ "null_binds" ] = std::move( jNullBinds );
             j[ "framegen" ] = std::move( jFrameGen );
+            j[ "motion_blur" ] = std::move( jMotionBlur );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );

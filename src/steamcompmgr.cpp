@@ -108,7 +108,7 @@
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/FrameGenHost.h"
-#include "FrameGen/Pacing.h"
+#include "../subprojects/FrameGen/gpu/pacing.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
 #include "Audio/Volume.h"
@@ -7783,18 +7783,21 @@ register_systray(xwayland_ctx_t *ctx)
 }
 
 // ---------------------------------------------------------------------------
-//  Frame generation pacing -- the steamcompmgr half (superdoc/planning/
-//  fidelityfx-opticalflow-framegen.md 5.1/5.2). All the decisions live in
-//  FrameGen/Pacing.h (pure, unit-tested); this is only the plumbing:
+//  Frame generation / motion blur pacing -- the steamcompmgr half (superdoc/
+//  planning/fidelityfx-opticalflow-framegen.md 5.1/5.2). All the decisions live in
+//  the FrameGen LIBRARY (frame-gen-ritz, gpu/pacing.h, namespace
+//  framegen::pacing, header-only, with its own test suite); this is only the
+//  plumbing -- gamescope keeps GUI and platform glue, no feature logic of its own:
 //
 //    arrival  handle_done_commit(): a real frame became the focused window's
 //             newest usable commit -> s_FrameGen.pacer.OnArrival()
 //    paint    main loop, right before paint_all(): FrameGen_PrePaint() asks the
-//             pacer which output frame this vblank shows -- the real frame, or a
-//             generated one at some t between two real frames, for the content
-//             time (vblank time V - delay D) -- and hands it to
-//             fghost::SetFrame(); paint_all() then builds layer 0 from the same
-//             commit and vulkan_composite() substitutes the generated frame
+//             pacer (whenever ANY of frame generation / motion blur is on) which
+//             output frame this vblank shows -- the real frame, a generated one at
+//             some t between two real frames, or either one blurred over a window
+//             [t0, t1] -- for the content time (vblank time V - delay D) -- and
+//             hands it to fghost::SetFrame(); paint_all() then builds layer 0 from
+//             the same commit and vulkan_composite() substitutes the output
 //    repeat   main loop, right after hasRepaint is cleared: FrameGen_PostPaint()
 //             forces the repaint that the rest of the pair needs on the next
 //             vblank. It MUST come after `hasRepaint = false`, or that clear
@@ -7805,7 +7808,7 @@ register_systray(xwayland_ctx_t *ctx)
 //  sequence; CVBlankTimer ticks at g_nNestedRefresh, else g_nOutputRefresh).
 //  Under VRR or for a tearing surface the main loop would paint on every commit
 //  arrival; while FG is generating it paints on timer ticks only instead
-//  (FrameGen_TimerPaced() / fgpacing::PaintTick() in the main loop, and a
+//  (FrameGen_TimerPaced() / framegen::pacing::PaintTick() in the main loop, and a
 //  normal sync flip), so the output frames keep their even spacing. VRR and
 //  tearing stay enabled on the display -- FG never forces them off -- and while
 //  FG passes real frames through they behave as they always did. V -- the time
@@ -7813,25 +7816,28 @@ register_systray(xwayland_ctx_t *ctx)
 //  (g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank), the one place the
 //  display's clock enters.
 //
-//  Beyond the refresh ("Pause at refresh rate" off, Pacing.h's "BEYOND THE
+//  Beyond the refresh ("Pause at refresh rate" off, pacing.h's "BEYOND THE
 //  REFRESH RATE"): when the pacer's output interval is shorter than a vblank
 //  (Pacer::ExtraTimer()) the vblank timer cannot drive the output, so
 //  g_FrameGenExtraTimer -- a timerfd on g_SteamCompMgrWaiter -- is armed for each
 //  output frame's own time (previous target + o, never in the past) and ONLY its
-//  ticks paint (fgpacing::PaintTick()); V for that paint is the timer's target.
+//  ticks paint (framegen::pacing::PaintTick()); V for that paint is the timer's target.
 //  The vblank timer keeps ticking for everything else. Only where a present
 //  between vblanks is shown or discarded without blocking: the nested Wayland
 //  backend (the host shows the newest buffer) and a tearing DRM flip
 //  (FrameGen_CanExceedRefresh()); everywhere else Off behaves as On.
 //
-//  Off costs one relaxed atomic load per paint (fghost::Enabled()) and one plain
+//  Off costs one relaxed atomic load per paint (fghost::Active()) and one plain
 //  bool read per focused-window commit: no extra repaint, no SetFrame, no
 //  status, no timer armed.
 // ---------------------------------------------------------------------------
 namespace
 {
-	// fghost::PassReason and fgpacing::Reason are the same list; Pacing.h cannot
-	// include the host header, so the mapping is a cast and this keeps it honest.
+	namespace fgpacing = framegen::pacing;
+
+	// fghost::PassReason and framegen::pacing::Reason are the same list; pacing.h
+	// cannot include the host header, so the mapping is a cast and this keeps it
+	// honest.
 	static_assert( uint8_t( fghost::PassReason::Normal ) == uint8_t( fgpacing::Reason::Normal ) );
 	static_assert( uint8_t( fghost::PassReason::Off ) == uint8_t( fgpacing::Reason::Off ) );
 	static_assert( uint8_t( fghost::PassReason::WarmingUp ) == uint8_t( fgpacing::Reason::WarmingUp ) );
@@ -7845,6 +7851,8 @@ namespace
 	static_assert( uint8_t( fghost::Priority::LowLatency ) == uint8_t( fgpacing::Priority::LowLatency ) );
 	static_assert( uint8_t( fghost::Priority::Smoothness ) == uint8_t( fgpacing::Priority::Smoothness ) );
 	static_assert( fghost::kMaxMultiplier == fgpacing::kMaxN );
+	static_assert( uint8_t( fghost::BlurRel::Shown ) == uint8_t( fgpacing::BlurRelative::ShownFrame ) );
+	static_assert( uint8_t( fghost::BlurRel::Game ) == uint8_t( fgpacing::BlurRelative::GameFrame ) );
 
 	struct FrameGenPacing_t
 	{
@@ -7907,23 +7915,29 @@ namespace
 		fghost::PassReason ePass = fghost::PassReason::Off;
 		fghost::Unavailable eUnavailable = fghost::Unavailable::Ok;
 		uint64_t ulLastLine = 0;   // last line of either kind, for the 5 s periodic one
+		bool bFg = false;          // frame generation switched on
+		bool bBlur = false;        // motion blur switched on
+		bool bBlurActive = false;
+		int nBlurKey = 0;          // samples / amount / relative / weights
 	};
 	FrameGenLog_t s_FrameGenLog;
 
-	// Is frame generation generating right now, i.e. should the main loop pace
-	// its paints on the vblank timer? True while FG is on and the pacer's last
-	// plan was to generate. Under VRR and for a tearing surface the loop would
-	// otherwise paint on every commit arrival (see fgpacing::PaintTick()); while
-	// generating, the output frames are painted on timer ticks instead, exactly
-	// as on a fixed-refresh display. VRR / tearing stay enabled on the display
-	// (D2: FG never forces them off); only OUR paint cadence follows the timer.
-	// While passing through (the game already reaches the output rate, HDR, the
-	// cost guard, still warming up) this is false and the loop behaves as without
-	// frame generation. One relaxed atomic load when FG is off.
-	// steamcompmgr thread only.
+	// Is the pacer planning right now, i.e. should the main loop pace its paints
+	// on the vblank timer? True while frame generation or motion blur is on and the
+	// pacer's last plan was to produce outputs (Planning(): frame generation,
+	// or one output per real frame for blur -- NOT Generating(), which is false in
+	// real-rate mode, where VRR arrival paints would otherwise leak through). Under
+	// VRR and for a tearing surface the loop would otherwise paint on every commit
+	// arrival (see framegen::pacing::PaintTick()); while planning, the output frames
+	// are painted on timer ticks instead, exactly as on a fixed-refresh display.
+	// VRR / tearing stay enabled on the display (D2: FG never forces them off); only
+	// OUR paint cadence follows the timer. While passing through (the game already
+	// reaches the output rate with blur off, HDR, the cost guard, still warming up)
+	// this is false and the loop behaves as without frame generation. One relaxed
+	// atomic load when both are off. steamcompmgr thread only.
 	bool FrameGen_TimerPaced()
 	{
-		return fghost::Enabled() && s_FrameGen.bActive && s_FrameGen.pacer.Generating();
+		return fghost::Active() && s_FrameGen.bActive && s_FrameGen.pacer.Planning();
 	}
 
 	// Is the output paced on g_FrameGenExtraTimer instead of the vblank timer?
@@ -8004,8 +8018,9 @@ namespace
 	}
 
 	// One line when the mode / multiplier / target / priority, whether it is
-	// generating, the pass reason or the renderer's reason changes, plus (debug) a
-	// compact one at most every 5 s while FG is on. Called where the pacing status
+	// generating, motion blur's settings or whether it is applied, the pass reason
+	// or the renderer's reason changes, plus (debug) a compact one at most every 5 s
+	// while FG or blur is on. Called where the pacing status
 	// is published and when the renderer's reason moves, never per frame. (Not
 	// keyed on the rounded multiplier: a game at a fractional ratio would flap
 	// between two values and spam the log.)
@@ -8013,32 +8028,47 @@ namespace
 	{
 		FrameGenLog_t &L = s_FrameGenLog;
 		const fghost::Config cfg = fghost::GetConfig();
-		const bool bGenerating = status.activeN >= 2;
+		const fghost::BlurConfig blur = fghost::GetBlurConfig();
+		const bool bGenerating = status.fgActive;
 		const bool bExtra = FrameGen_ExtraPaced();
+		const int nBlurKey = blur.samples | ( blur.amountPercent << 4 ) | ( int( blur.relative ) << 11 ) | ( int( blur.weights ) << 12 );
 		const bool bChanged = !L.bValid || int( cfg.mode ) != L.nMode || cfg.multiplier != L.nMultiplier ||
 			cfg.targetFps != L.nTarget || int( cfg.priority ) != L.nPriority || cfg.pauseAtRefresh != L.bPause ||
 			bExtra != L.bExtra || bGenerating != L.bGenerating ||
-			status.reason != L.ePass || eUnavailable != L.eUnavailable;
+			status.reason != L.ePass || eUnavailable != L.eUnavailable ||
+			cfg.enabled != L.bFg || blur.enabled != L.bBlur || status.blurActive != L.bBlurActive || nBlurKey != L.nBlurKey;
 		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
 		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
 		if ( !bChanged && !bPeriodic )
 			return;
 
-		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), cfg.pauseAtRefresh, bExtra, bGenerating, status.reason, eUnavailable, ulNow };
+		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), cfg.pauseAtRefresh, bExtra, bGenerating, status.reason, eUnavailable, ulNow,
+			cfg.enabled, blur.enabled, status.blurActive, nBlurKey };
 
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
 		const char *pszPriority = cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency";
 
+		// "motion blur off" / "motion blur 4 samples, 50% shown frame, gaussian, window 8.3 ms"
+		char szBlur[ 128 ];
+		if ( !blur.enabled )
+			snprintf( szBlur, sizeof( szBlur ), "motion blur off" );
+		else if ( status.blurActive )
+			snprintf( szBlur, sizeof( szBlur ), "motion blur %d samples, %d%% %s frame, %s, window %.1f ms", status.blurSamples,
+				blur.amountPercent, blur.relative == fghost::BlurRel::Game ? "game" : "shown",
+				blur.weights == fghost::BlurWeighting::Even ? "even" : "gaussian", status.blurWindowMs );
+		else
+			snprintf( szBlur, sizeof( szBlur ), "motion blur on, not applied" );
+
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
-				szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, pacing: \"%s\" (%u), renderer: %s",
+				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
-				bGenerating ? "generating" : "passing through", status.delayMs,
+				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
 		else
-			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, pacing: \"%s\", renderer: %s",
-				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs,
+			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, pacing: \"%s\", renderer: %s",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
 	}
 
@@ -8053,6 +8083,11 @@ namespace
 		status.chosenN = r.chosenN;
 		status.activeN = r.activeN;
 		status.delayMs = r.delayMs;
+		status.fgActive = r.fgActive;
+		status.blurActive = r.blurActive;
+		status.blurWindowMs = r.blurWindowMs;
+		status.blurSamples = r.blurSamples;
+		status.bufferDelayMs = r.bufferDelayMs;
 		status.reason = fghost::PassReason( uint8_t( r.reason ) );
 		return status;
 	}
@@ -8068,7 +8103,7 @@ namespace
 // at 60 fps on 144 Hz), arrival is not.
 static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 {
-	fgpacing::LayerKey layer;
+	fgpacing::FrameFormat layer;
 	if ( pCommit->vulkanTex )
 	{
 		layer.width = pCommit->vulkanTex->width();
@@ -8088,7 +8123,10 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 // caller must NOT paint -- the display keeps the last buffer.
 static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64_t ulExtraTarget, bool bCanExceed, bool bGenuineRepaint )
 {
-	if ( !fghost::Enabled() )
+	// The pacer runs whenever ANY feature is on (frame generation OR motion blur):
+	// with frame generation off, blur alone still wants one planned output per real
+	// frame (Inputs::frameGen false = real-rate planning).
+	if ( !fghost::Active() )
 	{
 		if ( s_FrameGen.bActive )
 		{
@@ -8104,17 +8142,18 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			status.reason = fghost::PassReason::Off;
 			fghost::PublishPacingStatus( status );
 			s_FrameGenLog = FrameGenLog_t();
-			fg_log.infof( "frame generation: off" );
+			fg_log.infof( "frame generation and motion blur: off" );
 		}
 		return false;
 	}
 	const fghost::Config cfg = fghost::GetConfig();
+	const fghost::BlurConfig blurCfg = fghost::GetBlurConfig();
 	if ( !s_FrameGen.bActive )
 	{
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
-		fg_log.infof( "frame generation: on, %s, %s", szMode,
-			cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency" );
+		fg_log.infof( "frame generation: %s%s, %s, motion blur %s", cfg.enabled ? "on, " : "off", cfg.enabled ? szMode : "",
+			cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency", blurCfg.enabled ? "on" : "off" );
 	}
 	s_FrameGen.bActive = true;
 
@@ -8162,10 +8201,10 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		const uint64_t ulTarget = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
 		constexpr uint64_t kPlausibleNs = 1000ull * 1000ull * 1000ull;
 		const bool bPlausible = bVblank && ulTarget != 0 && ulTarget < ulNow + kPlausibleNs && ulTarget + kPlausibleNs > ulNow;
-		in.vblankNs = bPlausible ? std::max( ulTarget, ulNow ) : ulNow;
+		in.presentNs = bPlausible ? std::max( ulTarget, ulNow ) : ulNow;
 		// An extra-timer tick is presented at the time the timer was armed for.
 		if ( ulExtraTarget > 1 )
-			in.vblankNs = ulExtraTarget;
+			in.presentNs = ulExtraTarget;
 	}
 	in.mode = fgpacing::Mode( uint8_t( cfg.mode ) );
 	in.multiplier = cfg.multiplier;
@@ -8182,6 +8221,15 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.synthMs = renderStatus.lastSynthMs;
 	in.costSeq = renderStatus.costSeq;
 	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
+	// The three features, each its own switch (the library composes them): frame
+	// generation (the cadence), motion blur (the shutter window). The buffer's
+	// extraDelayNs stays 0 until its lag-spike detection exists.
+	in.frameGen = cfg.enabled;
+	in.extraDelayNs = 0;
+	in.blur = blurCfg.enabled;
+	in.blurSamples = blurCfg.samples;
+	in.blurAmount = double( blurCfg.amountPercent ) / 100.0;
+	in.blurRelative = fgpacing::BlurRelative( uint8_t( blurCfg.relative ) );
 
 	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
 	if ( d.skip )
@@ -8202,10 +8250,17 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	request.currId = d.currId;
 	request.outId = d.outId;
 	request.t = d.inert ? -1.0f : d.t;
+	// The pacer's decision, applied as it says (the renderer's one rule, see
+	// fghost::FrameRequest): prevId != 0 -> recordSynthBlur( prev, curr, out, t0, t1 );
+	// else the real frame showId. t0/t1/showId pass straight through.
+	request.t0 = d.t0;
+	request.t1 = d.t1;
+	request.showId = d.showId;
+	request.historyDepth = s_FrameGen.pacer.HistoryDepth();
 	fghost::SetFrame( request );
 	s_FrameGen.bRepaintNext = d.repaintNext;
 	s_FrameGen.bExtraWantNext = false;   // this paint answered it; PostPaint sets it again if more is due
-	s_FrameGen.ulLastV = in.vblankNs;
+	s_FrameGen.ulLastV = in.presentNs;
 
 	if ( s_FrameGen.pacer.StatusDue( in.now ) )
 	{
@@ -8736,12 +8791,12 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 								&& !bMangoappSocketDisable;
 
 	bool bValidPreemptiveScale = reslistentry.pAcquirePoint && pCurrentFocus && w == pCurrentFocus->focusWindow && cv_upscale_preemptive;
-	// Frame generation substitutes layer 0 BEFORE the upscaler (FSR/NIS then run in
+	// Frame generation / motion blur substitute layer 0 BEFORE the upscaler (FSR/NIS then run in
 	// the present composite, on the generated frame), and its hook skips a layer
 	// that arrives already upscaled -- so no pre-emptive upscale while it is on.
 	// Left "valid" on purpose: the !bPreemptiveUpscale branch below then also
 	// frees the temp upscale images.
-	bool bPreemptiveUpscale = bValidPreemptiveScale && !fghost::Enabled() && newCommit->ShouldPreemptivelyUpscale();
+	bool bPreemptiveUpscale = bValidPreemptiveScale && !fghost::Active() && newCommit->ShouldPreemptivelyUpscale();
 
 	bool bKnownReady = false;
 

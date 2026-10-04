@@ -12,9 +12,11 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
-- **Frame generation**: a new Frame generation area under Display (below Shaders)
-  shows extra frames for every game frame, with Quality, Artifact safety and Static HUD
-  protection settings and a live status line.
+- **Motion blur**: a new Motion blur tab blends generated in-between frames into each
+  shown frame, with or without frame generation.
+- **Frame generation**: a new Frame generation area shows extra frames for every game
+  frame, with Quality, Artifact safety and Static HUD protection settings and a live
+  status line.
 - **Target fps and Priority**: frame generation can aim at a target frame rate, with a
   Low latency or Smoothness priority, and fixed multipliers now go up to 8×.
 - **UI protection**: frame generation keeps a still crosshair, or with Whole screen
@@ -29,6 +31,8 @@ The newest version below is the one this build reports.
   reaches your refresh rate, or keeps generating above it.
 
 ### Info
+- **MOTION group**: Frame generation and Motion blur moved to a new MOTION group
+  between Display and Overlay.
 - **Vibrancy range**: the Vibrancy strength slider now goes up to 3 instead of 2.
 
 ## [0.10.2] – 2026-09-29

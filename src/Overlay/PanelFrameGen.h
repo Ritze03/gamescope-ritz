@@ -1,5 +1,5 @@
-// The "Frame generation" settings area (`image.framegen`, DISPLAY rail group,
-// directly below Shaders) -- the user-facing half of the FrameGen integration.
+// The "Frame generation" settings area (`image.framegen`, MOTION rail group, first
+// area; Motion blur is the second) -- the user-facing half of the FrameGen integration.
 // The renderer and the pacing live in FrameGen/FrameGenHost.h (`fghost`); this
 // file owns only the four per-profile settings, their rows, and the one live
 // Status line. See config::FrameGenSettings for the stored shape.

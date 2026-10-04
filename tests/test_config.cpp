@@ -1907,6 +1907,84 @@ TEST_CASE( "framegen: gpu_limit defaults to false when absent and round-trips", 
     REQUIRE( LoadSections().framegen.gpu_limit == false );
 }
 
+// ---------------------------------------------------------------------
+// Motion blur (2026-10-04, Overlay/PanelMotionBlur.cpp): per-profile, under
+// "motion_blur", additive (no schema bump), readable-string enums.
+// ---------------------------------------------------------------------
+
+TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4/50/shown/gaussian", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.motion_blur.enabled == false );
+    REQUIRE( Settings{}.motion_blur.samples == 4 );
+    REQUIRE( Settings{}.motion_blur.amount == 50 );
+    REQUIRE( Settings{}.motion_blur.relative == "shown" );
+    REQUIRE( Settings{}.motion_blur.weights == "gaussian" );
+
+    // A profile written before the section existed loads the defaults.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 2 }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.motion_blur.enabled == false );
+    REQUIRE( loaded.motion_blur.samples == 4 );
+    REQUIRE( loaded.motion_blur.amount == 50 );
+    REQUIRE( loaded.motion_blur.relative == "shown" );
+    REQUIRE( loaded.motion_blur.weights == "gaussian" );
+
+    Settings s{};
+    s.motion_blur.enabled = true;
+    s.motion_blur.samples = 7;            // every whole number 2..8 is a real choice
+    s.motion_blur.amount = 85;
+    s.motion_blur.relative = "game";
+    s.motion_blur.weights = "even";
+    REQUIRE( SaveSections( s ) );
+
+    loaded = LoadSections();
+    REQUIRE( loaded.motion_blur.enabled == true );
+    REQUIRE( loaded.motion_blur.samples == 7 );
+    REQUIRE( loaded.motion_blur.amount == 85 );
+    REQUIRE( loaded.motion_blur.relative == "game" );
+    REQUIRE( loaded.motion_blur.weights == "even" );
+
+    // The keys the Motion blur area's rows are bound to (the Shell's
+    // inherited/overridden dot and "Reset to inherited" go through this).
+    REQUIRE( IsSettingsKey( "motion_blur.enabled" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.samples" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.amount" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.relative" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.weights" ) );
+}
+
+TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum string keeps its default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "motion_blur": { "enabled": true, "samples": 1, "amount": 250, "relative": "wide", "weights": "box" }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.motion_blur.enabled == true );
+    REQUIRE( loaded.motion_blur.samples == 2 );          // below 2 -> 2
+    REQUIRE( loaded.motion_blur.amount == 100 );         // above 100 -> 100
+    REQUIRE( loaded.motion_blur.relative == "shown" );   // unknown -> default
+    REQUIRE( loaded.motion_blur.weights == "gaussian" ); // unknown -> default
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "motion_blur": { "samples": 16, "amount": -5 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.motion_blur.samples == 8 );          // the library takes 16, the UI offers 2..8
+    REQUIRE( loaded.motion_blur.amount == 0 );
+    REQUIRE( loaded.motion_blur.enabled == false );
+}
+
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
 // no compositor deps, so it needs no Zoom.cpp link at all -- see that
 // header's own comment.

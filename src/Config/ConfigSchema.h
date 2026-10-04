@@ -510,6 +510,26 @@ namespace gamescope::config
         std::string ui_protection = "crosshair";
     };
 
+    // Motion blur (2026-10-04, this fork's own addition -- see
+    // Overlay/PanelMotionBlur.cpp and FrameGen/FrameGenHost.h's fghost::BlurConfig).
+    // Per profile. ADDITIVE, so no schema bump: an older config has no
+    // "motion_blur" object and resolves to these compiled-in defaults. The
+    // library (frame-gen-ritz) does all the work; this is only the user's choices.
+    struct MotionBlurSettings
+    {
+        bool enabled = false;
+        // Sub-frames averaged per shown frame, 2..8 (clamped on load; the library
+        // accepts 2..16, the UI offers every whole number up to 8).
+        int samples = 4;
+        // The shutter, in percent 0..100 (a fraction of one interval, see relative).
+        int amount = 50;
+        // What the shutter is measured against: "shown" (one SHOWN-frame interval,
+        // subtle) | "game" (one GAME-frame interval, the film look).
+        std::string relative = "shown";
+        // Sub-frame weights: "even" (box shutter) | "gaussian" (softer).
+        std::string weights = "gaussian";
+    };
+
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's
     // 3->4 comment above): the user pointed out this effect behaves like an
     // iPhone "Saturation" slider (a flat multiplier, same relative boost for
@@ -1254,6 +1274,7 @@ namespace gamescope::config
         AutoclickerSettings autoclicker;
         NullBindsSettings null_binds;
         FrameGenSettings framegen;
+        MotionBlurSettings motion_blur;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

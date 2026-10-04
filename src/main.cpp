@@ -39,6 +39,7 @@
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFrameGen.h"
+#include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
@@ -625,6 +626,8 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// holds the session profile's values from the first frame and again
 	// after every profile switch, same as the effects above.
 	gamescope::PanelFrameGen_ApplyStartupConfig( config );
+	// Motion blur (Motion blur area, per profile): the same, for the shutter.
+	gamescope::PanelMotionBlur_ApplyStartupConfig( config );
 
 	// This fork's own hotkeys (overlay.keybinds, src/Keybinds.cpp). Above the
 	// bStartup early-out on purpose: a saved rebind has to be in force from

@@ -8,20 +8,23 @@
 // generation code against --
 //   * the settings panel (Overlay/)        : Config, SetConfig/GetConfig,
 //                                            GetRenderStatus, GetPacingStatus
-//   * the pacing logic (steamcompmgr side) : Enabled, SetFrame, Reset,
+//   * the pacing glue (steamcompmgr side)  : Active, SetFrame, Reset,
 //                                            GetRenderStatus, PublishPacingStatus
 //   * the display backends                 : Enabled (force a full composite)
 //   * vulkan_composite() (rendervulkan.cpp): RenderWanted, RecordBaseLayer
 //
 // THE MODEL (superdoc/features/frame-generation.md, "Pacing"). Between two real
 // game frames P (prev) and C (curr) the library can make a generated frame at
-// ANY t in (0,1); pacing (FrameGen/Pacing.h) decides, for every output frame
-// (every vblank that is due a new image), which t to show, and calls
-// SetFrame(...) right before compositing it. The renderer does the work lazily,
+// ANY t in (0,1); pacing (frame-gen-ritz's gpu/pacing.h, framegen::pacing --
+// the library owns it; steamcompmgr only feeds it and applies its Decision)
+// decides, for every output frame (every vblank that is due a new image), which
+// pair, which t / blur window [t0, t1] or which real frame to show, and calls
+// SetFrame(...) right before compositing it. MOTION BLUR (BlurConfig) is the
+// same renderer call with a window instead of a point: recordSynthBlur(). The renderer does the work lazily,
 // once per output frame (see RecordBaseLayer). There is no "k of N" any more:
 // one estimate per pair, any number of synths at any t.
 //
-// OFF = ZERO COST. With frame generation off nothing in here runs per frame beyond one
+// OFF = ZERO COST. With frame generation AND motion blur off nothing in here runs per frame beyond one
 // relaxed atomic load (RenderWanted()), no Interpolator exists, no texture is
 // allocated, and the backends are free to direct-scanout. Turning it off frees
 // everything (after a g_device.waitIdle()).
@@ -85,6 +88,39 @@ namespace fghost
 	// The largest fixed multiplier.
 	constexpr int kMaxMultiplier = 8;
 
+	// ------------------------------------------------------------------
+	//  Motion blur (the Motion blur settings area; the library does the work)
+	// ------------------------------------------------------------------
+
+	// What the shutter is measured against (framegen::pacing::BlurRelative):
+	// Shown = one SHOWN-frame interval (subtle), Game = one GAME-frame interval
+	// (the "film look").
+	enum class BlurRel : uint8_t { Shown, Game };
+
+	// Weights of the sub-frames (framegen::BlurWeights).
+	enum class BlurWeighting : uint8_t { Even, Gaussian };
+
+	constexpr int kMinBlurSamples = 2;
+	constexpr int kMaxBlurSamples = 8;   // the library takes 16; the UI offers 2..8
+
+	// Independent of Config: motion blur works with frame generation off, and
+	// both on at once. Pushed to the renderer (library settings) and the pacer
+	// (Inputs) live; nothing here waits.
+	struct BlurConfig
+	{
+		bool enabled = false;
+		int samples = 4;             // kMinBlurSamples..kMaxBlurSamples (SetBlurConfig clamps)
+		int amountPercent = 50;      // the shutter, 0..100
+		BlurRel relative = BlurRel::Shown;
+		BlurWeighting weights = BlurWeighting::Gaussian;
+	};
+
+	// Replace the whole blur config. Thread-safe, cheap, any time. Like
+	// SetConfig(): switching the last feature off asks for one more composite so
+	// the resources are released.
+	void       SetBlurConfig( const BlurConfig &cfg );
+	BlurConfig GetBlurConfig();
+
 	struct Config
 	{
 		// The master switch. false: nothing runs (mode / multiplier are kept).
@@ -129,7 +165,12 @@ namespace fghost
 	// not pre-emptively upscale layer 0 while it is true (a pre-upscaled
 	// texture reaches vulkan_composite() already baked with
 	// bBaseLayerEffectsApplied, which is past the point FG can substitute).
-	bool Enabled();   // == Config::enabled
+	bool Enabled();   // == Config::enabled (frame generation only)
+
+	// Frame generation OR motion blur is on: the renderer is wanted, the backends
+	// must full-composite, steamcompmgr must not pre-upscale, and the pacer is
+	// driven. One relaxed atomic load.
+	bool Active();
 
 	// ------------------------------------------------------------------
 	//  Pacing -> renderer
@@ -157,6 +198,20 @@ namespace fghost
 		//           happens, so the next pair has its frame.
 		// 0 < t < 1: a generated frame between prevId and currId at t.
 		float t = -1.0f;
+		// THE ONE RENDERER RULE (the pacer's Decision, applied as it says):
+		//   prevId != 0 : recordSynthBlur( prev, curr, out, t0, t1 ) -- a plain synth
+		//                 when t0 == t1 (blur off), and the real frame currId (blurred)
+		//                 when t1 == 1. With blur on a REAL frame's output carries
+		//                 prevId = the previous real frame, currId = that frame, t = 1.
+		//   prevId == 0 : no renderer work; show the real frame showId.
+		float t0 = 1.0f;
+		float t1 = 1.0f;
+		// The real frame to show when prevId == 0: the newest, unless a lag-spike
+		// buffer delays (then an older frame still in the ring: it is substituted).
+		uint64_t showId = 0;
+		// Real frames the renderer's ring must hold (framegen::pacing::Pacer::
+		// HistoryDepth(): 3, more with a buffer). Only ever grows the ring.
+		int historyDepth = 3;
 	};
 
 	// Called by pacing from the steamcompmgr thread before each composite.
@@ -200,7 +255,8 @@ namespace fghost
 		// submissions have retired, never by waiting.
 		float lastPairGpuMs = -1.0f;
 		// The same measurement split: the motion estimate (once per real pair) and
-		// ONE synth (once per generated frame), milliseconds, < 0 = n/a. Cost of a
+		// ONE synth (once per generated frame; a blurred output counts as its sample
+		// count, so this is per SAMPLE then), milliseconds, < 0 = n/a. Cost of a
 		// pair with g generated frames is estimate + g x synth; the pacing cost
 		// guard budgets from these. lastSynthMs is the mean over the synths the
 		// profile covered (the library's query pool holds about a dozen).
@@ -256,6 +312,12 @@ namespace fghost
 		// HUD's Count generated frames option relies on that.
 		int   activeN = 0;
 		float delayMs = 0.0f;     // D: the extra latency pacing adds, in milliseconds
+		// Each feature separately (pacing's Report), for its own settings line.
+		bool  fgActive = false;     // frame generation is on and generating
+		bool  blurActive = false;   // motion blur is applied
+		float blurWindowMs = 0.0f;  // the last shutter window, ms of content time
+		int   blurSamples = 0;      // samples per output while blurActive
+		float bufferDelayMs = 0.0f; // the lag-spike buffer's part of delayMs (0 until it exists)
 		PassReason reason = PassReason::Normal; // why it is not generating as asked, or pass-through
 	};
 
@@ -268,8 +330,8 @@ namespace fghost
 	// ------------------------------------------------------------------
 
 	// True when vulkan_composite() should call RecordBaseLayer(): frame
-	// generation is on, OR it was on and still holds resources that the next
-	// call must release. This is the single atomic load the off path pays.
+	// generation or motion blur is on, OR it was on and still holds resources
+	// that the next call must release. This is the single atomic load the off path pays.
 	bool RenderWanted();
 
 	// Called once per full composite, BEFORE the ReShade / native-effects
@@ -294,8 +356,11 @@ namespace fghost
 	//   * on the first sight of a new newestId: copies layer 0 into a private
 	//     3-slot ring (decision D11 -- the game's buffers are never pinned) and
 	//     hands it to the library's recordObserve() (UI protection);
-	//   * for 0 < t < 1: the first synth of a real pair records recordEstimate
-	//     first, then recordSynth(t) into a pooled output (decision D13) cached
-	//     by outId, so a repeat composite of the same output records nothing.
+	//   * for a FrameRequest with prevId != 0: the first output of a real pair
+	//     records recordEstimate first, then recordSynthBlur(t0, t1) (a plain
+	//     synth when t0 == t1) into a pooled output (decision D13) cached by
+	//     outId, so a repeat composite of the same output records nothing; with
+	//     prevId == 0 it shows the real frame showId (layer 0, or an older ring
+	//     frame) and records nothing.
 	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace );
 }
