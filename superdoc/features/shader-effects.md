@@ -403,12 +403,11 @@ at 0, one at 255 — `sat = 1.0` exactly) is *already as saturated as an 8-bit e
 represent*, so no `strength` can push its measured chroma any further; this is not a bug,
 it is the ceiling every colour effect in this pipeline runs into eventually.
 
-**Why `0.0..2.0`, not `0.0..3.0` like Saturation's range:** at `strength = 2.0` the most
-saturated pixels get triple their original chroma before clamping (`gain = 3`), already
-enough headroom to push a moderately-saturated colour hard; `strength` is additive on top
-of the always-present `1.0`, unlike Saturation's `0.0..3.0` multiplier which has to reach
-all the way down to `0.0` (full grey) as one of its endpoints. `0.0` here is simply "off",
-not a second special value to reach.
+**Range `0.0..3.0`, additive on top of the always-present `1.0`:** `strength` is added to
+a neutral `1.0` gain, so `0.0` here is simply "off" and needs no second special value,
+unlike Saturation's `0.0..3.0` multiplier, which has to reach `0.0` (full grey) as one of
+its endpoints. At `strength = 3.0` the most saturated pixels get four times their original
+chroma before clamping (`gain = 4`).
 
 `Why:` raised from 2.0 to 3.0 on 2026-10-04 at the user's request (at 3.0 the gain is 4).
 

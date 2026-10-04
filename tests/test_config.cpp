@@ -1654,8 +1654,9 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
 {
     TempConfigHome home;
 
-    REQUIRE( Settings{}.framegen.mode == "off" );
-    REQUIRE( Settings{}.framegen.multiplier == 0 );
+    REQUIRE( Settings{}.framegen.enabled == false );
+    REQUIRE( Settings{}.framegen.mode == "fixed" );
+    REQUIRE( Settings{}.framegen.multiplier == 2 );
     REQUIRE( Settings{}.framegen.target_fps == 0 );
     REQUIRE( Settings{}.framegen.priority == "low_latency" );
     REQUIRE( Settings{}.framegen.pause_at_refresh == true );
@@ -1665,6 +1666,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
 
     Settings s{};
+    s.framegen.enabled = true;
     s.framegen.mode = "target";
     s.framegen.multiplier = 8;
     s.framegen.target_fps = 240;
@@ -1678,6 +1680,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
 
     const Settings loaded = LoadSections();
     REQUIRE( loaded.framegen.pause_at_refresh == false );
+    REQUIRE( loaded.framegen.enabled == true );
     REQUIRE( loaded.framegen.mode == "target" );
     REQUIRE( loaded.framegen.multiplier == 8 );
     REQUIRE( loaded.framegen.target_fps == 240 );
@@ -1694,6 +1697,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
 
     // The keys the Frame generation area's rows are bound to: the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this.
+    REQUIRE( IsSettingsKey( "framegen.enabled" ) );
     REQUIRE( IsSettingsKey( "framegen.mode" ) );
     REQUIRE( IsSettingsKey( "framegen.multiplier" ) );
     REQUIRE( IsSettingsKey( "framegen.target_fps" ) );
@@ -1711,7 +1715,8 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
 
     Settings s{};
     s.framegen.mode = "fixed";
-    s.framegen.multiplier = 1;            // not a real choice -> Off (so mode "fixed" -> "off")
+    s.framegen.enabled = true;
+    s.framegen.multiplier = 1;            // not a real choice -> normalised to 2; legacy fixed with < 2x had meant off
     s.framegen.priority = "fastest";      // unknown -> stays "low_latency"
     s.framegen.target_fps = 7;            // below 30 -> 30
     s.framegen.quality = "ultra";         // unknown -> stays "quality"
@@ -1721,8 +1726,9 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     REQUIRE( SaveSections( s ) );
 
     Settings loaded = LoadSections();
-    REQUIRE( loaded.framegen.multiplier == 0 );
-    REQUIRE( loaded.framegen.mode == "off" );
+    REQUIRE( loaded.framegen.multiplier == 2 );
+    REQUIRE( loaded.framegen.enabled == true );   // explicit `enabled` wins
+    REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.priority == "low_latency" );
     REQUIRE( loaded.framegen.target_fps == 30 );
     REQUIRE( loaded.framegen.quality == "quality" );
@@ -1768,7 +1774,9 @@ TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplie
         "framegen": { "multiplier": 0 }
     })";
     loaded = LoadSections();
-    REQUIRE( loaded.framegen.mode == "off" );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.enabled == false );
+    REQUIRE( loaded.framegen.multiplier == 2 );
 
     // The old ceiling of 4 is gone: 8 is a real multiplier now.
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -1778,6 +1786,62 @@ TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplie
     loaded = LoadSections();
     REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.multiplier == 8 );
+    REQUIRE( loaded.framegen.enabled == true );
+}
+
+TEST_CASE( "framegen: legacy mode off migrates to enabled=false", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "off", "multiplier": 4 }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.enabled == false );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.multiplier == 4 );   // the stored multiplier is kept
+
+    // An explicit `enabled` always wins over a legacy mode.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "enabled": true, "mode": "off", "multiplier": 3 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.enabled == true );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+
+    // Saving never writes "off" again.
+    loaded.framegen.enabled = false;
+    REQUIRE( SaveSections( loaded ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.enabled == false );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+}
+
+TEST_CASE( "framegen: legacy fixed/target without enabled loads as enabled", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 5 }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.enabled == true );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.multiplier == 5 );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "target", "target_fps": 240 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.enabled == true );
+    REQUIRE( loaded.framegen.mode == "target" );
+    REQUIRE( loaded.framegen.target_fps == 240 );
 }
 
 // "Pause at refresh rate" (2026-10-04) is additive: a profile written before it

@@ -473,13 +473,13 @@ namespace gamescope::config
     // renderer.
     struct FrameGenSettings
     {
-        // "off" | "fixed" | "target". Absent in a config written before
-        // 2026-10-04's Target fps mode: ConfigManager.cpp then derives it from
-        // `multiplier` (0 -> off, 2..8 -> fixed).
-        std::string mode = "off";
-        // Fixed mode: frames shown per real game frame, 2..8. 0 = never chosen
-        // (a normalised 1 reads as 0 too); a "fixed" mode with 0 loads as off.
-        int multiplier = 0;
+        // The master switch (split out of `mode` 2026-10-04: "off" used to be a
+        // mode). ConfigManager.cpp migrates a legacy mode "off" / absent mode.
+        bool enabled = false;
+        // "fixed" | "target": which kind of multiplier. Never "off" any more.
+        std::string mode = "fixed";
+        // Fixed mode: frames shown per real game frame, 2..8 (normalised on load).
+        int multiplier = 2;
         // Target mode: the output frame rate to aim for, 30..1000. 0 = the
         // display's refresh rate.
         int target_fps = 0;

@@ -286,15 +286,39 @@ namespace gamescope::config
             if ( const nlohmann::json *pFrameGen = JGetObject( j, "framegen" ) )
             {
                 auto &f = s.framegen;
-                const int nMult = std::clamp( JGetInt( *pFrameGen, "multiplier", f.multiplier ), 0, 8 );
-                f.multiplier = nMult < 2 ? 0 : nMult;
+                // `enabled` (the master switch) was split out of `mode` 2026-10-04:
+                // "off" used to be a mode. Legacy loads: mode "off" -> disabled
+                // + fixed; "fixed"/"target" without `enabled` -> enabled; no
+                // mode at all derives from the multiplier (0 -> disabled, 2..8
+                // -> enabled, fixed). An explicit `enabled` always wins. The
+                // multiplier is stored normalised to 2..8 either way.
+                const int nRawMult = std::clamp( JGetInt( *pFrameGen, "multiplier", 0 ), 0, 8 );
+                f.multiplier = nRawMult < 2 ? 2 : nRawMult;
                 const std::string sMode = JGetString( *pFrameGen, "mode", "" );
-                if ( sMode == "off" || sMode == "fixed" || sMode == "target" )
-                    f.mode = sMode;
+                bool bEnabled;
+                if ( sMode == "target" )
+                {
+                    f.mode = "target";
+                    bEnabled = true;
+                }
+                else if ( sMode == "fixed" )
+                {
+                    f.mode = "fixed";
+                    bEnabled = nRawMult >= 2;
+                }
+                else if ( sMode == "off" )
+                {
+                    f.mode = "fixed";
+                    bEnabled = false;
+                }
                 else
-                    f.mode = f.multiplier >= 2 ? "fixed" : "off";
-                if ( f.mode == "fixed" && f.multiplier < 2 )
-                    f.mode = "off";
+                {
+                    f.mode = "fixed";
+                    bEnabled = nRawMult >= 2;
+                }
+                if ( pFrameGen->contains( "enabled" ) && ( *pFrameGen )[ "enabled" ].is_boolean() )
+                    bEnabled = ( *pFrameGen )[ "enabled" ].get<bool>();
+                f.enabled = bEnabled;
                 const int nTarget = JGetInt( *pFrameGen, "target_fps", f.target_fps );
                 f.target_fps = nTarget <= 0 ? 0 : std::clamp( nTarget, 30, 1000 );
                 const std::string sPriority = JGetString( *pFrameGen, "priority", f.priority );
@@ -702,6 +726,7 @@ namespace gamescope::config
 
             const auto &fg = s.framegen;
             nlohmann::json jFrameGen = nlohmann::json::object();
+            jFrameGen[ "enabled" ] = fg.enabled;
             jFrameGen[ "mode" ] = fg.mode;
             jFrameGen[ "multiplier" ] = fg.multiplier;
             jFrameGen[ "target_fps" ] = fg.target_fps;

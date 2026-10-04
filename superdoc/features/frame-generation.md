@@ -3,7 +3,7 @@
 Shows extra frames on screen between the game's own, by synthesising them with
 optical-flow interpolation: a fixed multiplier of 2x to 8x, or a **Target fps**. Added
 2026-10-04, pacing reworked the same day (per-vblank fractional pacing, Target fps, Low
-latency / Smoothness, up to 8x). Off by default, per profile, DISPLAY rail group directly
+latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate from the multiplier choice), per profile, DISPLAY rail group directly
 below Shaders.
 
 Code map:
@@ -438,8 +438,9 @@ keybind, config section `framegen` (schema stays 5; additive).
 
 | Key | Values | Meaning |
 | --- | --- | --- |
-| `framegen.mode` | `off` (default) / `fixed` / `target` | the row "Frame generation": Off / 2x..8x / Target fps |
-| `framegen.multiplier` | 0, 2..8 | fixed mode's multiplier; 1 reads as 0 (a `fixed` mode with it loads as `off`), above 8 clamps to 8 |
+| `framegen.enabled` | `false` (default) / `true` | the master switch, the row "Frame generation" (split out of `mode` 2026-10-04) |
+| `framegen.mode` | `fixed` (default) / `target` | which kind of multiplier, the row "Multiplier": 2x..8x / Target fps. Never `off` any more |
+| `framegen.multiplier` | 2..8 (default 2) | fixed mode's multiplier; normalised to 2..8 on load (below 2 -> 2, above 8 -> 8) |
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
 | `framegen.priority` | `low_latency` (default) / `smoothness` | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
@@ -448,19 +449,33 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it |
 
-**Migration:** a config with no `mode` (written before Target fps) derives it from the old
-`multiplier`: 0 -> `off`, 2..8 -> `fixed` -- an old 3x profile stays 3x. Unknown strings keep
-the default.
+**Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
+`"off"` again): `mode: "off"` -> `enabled = false`, `mode = "fixed"`, the stored
+multiplier kept (normalised to 2..8); `mode: "fixed"` / `"target"` with no `enabled` ->
+`enabled = true` (a `fixed` with multiplier below 2 stays disabled, as it used to load as
+off); no `mode` and no `enabled` (written before Target fps) derives from the old
+`multiplier`: 0 -> disabled, 2..8 -> enabled + `fixed`, so an old 3x profile stays 3x. An
+explicit `enabled` always wins. Unknown strings keep the default.
 
-Rows, in order: **Frame generation** (Off / 2x / 3x / 4x / 5x / 6x / 7x / 8x / Target fps; it
-sets `mode`, and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the
-Shell's overridden-dot follows one key per row), **Target fps** (a slider, 0 shown as
-"Display refresh", disabled unless the mode is Target; a drag into 1..29 snaps to 0 or 30),
-**Priority** (Low latency / Smoothness), **Pause at refresh rate** (a switch), Quality, Artifact
-safety (Off / Low / Default / High), Static HUD protection, UI protection (Off / Crosshair / Whole
-screen; disabled while FG is off like the others), Status. The sub-rows are disabled while Off. Priority help: *Low latency adds the least
+Rows, in order: **Frame generation** (a switch, `framegen.enabled`; help *Generates extra
+frames between the game's own frames. Adds delay, so it is not suited to twitch
+shooters.*), **Multiplier** (2x / 3x / 4x / 5x / 6x / 7x / 8x / Target fps; it sets `mode`,
+and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shell's
+overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
+(a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
+into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
+rate** (a switch), Quality, Artifact safety (Off / Low / Default / High), Static HUD
+protection, UI protection (Off / Crosshair / Whole screen), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
+"off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*
+
+`Why two rows:` the user, after testing the single combined choice: *"There should be a
+single toggle to enable and disable framegen in general, and then below that should just
+be the multiplier. It shouldn't be combined into one."* Internally `fghost::Config` gained
+`bool enabled` (packed word bit 26, `Enabled()`/the gate follow it) and `Mode::Off` stays
+in the enum only because `Pacing.h`'s `Mode` mirrors it (`steamcompmgr.cpp` static_asserts
+the two match); the config never produces it.
 
 `Why:` the library's expert dials (searchPenalty, smoothBonus, sceneCutSad, globalFallback)
 are deliberately not exposed -- only the library's defaults were visually reviewed, and raw

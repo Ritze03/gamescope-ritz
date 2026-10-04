@@ -35,17 +35,16 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection.
+		// 24-25 UI protection, 26 enabled.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
 		uint32_t Pack( const Config &c )
 		{
 			int nMult = c.multiplier < 2 ? 0 : std::min( c.multiplier, kMaxMultiplier );
-			Mode eMode = c.mode;
-			// A fixed multiplier below 2x is not a mode: it is Off.
-			if ( eMode == Mode::Fixed && nMult < 2 )
-				eMode = Mode::Off;
+			Mode eMode = c.mode == Mode::Target ? Mode::Target : Mode::Fixed;
+			// A fixed multiplier below 2x is not a real choice: it is disabled.
+			const bool bEnabled = c.enabled && !( eMode == Mode::Fixed && nMult < 2 );
 			const int nTarget = c.targetFps <= 0 ? 0 : std::min( std::max( c.targetFps, kMinTargetFps ), kMaxTargetFps );
 			return uint32_t( nMult )
 				| ( uint32_t( c.quality ) << 4 )
@@ -55,7 +54,8 @@ namespace fghost
 				| ( uint32_t( c.priority ) << 12 )
 				| ( uint32_t( nTarget ) << 13 )
 				| ( uint32_t( c.pauseAtRefresh ? 1 : 0 ) << 23 )
-				| ( uint32_t( c.ui ) << 24 );
+				| ( uint32_t( c.ui ) << 24 )
+				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 );
 		}
 
 		Config Unpack( uint32_t u )
@@ -65,6 +65,7 @@ namespace fghost
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
 			c.safety = Safety( ( u >> 6 ) & 0x3u );
 			c.hud = HudProtect( ( u >> 8 ) & 0x3u );
+			c.enabled = ( ( u >> 26 ) & 1u ) != 0;
 			c.mode = Mode( ( u >> 10 ) & 0x3u );
 			c.priority = Priority( ( u >> 12 ) & 0x1u );
 			c.targetFps = int( ( u >> 13 ) & 0x3FFu );
@@ -75,7 +76,7 @@ namespace fghost
 
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
 
-		// The gate word. bit 0: enabled (mode != Off). bit 1: the render thread
+		// The gate word. bit 0: enabled. bit 1: the render thread
 		// holds resources. RenderWanted() is `!= 0`, so with FG off and everything
 		// released the per-frame cost is this one load.
 		constexpr uint32_t kGateEnabled = 1u << 0;
@@ -621,7 +622,7 @@ namespace fghost
 		const uint32_t uPacked = Pack( cfg );
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
 
-		if ( Mode( ( uPacked >> 10 ) & 0x3u ) != Mode::Off )
+		if ( ( uPacked >> 26 ) & 1u )
 		{
 			g_uGate.fetch_or( kGateEnabled, std::memory_order_relaxed );
 		}
@@ -732,7 +733,7 @@ namespace fghost
 		// Switched off (or never on): release everything. The first branch is the
 		// whole cost of the off path once resources are gone, and
 		// vulkan_composite() does not even reach it then (RenderWanted() == 0).
-		if ( cfg.mode == Mode::Off )
+		if ( !cfg.enabled )
 		{
 			if ( g_pHost )
 			{

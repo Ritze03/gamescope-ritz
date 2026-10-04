@@ -1,14 +1,17 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Eight per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
-// Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection,
+// SHAPE. Nine per-profile rows -- Frame generation (the on/off switch), Multiplier
+// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection,
 // UI protection -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
 // override needed (config::IsSettingsKey() answers from the serializer).
-// The first row sets TWO keys (mode, and the multiplier for a fixed choice) but
-// is tied to `framegen.mode`: the Shell's marker follows one key per row.
+// The Multiplier row sets TWO keys (mode, and the multiplier for a fixed choice)
+// but is tied to `framegen.mode`: the Shell's marker follows one key per row.
+// `Why two rows:` the user asked for "a single toggle to enable and disable
+// framegen in general, and then below that should just be the multiplier. It
+// shouldn't be combined into one."
 // Every edit calls fghost::SetConfig() at once; the renderer applies the
 // presets live (a Quality change costs it one GPU wait, which is its business).
 //
@@ -16,7 +19,7 @@
 // rest) are deliberately not exposed -- only the defaults were visually
 // reviewed, so a slider would hand the user settings nobody has looked at.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
-// momentary action; the Frame generation row is the switch.
+// momentary action; the Frame generation switch is the on/off.
 #include "PanelFrameGen.h"
 
 #include <cstdint>
@@ -39,12 +42,12 @@ namespace gamescope
 		// Choice rows bind ints; fghost wants its own enums. These are the
 		// only three places that translate, and an unknown string falls to the
 		// default the schema documents.
-		// The first row folds the mode and the multiplier into one choice, as the
-		// user asked ("up to 8x", "a target FPS mode"): 0 = Off, 2..8 = fixed
-		// multiplier, 9 = Target fps (not a multiplier, just the next free id).
+		// The Multiplier row folds the kind of multiplier and its value into one
+		// choice ("up to 8x", "a target FPS mode"): 2..8 = fixed multiplier,
+		// 9 = Target fps (not a multiplier, just the next free id).
 		constexpr int kTargetChoice = 9;
 		constexpr ui::Option kModeOptions[] = {
-			{ 0, "Off" }, { 2, "2×" }, { 3, "3×" }, { 4, "4×" }, { 5, "5×" },
+			{ 2, "2×" }, { 3, "3×" }, { 4, "4×" }, { 5, "5×" },
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
@@ -73,9 +76,9 @@ namespace gamescope
 		{
 			if ( f.mode == "target" )
 				return kTargetChoice;
-			if ( f.mode == "fixed" && f.multiplier >= 2 )
+			if ( f.multiplier >= 2 )
 				return f.multiplier > fghost::kMaxMultiplier ? fghost::kMaxMultiplier : f.multiplier;
-			return 0;
+			return 2;
 		}
 
 		void SetModeChoice( config::FrameGenSettings &f, int n )
@@ -84,14 +87,10 @@ namespace gamescope
 			{
 				f.mode = "target";
 			}
-			else if ( n >= 2 )
-			{
-				f.mode = "fixed";
-				f.multiplier = n > fghost::kMaxMultiplier ? fghost::kMaxMultiplier : n;
-			}
 			else
 			{
-				f.mode = "off";
+				f.mode = "fixed";
+				f.multiplier = n < 2 ? 2 : ( n > fghost::kMaxMultiplier ? fghost::kMaxMultiplier : n );
 			}
 		}
 
@@ -108,9 +107,9 @@ namespace gamescope
 		fghost::Config ToHostConfig( const config::FrameGenSettings &f )
 		{
 			fghost::Config c;
-			c.mode = f.mode == "target" ? fghost::Mode::Target
-				: ( f.mode == "fixed" ? fghost::Mode::Fixed : fghost::Mode::Off );
-			c.multiplier = f.multiplier;   // SetConfig() normalises (fixed below 2x -> Off, above 8x -> 8x)
+			c.enabled = f.enabled;
+			c.mode = f.mode == "target" ? fghost::Mode::Target : fghost::Mode::Fixed;
+			c.multiplier = f.multiplier;   // SetConfig() normalises (fixed below 2x -> disabled, above 8x -> 8x)
 			c.targetFps = f.target_fps;
 			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 0 ) == 1
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
@@ -153,7 +152,7 @@ namespace gamescope
 		bool On()
 		{
 			EnsureConfigLoaded();
-			return ModeChoice( s_Settings.framegen ) != 0;
+			return s_Settings.framegen.enabled;
 		}
 
 		bool TargetMode()
@@ -181,9 +180,9 @@ namespace gamescope
 		// is not in the atlas); "·" and "×" are Latin-1 and render.
 		std::string StatusLine( const config::FrameGenSettings &f, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
 		{
-			const int nChoice = ModeChoice( f );
-			if ( nChoice == 0 )
+			if ( !f.enabled )
 				return "Off";
+			const int nChoice = ModeChoice( f );
 
 			if ( ps.valid && ps.activeN >= 2 )
 			{
@@ -253,29 +252,40 @@ namespace gamescope
 		a.Summary( []
 		{
 			EnsureConfigLoaded();
+			if ( !s_Settings.framegen.enabled )
+				return std::string( "off" );
 			const int n = ModeChoice( s_Settings.framegen );
 			if ( n == kTargetChoice )
 				return s_Settings.framegen.target_fps > 0
 					? "target " + std::to_string( s_Settings.framegen.target_fps ) : std::string( "target" );
-			return n >= 2 ? std::to_string( n ) + "×" : std::string( "off" );
+			return std::to_string( n ) + "×";
 		} );
 
 		using S = config::FrameGenSettings;
 
 		a.Group( "Frame generation" );
 
-		a.Choice( "framegen.mode", "Frame generation",
+		a.Switch( "framegen.enabled", "Frame generation",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.enabled = b; PersistAndPush(); } ) )
+			.Help( "Generates extra frames between the game's own frames. Adds delay, so it is "
+			       "not suited to twitch shooters." )
+			.Default( false )
+			.Keywords( "frame generation framegen fg interpolation fluid motion smooth fps enable on off switch toggle" );
+
+		a.Choice( "framegen.mode", "Multiplier",
 			ui::AnyBind::Of<int>(
 				[]{ EnsureConfigLoaded(); return ModeChoice( s_Settings.framegen ); },
 				[]( int n ) { EnsureConfigLoaded(); SetModeChoice( s_Settings.framegen, n ); PersistAndPush(); } ),
 			kModeOptions, std::size( kModeOptions ) )
-			.Help( "Shows extra frames between the game's own by generating them, 2× to 8× the "
-			       "game's rate, or aiming at a Target fps. It keeps generating until the game "
-			       "reaches your refresh rate (or the target); a multiplier your display cannot "
-			       "show just fills every refresh. Adds delay, so it is not suited to twitch "
-			       "shooters. The Frame limiter caps the game and this multiplies the capped rate." )
-			.Default( 0 )
-			.Keywords( "frame generation multiplier 2x 3x 4x 5x 6x 7x 8x double triple quadruple target fps dynamic interpolation off" );
+			.Help( "How many frames are shown per game frame, 2× to 8× the game's rate, or aim at "
+			       "a Target fps. It keeps generating until the game reaches your refresh rate (or "
+			       "the target); a multiplier your display cannot show just fills every refresh. "
+			       "The Frame limiter caps the game and this multiplies the capped rate." )
+			.Default( 2 )
+			.Keywords( "frame generation framegen fg multiplier 2x 3x 4x 5x 6x 7x 8x double triple quadruple target fps dynamic interpolation" )
+			.DisabledUnless( On, "frame generation is off" );
 
 		a.Slider( "framegen.target_fps", "Target fps",
 			ui::AnyBind::Of<int>(
@@ -289,7 +299,7 @@ namespace gamescope
 			.ZeroMeans( "Display refresh" )
 			.Default( 0 )
 			.Keywords( "frame generation target fps frame rate dynamic refresh" )
-			.DisabledUnless( TargetMode, "Frame generation is not set to Target fps" );
+			.DisabledUnless( TargetMode, "Multiplier is not set to Target fps" );
 
 		a.Choice( "framegen.priority", "Priority",
 			ui::AnyBind::Of<int>(

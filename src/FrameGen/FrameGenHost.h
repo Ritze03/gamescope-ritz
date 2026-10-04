@@ -21,7 +21,7 @@
 // once per output frame (see RecordBaseLayer). There is no "k of N" any more:
 // one estimate per pair, any number of synths at any t.
 //
-// OFF = ZERO COST. With the mode Off nothing in here runs per frame beyond one
+// OFF = ZERO COST. With frame generation off nothing in here runs per frame beyond one
 // relaxed atomic load (RenderWanted()), no Interpolator exists, no texture is
 // allocated, and the backends are free to direct-scanout. Turning it off frees
 // everything (after a g_device.waitIdle()).
@@ -87,9 +87,11 @@ namespace fghost
 
 	struct Config
 	{
-		Mode mode = Mode::Off;
+		// The master switch. false: nothing runs (mode / multiplier are kept).
+		bool enabled = false;
+		Mode mode = Mode::Fixed;
 		// Fixed: 2..kMaxMultiplier. SetConfig() normalises (< 2 with mode Fixed
-		// -> mode Off, > kMaxMultiplier -> kMaxMultiplier). Kept as chosen in the
+		// -> disabled, > kMaxMultiplier -> kMaxMultiplier). Kept as chosen in the
 		// other modes (0 if never set).
 		int multiplier = 0;
 		// Target: the output fps to aim for, 30..1000; 0 = the display's refresh.
@@ -111,20 +113,20 @@ namespace fghost
 	// Replace the whole config. Thread-safe, cheap, callable at any time
 	// (startup load, a user change, a profile switch). Takes effect at the next
 	// vulkan_composite(): a preset change is applied live; a Quality change
-	// additionally costs one waitIdle + reconfigure there. Setting the
-	// mode to Off releases every resource at the next composite (and asks
+	// additionally costs one waitIdle + reconfigure there. Turning it
+	// off releases every resource at the next composite (and asks
 	// for one, so it does not wait for the next vblank that happens to draw).
 	void   SetConfig( const Config &cfg );
 	Config GetConfig();
 
-	// The per-frame gate: mode != Off. One relaxed atomic load. The three
+	// The per-frame gate: Config::enabled. One relaxed atomic load. The three
 	// backends OR this into their "needs full composite" decision (direct
 	// scanout must be impossible while frame generation is on: a scanned-out
 	// buffer never passes through vulkan_composite()), and steamcompmgr must
 	// not pre-emptively upscale layer 0 while it is true (a pre-upscaled
 	// texture reaches vulkan_composite() already baked with
 	// bBaseLayerEffectsApplied, which is past the point FG can substitute).
-	bool Enabled();
+	bool Enabled();   // == Config::enabled
 
 	// ------------------------------------------------------------------
 	//  Pacing -> renderer
