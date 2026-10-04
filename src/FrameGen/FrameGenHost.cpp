@@ -341,6 +341,15 @@ namespace fghost
 			bool bEstContig = false;       // the open profile's estimate was recorded in the same command buffer as the observe before it
 			bool bUiSetFailLogged = false; // setSettings() refused the UI settings once already (logged once)
 			bool bUiEvictLogged = false;   // a recordSynth was refused with UI protection on (logged once)
+
+			// The newest real frame (commit id) handed to the library's UI protection,
+			// by recordObserve (generating) OR recordTrack (inert). Not cleared by
+			// DropFrames(): that drops the host's ring, not the library's counters, and
+			// a tracked frame must not be tracked again by a repaint of it.
+			uint64_t ulUiFedId = 0;
+			uint32_t uTrackedRun = 0;      // frames tracked since the last observe (the resume log)
+			uint64_t ulTrackedTotal = 0;
+			bool bTrackFailLogged = false; // a recordTrack was refused (logged once)
 		};
 
 		Host_t *g_pHost = nullptr;   // leaked on purpose: see HostGet()
@@ -483,6 +492,8 @@ namespace fghost
 			g_flLastUiMs.store( -1.0f, std::memory_order_relaxed );
 			g_pszFormatTag.store( "", std::memory_order_relaxed );
 			H.bHaveColorspace = false;
+			H.ulUiFedId = 0;   // the library's counters went with the Interpolator
+			H.uTrackedRun = 0;
 		}
 
 		bool CreateTexture( gamescope::Rc<CVulkanTexture> &out, uint32_t w, uint32_t h, const FormatPlan &plan )
@@ -845,6 +856,68 @@ namespace fghost
 					g_flLastSynthMs.load( std::memory_order_relaxed ), flPatchMs, nSynth, nBlurOutputs, H.nProfileBlurSamples );
 		}
 
+		// UI protection while the renderer is inert (pass-through): the game is fast
+		// enough that frame generation is paused, so no frame is copied, observed or
+		// shown by us -- but the library's stillness counters must keep following the
+		// real frames, or a crosshair / HUD that changed meanwhile restarts cold when
+		// generation resumes and shifts around. The user: "make sure that it still
+		// keeps track of like static UI elements, like the crosshair, even when it's
+		// temporarily deactivated because the FPS is high enough ... so it doesn't
+		// start shifting around once it starts generating frames again."
+		//
+		// recordTrack() (frame-gen-ritz PR #9) is the counter update alone: ~0.003 ms
+		// in Crosshair mode, ~0.03 ms in WholeScreen, no clean copy, no ring copy.
+		// It samples the GAME's texture directly (raw UNORM view = the encoded values
+		// the copy shader would have put in the ring; the library reads rgb only).
+		//
+		// Once per NEW real frame, and only when the library is live for this layer:
+		// a command buffer is built and submitted only then, never an empty one.
+		// Never for a frame the library was already handed (see ShouldTrackUi()).
+		// No Interpolator is created for it: a pass-through only follows a warm-up
+		// (pacing drives the renderer, and so EnsureReady(), until its estimate
+		// is valid), so "not live" means generation never got going and there is
+		// no state to keep warm -- a lazy init would only buy pipeline-build stalls.
+		void TrackWhileInert( Host_t &H, const gamescope::Rc<CVulkanTexture> &pLayer0, GamescopeAppTextureColorspace eColorspace, const Config &cfg, uint64_t ulNewestId )
+		{
+			// The cheap rejections first: this runs on every inert composite.
+			if ( cfg.ui == UiProt::Off || !H.bLive || ulNewestId == 0 || ulNewestId == H.ulUiFedId )
+				return;
+
+			FormatPlan plan;
+			const Unavailable eWhy = ClassifyLayer( pLayer0->format(), pLayer0->isYcbcr(), eColorspace, DeviceCaps(), &plan );
+			const bool bFits = LayerFitsHost( eWhy, plan, H.plan, pLayer0->width(), pLayer0->height(), H.uWidth, H.uHeight,
+				H.bHaveColorspace && H.eColorspace == eColorspace );
+			if ( !ShouldTrackUi( true, H.bLive, bFits, ulNewestId, H.ulUiFedId ) )
+				return;
+
+			H.ulUiFedId = ulNewestId;
+
+			std::unique_ptr<CVulkanCmdBuffer> pCmd = g_device.commandBuffer();
+			H.interp.beginFrame();   // once per command buffer, before its first record
+			// Hold the game's texture for the command buffer's life, import it from the
+			// client (queue-family acquire) and put it in GENERAL: the library samples it
+			// in that layout. The same steps the ring copy's dispatch performs.
+			pCmd->bindTexture( 0, pLayer0 );
+			pCmd->prepareSrcImage( pLayer0.get() );
+			pCmd->insertBarrier();
+			pCmd->bindTexture( 0, nullptr );
+			const bool bOk = H.interp.recordTrack( pCmd->rawBuffer(), pLayer0->srgbView() );
+			g_device.submit( std::move( pCmd ) );
+
+			if ( bOk )
+			{
+				H.uTrackedRun++;
+				H.ulTrackedTotal++;
+				if ( ( H.ulTrackedTotal % 120 ) == 1 )
+					fg_log.debugf( "UI protection: tracking while passing through (%llu real frames tracked so far)", (unsigned long long)H.ulTrackedTotal );
+			}
+			else if ( !H.bTrackFailLogged )
+			{
+				H.bTrackFailLogged = true;
+				fg_log.warnf( "UI protection: the library refused recordTrack while passing frames through (a descriptor ring was full, or its first-use allocation failed)" );
+			}
+		}
+
 		// Makes the host's ring and the library's UI-protection history follow the
 		// pacer's depth (see the ring comment above). Called once per active paint.
 		void FollowDepth( Host_t &H, int nDepth, bool bUi )
@@ -1118,7 +1191,13 @@ namespace fghost
 		if ( req.t < 0.0f || req.newestId == 0 )
 		{
 			if ( g_pHost && ( g_uGate.load( std::memory_order_relaxed ) & kGateLive ) )
+			{
+				// The library's UI counters keep following the real frames (nothing here
+				// touches the Interpolator otherwise: DropFrames() forgets the HOST's ring
+				// only, and EnsureReady() is not reached, so no setSettings()/resize()).
+				TrackWhileInert( *g_pHost, pLayer0, eColorspace, cfg, req.newestId );
 				DropFrames( *g_pHost );
+			}
 			return nullptr;
 		}
 
@@ -1238,6 +1317,14 @@ namespace fghost
 					HarvestProfile( H, true, false );
 					H.nProfileSynths = 0;
 					H.nProfileBlurSamples = 0;
+				}
+				// A frame is tracked (inert) OR observed (here), never both: this one is
+				// recorded as the library's newest from now on.
+				H.ulUiFedId = req.newestId;
+				if ( H.uTrackedRun )
+				{
+					fg_log.debugf( "UI protection: observing again after %u tracked real frames (counters kept)", H.uTrackedRun );
+					H.uTrackedRun = 0;
 				}
 				if ( H.interp.recordObserve( pCb->rawBuffer(), H.pRing[ nNewSlot ]->srgbView() ) )
 				{

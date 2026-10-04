@@ -249,7 +249,8 @@ the `curr` view it is given. All of these are runtime `Settings` fields; the hos
 - `recordObserve(cb, ringSlotView)` is called **once per new real frame**, in the command
   buffer that copied it into the ring, right after the ring copy and its barrier, **also
   for frames that are only passed through** (the stillness counters compare consecutive real
-  frames; a gap costs only the exact "8 in a row"). Off: the call is skipped entirely.
+  frames; a gap costs only the exact "8 in a row"). While the pacer is **inert** the renderer
+  tracks instead (`recordTrack`, see below). Off: the call is skipped entirely.
 - The **ring holds the real, un-inpainted frame**: `recordSynth` must get the real `curr`
   to paste from. The library keeps `uiHistory` (default `kUiFrames` = 3) clean copies, LRU by
   view; the ring re-observes exactly one slot per new frame and `uiHistory` follows the ring's
@@ -269,6 +270,47 @@ the `curr` view it is given. All of these are runtime `Settings` fields; the hos
 - The library has a **third descriptor ring**, `kUiSets = 64` (separate from the two of
   32). Per composite the host records one observe (1 set Crosshair, 2 Whole screen) plus
   one patch set per synth, far below it (`kMaxSynthsPerPair` is 24).
+
+**Tracking while passing real frames through (the inert state, 2026-10-04).** When the
+pacer is inert (the game reaches the refresh / target with Pause at refresh rate on, the
+cost guard, ...) the renderer does no ring copy and no observe, so the library's stillness
+counters used to stop at the last frame before the stretch. They survive that gap, but then
+compare the frame before it with the one after, so UI that **changed meanwhile** (a
+recoloured crosshair, a scope, a HUD update) restarted cold at generation's resume and could
+shift for `uiStillFrames` real frames. The user: *"make sure that it still keeps track of
+like static UI elements, like the crosshair, even when it's temporarily deactivated because
+the FPS is high enough ... so it doesn't start shifting around once it starts generating
+frames again."* `RecordBaseLayer()`'s inert branch now calls `TrackWhileInert()`: **one
+`recordTrack()` (library PR #9) per NEW real frame**, in a command buffer of its own that is
+built and submitted only for such a frame (never an empty one per composite). Rules, pinned
+by the pure `ShouldTrackUi()` / `LayerFitsHost()` (`FrameGenFormat.h`, `tests/test_framegen_format.cpp`):
+UI protection on; the Interpolator live; the layer still the format plan / size / colourspace
+it was created for (the D4 gates: an unsupported layer is not tracked); and a commit id the
+library was not already handed (`Host_t::ulUiFedId`, set by an observe **and** a track), so
+a repaint of the same frame (cursor, overlay) or the frame observed on the way into
+pass-through is never counted twice. A frame is tracked **or** observed, never both; on
+resume the next real frames go through `recordObserve` as always (ring copy and clean copy
+return), and the first pair is (first observed frame, the one after it). The game's own texture is
+sampled directly (its raw UNORM view, GENERAL layout after `prepareSrcImage` +
+`insertBarrier`): no ring copy, and the values equal what the ring would hold (the copy is
+exact; the library reads rgb only). **Cost: ~0.003 ms of GPU in Crosshair mode, ~0.02-0.03
+ms in Whole screen**, plus one small command buffer per real frame on the CPU, only while
+inert. `Why` no lazy Interpolator init for tracking: pacing drives the renderer (and so
+`EnsureReady()`) through its warm-up before it can ever say "game too fast", so a not-live
+host while inert means generation never started and there is nothing to keep warm; an init
+only for tracking would buy a pipeline-build stall. `Why` nothing else had to change: the
+audit of what could reset the counters found only legitimate triggers: `DropFrames()`
+forgets the host's ring and cached outputs, never the library's state; the inert branch
+returns before `EnsureReady()`, so no `resize()` / `reconfigure()` / `setSettings()` runs
+during the stretch; at resume `setSettings()` (UI-history follow, `FollowDepth`, and the
+preset change at `EnsureReady`) only zeroes the box counters when UI protection itself goes
+Off or comes On (`uiAdopted()`), and `Teardown()` (the format class / FG-off) is a true
+reset by nature. Known edges: a UI protection **change made while inert** (Off -> On, a
+different mode) is only applied at resume (`EnsureReady` is not run), so that stretch tracks
+with the old setting and the counters start cold at the change, as before; a resume on the
+very frame last tracked observes it again (one still-step of over-count, harmless).
+The debug log (`framegen` scope) counts tracked frames ("UI protection: tracking while
+passing through") and notes the resume ("observing again after N tracked real frames").
 
 **Timing.** The library adds `ui_detect` and `ui_inpaint` (per observe) and `ui_patch`
 (per synth) to its profile, and an observe opens a profile that the next estimate

@@ -78,3 +78,28 @@ TEST_CASE( "framegen format: refusals keep their specific reason", "[framegen_fo
 	CHECK( ClassifyLayer( VK_FORMAT_R5G6B5_UNORM_PACK16, false, kSrgb, kAll, nullptr ) == Unavailable::Format );
 	CHECK( ClassifyLayer( VK_FORMAT_R16G16B16A16_UNORM, false, kSrgb, kAll, nullptr ) == Unavailable::Format );
 }
+
+TEST_CASE( "framegen format: an inert composite tracks each new real frame once, only where the library can take it", "[framegen_format]" )
+{
+	FormatPlan p8, p10;
+	REQUIRE( ClassifyLayer( VK_FORMAT_B8G8R8A8_UNORM, false, kSrgb, kAll, &p8 ) == Unavailable::Ok );
+	REQUIRE( ClassifyLayer( VK_FORMAT_A2B10G10R10_UNORM_PACK32, false, kSrgb, kAll, &p10 ) == Unavailable::Ok );
+
+	// LayerFitsHost: same plan, size and colourspace, classified Ok -- nothing else.
+	CHECK( LayerFitsHost( Unavailable::Ok, p8, p8, 1920, 1080, 1920, 1080, true ) );
+	CHECK_FALSE( LayerFitsHost( Unavailable::Format, p8, p8, 1920, 1080, 1920, 1080, true ) );   // a refused layer (D4)
+	CHECK_FALSE( LayerFitsHost( Unavailable::Ok, p10, p8, 1920, 1080, 1920, 1080, true ) );      // the game changed format class
+	CHECK_FALSE( LayerFitsHost( Unavailable::Ok, p8, p8, 1280, 720, 1920, 1080, true ) );        // a resolution change
+	CHECK_FALSE( LayerFitsHost( Unavailable::Ok, p8, p8, 1920, 1080, 1920, 1080, false ) );      // SDR <-> HDR10 on the same surface
+
+	// ShouldTrackUi: UI protection on, library live, layer fits, a frame it has not been handed.
+	CHECK( ShouldTrackUi( true, true, true, 42, 41 ) );
+	CHECK( ShouldTrackUi( true, true, true, 42, 0 ) );
+	CHECK_FALSE( ShouldTrackUi( false, true, true, 42, 41 ) );    // UI protection off
+	CHECK_FALSE( ShouldTrackUi( true, false, true, 42, 41 ) );    // no Interpolator: nothing to keep warm
+	CHECK_FALSE( ShouldTrackUi( true, true, false, 42, 41 ) );    // unsupported layer
+	CHECK_FALSE( ShouldTrackUi( true, true, true, 0, 41 ) );      // no frame
+	// A repaint of the frame the library already has (cursor move, overlay), or one it
+	// was just observed on the way into pass-through: never counted twice.
+	CHECK_FALSE( ShouldTrackUi( true, true, true, 42, 42 ) );
+}

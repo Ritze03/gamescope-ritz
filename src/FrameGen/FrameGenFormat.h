@@ -125,4 +125,33 @@ namespace fghost
 			*pPlan = plan;
 		return Unavailable::Ok;
 	}
+
+	// ------------------------------------------------------------------
+	//  UI protection while the renderer is inert (pass-through)
+	// ------------------------------------------------------------------
+	// While pacing says "inert" (the game is fast enough, generation is paused) the
+	// host does no ring copy and no observe, but the library's UI-protection
+	// stillness counters must keep following the real frames (recordTrack, library
+	// PR #9), or a crosshair / HUD that changed during the stretch is cold when
+	// generation resumes and shifts. Pure here so the rule can be pinned without a
+	// GPU (tests/test_framegen_format.cpp); FrameGenHost.cpp applies it.
+
+	// Whether this layer 0 is the kind of frame the live Interpolator was created
+	// for: classified Ok, the same format plan, size and colourspace tag. Anything
+	// else is a frame the library cannot take (D4) and is not tracked.
+	inline bool LayerFitsHost( Unavailable eWhy, const FormatPlan &layer, const FormatPlan &host, uint32_t uWidth, uint32_t uHeight,
+		uint32_t uHostWidth, uint32_t uHostHeight, bool bSameColorspace )
+	{
+		return eWhy == Unavailable::Ok && layer == host && uWidth == uHostWidth && uHeight == uHostHeight && bSameColorspace;
+	}
+
+	// Track this inert composite's real frame? Only with UI protection on, a live
+	// Interpolator, a layer it can take, and a frame the library has not been
+	// handed yet (`ulLastFedId` = the newest id given to recordObserve OR
+	// recordTrack: a frame is tracked or observed, never both, and a repaint of the
+	// same frame -- cursor, overlay -- must not count its pixels twice).
+	inline bool ShouldTrackUi( bool bUiOn, bool bLive, bool bLayerFits, uint64_t ulNewestId, uint64_t ulLastFedId )
+	{
+		return bUiOn && bLive && bLayerFits && ulNewestId != 0 && ulNewestId != ulLastFedId;
+	}
 }

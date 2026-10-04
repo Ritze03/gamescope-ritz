@@ -35,6 +35,8 @@ The newest version below is the one this build reports.
   reaches your refresh rate, or keeps generating above it.
 
 ### Fixed
+- **UI protection after a pause**: the crosshair and HUD stay protected the moment
+  frame generation resumes after passing frames through.
 - **Frame generation latency**: Low latency adds much less delay again, and generated
   frames tear like real ones when tearing is on.
 - **Lag spike buffer test mode**: Test mode is now Off or Force maximum; the
