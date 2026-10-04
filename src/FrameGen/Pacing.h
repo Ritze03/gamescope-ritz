@@ -5,40 +5,78 @@
 // Header-only, no gamescope globals, no Vulkan, no clock of its own: every
 // time is passed in (nanoseconds, any monotonic base), so tests/test_framegen_
 // pacing.cpp drives it with a fake clock. steamcompmgr.cpp is the thin glue
-// that feeds it commit arrivals and paints and takes back (k, n).
+// that feeds it commit arrivals and paints and takes back what to show.
 //
-// WHAT IT DECIDES (superdoc/planning/fidelityfx-opticalflow-framegen.md 5.1/5.2
-// and the FG decisions D2..D21 in the plan):
-//   * which image each display refresh shows: generated slot k of N, or the
-//     real frame (the "slot sequencer", Pacer::OnPaint);
-//   * what N is actually usable (the game's rate vs the display's, the cost
-//     guard) and when it may change (the 0.5 s hysteresis);
-//   * when to forget the previous real frame (focus / size / format / gap).
+// THE MODEL: PER-VBLANK FRACTIONAL PACING (rewritten 2026-10-04).
+// There is no "N" inside the pacer. Every output frame -- every vblank that
+// the output cadence says should get a new image -- is generated for its OWN
+// moment between two real frames:
 //
-// THE MODEL (fixed refresh, one image per vblank). A "pair" is N-1 generated
-// frames at t = k/N followed by the real frame they lead up to. When a real
-// frame arrives, the NEXT vblank shows slot 1, the one after slot 2 ... and the
-// vblank after the last generated slot shows the real frame itself. So a real
-// frame is held back by N-1 refreshes, which is the price of generation.
-//   Why: generated frames lie BETWEEN the previous and the newest real frame,
-//   so they can only be made once the newest exists, and they must be shown
-//   before it.
+//   * a real frame carries its arrival time (the commit's acquire fence
+//     signalling, see OnArrival); the frames in play are A0 (before) and A1;
+//   * an output frame painted for the vblank at time V shows CONTENT TIME
+//         tau = V - D          (D = the delay, per priority, see below)
+//     which lies between two real frames: t = (tau - A0) / (A1 - A0);
+//   * t >= 1 (tau has caught up with the newest real frame): show that real
+//     frame itself, no synth. Otherwise a synth at t.
 //
-// LATENCY FIRST (D9). A real frame is never held past its own slot: if a newer
-// real frame arrives while a pair is still playing out, what is left of that
-// pair (its remaining generated frames and its held real frame) is DROPPED and
-// the new pair starts at once. Delay therefore cannot pile up.
-//   Why: the alternative (finish the old pair first) would grow a queue
-//   whenever the game briefly runs above refresh/N, and latency is what the
-//   user is least willing to give up.
+// So "how many generated frames per real frame" is never chosen or held: it
+// falls out of t from the latest arrivals, on the very next pair. A fixed
+// multiplier N only sets the OUTPUT INTERVAL o = max(interval / N, 1/refresh)
+// -- more frames than the display can show simply saturate at the refresh
+// rate, nothing steps down (user direction #4). Target fps mode sets
+// o = 1 / min(target, refresh). When o is longer than one vblank only the
+// vblanks where a phase accumulator crosses o get a new image (Bresenham), so
+// the average output rate is exact.
 //
-// Phase A is vblank-driven for every backend. "The next vblank" is the only
-// place the display's clock enters (Pacer::OnPaint), so a later phase can
-// replace it with a per-slot timer without touching anything else here.
+// DELAY D, per Priority (the user's "one for low latency and one for maximum
+// smoothness"):
+//   Low latency : D = latest real interval - o, floored at 0. At a fixed N this
+//     is today's (N-1)/N of a game interval. A real frame arriving early or
+//     late SNAPS the content time to the new pair rather than sliding (D9's
+//     latency-first rule), so uneven motion on jittery frame times is accepted.
+//   Smoothness  : D = median interval + margin (margin = max(2 ms, the spread
+//     of recent intervals), capped at half an interval). tau advances evenly at
+//     the output rate; the pair being played may be one OLDER than the newest
+//     (so frames are queued by about one game interval). A late real frame
+//     holds at t = 1 instead of hitching; an early one is absorbed by the
+//     margin. Costs about one game frame of delay.
+//   Why the pair can be older only in Smoothness: with D >= one interval the
+//   newest real frame has usually ARRIVED while tau is still inside the pair
+//   before it. The renderer therefore keeps the last three real frames.
+//
+// tau is MONOTONIC: an output frame never shows content older than the one
+// before it (tau >= tau_last), however D moves.
+//
+// PASS-THROUGH (the real frame, shown at once, renderer inert) only when:
+//   - the game's rate already reaches the output rate (interval <= o, with a
+//     ratio band for hysteresis: stop generating below 1.02, start again above
+//     1.10 -- NOT a time hold);
+//   - the renderer is unavailable (HDR, 10-bit, ... -- it is still driven, so
+//     it re-checks);
+//   - the cost guard trips (below).
+// VRR / tearing are NOT a pass-through reason: while generating, gamescope
+// paces its own output frames on the vblank timer exactly as on a fixed-refresh
+// display (PaintTick() below is the one rule the main loop uses), and while
+// passing through it behaves as it always did.
+//
+// COST GUARD (D16, adapted). The renderer reports the estimate's and one
+// synth's GPU time. Generation per game interval is estimate + the synths:
+// when that would exceed 25% of the interval, the output rate is LOWERED
+// (o raised) until it fits; if not even one generated frame per pair fits it
+// passes through. A probe retries every 10 s. No timestamps, no guard.
+//
+// LATENCY. A newer real frame is seen by the very next paint: nothing is ever
+// queued except by Smoothness's deliberate delay.
+//
+// Phase A is vblank-driven for every backend. "The vblank" enters through
+// Inputs::vblankNs only, so a timer-paced Phase B can feed its own present
+// time with no other change: tau = V - D is exactly as valid for it.
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <climits>
 
 namespace fgpacing
 {
@@ -54,23 +92,38 @@ namespace fgpacing
 	constexpr double kMaxIntervalMs   = 50.0;
 	// D12: a gap longer than this between real frames drops the previous frame.
 	constexpr Ns     kGapResetNs      = 100 * kNsPerMs;
-	// D10: a pass-through / N change happens only after the target has held this long.
-	constexpr Ns     kHysteresisNs    = 500 * kNsPerMs;
-	// D5: "fits" = game fps x N <= kFitHeadroom x refresh. The 20% headroom lets a
-	// game hover a little above refresh/N and lose the odd real frame to D9
-	// rather than switching down at the threshold.
-	constexpr double kFitHeadroom     = 1.2;
+	// Generation stops when game interval / output interval falls below
+	// kStopRatio (the game reaches the output rate) and starts again once it is
+	// back above kStartRatio. 98% .. 91% of the refresh at a fixed multiplier.
+	constexpr double kStopRatio       = 1.02;
+	constexpr double kStartRatio      = 1.10;
 	// D16: generation (estimate + synths) may use at most this share of a game
 	// interval.
 	constexpr double kCostBudget      = 0.25;
 	// After a cost-guard pass-through nothing is generated, hence nothing is
-	// measured; retry N = 2 this often to see whether the load has gone.
+	// measured; retry this often (one generated frame per pair) to see whether
+	// the load has gone, and give up on a probe that measured nothing after
+	// kCostProbeMaxNs.
 	constexpr Ns     kCostProbeNs     = 10'000'000'000ull;
+	constexpr Ns     kCostProbeMaxNs  = 3'000'000'000ull;
 	// Status is worth publishing this often (D18).
 	constexpr Ns     kStatusPeriodNs  = 250 * kNsPerMs;
 
-	// The largest multiplier the host supports (FrameGenHost.h kMaxMultiplier).
-	constexpr int    kMaxN            = 4;
+	// The largest fixed multiplier (FrameGenHost.h kMaxMultiplier).
+	constexpr int    kMaxN            = 8;
+	// Smoothness: margin = max(kMinMarginMs, spread), at most half an interval.
+	constexpr double kMinMarginMs     = 2.0;
+	// Generated frames per real pair, well under the library's 32-set ring.
+	constexpr int    kMaxSynthsPerPair = 24;
+	// A synth is never made closer than this to either real frame; a newest-pair
+	// t above kRealSnapT shows the real frame itself.
+	constexpr double kTMin            = 0.02;
+	constexpr double kRealSnapT       = 0.98;
+	// Real frames kept for pair selection (the renderer's ring is the same size).
+	constexpr int    kHistory         = 3;
+
+	enum class Mode : uint8_t { Off, Fixed, Target };
+	enum class Priority : uint8_t { LowLatency, Smoothness };
 
 	// Mirrors fghost::PassReason value for value (steamcompmgr.cpp static_asserts
 	// it); duplicated so this header stays free of the host's includes.
@@ -79,7 +132,6 @@ namespace fgpacing
 		Normal,
 		Off,
 		WarmingUp,
-		RefreshLimit,
 		CostGuard,
 		GameTooFast,
 		GameStalled,
@@ -95,13 +147,9 @@ namespace fgpacing
 		return std::min( std::max( flMs, kMinIntervalMs ), kMaxIntervalMs );
 	}
 
-	// Median of v[0..n): the middle value, or the mean of the two middle ones
-	// for an even count. n is tiny (<= 8), so a copy + insertion sort.
-	inline double MedianOf( const double *v, int n )
+	// The sorted copy's helpers. n is tiny (<= 8): insertion sort.
+	inline int SortedCopy( const double *v, int n, double *s )
 	{
-		if ( n <= 0 )
-			return 0.0;
-		double s[ kIntervalWindow ];
 		n = std::min( n, kIntervalWindow );
 		for ( int i = 0; i < n; i++ )
 		{
@@ -113,84 +161,95 @@ namespace fgpacing
 			}
 			s[ j ] = v[ i ];
 		}
+		return n;
+	}
+
+	// Median of v[0..n): the middle value, or the mean of the two middle ones
+	// for an even count.
+	inline double MedianOf( const double *v, int n )
+	{
+		if ( n <= 0 )
+			return 0.0;
+		double s[ kIntervalWindow ];
+		n = SortedCopy( v, n, s );
 		return ( n & 1 ) ? s[ n / 2 ] : 0.5 * ( s[ n / 2 - 1 ] + s[ n / 2 ] );
 	}
 
-	// D5: can N x the game's rate be shown on this display?
-	inline bool Fits( double flIntervalMs, int n, double flRefreshHz )
+	// A robust spread of v[0..n): second-largest minus median, so one hitch in
+	// the window does not count but a jittery game does. 0 for fewer than 3.
+	inline double SpreadOf( const double *v, int n )
 	{
-		if ( flIntervalMs <= 0.0 || flRefreshHz <= 0.0 )
-			return false;
-		const double flGameFps = 1000.0 / flIntervalMs;
-		// 1e-9: 0.6 x 144 must fit 86.4 exactly, not lose to rounding.
-		return flGameFps * n <= kFitHeadroom * flRefreshHz + 1e-9;
+		if ( n < 3 )
+			return 0.0;
+		double s[ kIntervalWindow ];
+		n = SortedCopy( v, n, s );
+		return std::max( 0.0, s[ n - 2 ] - MedianOf( v, n ) );
 	}
 
-	// What the user's "N" resolves to right now, before hysteresis.
-	struct NChoice
+	// The output interval o in milliseconds, before the cost guard.
+	//   Fixed : max(interval / n, 1 / refresh)  -- never faster than the display
+	//   Target: 1 / min(target, refresh); target 0 = the display's refresh
+	inline double OutputIntervalMs( Mode eMode, int nMultiplier, int nTargetFps, double flIntervalMs, double flRefreshHz )
 	{
-		int    n      = 0;                 // 0 = pass-through, else 2..kMaxN
-		Reason reason = Reason::Normal;    // why n < chosen (Normal when n == chosen)
-	};
+		const double flVblankMs = 1000.0 / std::max( flRefreshHz, 1.0 );
+		if ( eMode == Mode::Target )
+		{
+			const double flTarget = nTargetFps > 0 ? std::min( double( nTargetFps ), flRefreshHz ) : flRefreshHz;
+			return 1000.0 / std::max( flTarget, 1.0 );
+		}
+		const int n = std::max( nMultiplier, 1 );
+		return std::max( flIntervalMs / double( n ), flVblankMs );
+	}
 
-	// D21: the highest N' <= chosenN that fits the display (D5) and passes the cost
-	// guard (D16); below 2 it is pass-through.
-	//   flCostPerNMs : measured generation cost per unit of N (cost of the last
-	//                  pair divided by the N it ran at), or < 0 when unknown /
-	//                  the GPU cannot time it -- then there is no guard at all.
-	//   bIgnoreCost  : the cost probe (see kCostProbeNs): trust nothing stale,
-	//                  try N = 2.
-	// Why a per-N model: the renderer reports one number for the whole pair
-	// (estimate + synths) and we cannot split it, so cost(N') is assumed to scale
-	// with N'. Conservative for the (fixed) estimate part, which is the safe side
-	// for a guard.
-	inline NChoice ChooseN( int nChosen, double flIntervalMs, double flRefreshHz, double flCostPerNMs, bool bIgnoreCost = false )
+	// Low latency: the latest real interval minus the output interval, floored.
+	inline double LowLatencyDelayMs( double flLatestIntervalMs, double flOutputMs )
 	{
-		NChoice c;
-		nChosen = std::min( nChosen, kMaxN );
-		if ( nChosen < 2 )
-		{
-			c.reason = Reason::Off;
-			return c;
-		}
+		return std::max( 0.0, flLatestIntervalMs - flOutputMs );
+	}
 
-		int n = nChosen;
-		while ( n >= 2 && !Fits( flIntervalMs, n, flRefreshHz ) )
-			n--;
-		if ( n < 2 )
-		{
-			c.n = 0;
-			c.reason = Reason::GameTooFast;
-			return c;
-		}
-		c.n = n;
-		c.reason = ( n < nChosen ) ? Reason::RefreshLimit : Reason::Normal;
+	// Smoothness: the median interval plus the margin.
+	inline double SmoothnessMarginMs( double flIntervalMs, double flSpreadMs )
+	{
+		return std::min( std::max( kMinMarginMs, flSpreadMs ), 0.5 * flIntervalMs );
+	}
+	inline double SmoothnessDelayMs( double flIntervalMs, double flSpreadMs )
+	{
+		return flIntervalMs + SmoothnessMarginMs( flIntervalMs, flSpreadMs );
+	}
 
-		if ( bIgnoreCost )
-		{
-			c.n = std::min( c.n, 2 );
-			return c;
-		}
-		if ( flCostPerNMs >= 0.0 )
-		{
-			const double flBudgetMs = kCostBudget * flIntervalMs;
-			bool bStepped = false;
-			while ( c.n >= 2 && flCostPerNMs * c.n > flBudgetMs )
-			{
-				c.n--;
-				bStepped = true;
-			}
-			if ( c.n < 2 )
-			{
-				c.n = 0;
-				c.reason = Reason::CostGuard;
-			}
-			else if ( bStepped )
-			{
-				c.reason = Reason::CostGuard;
-			}
-		}
-		return c;
+	// How many generated frames per game interval the GPU budget allows:
+	// floor((25% of the interval - estimate) / one synth); 0 = not even one;
+	// INT_MAX = unknown (no guard). Costs < 0 = no timings.
+	inline int MaxSynthsPerPair( double flIntervalMs, double flEstimateMs, double flSynthMs )
+	{
+		if ( flEstimateMs < 0.0 || flSynthMs < 0.0 )
+			return INT_MAX;
+		const double flRoom = kCostBudget * flIntervalMs - flEstimateMs;
+		if ( flRoom <= 0.0 )
+			return 0;
+		const double flSynth = std::max( flSynthMs, 1e-4 );
+		return int( std::min( std::floor( flRoom / flSynth + 1e-9 ), double( kMaxSynthsPerPair ) ) );
+	}
+
+	// Which main-loop iterations may paint. On a fixed-refresh display only the
+	// vblank-timer ticks do (bLoopVblank == bFromTimer). Under VRR the loop treats
+	// EVERY iteration as a vblank (a commit arrival paints at once) and a tearing
+	// surface paints on arrival too; while frame generation is generating, its
+	// output frames would then go out at commit-arrival times, bunched, with the
+	// content times in the wrong places. So while generating (bGenerating) only
+	// timer ticks paint -- the display is still asked for nothing (VRR stays on,
+	// the flip is simply a normal one at the tick), and while passing through the
+	// loop behaves exactly as without frame generation.
+	inline bool PaintTick( bool bGenerating, bool bFromTimer, bool bLoopVblank )
+	{
+		return bGenerating ? bFromTimer : bLoopVblank;
+	}
+
+	// Ratio of the game's interval to the output interval: > 1 means there is
+	// room to generate; the multiplier the display would be fed.
+	inline double OutputRatio( double flIntervalMs, double flOutputMs )
+	{
+		return flOutputMs > 0.0 ? flIntervalMs / flOutputMs : 0.0;
 	}
 
 	// ------------------------------------------------------------------
@@ -226,72 +285,13 @@ namespace fgpacing
 			return ClampIntervalMs( MedianOf( m_flMs, m_nCount ) );
 		}
 
+		// Jitter of the recent intervals (SpreadOf), in milliseconds.
+		double SpreadMs() const { return SpreadOf( m_flMs, m_nCount ); }
+
 	private:
 		double m_flMs[ kIntervalWindow ] = {};
 		int m_nCount = 0;
 		int m_nHead = 0;
-	};
-
-	// ------------------------------------------------------------------
-	//  Hysteresis (D10)
-	// ------------------------------------------------------------------
-
-	// Holds the multiplier in use. A new target (including pass-through) has to be
-	// the target continuously for kHysteresisNs before it replaces the held one,
-	// so a game hovering at a threshold does not flap.
-	class NHysteresis
-	{
-	public:
-		// The next Update() adopts its target at once (first estimate, a new
-		// game, the user picking a different multiplier).
-		void Restart() { m_bInit = false; m_bPending = false; }
-
-		const NChoice &Update( Ns ulNow, const NChoice &target )
-		{
-			if ( !m_bInit )
-			{
-				m_bInit = true;
-				m_Held = target;
-				m_bPending = false;
-				m_bChanged = true;
-				return m_Held;
-			}
-			m_bChanged = false;
-
-			if ( target.n == m_Held.n )
-			{
-				m_Held.reason = target.reason;   // same N, maybe a better explanation
-				m_bPending = false;
-				return m_Held;
-			}
-			if ( !m_bPending || target.n != m_PendingN )
-			{
-				m_bPending = true;
-				m_PendingN = target.n;
-				m_ulSince = ulNow;
-				return m_Held;
-			}
-			if ( ulNow - m_ulSince >= kHysteresisNs )
-			{
-				m_Held = target;
-				m_bPending = false;
-				m_bChanged = true;
-			}
-			return m_Held;
-		}
-
-		const NChoice &Held() const { return m_Held; }
-		bool Initialised() const { return m_bInit; }
-		// True for the Update() that changed (or first set) the held value.
-		bool Changed() const { return m_bChanged; }
-
-	private:
-		NChoice m_Held;
-		bool m_bInit = false;
-		bool m_bPending = false;
-		bool m_bChanged = false;
-		int  m_PendingN = 0;
-		Ns   m_ulSince = 0;
 	};
 
 	// ------------------------------------------------------------------
@@ -314,21 +314,31 @@ namespace fgpacing
 		// Everything the glue reads fresh at each paint.
 		struct Inputs
 		{
-			Ns     now = 0;
-			int    chosenN = 0;        // the user's multiplier (fghost::GetConfig().multiplier)
+			Ns     now = 0;            // the clock, for gaps, probes and status
+			Ns     vblankNs = 0;       // V: the predicted present time of this composite (0 = now)
+			Mode   mode = Mode::Fixed;
+			int    multiplier = 2;     // Fixed: 2..kMaxN
+			int    targetFps = 0;      // Target: 0 = the display's refresh, else 30..1000
+			Priority priority = Priority::LowLatency;
 			double refreshHz = 60.0;   // the refresh the vblank timer paces against
-			float  costMs = -1.0f;     // RenderStatus::lastPairGpuMs, < 0 = n/a
+			float  estimateMs = -1.0f; // RenderStatus::lastEstimateMs, < 0 = n/a
+			float  synthMs = -1.0f;    // RenderStatus::lastSynthMs, < 0 = n/a
+			uint32_t costSeq = 0;      // RenderStatus::costSeq: changes with every new measurement
 			bool   rendererOk = true;  // RenderStatus::reason == Ok
 		};
 
 		// What to do for this paint.
 		struct Decision
 		{
-			uint64_t pairId = 0;       // fghost::SetSlot's pairId: the commit that is layer 0
-			int  k = 0;                // 1..n-1: generated slot k of n.  0: the real frame
-			int  n = 0;                // fghost::SetSlot's n.  0: renderer inert (not even the ring copy)
+			uint64_t newestId = 0;     // the commit that is layer 0 (the renderer copies it on first sight)
+			uint64_t prevId = 0;       // the pair a synth is made from (0 when showing the real frame)
+			uint64_t currId = 0;
+			uint64_t outId = 0;        // the output frame's identity: the same outId is the same image
+			float    t = 1.0f;         // (0,1): synth at t between prevId and currId; 1: the real frame newestId
+			bool inert = false;        // the renderer does nothing at all (not even the ring copy)
 			bool reset = false;        // call fghost::Reset() BEFORE this composite
-			bool repaintNext = false;  // the pair is not finished: force a repaint on the next vblank
+			bool repaintNext = false;  // another output is due: force a repaint on the next vblank
+			bool newOutput = false;    // this paint presents a new output frame (counted in presentedFps)
 		};
 
 		// D18, in the glue's terms.
@@ -336,9 +346,11 @@ namespace fgpacing
 		{
 			float  gameFps = 0.0f;
 			float  presentedFps = 0.0f;
-			int    chosenN = 0;
-			int    activeN = 0;
-			float  delayMs = 0.0f;
+			float  effectiveMultiplier = 0.0f; // presented / game while generating
+			float  targetFps = 0.0f;           // Target mode: the rate aimed for (clamped to the refresh), else 0
+			int    chosenN = 0;                // Fixed: the multiplier; Target: 0
+			int    activeN = 0;                // round(effective multiplier), >= 2 while generating, else 0
+			float  delayMs = 0.0f;             // D
 			Reason reason = Reason::Normal;
 		};
 
@@ -350,7 +362,7 @@ namespace fgpacing
 		}
 
 		// Layer 0 cannot take part right now (a fade, the Steam UI, no commit):
-		// the previous real frame must not be used for the next pair.
+		// the previous real frames must not be used for the next pair.
 		void Discontinuity()
 		{
 			DropHistory( Cause::Other, false );
@@ -364,6 +376,7 @@ namespace fgpacing
 		// commit_t::present_time). tNs is that time.
 		void OnArrival( uint64_t ulCommitId, Ns tNs, uint64_t ulFocusKey, const LayerKey &layer )
 		{
+			m_flLastIntervalMs = 0.0;
 			if ( m_bHaveFocus && ( ulFocusKey != m_ulFocusKey || layer != m_Layer ) )
 			{
 				// D12: another window, or the same one at another size / format.
@@ -376,7 +389,9 @@ namespace fgpacing
 			}
 			else if ( m_bHaveArrival )
 			{
-				m_Est.AddInterval( tNs >= m_ulLastArrival ? tNs - m_ulLastArrival : 0 );
+				const Ns ulInterval = tNs >= m_ulLastArrival ? tNs - m_ulLastArrival : 0;
+				m_Est.AddInterval( ulInterval );
+				m_flLastIntervalMs = ClampIntervalMs( double( ulInterval ) / double( kNsPerMs ) );
 			}
 
 			m_ulFocusKey = ulFocusKey;
@@ -390,14 +405,11 @@ namespace fgpacing
 
 		// A paint is about to happen. `ulLayer0Id` is the commit that will be layer 0.
 		// `bVblank` says whether it is the display's refresh that triggered it: on
-		// a fixed-refresh display every paint is, and each one consumes one slot.
-		// A paint that is NOT a vblank (VRR / tearing paint straight on a commit)
-		// only advances the sequence when a new real frame is waiting; otherwise it
-		// repeats what is being shown.
+		// a fixed-refresh display every paint is, and each one may consume one
+		// output frame. A paint that is NOT a vblank only advances when a new real
+		// frame is waiting; otherwise it repeats what is being shown.
 		Decision OnPaint( const Inputs &in, uint64_t ulLayer0Id, bool bVblank )
 		{
-			m_nPaints++;
-
 			if ( ulLayer0Id != m_ulNewestId )
 			{
 				// Layer 0 changed behind our back (focus switched with no arrival of
@@ -408,37 +420,45 @@ namespace fgpacing
 				m_bHaveArrival = false;
 			}
 
-			UpdateTarget( in );
+			const bool bFresh = m_bPending;
+			m_bPending = false;
+
+			Evaluate( in );
 
 			Decision d;
-			d.pairId = ulLayer0Id;
-
-			if ( m_bPending )
-			{
-				// D9: whatever is left of an older pair is dropped; this one starts now.
-				StartPair( in, d );
-			}
-			else if ( !bVblank )
-			{
-				d = m_Last;
-				d.reset = false;
-				d.repaintNext = m_bPairActive;
-			}
-			else if ( m_bPairActive )
-			{
-				ContinuePair( d );
-			}
-			else
-			{
-				// Nothing new (a UI repaint): the real frame again. Same slot as last
-				// time, so the renderer reuses what it has.
-				d.k = 0;
-				d.n = m_nIdleN;
-			}
-
+			d.newestId = ulLayer0Id;
+			d.reset = m_bNeedReset;
 			if ( d.reset )
 				m_bNeedReset = false;
-			m_Last = d;
+
+			switch ( m_Plan.state )
+			{
+				case State::Pass:
+					ClearPlayState();
+					d.t = 1.0f;
+					d.inert = m_Plan.inert;
+					d.newOutput = bFresh;
+					m_flDelayMs = 0.0;
+					break;
+
+				case State::Warming:
+					// Ask for the ring copy so the first pair after warm-up has its
+					// previous frame.
+					PushNewest( ulLayer0Id );
+					d.t = 1.0f;
+					d.newOutput = bFresh;
+					m_flDelayMs = 0.0;
+					break;
+
+				case State::Generate:
+					PaintGenerated( in, d, bFresh, bVblank );
+					break;
+			}
+
+			if ( d.newOutput )
+				m_nOutputs++;
+			if ( m_Plan.state == State::Generate )
+				m_Last = d;
 			return d;
 		}
 
@@ -452,17 +472,23 @@ namespace fgpacing
 		Report TakeStatus( const Inputs &in, Ns ulNow )
 		{
 			Report s;
-			s.chosenN = in.chosenN;
+			s.chosenN = in.mode == Mode::Fixed ? in.multiplier : 0;
 
 			const bool bEst = m_Est.Valid();
 			if ( bEst )
 				s.gameFps = float( 1000.0 / m_Est.IntervalMs() );
 
 			if ( m_bStatusStarted && ulNow > m_ulStatusAt )
-				s.presentedFps = float( double( m_nPaints ) * 1e9 / double( ulNow - m_ulStatusAt ) );
-			m_nPaints = 0;
+				s.presentedFps = float( double( m_nOutputs ) * 1e9 / double( ulNow - m_ulStatusAt ) );
+			m_nOutputs = 0;
 			m_ulStatusAt = ulNow;
 			m_bStatusStarted = true;
+
+			if ( in.mode == Mode::Target )
+			{
+				const double flRefresh = std::max( in.refreshHz, 1.0 );
+				s.targetFps = float( in.targetFps > 0 ? std::min( double( in.targetFps ), flRefresh ) : flRefresh );
+			}
 
 			if ( !in.rendererOk )
 			{
@@ -472,205 +498,441 @@ namespace fgpacing
 			{
 				s.reason = Reason::GameStalled;
 			}
-			else if ( !bEst || !m_Hyst.Initialised() )
+			else if ( !bEst || m_Plan.state == State::Warming )
 			{
 				s.reason = ( m_Cause == Cause::Gap ) ? Reason::GameStalled : Reason::WarmingUp;
 			}
 			else
 			{
-				s.reason = m_Hyst.Held().reason;
-				s.activeN = m_Hyst.Held().n;
+				s.reason = m_Plan.reason;
+				if ( m_Plan.state == State::Generate )
+				{
+					s.delayMs = float( m_flDelayMs );
+					if ( s.gameFps > 0.0f )
+					{
+						s.effectiveMultiplier = s.presentedFps / s.gameFps;
+						s.activeN = std::max( 2, int( std::lround( s.effectiveMultiplier ) ) );
+					}
+				}
 			}
-
-			if ( s.activeN >= 2 )
-				s.delayMs = float( double( s.activeN - 1 ) / double( s.activeN ) * m_Est.IntervalMs() );
 			return s;
 		}
 
 		// --- read-only views, for tests and the glue ---
 		bool   EstimateValid() const { return m_Est.Valid(); }
 		double IntervalMs() const { return m_Est.IntervalMs(); }
-		int    ActiveN() const { return m_Hyst.Held().n; }
-		bool   PairActive() const { return m_bPairActive; }
-		bool   HavePrev() const { return m_bHavePrev; }
+		bool   Generating() const { return m_Plan.state == State::Generate; }
+		bool   CostBlocked() const { return m_bCostBlocked; }
+		// The effective output interval (after the cost guard), ms; 0 when not generating.
+		double OutputMs() const { return m_Plan.state == State::Generate ? m_Plan.oMs : 0.0; }
+		double DelayMs() const { return m_flDelayMs; }
+		int    HistoryCount() const { return m_nHist; }
+		// The content time of the last output frame (tau, ns; 0 before any).
+		int64_t ContentNs() const { return m_bTauValid ? m_nTauLast : 0; }
 
 	private:
 		enum class Cause : uint8_t { Unknown, Focus, Gap, Other };
+		enum class State : uint8_t { Warming, Pass, Generate };
 
-		// D12: forget the previous real frame and the interval history. The
+		struct Plan
+		{
+			State  state = State::Warming;
+			Reason reason = Reason::WarmingUp;
+			bool   inert = false;   // Pass only: the renderer stays completely inert
+			double oMs = 0.0;       // Generate: the effective output interval
+		};
+
+		struct HistFrame
+		{
+			uint64_t id = 0;
+			int64_t  arrival = 0;   // ns
+		};
+
+		// D12: forget the previous real frames and the interval history. The
 		// renderer is told through Decision::reset at the next paint.
 		void DropHistory( Cause cause, bool bNewGame )
 		{
 			m_Est.Clear();
-			m_bHavePrev = false;
-			m_bPairActive = false;
+			m_flLastIntervalMs = 0.0;
+			ClearPlayState();
 			m_bNeedReset = true;
 			m_Cause = cause;
 			if ( bNewGame )
 			{
 				// Another game / window: its rate and its cost are unrelated to the
-				// last one's, so adopt the new target at once and unlearn the cost.
-				m_Hyst.Restart();
-				m_flCostPerNMs = -1.0;
+				// last one's.
+				m_bGenInit = false;
 				m_bCostBlocked = false;
-				m_nLastGenN = 0;
-				m_nSettle = 3;
+				m_bProbing = false;
 			}
 		}
 
-		void UpdateTarget( const Inputs &in )
+		// Everything about the output sequence in progress (the content time, the
+		// cadence phase, the frames kept).
+		void ClearPlayState()
 		{
-			if ( in.chosenN != m_nChosen )
-			{
-				m_nChosen = in.chosenN;
-				m_Hyst.Restart();
-			}
+			m_nHist = 0;
+			m_bTauValid = false;
+			m_nNextDue = 0;
+			m_bExpectPaint = false;
+			m_bHavePair = false;
+			m_nPairSynths = 0;
+			m_Last = Decision();
+		}
 
-			// Cost model (D16). Only pairs that really generated feed it, and not
-			// for a few pairs after N changed: the renderer's number lags the live
-			// pair by up to one, so right after a change it still belongs to the
-			// old N.
-			if ( in.costMs >= 0.0f && m_nLastGenN >= 2 && m_nSettle == 0 )
-				m_flCostPerNMs = double( in.costMs ) / double( m_nLastGenN );
-			else if ( in.costMs < 0.0f )
-				m_flCostPerNMs = -1.0;
-
-			if ( !m_Est.Valid() || !in.rendererOk )
+		void PushNewest( uint64_t ulId )
+		{
+			if ( m_nHist > 0 && m_Hist[ m_nHist - 1 ].id == ulId )
 				return;
-
-			const double flInterval = m_Est.IntervalMs();
-			const bool bProbe = m_bCostBlocked && m_Hyst.Held().n < 2 && in.now >= m_ulCostBlockedAt + kCostProbeNs;
-			const NChoice target = ChooseN( in.chosenN, flInterval, in.refreshHz, m_flCostPerNMs, bProbe );
-
-			const NChoice &held = m_Hyst.Update( in.now, target );
-			if ( m_Hyst.Changed() )
+			if ( m_nHist == kHistory )
 			{
-				m_nSettle = 3;
-				if ( held.n < 2 && held.reason == Reason::CostGuard )
-				{
-					m_bCostBlocked = true;
-					m_ulCostBlockedAt = in.now;
-				}
-				else if ( held.n >= 2 )
-				{
-					m_bCostBlocked = false;
-				}
+				for ( int i = 1; i < kHistory; i++ )
+					m_Hist[ i - 1 ] = m_Hist[ i ];
+				m_nHist--;
 			}
+			m_Hist[ m_nHist++ ] = HistFrame{ ulId, int64_t( m_ulLastArrival ) };
 		}
 
-		// The first paint of a pair: the real frame has arrived.
-		void StartPair( const Inputs &in, Decision &d )
+		// Chooses what this paint does in general: pass-through (and why), warm-up,
+		// or generation (and at what output interval).
+		void Evaluate( const Inputs &in )
 		{
-			m_bPending = false;
-			m_bPairActive = false;
-			d.reset = m_bNeedReset;
+			const uint32_t uKey = uint32_t( in.mode ) | ( uint32_t( in.multiplier ) << 2 ) |
+				( uint32_t( in.targetFps ) << 8 ) | ( uint32_t( in.priority ) << 24 );
+			if ( uKey != m_uCfgKey )
+			{
+				// The user picked something else: forget the content time and the
+				// hysteresis memory and adopt the new target at once.
+				m_uCfgKey = uKey;
+				m_bGenInit = false;
+				m_bTauValid = false;
+				m_nNextDue = 0;
+				m_bExpectPaint = false;
+				m_Last = Decision();
+			}
 
-			const NChoice &held = m_Hyst.Held();
-
+			Plan p;
 			if ( !in.rendererOk )
 			{
-				// Keep telling the renderer (n >= 2): it only re-checks whether it can
-				// run when it is driven, and it would otherwise stay "unavailable"
+				// Keep telling the renderer (not inert): it only re-checks whether it
+				// can run when it is driven, and it would otherwise stay "unavailable"
 				// forever after the cause (HDR, ...) went away.
-				d.k = 0;
-				d.n = std::max( in.chosenN, 2 );
-				m_bHavePrev = false;
-				m_nIdleN = d.n;
+				p.state = State::Pass;
+				p.reason = Reason::RendererUnavailable;
+				p.inert = false;
+				m_Plan = p;
 				return;
 			}
 			if ( !m_Est.Valid() )
 			{
-				// Warming up (a new game, or after a gap). Ask for the ring copy so the
-				// first pair after it has its previous frame.
-				d.k = 0;
-				d.n = std::max( in.chosenN, 2 );
-				m_bHavePrev = true;
-				m_nIdleN = d.n;
-				return;
-			}
-			if ( held.n < 2 )
-			{
-				// Settled pass-through: the real frame at once, the renderer left
-				// completely inert (no copy either).
-				d.k = 0;
-				d.n = 0;
-				m_bHavePrev = false;
-				m_nIdleN = 0;
-				return;
-			}
-			if ( !m_bHavePrev )
-			{
-				// First pair after a reset / a pass-through: this frame is only
-				// copied; generation starts with the next one.
-				d.k = 0;
-				d.n = held.n;
-				m_bHavePrev = true;
-				m_nIdleN = held.n;
+				p.state = State::Warming;
+				p.reason = Reason::WarmingUp;
+				m_Plan = p;
 				return;
 			}
 
-			// A pair: slot 1 now, slots 2..n-1 and then the real frame on the
-			// following refreshes. N is latched here: a change takes effect only at a
-			// pair boundary.
-			d.k = 1;
-			d.n = held.n;
-			d.repaintNext = true;
-			m_bPairActive = true;
-			m_nPairN = held.n;
-			m_nNextK = 2;
-			m_nIdleN = held.n;
-			m_nLastGenN = held.n;
-			if ( m_nSettle > 0 )
-				m_nSettle--;
-		}
+			const double flInterval = m_Est.IntervalMs();
+			const double flBaseMs = OutputIntervalMs( in.mode, in.multiplier, in.targetFps, flInterval, in.refreshHz );
+			const double flRatio = OutputRatio( flInterval, flBaseMs );
 
-		void ContinuePair( Decision &d )
-		{
-			d.n = m_nPairN;
-			if ( m_nNextK < m_nPairN )
+			// The game reaches the output rate: nothing to generate. Hysteresis is a
+			// ratio band, not a time hold (the first decision after a start or a
+			// change uses the stop ratio alone).
+			if ( !m_bGenInit )
 			{
-				d.k = m_nNextK++;
-				d.repaintNext = true;
+				m_bGen = flRatio > kStopRatio;
+				m_bGenInit = true;
+			}
+			else if ( m_bGen )
+			{
+				if ( flRatio < kStopRatio )
+					m_bGen = false;
+			}
+			else if ( flRatio > kStartRatio )
+			{
+				m_bGen = true;
+			}
+			if ( !m_bGen )
+			{
+				p.state = State::Pass;
+				p.reason = Reason::GameTooFast;
+				p.inert = true;
+				m_Plan = p;
+				return;
+			}
+
+			double flOutMs = flBaseMs;
+			Reason eReason = Reason::Normal;
+
+			const bool bTimed = in.estimateMs >= 0.0f && in.synthMs >= 0.0f;
+			if ( !bTimed )
+			{
+				m_bCostBlocked = false;
+				m_bProbing = false;
 			}
 			else
 			{
-				// The generated frames are out: now the real one.
-				d.k = 0;
-				m_bPairActive = false;
+				if ( m_bCostBlocked && !m_bProbing && in.now >= m_ulCostBlockedAt + kCostProbeNs )
+				{
+					m_bProbing = true;
+					m_ulProbeStart = in.now;
+					m_uProbeSeq = in.costSeq;
+				}
+				if ( m_bProbing )
+				{
+					if ( in.costSeq != m_uProbeSeq )
+					{
+						// A measurement of a pair generated by the probe.
+						m_bProbing = false;
+						if ( MaxSynthsPerPair( flInterval, in.estimateMs, in.synthMs ) >= 1 )
+							m_bCostBlocked = false;
+						else
+							m_ulCostBlockedAt = in.now;
+					}
+					else if ( in.now >= m_ulProbeStart + kCostProbeMaxNs )
+					{
+						// Nothing measured: stay blocked, try again later.
+						m_bProbing = false;
+						m_ulCostBlockedAt = in.now;
+					}
+				}
+
+				if ( m_bCostBlocked )
+				{
+					if ( !m_bProbing )
+					{
+						p.state = State::Pass;
+						p.reason = Reason::CostGuard;
+						p.inert = true;
+						m_Plan = p;
+						return;
+					}
+					// The probe: one generated frame per real frame.
+					flOutMs = std::max( flOutMs, flInterval * 0.5 );
+					eReason = Reason::CostGuard;
+				}
+				else
+				{
+					const int nMax = MaxSynthsPerPair( flInterval, in.estimateMs, in.synthMs );
+					if ( nMax < 1 )
+					{
+						m_bCostBlocked = true;
+						m_ulCostBlockedAt = in.now;
+						p.state = State::Pass;
+						p.reason = Reason::CostGuard;
+						p.inert = true;
+						m_Plan = p;
+						return;
+					}
+					const double flCostMs = flInterval / double( nMax + 1 );
+					if ( flCostMs > flOutMs + 1e-9 )
+					{
+						flOutMs = flCostMs;
+						eReason = Reason::CostGuard;
+					}
+				}
 			}
+
+			p.state = State::Generate;
+			p.reason = eReason;
+			p.oMs = flOutMs;
+			m_Plan = p;
+		}
+
+		// The delay D for the current plan, ms.
+		double DelayFor( const Inputs &in ) const
+		{
+			const double flInterval = m_Est.IntervalMs();
+			if ( in.priority == Priority::Smoothness )
+				return SmoothnessDelayMs( flInterval, m_Est.SpreadMs() );
+			const double flLatest = m_flLastIntervalMs > 0.0 ? m_flLastIntervalMs : flInterval;
+			return LowLatencyDelayMs( flLatest, m_Plan.oMs );
+		}
+
+		void Repeat( Decision &d, const Decision &last, bool bRepaintNext ) const
+		{
+			const bool bReset = d.reset;
+			const uint64_t ulNewest = d.newestId;
+			d = last;
+			d.newestId = ulNewest;
+			d.reset = bReset;
+			d.newOutput = false;
+			d.repaintNext = bRepaintNext;
+		}
+
+		void PaintGenerated( const Inputs &in, Decision &d, bool bFresh, bool bVblank )
+		{
+			PushNewest( d.newestId );
+
+			if ( m_nHist < 2 )
+			{
+				// First frame after a reset / a pass-through: it is only copied;
+				// generation starts with the next one.
+				d.t = 1.0f;
+				d.newOutput = bFresh;
+				m_flDelayMs = 0.0;
+				return;
+			}
+
+			const bool bExpect = bFresh || m_bExpectPaint;
+			if ( !bExpect || ( !bVblank && !bFresh ) )
+			{
+				// Nothing new to show (a UI / cursor repaint): the same output again.
+				Repeat( d, m_Last, m_bExpectPaint );
+				return;
+			}
+
+			const int64_t V = int64_t( in.vblankNs ? in.vblankNs : in.now );
+			const double flVblankMs = 1000.0 / std::max( in.refreshHz, 1.0 );
+			const double flOutMs = m_Plan.oMs;
+			const bool bCadence = flOutMs > flVblankMs * 1.02;
+
+			// Output cadence: a vblank that does not cross the output interval keeps
+			// the previous image. A real frame held (t = 1) is not repeatable once
+			// layer 0 has moved on, so only a cached synth may be skipped over.
+			const bool bLastSynth = m_Last.t < 1.0f && m_Last.outId != 0;
+			if ( bCadence )
+			{
+				const int64_t nVblankNs = int64_t( flVblankMs * 1e6 );
+				const int64_t nOutNs = int64_t( flOutMs * 1e6 );
+				const bool bDue = m_nNextDue != 0 && V + nVblankNs / 2 >= m_nNextDue;
+				if ( m_nNextDue != 0 && !bDue && bLastSynth )
+				{
+					Repeat( d, m_Last, true );
+					return;
+				}
+				// A due vblank advances the accumulator by one output interval, but
+				// never lets it lag more than one vblank behind (slots that lapsed
+				// while holding a real frame are not made up for with a burst). An
+				// output that was not due (a new real frame after a held one) starts
+				// the phase afresh.
+				if ( bDue )
+					m_nNextDue = std::max( m_nNextDue + nOutNs, V + nOutNs - nVblankNs );
+				else
+					m_nNextDue = V + nOutNs;
+			}
+			else
+			{
+				m_nNextDue = 0;
+			}
+
+			// Content time: tau = V - D, never older than the last output's.
+			const double flDelayMs = DelayFor( in );
+			m_flDelayMs = flDelayMs;
+			int64_t tau = V - int64_t( flDelayMs * 1e6 );
+			if ( m_bTauValid && tau < m_nTauLast )
+				tau = m_nTauLast;
+			m_nTauLast = tau;
+			m_bTauValid = true;
+
+			const HistFrame &newest = m_Hist[ m_nHist - 1 ];
+			d.newOutput = true;
+
+			// Low latency plays only the newest pair (a new real frame snaps the
+			// content time to it); Smoothness may still be inside an older one.
+			const int jMin = in.priority == Priority::LowLatency ? m_nHist - 2 : 0;
+			bool bReal = tau >= newest.arrival;
+			int j = m_nHist - 2;
+			double t = 1.0;
+			if ( !bReal )
+			{
+				while ( j > jMin && m_Hist[ j ].arrival > tau )
+					j--;
+				const int64_t nSpan = std::max<int64_t>( m_Hist[ j + 1 ].arrival - m_Hist[ j ].arrival, 1 );
+				t = double( tau - m_Hist[ j ].arrival ) / double( nSpan );
+				if ( j + 1 == m_nHist - 1 && t >= kRealSnapT )
+					bReal = true;
+				else
+					t = std::min( std::max( t, kTMin ), kRealSnapT );
+			}
+
+			if ( bReal )
+			{
+				// The real frame itself: nothing more is due until a newer one arrives.
+				d.t = 1.0f;
+				d.prevId = d.currId = 0;
+				d.outId = ++m_ulOutSeq;
+				d.repaintNext = false;
+				m_bExpectPaint = false;
+				m_bHavePair = false;
+				return;
+			}
+
+			d.prevId = m_Hist[ j ].id;
+			d.currId = m_Hist[ j + 1 ].id;
+			d.t = float( t );
+
+			if ( m_bHavePair && m_PairPrev == d.prevId && m_PairCurr == d.currId )
+			{
+				m_nPairSynths++;
+			}
+			else
+			{
+				m_bHavePair = true;
+				m_PairPrev = d.prevId;
+				m_PairCurr = d.currId;
+				m_nPairSynths = 1;
+			}
+
+			// The same instant of the same pair needs no second synth (a clamped
+			// content time), and a pair at its synth cap repeats its last one.
+			const bool bSamePair = bLastSynth && m_Last.prevId == d.prevId && m_Last.currId == d.currId;
+			if ( bSamePair && ( m_nPairSynths > kMaxSynthsPerPair || std::fabs( m_Last.t - d.t ) < 1e-4f ) )
+			{
+				d.t = m_Last.t;
+				d.outId = m_Last.outId;
+				m_nPairSynths = std::min( m_nPairSynths, kMaxSynthsPerPair );
+			}
+			else
+			{
+				d.outId = ++m_ulOutSeq;
+			}
+			d.repaintNext = true;
+			m_bExpectPaint = true;
 		}
 
 		// -- arrivals / geometry --
 		uint64_t m_ulNewestId = 0;
-		bool     m_bPending = false;         // the newest arrival has not started a pair yet
+		bool     m_bPending = false;         // the newest arrival has not been painted yet
 		bool     m_bHaveArrival = false;
 		Ns       m_ulLastArrival = 0;
+		double   m_flLastIntervalMs = 0.0;   // the most recent real interval (0 = none yet)
 		bool     m_bHaveFocus = false;
 		uint64_t m_ulFocusKey = 0;
 		LayerKey m_Layer;
 		IntervalEstimator m_Est;
 
-		// -- the pair being played out --
-		bool m_bPairActive = false;
-		int  m_nPairN = 0;
-		int  m_nNextK = 0;
-		bool m_bHavePrev = false;            // the renderer has the previous real frame
-		bool m_bNeedReset = false;
-		int  m_nIdleN = 0;                   // the n to repeat while nothing new arrives
+		// -- the output sequence in progress --
+		HistFrame m_Hist[ kHistory ];
+		int      m_nHist = 0;
+		bool     m_bTauValid = false;
+		int64_t  m_nTauLast = 0;
+		int64_t  m_nNextDue = 0;             // the cadence accumulator, ns (0 = none)
+		bool     m_bExpectPaint = false;     // we asked for the next vblank's repaint
+		bool     m_bHavePair = false;
+		uint64_t m_PairPrev = 0, m_PairCurr = 0;
+		int      m_nPairSynths = 0;
+		uint64_t m_ulOutSeq = 0;
+		bool     m_bNeedReset = false;
+		double   m_flDelayMs = 0.0;
 		Decision m_Last;
-		Cause m_Cause = Cause::Unknown;
+		Cause    m_Cause = Cause::Unknown;
 
-		// -- N selection --
-		NHysteresis m_Hyst;
-		int    m_nChosen = 0;
-		double m_flCostPerNMs = -1.0;
-		int    m_nLastGenN = 0;
-		int    m_nSettle = 0;
-		bool   m_bCostBlocked = false;
-		Ns     m_ulCostBlockedAt = 0;
+		// -- the plan --
+		Plan     m_Plan;
+		uint32_t m_uCfgKey = 0xFFFFFFFFu;
+		bool     m_bGenInit = false;
+		bool     m_bGen = false;
+
+		// -- cost guard --
+		bool     m_bCostBlocked = false;
+		Ns       m_ulCostBlockedAt = 0;
+		bool     m_bProbing = false;
+		Ns       m_ulProbeStart = 0;
+		uint32_t m_uProbeSeq = 0;
 
 		// -- status --
-		uint64_t m_nPaints = 0;
+		uint64_t m_nOutputs = 0;
 		bool     m_bStatusStarted = false;
 		Ns       m_ulStatusAt = 0;
 	};

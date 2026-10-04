@@ -471,8 +471,19 @@ namespace gamescope::config
     // renderer.
     struct FrameGenSettings
     {
-        // 0 = Off, else 2, 3 or 4 (frames shown per real game frame).
+        // "off" | "fixed" | "target". Absent in a config written before
+        // 2026-10-04's Target fps mode: ConfigManager.cpp then derives it from
+        // `multiplier` (0 -> off, 2..8 -> fixed).
+        std::string mode = "off";
+        // Fixed mode: frames shown per real game frame, 2..8. 0 = never chosen
+        // (a normalised 1 reads as 0 too); a "fixed" mode with 0 loads as off.
         int multiplier = 0;
+        // Target mode: the output frame rate to aim for, 30..1000. 0 = the
+        // display's refresh rate.
+        int target_fps = 0;
+        // What pacing trades when the game's frame times jitter:
+        // "low_latency" | "smoothness".
+        std::string priority = "low_latency";
         // "quality" | "performance"
         std::string quality = "quality";
         // Artifact safety: "low" | "default" | "high"

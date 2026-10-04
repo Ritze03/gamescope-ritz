@@ -274,13 +274,27 @@ namespace gamescope::config
 
             // Frame generation (2026-10-04). Additive, like null_binds above.
             // multiplier is normalised the way fghost::SetConfig() does (1
-            // -> 0, above 4 -> 4); an unknown enum string keeps the default
-            // rather than guessing.
+            // -> 0, above 8 -> 8); an unknown enum string keeps the default
+            // rather than guessing. A config with no "mode" (written before
+            // Target fps existed) derives it from the multiplier, so an old
+            // 3x profile stays 3x.
             if ( const nlohmann::json *pFrameGen = JGetObject( j, "framegen" ) )
             {
                 auto &f = s.framegen;
-                const int nMult = std::clamp( JGetInt( *pFrameGen, "multiplier", f.multiplier ), 0, 4 );
+                const int nMult = std::clamp( JGetInt( *pFrameGen, "multiplier", f.multiplier ), 0, 8 );
                 f.multiplier = nMult < 2 ? 0 : nMult;
+                const std::string sMode = JGetString( *pFrameGen, "mode", "" );
+                if ( sMode == "off" || sMode == "fixed" || sMode == "target" )
+                    f.mode = sMode;
+                else
+                    f.mode = f.multiplier >= 2 ? "fixed" : "off";
+                if ( f.mode == "fixed" && f.multiplier < 2 )
+                    f.mode = "off";
+                const int nTarget = JGetInt( *pFrameGen, "target_fps", f.target_fps );
+                f.target_fps = nTarget <= 0 ? 0 : std::clamp( nTarget, 30, 1000 );
+                const std::string sPriority = JGetString( *pFrameGen, "priority", f.priority );
+                if ( sPriority == "low_latency" || sPriority == "smoothness" )
+                    f.priority = sPriority;
                 const std::string sQuality = JGetString( *pFrameGen, "quality", f.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     f.quality = sQuality;
@@ -679,7 +693,10 @@ namespace gamescope::config
 
             const auto &fg = s.framegen;
             nlohmann::json jFrameGen = nlohmann::json::object();
+            jFrameGen[ "mode" ] = fg.mode;
             jFrameGen[ "multiplier" ] = fg.multiplier;
+            jFrameGen[ "target_fps" ] = fg.target_fps;
+            jFrameGen[ "priority" ] = fg.priority;
             jFrameGen[ "quality" ] = fg.quality;
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;

@@ -12,12 +12,18 @@ The newest version below is the one this build reports.
 ## [0.11.0] – 2026-10-04
 
 ### Added
-- **Frame generation**: a new Frame generation area under Display (below Shaders) shows
-  2, 3 or 4 frames for every game frame, with Quality, Artifact safety and Static HUD
+- **Frame generation**: a new Frame generation area under Display (below Shaders)
+  shows extra frames for every game frame, with Quality, Artifact safety and Static HUD
   protection settings and a live status line.
-- **Steps down when it cannot help**: it lowers the multiplier, or passes real frames
-  through untouched, when the game runs too fast for your refresh rate or the GPU is
-  too slow, and for HDR content.
+- **Target fps and Priority**: frame generation can aim at a target frame rate, with a
+  Low latency or Smoothness priority, and fixed multipliers now go up to 8×.
+- **Crosshair protection**: frame generation keeps a still crosshair in the middle of
+  the screen sharp (part of Static HUD protection).
+- **Count generated frames**: the HUD can show the rate actually sent to the display,
+  including frame-generated frames.
+- **Passes real frames through when it cannot help**: it keeps generating until the
+  game reaches your refresh rate or target, and passes real frames through then, for
+  HDR content, or when the GPU is too slow.
 
 ## [0.10.2] – 2026-09-29
 

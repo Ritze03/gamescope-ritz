@@ -1624,27 +1624,39 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
 {
     TempConfigHome home;
 
+    REQUIRE( Settings{}.framegen.mode == "off" );
     REQUIRE( Settings{}.framegen.multiplier == 0 );
+    REQUIRE( Settings{}.framegen.target_fps == 0 );
+    REQUIRE( Settings{}.framegen.priority == "low_latency" );
     REQUIRE( Settings{}.framegen.quality == "quality" );
     REQUIRE( Settings{}.framegen.safety == "default" );
     REQUIRE( Settings{}.framegen.hud_protection == "normal" );
 
     Settings s{};
-    s.framegen.multiplier = 3;
+    s.framegen.mode = "target";
+    s.framegen.multiplier = 8;
+    s.framegen.target_fps = 240;
+    s.framegen.priority = "smoothness";
     s.framegen.quality = "performance";
     s.framegen.safety = "high";
     s.framegen.hud_protection = "strong";
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
-    REQUIRE( loaded.framegen.multiplier == 3 );
+    REQUIRE( loaded.framegen.mode == "target" );
+    REQUIRE( loaded.framegen.multiplier == 8 );
+    REQUIRE( loaded.framegen.target_fps == 240 );
+    REQUIRE( loaded.framegen.priority == "smoothness" );
     REQUIRE( loaded.framegen.quality == "performance" );
     REQUIRE( loaded.framegen.safety == "high" );
     REQUIRE( loaded.framegen.hud_protection == "strong" );
 
     // The keys the Frame generation area's rows are bound to: the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this.
+    REQUIRE( IsSettingsKey( "framegen.mode" ) );
     REQUIRE( IsSettingsKey( "framegen.multiplier" ) );
+    REQUIRE( IsSettingsKey( "framegen.target_fps" ) );
+    REQUIRE( IsSettingsKey( "framegen.priority" ) );
     REQUIRE( IsSettingsKey( "framegen.quality" ) );
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
@@ -1655,7 +1667,10 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     TempConfigHome home;
 
     Settings s{};
-    s.framegen.multiplier = 1;            // not a real choice -> Off
+    s.framegen.mode = "fixed";
+    s.framegen.multiplier = 1;            // not a real choice -> Off (so mode "fixed" -> "off")
+    s.framegen.priority = "fastest";      // unknown -> stays "low_latency"
+    s.framegen.target_fps = 7;            // below 30 -> 30
     s.framegen.quality = "ultra";         // unknown -> stays "quality"
     s.framegen.safety = "";               // unknown -> stays "default"
     s.framegen.hud_protection = "max";    // unknown -> stays "normal"
@@ -1663,14 +1678,61 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
 
     Settings loaded = LoadSections();
     REQUIRE( loaded.framegen.multiplier == 0 );
+    REQUIRE( loaded.framegen.mode == "off" );
+    REQUIRE( loaded.framegen.priority == "low_latency" );
+    REQUIRE( loaded.framegen.target_fps == 30 );
     REQUIRE( loaded.framegen.quality == "quality" );
     REQUIRE( loaded.framegen.safety == "default" );
     REQUIRE( loaded.framegen.hud_protection == "normal" );
 
-    s.framegen.multiplier = 9;            // above 4 -> 4
+    s.framegen.mode = "fixed";
+    s.framegen.multiplier = 12;           // above 8 -> 8
+    s.framegen.target_fps = 5000;         // above 1000 -> 1000
     REQUIRE( SaveSections( s ) );
     loaded = LoadSections();
-    REQUIRE( loaded.framegen.multiplier == 4 );
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.multiplier == 8 );
+    REQUIRE( loaded.framegen.target_fps == 1000 );
+
+    s.framegen.mode = "turbo";            // unknown mode -> derived from the multiplier
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.mode == "fixed" );
+}
+
+// A profile written before Target fps existed has only "multiplier": the mode
+// is derived from it (0 -> off, 2..8 -> fixed), so an old 3x profile stays 3x.
+TEST_CASE( "framegen: a legacy config with no mode derives it from the multiplier", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "multiplier": 3, "quality": "performance" }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.multiplier == 3 );
+    REQUIRE( loaded.framegen.target_fps == 0 );
+    REQUIRE( loaded.framegen.priority == "low_latency" );
+    REQUIRE( loaded.framegen.quality == "performance" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "multiplier": 0 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.mode == "off" );
+
+    // The old ceiling of 4 is gone: 8 is a real multiplier now.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "multiplier": 8 }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.mode == "fixed" );
+    REQUIRE( loaded.framegen.multiplier == 8 );
 }
 
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
