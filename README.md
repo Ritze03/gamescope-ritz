@@ -36,7 +36,8 @@ links to its page in the docs.
   library, at a fixed 2x to 8x or aimed at a Target fps, with a Low latency or
   Smoothness priority, Quality and Artifact safety settings, optional UI protection
   (a still crosshair, or the whole screen) and a live status line. It stops at your
-  refresh rate unless you choose otherwise, and works with VRR and tearing.
+  refresh rate unless you choose otherwise, works with VRR and tearing, and works in
+  HDR and 10-bit games too.
 - **[Motion blur](superdoc/features/motion-blur.md)**: blends interpolated in-between
   frames into each shown frame like a camera shutter, with or without frame generation.
 - **[Lag spike buffer](superdoc/features/lag-spike-buffer.md)**: bridges repeating game

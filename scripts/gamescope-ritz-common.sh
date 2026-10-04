@@ -175,6 +175,7 @@ gcr_submodules_missing() {
 		"subprojects/libdisplay-info/meson.build"
 		"subprojects/libliftoff/meson.build"
 		"thirdparty/SPIRV-Headers/include"
+		"subprojects/FrameGen/gpu/framegen.h"
 	)
 	for marker in "${markers[@]}"; do
 		[ -e "$repo_root/$marker" ] || return 0
