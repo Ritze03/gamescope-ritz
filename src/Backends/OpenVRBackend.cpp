@@ -1624,8 +1624,8 @@ namespace gamescope
         // The bundled effects (Shaders area) run as a compute pre-pass inside
         // vulkan_composite(), so direct scanout would skip them silently.
         bNeedsFullComposite |= vulkan_native_effects_active();
-        // Frame generation substitutes layer 0 inside vulkan_composite() too.
-        bNeedsFullComposite |= fghost::Enabled();
+        // Frame generation substitutes layer 0 inside vulkan_composite() too. RenderWanted(), not Enabled(): after it is switched off one more full composite must run to release what it holds.
+        bNeedsFullComposite |= fghost::RenderWanted();
         bNeedsFullComposite |= !m_pBackend->UsesModifiers();
 
         if ( g_bOutputHDREnabled )

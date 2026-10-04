@@ -3644,7 +3644,7 @@ namespace gamescope
 			// toggles it mid-Present. A scanned-out buffer never passes through
 			// vulkan_composite(), and a PARTIAL composite has already dropped the
 			// base layer from its frame info, so neither may happen while it is on.
-			const bool bFrameGenActive = fghost::Enabled();
+			const bool bFrameGenActive = fghost::RenderWanted();
 
 			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition && !bFrameGenActive;
 
@@ -3689,7 +3689,7 @@ namespace gamescope
 			// The bundled effects (Shaders area) run as a compute pre-pass inside
 			// vulkan_composite(), so direct scanout would skip them silently.
 			bNeedsFullComposite |= vulkan_native_effects_active();
-			// Frame generation substitutes layer 0 inside vulkan_composite() too.
+			// Frame generation substitutes layer 0 inside vulkan_composite() too. RenderWanted(), not Enabled(): after it is switched off one more full composite must run to release what it holds.
 			bNeedsFullComposite |= bFrameGenActive;
 
 			if ( g_bOutputHDREnabled )

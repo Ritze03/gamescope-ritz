@@ -141,6 +141,7 @@ static const int g_nBaseCursorScale = 36;
 
 LogScope xwm_log("xwm");
 LogScope focus_log("focus");
+LogScope fg_log("framegen");
 LogScope g_WaitableLog("waitable");
 
 gamescope::ConVar<bool> cv_overlay_unmultiplied_alpha{ "overlay_unmultiplied_alpha", false };
@@ -7801,7 +7802,9 @@ register_systray(xwayland_ctx_t *ctx)
 //  Phase A: every backend is paced off the fixed-refresh vblank sequence. A
 //  later phase that times slots under VRR / nested replaces "the next vblank" in
 //  FrameGen_PrePaint()'s `bVblank` argument and in the force_repaint() below;
-//  nothing in Pacing.h cares where the tick comes from.
+//  nothing in Pacing.h cares where the tick comes from. Until then VRR and
+//  tearing are passed through (FrameGen_Unpaced(): n = 0, no hold, the pacer
+//  reset on entry and exit); FG never forces VRR off.
 //
 //  Off costs one relaxed atomic load per paint (fghost::Enabled()) and one plain
 //  bool read per focused-window commit: no extra repaint, no SetSlot, no
@@ -7828,8 +7831,66 @@ namespace
 		bool bActive = false;
 		// The pair needs another refresh: FrameGen_PostPaint() forces it.
 		bool bRepaintNext = false;
+		// VRR / tearing: the display is not paced off a fixed vblank, so FG passes
+		// through (see FrameGen_Unpaced()). bUnpaced is the state the pacer was last
+		// reset for; ulUnpacedUntil is the hysteresis hold (ns) before leaving it.
+		bool bUnpaced = false;
+		uint64_t ulUnpacedUntil = 0;
 	};
 	FrameGenPacing_t s_FrameGen;
+
+	// On-change logging state (FrameGen_LogStatus()). steamcompmgr thread only.
+	struct FrameGenLog_t
+	{
+		bool bValid = false;
+		int nChosenN = -1;
+		int nActiveN = -1;
+		fghost::PassReason ePass = fghost::PassReason::Off;
+		fghost::Unavailable eUnavailable = fghost::Unavailable::Ok;
+		uint64_t ulLastLine = 0;   // last line of either kind, for the 5 s periodic one
+	};
+	FrameGenLog_t s_FrameGenLog;
+
+	// Is the present path one the pair's slots cannot be spaced on? Under VRR the
+	// main loop treats every moment as a vblank and a forced repaint paints at
+	// once, so the generated slots would be presented back-to-back at CPU speed;
+	// tearing (async flips) is the same. Phase B (timer pacing) lifts this.
+	// Tearing mirrors the `bTearing` the main loop uses to choose FlipType::Async.
+	bool FrameGen_Unpaced()
+	{
+		gamescope::IBackendConnector *pConnector = GetBackend()->GetCurrentConnector();
+		if ( pConnector && pConnector->IsVRRActive() )
+			return true;
+
+		const gamescope::Rc<commit_t> &pBase = g_HeldCommits[ HELD_COMMIT_BASE ];
+		return cv_tearing_enabled && GetBackend()->SupportsTearing() && pBase != nullptr && pBase->async;
+	}
+
+	// One line when chosenN / activeN / the pass reason / the renderer's reason
+	// changes, plus (debug) a compact one at most every 5 s while FG is on. Called
+	// where the pacing status is published and when the renderer's reason moves,
+	// never per frame.
+	void FrameGen_LogStatus( const fghost::PacingStatus &status, fghost::Unavailable eUnavailable, uint64_t ulNow )
+	{
+		FrameGenLog_t &L = s_FrameGenLog;
+		const bool bChanged = !L.bValid || status.chosenN != L.nChosenN || status.activeN != L.nActiveN ||
+			status.reason != L.ePass || eUnavailable != L.eUnavailable;
+		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
+		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
+		if ( !bChanged && !bPeriodic )
+			return;
+
+		L = { true, status.chosenN, status.activeN, status.reason, eUnavailable, ulNow };
+
+		if ( bChanged )
+			fg_log.infof( "frame generation: game %.1f fps, presented %.1f fps, chosen %dx -> active %dx, delay %.1f ms, pacing: \"%s\" (%u), renderer: %s",
+				status.gameFps, status.presentedFps, status.chosenN, status.activeN, status.delayMs,
+				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
+		else
+			fg_log.debugf( "frame generation status: game %.1f fps, presented %.1f fps, %dx -> %dx, delay %.1f ms, pacing: \"%s\", renderer: %s",
+				status.gameFps, status.presentedFps, status.chosenN, status.activeN, status.delayMs,
+				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
+	}
 }
 
 // A real frame of the focused window became its newest usable commit.
@@ -7862,6 +7923,8 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 			// Switched off: stop paying for it and say so once.
 			s_FrameGen.bActive = false;
 			s_FrameGen.bRepaintNext = false;
+			s_FrameGen.bUnpaced = false;
+			s_FrameGen.ulUnpacedUntil = 0;
 			s_FrameGen.pacer.Reset();
 			fghost::SetSlot( 0, 0, 0 );
 
@@ -7869,9 +7932,13 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 			status.valid = false;
 			status.reason = fghost::PassReason::Off;
 			fghost::PublishPacingStatus( status );
+			s_FrameGenLog = FrameGenLog_t();
+			fg_log.infof( "frame generation: off" );
 		}
 		return;
 	}
+	if ( !s_FrameGen.bActive )
+		fg_log.infof( "frame generation: on, chosen %dx", fghost::GetConfig().multiplier );
 	s_FrameGen.bActive = true;
 
 	// Only the connector the user is looking at takes part: the pacer's one
@@ -7904,15 +7971,56 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 	}
 
 	const fghost::RenderStatus renderStatus = fghost::GetRenderStatus();
+	const uint64_t ulNow = get_time_in_nanos();
+
+	// VRR / tearing: pass through. Hysteresis: entering is immediate, leaving
+	// needs the condition clear for kUnpacedHoldNs (VRR does not flap; a tearing
+	// surface's async flag can follow the held commit).
+	constexpr uint64_t kUnpacedHoldNs = 500ull * 1000ull * 1000ull;
+	if ( FrameGen_Unpaced() )
+		s_FrameGen.ulUnpacedUntil = ulNow + kUnpacedHoldNs;
+	const bool bUnpaced = ulNow < s_FrameGen.ulUnpacedUntil;
+	if ( bUnpaced != s_FrameGen.bUnpaced )
+	{
+		// Entering or leaving: the next pair starts clean.
+		s_FrameGen.bUnpaced = bUnpaced;
+		s_FrameGen.pacer.Reset();
+		s_FrameGen.bRepaintNext = false;
+		fghost::Reset();
+	}
 
 	fgpacing::Pacer::Inputs in;
-	in.now = get_time_in_nanos();
+	in.now = ulNow;
 	in.chosenN = fghost::GetConfig().multiplier;
 	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):
 	// that is the rate at which slots tick.
 	in.refreshHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
 	in.costMs = renderStatus.lastPairGpuMs;
 	in.rendererOk = renderStatus.reason == fghost::Unavailable::Ok;
+
+	if ( bUnpaced )
+	{
+		// The real frame goes out at once, the renderer stays inert, no extra
+		// repaint. The pacer is still fed arrivals (FrameGen_OnArrival) so the
+		// status can show the game's rate.
+		fghost::SetSlot( 0, 0, 0 );
+		if ( s_FrameGen.pacer.StatusDue( in.now ) )
+		{
+			const fgpacing::Pacer::Report s = s_FrameGen.pacer.TakeStatus( in, in.now );
+			fghost::PacingStatus status;
+			status.valid = true;
+			status.gameFps = s.gameFps;
+			status.presentedFps = s.gameFps;
+			status.chosenN = s.chosenN;
+			status.activeN = 0;
+			status.delayMs = 0.0f;
+			// No dedicated "variable refresh" value exists; RefreshLimit is the closest.
+			status.reason = fghost::PassReason::RefreshLimit;
+			fghost::PublishPacingStatus( status );
+			FrameGen_LogStatus( status, renderStatus.reason, in.now );
+		}
+		return;
+	}
 
 	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank );
 
@@ -7933,6 +8041,13 @@ static void FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank )
 		status.delayMs = s.delayMs;
 		status.reason = fghost::PassReason( uint8_t( s.reason ) );
 		fghost::PublishPacingStatus( status );
+		FrameGen_LogStatus( status, renderStatus.reason, in.now );
+	}
+	else if ( renderStatus.reason != s_FrameGenLog.eUnavailable )
+	{
+		// The renderer's own reason (RecordFailed, Hdr, ...) moved between status
+		// periods: log it now, against the last published pacing status.
+		FrameGen_LogStatus( fghost::GetPacingStatus(), renderStatus.reason, in.now );
 	}
 }
 
