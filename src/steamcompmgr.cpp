@@ -8172,6 +8172,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.targetFps = cfg.targetFps;
 	in.priority = fgpacing::Priority( uint8_t( cfg.priority ) );
 	in.pauseAtRefresh = cfg.pauseAtRefresh;
+	in.costGuard = cfg.gpuLimit;
 	in.canExceedRefresh = bCanExceed;
 	s_FrameGen.bCanExceed = bCanExceed;
 	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):

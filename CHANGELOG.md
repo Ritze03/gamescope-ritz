@@ -20,10 +20,11 @@ The newest version below is the one this build reports.
 - **UI protection**: frame generation keeps a still crosshair, or with Whole screen
   every solid HUD element, pixel-exact.
 - **FPS shown**: the HUD can show the game's frame rate, the output rate including
-  generated frames, or both as `game->output`.
+  generated frames, or both as `game>output`.
 - **Passes real frames through when it cannot help**: it keeps generating until the
   game reaches your refresh rate or target, and passes real frames through then, for
-  HDR content, or when the GPU is too slow.
+  HDR content, or (with the off-by-default "Limit to GPU speed") when the GPU is too
+  slow.
 - **Pause at refresh rate**: choose whether frame generation stops once the game
   reaches your refresh rate, or keeps generating above it.
 

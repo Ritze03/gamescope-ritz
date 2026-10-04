@@ -439,6 +439,10 @@ namespace fgpacing
 			// a tearing DRM flip). The cap applies unless the switch is off AND it can.
 			bool   pauseAtRefresh = true;
 			bool   canExceedRefresh = false;
+			// "Limit to GPU speed" (the cost guard). false: costs are still read, but
+			// the guard never caps the output, never passes through (CostGuard) and
+			// never probes; switching it off lifts a cap at once.
+			bool   costGuard = true;
 			float  estimateMs = -1.0f; // RenderStatus::lastEstimateMs, < 0 = n/a
 			float  synthMs = -1.0f;    // RenderStatus::lastSynthMs, < 0 = n/a
 			uint32_t costSeq = 0;      // RenderStatus::costSeq: changes with every new measurement
@@ -809,7 +813,7 @@ namespace fgpacing
 			Reason eReason = Reason::Normal;
 
 			const bool bTimed = in.estimateMs >= 0.0f && in.synthMs >= 0.0f;
-			if ( !bTimed )
+			if ( !bTimed || !in.costGuard )
 			{
 				m_bCostBlocked = false;
 				m_bProbing = false;

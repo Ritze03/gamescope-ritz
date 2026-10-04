@@ -114,6 +114,7 @@ namespace gamescope
 			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 0 ) == 1
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
 			c.pauseAtRefresh = f.pause_at_refresh;
+			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 1 );
@@ -309,6 +310,17 @@ namespace gamescope
 			       "past the refresh rate." )
 			.Default( true )
 			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.gpu_limit; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.gpu_limit = b; PersistAndPush(); } ) )
+			.Help( "On: when frame generation takes too much of the GPU it lowers the output rate, "
+			       "and as a last resort shows only real frames, so the game itself keeps its frame "
+			       "rate. Off: always generate at the chosen rate, even if that slows the game down." )
+			.Default( false )
+			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.quality", "Quality",

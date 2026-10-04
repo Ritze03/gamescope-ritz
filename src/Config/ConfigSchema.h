@@ -492,6 +492,11 @@ namespace gamescope::config
         // may exceed the refresh); extra frames are presented between vblanks
         // where the backend can show them. ADDITIVE: an older config loads true.
         bool pause_at_refresh = true;
+        // "Limit to GPU speed" (2026-10-04): the cost guard. true: when frame
+        // generation costs too much of the GPU it lowers the output rate or passes
+        // real frames through. false (default, the user's call). ADDITIVE: absent
+        // loads false, schema stays 5.
+        bool gpu_limit = false;
         // "quality" | "performance"
         std::string quality = "quality";
         // Artifact safety: "off" | "low" | "default" | "high" ("off" added 2026-10-04:

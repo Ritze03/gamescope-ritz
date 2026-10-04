@@ -1877,6 +1877,36 @@ TEST_CASE( "framegen: a legacy config without pause_at_refresh loads as true; sa
     REQUIRE( loaded.framegen.safety == "off" );
 }
 
+TEST_CASE( "framegen: gpu_limit defaults to false when absent and round-trips", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( Settings{}.framegen.gpu_limit == false );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 4 }
+    })";
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.framegen.gpu_limit == false );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "gpu_limit": true }
+    })";
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.gpu_limit == true );
+
+    Settings s{};
+    s.framegen.gpu_limit = true;
+    REQUIRE( SaveSections( s ) );
+    loaded = LoadSections();
+    REQUIRE( loaded.framegen.gpu_limit == true );
+    s.framegen.gpu_limit = false;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().framegen.gpu_limit == false );
+}
+
 // zoom.scroll_adjust's pure arithmetic (Zoom_StepFactor, Overlay/Zoom.h):
 // no compositor deps, so it needs no Zoom.cpp link at all -- see that
 // header's own comment.

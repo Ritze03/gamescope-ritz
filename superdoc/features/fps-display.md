@@ -143,13 +143,13 @@ sure that there's an option to count fake frames as real frames, and then it
 should just, in the bottom right, say the new number ... But still only a single
 number, just what's actually being outputted."* Then: *"For the HUD, add toggle,
 to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
-40->280"*
+40->280"* (the `->` was later shortened to a single `>`, 2026-10-04: `40>280`)
 
 - **Game**: the game's real frame rate (the commit counter); exactly the HUD as
   it was before this option.
 - **Output**: what `count_generated_frames=true` did. `presentedFps` while
   generating, the commit rate otherwise.
-- **Both**: while generating, `<game>-><output>` (e.g. `40->280`); when not
+- **Both**: while generating, `<game>><output>` (e.g. `40>280`); when not
   generating, the single game number.
 
 "Generating" is `fghost::Enabled()` and `GetPacingStatus()` `valid` and
@@ -170,16 +170,16 @@ restart. `Why:` in Both the game number must not jump or restart when
 generation starts or stops, and always stepping both means changing "FPS shown"
 never shows a stale value.
 
-**Layout.** `MeasureFpsModule( nFps, nOut, ... )` builds the string `"%d->%d"`
+**Layout.** `MeasureFpsModule( nFps, nOut, ... )` builds the string `"%d>%d"`
 (plain ASCII — the overlay font atlas is Latin-1 only, an arrow glyph would be a
-missing glyph). The pinned box is `<game zeros>-><output zeros>`, each side
+missing glyph). The pinned box is `<game zeros>><output zeros>`, each side
 padded to its own >= 3 cells like a lone number, so the box only widens when a
 side gains a digit. The box is placed by the same `ResolveAnchoredOrigin()` and
 the digits hug the anchored side via `flTextOffsetX` as before, so at a right
 anchor the string grows leftwards from the margin and cannot clip. The margin
 and ink-bearing correction is measured off the game number's zero run in every
-mode (`szInkRef`), not off `->`, so Game mode is byte-identical and the `>`/`-`
-glyphs cannot shift the vertical correction. The outline and Inverted modes
+mode (`szInkRef`), not off the `>`, so Game mode is byte-identical and the `>`
+glyph cannot shift the vertical correction. The outline and Inverted modes
 need no change: the outline is drawn from the same string, and Inverted samples
 one pixel at the box centre (now the middle of the wider string). The font is
 monospaced, so the widths are stable.

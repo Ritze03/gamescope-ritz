@@ -325,6 +325,7 @@ namespace gamescope::config
                 if ( sPriority == "low_latency" || sPriority == "smoothness" )
                     f.priority = sPriority;
                 f.pause_at_refresh = JGetBool( *pFrameGen, "pause_at_refresh", f.pause_at_refresh );
+                f.gpu_limit = JGetBool( *pFrameGen, "gpu_limit", f.gpu_limit );
                 const std::string sQuality = JGetString( *pFrameGen, "quality", f.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     f.quality = sQuality;
@@ -732,6 +733,7 @@ namespace gamescope::config
             jFrameGen[ "target_fps" ] = fg.target_fps;
             jFrameGen[ "priority" ] = fg.priority;
             jFrameGen[ "pause_at_refresh" ] = fg.pause_at_refresh;
+            jFrameGen[ "gpu_limit" ] = fg.gpu_limit;
             jFrameGen[ "quality" ] = fg.quality;
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;

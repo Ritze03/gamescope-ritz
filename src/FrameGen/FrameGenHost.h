@@ -104,6 +104,9 @@ namespace fghost
 		// the extra frames are presented between vblanks where the backend can show
 		// them (Pacing.h's "BEYOND THE REFRESH RATE").
 		bool pauseAtRefresh = true;
+		// "Limit to GPU speed": the cost guard (lower the output rate, or pass
+		// real frames through, when generation takes too much of the GPU).
+		bool gpuLimit = false;
 		Quality quality = Quality::Quality;
 		Safety safety = Safety::Default;
 		HudProtect hud = HudProtect::Normal;

@@ -55,7 +55,8 @@ namespace fghost
 				| ( uint32_t( nTarget ) << 13 )
 				| ( uint32_t( c.pauseAtRefresh ? 1 : 0 ) << 23 )
 				| ( uint32_t( c.ui ) << 24 )
-				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 );
+				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
+				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 );
 		}
 
 		Config Unpack( uint32_t u )
@@ -71,6 +72,7 @@ namespace fghost
 			c.targetFps = int( ( u >> 13 ) & 0x3FFu );
 			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
 			c.ui = UiProt( std::min( ( u >> 24 ) & 0x3u, 2u ) );
+			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
 			return c;
 		}
 

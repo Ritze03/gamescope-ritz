@@ -48,6 +48,7 @@ namespace
 		// vblanks (the defaults are the capped, vblank-paced behaviour).
 		bool pauseAtRefresh = true;
 		bool canExceed = false;
+		bool costGuard = true;         // "Limit to GPU speed" (the product default is off; the pacing tests exercise the guard, so the Driver turns it on)
 		// The main loop lets frame generation skip a vblank that is not due a new
 		// output when nothing else (UI, cursor, fade) asked for the paint.
 		bool skipVblanks = false;
@@ -86,6 +87,7 @@ namespace
 			in.rendererOk = rendererOk;
 			in.pauseAtRefresh = pauseAtRefresh;
 			in.canExceedRefresh = canExceed;
+			in.costGuard = costGuard;
 			return in;
 		}
 
@@ -1039,6 +1041,49 @@ TEST_CASE( "framegen pacing: the cost guard lowers the output rate, then passes 
 		CHECK( s.reason == Reason::CostGuard );
 		CHECK( s.activeN == 0 );
 	}
+}
+
+TEST_CASE( "framegen pacing: with the GPU limit off an over-budget cost neither caps nor passes through", "[framegen_pacing]" )
+{
+	Driver drv;
+	drv.costGuard = true;   // explicit: the guard is on until the switch below
+	drv.refreshHz = 240.0;
+	drv.multiplier = 4;
+	WarmUp( drv, 1000.0 / 60.0, 800 * MS );
+
+	// Over budget for one generated frame: with the limit on this passes through.
+	drv.estimateMs = 5.0f;
+	drv.synthMs = 0.5f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	REQUIRE( drv.pacer.CostBlocked() );
+	REQUIRE_FALSE( drv.pacer.Generating() );
+
+	// Off: the cap lifts at once and it generates at the full rate, no CostGuard, no probe.
+	drv.costGuard = false;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK_FALSE( drv.pacer.CostBlocked() );
+	CHECK( drv.pacer.Generating() );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 240.0 ) < 1e-6 );
+	CHECK( drv.Status().reason == Reason::Normal );
+	drv.Run( 12 * 1000 * MS, 1000.0 / 60.0 );
+	CHECK( drv.pacer.Generating() );
+	CHECK( drv.Status().reason == Reason::Normal );
+
+	// A cost that would only lower the rate (not pass through) leaves it alone too.
+	drv.estimateMs = 1.0f;
+	drv.synthMs = 1.5f;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK( std::fabs( drv.pacer.OutputMs() - 1000.0 / 240.0 ) < 1e-6 );
+	CHECK( drv.Status().reason == Reason::Normal );
+
+	// Back on: it caps again at once.
+	drv.costGuard = true;
+	drv.costSeq++;
+	drv.Run( 300 * MS, 1000.0 / 60.0 );
+	CHECK( std::fabs( drv.pacer.OutputMs() - ( 1000.0 / 60.0 ) / 3.0 ) < 1e-6 );
+	CHECK( drv.Status().reason == Reason::CostGuard );
 }
 
 TEST_CASE( "framegen pacing: a cost-guard pass-through is retried after a while", "[framegen_pacing]" )

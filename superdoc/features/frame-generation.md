@@ -318,6 +318,18 @@ told you earlier."*
   renderer's sequence number), and gives up after 3 s without one. It never changes the
   user's Quality preset (a flow-scale change needs a GPU wait, which would stutter if it
   flapped). No guard without timestamps.
+  **Switch (2026-10-04, `framegen.gpu_limit`, row "Limit to GPU speed").** The user: *"I should
+  be able to disable the 'limit to keep up with GPU' feature."* Off sets
+  `Pacer::Inputs::costGuard = false` (packed config bit 27, `fghost::Config::gpuLimit`): the
+  pacer clears `m_bCostBlocked`/`m_bProbing` (so a cap or pass-through lifts at once), never raises
+  `o` for cost, never reports CostGuard and never probes; the renderer still measures, so turning
+  it back on caps immediately and the status/debug log keep their numbers. `Why:` the guard
+  trades the chosen output rate for the game's own frame rate; someone who wants the rate
+  regardless (and accepts a slower game) needs a way to say so. **Default off:** the user, on
+  the first cut (default on): *"turn it off by default. I personally believe, that it is
+  useless/defeats the whole purpose"*; so a fresh or older profile never caps or passes through
+  for cost unless the switch is turned on. The user's fuller reasoning: *"it's fine if it takes up more GPU time. So it actually decreases the real FPS because it's supposed to just make the whole experience move and not switch back and forth. ... For example, if I have 120 FPS and it turns off, that looks substantially worse than, for example, having 90 FPS and it being generated up to 280."* In short: a steady generated output beats protecting the game's own frame rate, because toggling generation on and off looks worse than a lower real rate that is always generated. (The pure `Pacer::Inputs::costGuard` still defaults
+  to true, and the pacing tests drive it explicitly.)
 - **Cadence-skip vblanks do not paint** (2026-10-04). When `o` is longer than a vblank and no
   new output is due, the pacer says `Decision::skip` (only if nothing but frame generation
   asked for the paint: no UI / cursor / fade repaint, no repaint that is not the arrival of a
@@ -443,6 +455,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
 | `framegen.priority` | `low_latency` (default) / `smoothness` | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
+| `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
