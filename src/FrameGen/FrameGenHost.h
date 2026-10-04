@@ -64,6 +64,13 @@ namespace fghost
 	// Strong = 2.5. Runtime.
 	enum class HudProtect : uint8_t { Off, Normal, Strong };
 
+	// "UI protection": the FrameGen library's static-UI protection
+	// (framegen::UiProtection), independent of HudProtect. Crosshair = a centred
+	// box (3% of the frame's area), WholeScreen = every solid still HUD element
+	// too. Runtime (setSettings, no wait). Stored in the packed config at bits
+	// 24-25, so Off = 0 would be the all-zero word; the DEFAULT is Crosshair.
+	enum class UiProt : uint8_t { Off, Crosshair, WholeScreen };
+
 	// What the user asked for. Off = nothing runs. Fixed = a multiplier of the
 	// game's rate (output saturates at the refresh rate, it never steps down).
 	// Target = aim at an output frame rate whatever the game does.
@@ -98,6 +105,7 @@ namespace fghost
 		Quality quality = Quality::Quality;
 		Safety safety = Safety::Default;
 		HudProtect hud = HudProtect::Normal;
+		UiProt ui = UiProt::Crosshair;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time
@@ -193,6 +201,11 @@ namespace fghost
 		// profile covered (the library's query pool holds about a dozen).
 		float lastEstimateMs = -1.0f;
 		float lastSynthMs = -1.0f;
+		// The UI-protection share of the pair cost above (already INCLUDED in
+		// lastPairGpuMs / lastEstimateMs / lastSynthMs, so the cost guard counts it):
+		// one observe (ui_detect + ui_inpaint) plus one patch (ui_patch), ms.
+		// < 0 = n/a (protection off, or not measured yet).
+		float lastUiMs = -1.0f;
 		// Increments with every new measurement, so pacing can tell a fresh
 		// reading from the stale one it already acted on.
 		uint32_t costSeq = 0;
@@ -275,7 +288,7 @@ namespace fghost
 	// waitIdle() here can never disturb it):
 	//   * on the first sight of a new newestId: copies layer 0 into a private
 	//     3-slot ring (decision D11 -- the game's buffers are never pinned) and
-	//     runs crosshair detect/inpaint on it;
+	//     hands it to the library's recordObserve() (UI protection);
 	//   * for 0 < t < 1: the first synth of a real pair records recordEstimate
 	//     first, then recordSynth(t) into a pooled output (decision D13) cached
 	//     by outId, so a repeat composite of the same output records nothing.

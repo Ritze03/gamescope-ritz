@@ -1,7 +1,8 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Seven per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
-// Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection -- plus
+// SHAPE. Eight per-profile rows -- Frame generation (Off / 2x..8x / Target fps),
+// Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection,
+// UI protection -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
@@ -49,11 +50,13 @@ namespace gamescope
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
+		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 2, "Whole screen" } };
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
+		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen" };
 
 		int IndexOf( const std::string &s, const char *const *ppszKeys, int n, int nFallback )
 		{
@@ -116,6 +119,7 @@ namespace gamescope
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 1 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 1 );
+			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 3, 1 );
 			return c;
 		}
 
@@ -209,6 +213,13 @@ namespace gamescope
 				{
 					std::snprintf( sz, sizeof( sz ), " · FG %.2f ms", rs.lastPairGpuMs );
 					s += sz;
+					// The UI-protection share of that (already included above); only
+					// while it is on and has been measured.
+					if ( f.ui_protection != "off" && rs.lastUiMs >= 0.0f )
+					{
+						std::snprintf( sz, sizeof( sz ), " · UI %.2f ms", rs.lastUiMs );
+						s += sz;
+					}
 				}
 				std::snprintf( sz, sizeof( sz ), " · +%.1f ms delay", ps.delayMs );
 				s += sz;
@@ -336,12 +347,26 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.hud_protection, kHudKeys, 3, 1 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.hud_protection = kHudKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kHudOptions, std::size( kHudOptions ) )
-			.Help( "Keeps a motionless on-screen HUD from wobbling, and a still crosshair in the "
-			       "middle of the screen sharp. The game's own HUD can still artifact when "
-			       "frames are generated; this fork's own Crosshair is drawn after generation "
-			       "and stays sharp." )
+			.Help( "A soft bias towards \"stay put\" when frames are generated, so a motionless "
+			       "or see-through HUD wobbles less. It only nudges the motion estimate: it "
+			       "cannot make a HUD pixel-exact (that is UI protection below). Strong "
+			       "can hold back genuinely slow motion near the HUD." )
 			.Default( 1 )
-			.Keywords( "frame generation static hud protection ui wobble crosshair" )
+			.Keywords( "frame generation static hud protection ui wobble see-through" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.ui_protection", "UI protection",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.ui_protection, kUiKeys, 3, 1 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.ui_protection = kUiKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+			kUiOptions, std::size( kUiOptions ) )
+			.Help( "Crosshair keeps a still crosshair in the middle of the screen pixel-exact. "
+			       "Whole screen does the same for every solid still HUD element (minimap, "
+			       "ammo, text), at a small extra cost. It cannot protect see-through or "
+			       "changing UI. With Whole screen on, Static HUD protection can usually be "
+			       "lowered. Off for racing games or anything without a fixed HUD." )
+			.Default( 1 )
+			.Keywords( "frame generation ui protection crosshair hud whole screen minimap static pixel exact" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Group( "Status" );

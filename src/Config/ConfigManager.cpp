@@ -310,6 +310,9 @@ namespace gamescope::config
                 const std::string sHud = JGetString( *pFrameGen, "hud_protection", f.hud_protection );
                 if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
                     f.hud_protection = sHud;
+                const std::string sUi = JGetString( *pFrameGen, "ui_protection", f.ui_protection );
+                if ( sUi == "off" || sUi == "crosshair" || sUi == "whole_screen" )
+                    f.ui_protection = sUi;
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
@@ -707,6 +710,7 @@ namespace gamescope::config
             jFrameGen[ "quality" ] = fg.quality;
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;
+            jFrameGen[ "ui_protection" ] = fg.ui_protection;
 
             nlohmann::json jSaturation = nlohmann::json::object();
             jSaturation[ "enabled" ] = s.reshade.saturation.enabled;

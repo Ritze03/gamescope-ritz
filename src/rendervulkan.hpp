@@ -844,7 +844,6 @@ struct wlr_renderer *vulkan_renderer_create( void );
 using mat3x4 = std::array<std::array<float, 4>, 3>;
 
 #include "color_helpers_impl.h"
-#include <cstring>
 
 struct gamescope_color_mgmt_t
 {
@@ -1063,9 +1062,6 @@ enum ShaderType {
 	SHADER_TYPE_EFFECTS_V2_BOX1_FINE,
 	SHADER_TYPE_EFFECTS_V2_BOX2_FINE,
 	SHADER_TYPE_FG_COPY, // cs_fg_copy.comp: the frame generation host's ring copy of the game's frame (src/FrameGen/FrameGenHost.cpp)
-	SHADER_TYPE_FG_XHAIR_DETECT, // cs_fg_crosshair_detect.comp: frame generation's crosshair protection, stability counters + mask/patch build
-	SHADER_TYPE_FG_INPAINT,      // cs_fg_inpaint.comp: ... fills the masked crosshair pixels of the ring frame from their surroundings
-	SHADER_TYPE_FG_XHAIR_PATCH,  // cs_fg_crosshair_patch.comp: ... paints the original crosshair pixels back over a generated frame
 
 	SHADER_TYPE_COUNT
 };
@@ -1480,15 +1476,6 @@ public:
 	void clearState();
 	template<class PushData, class... Args>
 	void uploadConstants(Args&&... args);
-	// Non-template twin of uploadConstants<>() for code outside rendervulkan.cpp
-	// (the frame generation host, src/FrameGen/FrameGenHost.cpp): the template's
-	// definition lives in the .cpp, so it cannot be instantiated from there.
-	void uploadConstantsRaw(const void *pData, uint32_t size)
-	{
-		auto [ptr, offset] = m_device->uploadBufferData(size);
-		m_renderBufferOffset = offset;
-		memcpy(ptr, pData, size);
-	}
 	void bindPipeline(VkPipeline pipeline);
 	void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 	void copyImage(gamescope::Rc<CVulkanTexture> src, gamescope::Rc<CVulkanTexture> dst);

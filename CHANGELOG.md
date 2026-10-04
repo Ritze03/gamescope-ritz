@@ -17,8 +17,8 @@ The newest version below is the one this build reports.
   protection settings and a live status line.
 - **Target fps and Priority**: frame generation can aim at a target frame rate, with a
   Low latency or Smoothness priority, and fixed multipliers now go up to 8×.
-- **Crosshair protection**: frame generation keeps a still crosshair in the middle of
-  the screen sharp (part of Static HUD protection).
+- **UI protection**: frame generation keeps a still crosshair, or with Whole screen
+  every solid HUD element, pixel-exact.
 - **FPS shown**: the HUD can show the game's frame rate, the output rate including
   generated frames, or both as `game->output`.
 - **Passes real frames through when it cannot help**: it keeps generating until the

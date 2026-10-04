@@ -36,12 +36,13 @@ Pipeline order inside `vulkan_composite()`:
 2. Native shader effects and ReShade run on it like on any frame.
 3. The upscaler (FSR / NIS) runs afterwards, in the present composite.
 4. HUD, Crosshair, cursor and overlays are drawn on top.
+   (The game's own still HUD is kept pixel-exact by [UI protection](#ui-protection).)
 
 `Why:` before the effects, because the effects then treat generated frames like real ones
 with no special case (adaptive effects measure generated frames too, which is harmless).
 After the upscaler is impossible: the library works at the game's own resolution. Drawing
 the fork's own Crosshair/HUD after FG keeps them sharp, while the game's own HUD may
-artifact.
+artifact unless UI protection holds it.
 
 The pre-emptive upscale is bypassed while FG is enabled: it bakes layer 0 at commit time,
 which FG cannot substitute per output frame.
@@ -93,71 +94,126 @@ which FG cannot substitute per output frame.
 - **`g_device.waitIdle()`** before every Interpolator resize / reconfigure / teardown (the
   library has no deferred free). So a **Quality** change (it alters the flow scale) causes
   one brief pause; the other presets apply live.
-- **Logs**: the renderer logs under the `framegen` scope (ready / unavailable / crosshair
-  errors); the pacing glue logs under **`framegen_pacing`** (see
+- **Logs**: the renderer logs under the `framegen` scope (ready / unavailable / UI protection
+  warnings); the pacing glue logs under **`framegen_pacing`** (see
   [Logging](#logging)). They are two scopes because every `LogScope` registers a
   ConCommand of its own name and the console asserts on a duplicate -- two scopes called
   `framegen` aborted the binary in static init.
 
-## Crosshair protection
+## UI protection
 
-Active whenever **Static HUD protection** is Normal or Strong; Off records none of it. No
-setting of its own. `Why:` the user, after testing in a real game ("looks REALLY good"):
-*"One thing that many frame gens get wrong is the crosshair [...] We won't optimize for
-like weird big crosshairs, but like the middle one to maybe three percent of the screen
-[...] It should analyze multiple frames and can easily tell if the crosshair isn't moving.
-And then it should detect it, that it is the crosshair. Then the image that is being used
-to generate frames should have this crosshair removed and at a later point patched on
-again. This of course doesn't work as well if there's transparency, but it should work for
-most games."* The library's `hudBonus` does not solve it: a static crosshair over a moving
-background drags or smears, or makes the background around it stick.
+The **UI protection** row (`framegen.ui_protection`: Off / **Crosshair** (default) / Whole
+screen) keeps a still crosshair, or with Whole screen every solid still HUD element,
+pixel-exact on generated frames. It is **independent of Static HUD protection**.
 
-Algorithm (all in `FrameGenHost.cpp`, three shaders, every pass over the ROI only):
+**It lives in the FrameGen library, not in this repository.** The library work is
+[Ritze03/FrameGen PR #1](https://github.com/Ritze03/FrameGen/pull/1) (branch
+`ui-protection`, pinned here at `cdc54bd`); the host only maps the setting and feeds frames
+in. The first version of this feature was host code (three shaders of our own, ROI-sized
+textures per ring slot). `Why` it moved: the user, on where it belongs: *"It should really
+be part of the library ... especially since the repository will be public in the end ... so
+if anyone actually decides to use it, he can just implement it easily."* A host-side
+crosshair hack that every user of the library would have to rewrite is the opposite of that.
+The old `cs_fg_crosshair_*.comp` / `cs_fg_inpaint.comp` shaders, their `SHADER_TYPE_FG_*`
+registrations, `CVulkanCmdBuffer::uploadConstantsRaw` and the per-slot patch textures were
+deleted; the library's six shaders (`ui_detect`, `ui_box_update`, `ui_box_mask`, `ui_mask`,
+`ui_inpaint`, `ui_patch`, plus the include `ui_common.glsl`) are compiled by
+`src/meson.build` like its other eleven.
 
-1. **ROI**: a centred square of 3% of the frame area, `side = round(sqrt(0.03 * w * h))`
-   (332 px at 2560x1440, 249 px at 1920x1080), clamped to the frame. `Why:` the user's
-   "middle one to maybe three percent of the screen", and they asked to cover a crosshair
-   two to three times the usual size. Off-centre reticles are not covered.
-2. **Detect** (`cs_fg_crosshair_detect.comp`, once per NEW real frame, in the ring-copy
-   command buffer): a per-ROI-pixel counter of consecutive real frames on which the pixel's
-   max channel changed by at most 3.5/255; any larger change resets it to 0 at once. A
-   pixel is **masked** at a count of 8, dilated by 2 px (full strength within 1 px, half
-   within 2 px, a one-pixel feather). `Why` no "is this a crosshair shape" test: "static
-   for 8 frames inside the central ROI" is the whole detector, which is the user's point
-   that the crosshair "isn't moving". A still camera also masks static background, which is
-   harmless (it is restored with identical pixels), and as soon as anything moves its
-   pixels leave the mask on that same pair. `Why` 8 frames: long enough that a stall of
-   the picture does not mask a whole scene, short enough to protect within ~0.1 s.
-   `Why` every real frame and not only generated pairs: the counters need consecutive real
-   frames.
-3. **Remove** (`cs_fg_inpaint.comp`): the new frame's original ROI pixels plus the mask are
-   saved to that ring slot's **patch** texture (`.rgb` original, `.a` mask), then the masked
-   pixels of the ring slot are overwritten in place with a 1/distance^2-weighted average of
-   the nearest unmasked pixel along each of 8 directions (reach 12 px). Motion estimation
-   and the warp therefore see plain background where the crosshair was. The previous
-   frame's slot was inpainted in its own turn and is only ever `prev`, so nothing is redone
-   for it; the next detect compares against the previous slot's patch texture's ORIGINAL
-   pixels, never the inpainted ring. `Why` a directional search and not a push-pull
-   pyramid: a crosshair is thin, and this is one dispatch with no scratch levels. A pixel
-   with no unmasked neighbour in reach (the whole ROI is still) is left as it is.
-4. **Patch back** (`cs_fg_crosshair_patch.comp`): after each `recordSynth` into its output
-   texture, `out = mix(out, patch.rgb, mask)` over the ROI, with the patch of the real frame
-   the synth leads up to (its `curr`). Outputs are cached per output frame, so repaints
-   keep the crosshair at no extra cost. The real frame shown at t = 1 is the game's own
-   texture and is never touched.
+`Why` a mask beats Static HUD protection's `hudBonus`: `hudBonus` only biases the block
+motion search towards a zero vector, and a static crosshair shares its block with the
+moving background behind it, so the block still gets one vector (the background's drags the
+crosshair, or the crosshair's freezes the background) and the output is an interpolation,
+never exact. The mask instead *removes* the still pixels from what the estimate and warp
+see (the library's clean copy has them inpainted from their surroundings) and pastes the
+**exact real pixels** back over each generated frame. That is why the old text of the
+Static HUD row ("keeps a still crosshair sharp") was wrong, and the row now only describes
+the soft bias, which still matters for see-through HUD the mask cannot cover.
 
-Textures: two ping-pong counter textures and **three patch textures** (one per ring slot,
-so a synth of the older pair still gets its own frame's crosshair), all ARGB8888 ROI-sized
-(about 0.44 MB each at 1440p), created lazily and released with the ring (after
-`g_device.waitIdle()`). The counters restart from 0 on any gap: `fghost::Reset()`, a
-size/format change, FG toggled, an inert (pass-through) stretch, HUD protection switched
-Off and on.
+The user's original request (after testing in a real game, "looks REALLY good"): *"One
+thing that many frame gens get wrong is the crosshair [...] We won't optimize for like weird
+big crosshairs, but like the middle one to maybe three percent of the screen [...] It should
+analyze multiple frames and can easily tell if the crosshair isn't moving. And then it should
+detect it, that it is the crosshair. Then the image that is being used to generate frames
+should have this crosshair removed and at a later point patched on again. This of course
+doesn't work as well if there's transparency, but it should work for most games."*
 
-Limits: a semi-transparent crosshair (its pixels change with the background, so it never
-reaches the mask); a crosshair that changes shape (spread, hit markers) stays unmasked
-while it changes; off-centre reticles; a still camera masks the background too, so a big
-moving object crossing the ROI of an otherwise still scene is interpolated from slightly
-smeared neighbours. The fork's own Crosshair is drawn after FG and is unaffected.
+**What the library does** (full contract in `subprojects/FrameGen/gpu/framegen.h` and
+`INTEGRATION.md`): a pixel is *still* if no channel moved more than `uiStillThreshold`
+(3.5 levels) between two consecutive real frames, and is protected after `uiStillFrames` (8)
+consecutive still frames. Crosshair mode watches a centred square of side
+`round(sqrt(uiCrosshairArea * w * h))` (`uiCrosshairArea` 0.03, i.e. 332 px at 2560x1440);
+Whole screen watches every pixel in cells and protects the still ones, giving up on a frame
+where more than `uiMaxStillFraction` (0.75) of it is still (a paused game, a loading
+screen). Per observed frame the library keeps its own **clean copy** with the protected
+pixels inpainted (reach `uiInpaintReach` 12 px); estimate and synth run on the clean copies,
+and every synth ends with `out = mix(out, real pixel, mask)`, reading the real pixels from
+the `curr` view it is given. All of these are runtime `Settings` fields; the host sets only
+`uiProtection` and leaves the rest at the library's defaults.
+
+**Host wiring** (`FrameGenHost.cpp`):
+
+- `recordObserve(cb, ringSlotView)` is called **once per new real frame**, in the command
+  buffer that copied it into the ring, right after the ring copy and its barrier, **also
+  for frames that are only passed through** (the stillness counters compare consecutive real
+  frames; a gap costs only the exact "8 in a row"). Off: the call is skipped entirely.
+- The **ring holds the real, un-inpainted frame**: `recordSynth` must get the real `curr`
+  to paste from. The library keeps `kUiFrames = 3` clean copies, LRU by view; the 3-slot
+  ring re-observes exactly one slot per new frame, so the library holds exactly the ring's
+  three frames and a pair whose frames are both in the ring is always protected. A pair
+  with an unobserved view (protection just switched on) simply runs unprotected.
+- If `recordSynth` returns false with UI protection on (an observed frame of the pair was
+  evicted or re-observed after the estimate, or a descriptor ring is full), the real frame
+  is shown for that slot and the estimate is dropped: the same path as a failed record but
+  **without** the "A generation step failed" status reason and without disabling FG. It
+  logs once under `framegen`. It should not occur with the 3-slot ring: the pacer never
+  needs a frame that has left the ring (`bEstimateValid` is cleared the moment the pair's
+  frames are overwritten, before the next observe).
+- `setSettings()` is a runtime change (no GPU wait): `ToLibrarySettings()` maps the config
+  to `uiProtection`, and the packed config word carries it at bits 24-25 so a change goes
+  through the same applied-preset check as Quality/Artifact safety/Static HUD protection.
+  If the library refuses (`false`), the old settings stay and it logs once.
+- The library has a **third descriptor ring**, `kUiSets = 64` (separate from the two of
+  32). Per composite the host records one observe (1 set Crosshair, 2 Whole screen) plus
+  one patch set per synth, far below it (`kMaxSynthsPerPair` is 24).
+
+**Timing.** The library adds `ui_detect` and `ui_inpaint` (per observe) and `ui_patch`
+(per synth) to its profile, and an observe opens a profile that the next estimate
+continues. `HarvestProfile()` therefore classifies stamps by name: the observe's two
+passes are added to the **estimate's** time (per real frame, like the estimate) and
+`ui_patch` to each **synth's**, so the cost guard and the Status line's "FG X ms" include
+them; the UI share alone is published as `RenderStatus::lastUiMs` (one observe plus one
+patch) and the Status line appends `· UI 0.05 ms` only while UI protection is on and has
+been measured. Idle gaps are the hazard: a delta whose previous stamp was recorded in an
+earlier command buffer contains up to a frame of nothing, so it is dropped (a `ui_detect`
+that does not directly follow the profile's start stamp; `luma` behind an observe unless the
+estimate was recorded in the observe's own command buffer; the first stamp of a synth that
+does not directly follow the estimate) -- an under-count of 0.01-0.05 ms in place of a
+16 ms over-count. The host reads the previous profile **before** recording an observe (it
+resets the query pool), never in the same composite after it (that would wait on a
+submission that does not exist yet).
+
+**Cost** (library figures, 7900 XTX, 1440p, moving scene, marginal over Off): Crosshair
++0.03 ms, Whole screen +0.05 ms; the worst case (Whole screen, 70% still) about 0.25 ms in
+total. **Memory**: three clean copies of the frame (44 MB at 1440p) in both modes, about
+15 MB more for Whole screen. The memory stays with the library until the interpolator is
+destroyed or resized (switching the row Off stops the work, not the allocation).
+
+**BGRA validation warning (known, upstream).** The ring and every output are
+`B8G8R8A8_UNORM`; the library's `ui_patch.comp` loads from the output through an `rgba8`
+declaration, which the validation layer reports once as
+`Undefined-Value-StorageImage-FormatMismatch-ImageView`. It works on RADV (gamescope itself
+does the same on BGRA views); it is not fixed here because the library is not edited from
+this repository. Expect that line in a validation-layer run.
+
+**Limits**: UI that is see-through (its pixels change with the background, so it is never
+still), UI that changes (hit markers, an animated ammo counter, a spreading crosshair),
+off-centre reticles in Crosshair mode. A still camera masks the background too, which is
+harmless (restored with identical pixels) and leaves the mask the moment anything moves.
+With Whole screen on, **Static HUD protection can usually be lowered**: the solid HUD no
+longer needs the bias. **Off** for racing games or anything without a fixed HUD (the
+detector would spend its time on nothing, or on a still dashboard it should not freeze).
+The fork's own Crosshair (`system.crosshair`) is drawn after FG and unaffected either way.
 
 ## Backends
 
@@ -388,7 +444,8 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: about a third cheaper, can miss thin fast detail |
 | `framegen.safety` | `off` / `low` / `default` (default) / `high` | trust ramp (16,56) / (12,40) / (8,28): how readily doubtful pixels fall back to the real frame. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
-| `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: keeps a static HUD from wobbling; any value but `off` also switches on [Crosshair protection](#crosshair-protection) |
+| `framegen.hud_protection` | `off` / `normal` / `strong` | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
+| `framegen.ui_protection` | `off` / `crosshair` (default) / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it |
 
 **Migration:** a config with no `mode` (written before Target fps) derives it from the old
 `multiplier`: 0 -> `off`, 2..8 -> `fixed` -- an old 3x profile stays 3x. Unknown strings keep
@@ -399,7 +456,8 @@ sets `mode`, and `multiplier` for a fixed choice, and is keyed to `framegen.mode
 Shell's overridden-dot follows one key per row), **Target fps** (a slider, 0 shown as
 "Display refresh", disabled unless the mode is Target; a drag into 1..29 snaps to 0 or 30),
 **Priority** (Low latency / Smoothness), **Pause at refresh rate** (a switch), Quality, Artifact
-safety (Off / Low / Default / High), Static HUD protection, Status. The sub-rows are disabled while Off. Priority help: *Low latency adds the least
+safety (Off / Low / Default / High), Static HUD protection, UI protection (Off / Crosshair / Whole
+screen; disabled while FG is off like the others), Status. The sub-rows are disabled while Off. Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*
 
@@ -413,6 +471,7 @@ sliders would invite settings nobody has looked at.
   when the display cannot show N x the game: `... · 2× (1.4× actual) · ...`
 - generating, target: `game 100 fps -> presented ~240 fps · target 240 (2.4×) · FG 0.50 ms
   · +6.3 ms delay`
+- with UI protection on, `· UI 0.05 ms` follows the FG time (that share is already inside it)
 - otherwise the reason (renderer's first, then pacing's), `Off`, or `Waiting for frames`.
 
 It writes `->` and 1/2 in help text because the overlay font atlas is Latin-1 only (no
@@ -421,7 +480,7 @@ semantics:** `presentedFps` counts output frames actually presented (generated f
 the real frames pacing decided to show) and **not** repaints of an already-shown output
 (cursor, overlay) -- it used to be a paint count; `activeN` = the effective multiplier
 rounded, at least 2 while generating and 0 when passing through, so "`activeN >= 2`" means
-"generating" (the HUD's *Count generated frames* option relies on that, via
+"generating" (the HUD's *FPS shown* Output / Both choices rely on that, via
 `GetPacingStatus().presentedFps`); `chosenN` = the fixed N, 0 in target mode; `delayMs` = D.
 A vblank that holds a real frame while the next one is still to come re-presents it and is
 not counted, so under Low latency with a saturated display the distinct-frame rate is a
@@ -470,10 +529,8 @@ Library measurements on a 7900 XTX, ms of GPU per real pair:
 (about 0.07-0.1 ms per extra synth.) About 12 MB VRAM at 1080p plus the frame ring (three
 slots, about 8 MB each at 1080p) and up to three pooled outputs.
 
-Crosshair protection (estimated from the texel-fetch count, not measured on a GPU): per real
-frame about 0.03 ms typical and up to about 0.1 ms on a still scene at 1440p (~110k ROI
-pixels; detect 4 fetches, mask 26, inpaint up to 96 on masked pixels only), plus a ~110k-pixel
-load/store per generated frame; about 1.5 MB VRAM.
+UI protection: see [its section](#ui-protection) (Crosshair +0.03 ms, Whole screen +0.05 ms
+at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 ## Limitations
 
@@ -482,8 +539,8 @@ load/store per generated frame; about 1.5 MB VRAM.
 - Adds delay (Low latency: (N-1)/N of a game frame at a fixed N; Smoothness: about one game
   frame); not suited to twitch shooters.
 - Fast flicks can leave seams; a semi-transparent HUD over motion artifacts; scene cuts
-  hold the nearer real frame. A game's own still centred crosshair is protected (see
-  above) except when semi-transparent or changing shape.
+  hold the nearer real frame. A game's own still crosshair / solid HUD is kept exact by [UI
+  protection](#ui-protection) except when semi-transparent or changing.
 - With several virtual connectors (VR) an output repaint could be swallowed by the shared
   force-repaint flag.
 - Under VRR, FG paints on timer ticks while generating, so the display runs at the timer's
@@ -495,7 +552,7 @@ load/store per generated frame; about 1.5 MB VRAM.
 
 The library has no root `meson.build`, and Meson's sandbox forbids handing files under
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
-nested subproject`), so `subproject()` is impossible. Its 11 shaders are compiled with
+nested subproject`), so `subproject()` is impossible. Its 17 shaders (11 for the interpolation, 6 for UI protection) are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work
@@ -522,7 +579,7 @@ estimator. Pause at refresh rate: the uncapped output interval, the extra timer 
 requested (Off, fixed 4x at 200 fps on 144 Hz = 800/s; target 500), Off on a backend that cannot
 exceed the refresh being capped like On, On unchanged, the cost guard still bounding Off, and
 `PaintTick` with the extra timer. `tests/test_config.cpp` covers the `framegen` keys (including
-`pause_at_refresh`, defaulting to true on a legacy config, and `safety: off`) and the
+`ui_protection`, absent -> `crosshair`, and `pause_at_refresh`, defaulting to true on a legacy config, and `safety: off`) and the
 legacy-multiplier migration. The renderer needs a GPU and is verified by eye on a real game (status line +
 MangoHud output timing).
 

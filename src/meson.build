@@ -95,9 +95,6 @@ shader_src = [
   'shaders/cs_nis_fp16.comp',
   'shaders/cs_rgb_to_nv12.comp',
   'shaders/cs_fg_copy.comp',
-  'shaders/cs_fg_crosshair_detect.comp',
-  'shaders/cs_fg_inpaint.comp',
-  'shaders/cs_fg_crosshair_patch.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
@@ -121,12 +118,14 @@ spirv_shaders = glsl_generator.process(shader_src)
 # array, which is its own naming (glsl_generator above emits `<name>.h` /
 # `<name>`), hence a separate rule with the same glslang binary and flags.
 # `--target-env vulkan1.2` matches the library's own build (the shaders were
-# validated against it). `#include "common.glsl"` resolves relative to each
-# .comp, so no -I is needed.
+# validated against it). `#include "common.glsl"` / `"ui_common.glsl"` resolve
+# relative to each .comp, so no -I is needed; the depfile lists the includes, so
+# editing either re-runs glslang for every shader that uses it.
 framegen_gpu_dir = meson.project_source_root() / 'subprojects/FrameGen/gpu'
 framegen_has_depfile = run_command(glsl_compiler, ['--version', '--depfile', 'dummy.dep'], check: false).returncode() == 0
 framegen_shaders = []
-foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfield', 'error', 'resolve', 'fallback', 'lookup']
+foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfield', 'error', 'resolve', 'fallback', 'lookup',
+                'ui_detect', 'ui_box_update', 'ui_box_mask', 'ui_mask', 'ui_inpaint', 'ui_patch']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
   if framegen_has_depfile

@@ -499,6 +499,10 @@ namespace gamescope::config
         std::string safety = "default";
         // Static HUD protection: "off" | "normal" | "strong"
         std::string hud_protection = "normal";
+        // UI protection (the FrameGen library's static-UI protection, 2026-10-04):
+        // "off" | "crosshair" | "whole_screen". Independent of hud_protection.
+        // ADDITIVE: an older config has none and resolves to "crosshair".
+        std::string ui_protection = "crosshair";
     };
 
     // Renamed from ReshadeVibrancySettings 2026-09-08 (kCurrentSchemaVersion's

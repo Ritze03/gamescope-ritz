@@ -189,13 +189,14 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 ### FrameGen submodule (2026-10-04)
 
 The frame-generation library is a git submodule, `subprojects/FrameGen`
-(github.com/Ritze03/FrameGen, MIT), pinned at `e2f3b61`. **A fresh checkout or worktree
+(github.com/Ritze03/FrameGen, MIT), pinned at `cdc54bd` (FrameGen PR #1, static UI protection). **A fresh checkout or worktree
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
 (`Sandbox violation: Tried to grab file ... from a nested subproject`), and FrameGen has
-no root `meson.build`, so `subproject()` is impossible. Instead its 11 shaders are
-compiled with `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers
+no root `meson.build`, so `subproject()` is impossible. Instead its 17 shaders (the
+interpolation's 11 plus UI protection's six, `ui_*.comp`, which share the include
+`ui_common.glsl`; the depfile re-runs glslang when it changes) are compiled with `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers
 as gamescope's own) using absolute paths, and `framegen.cpp` is compiled through the
 wrapper `src/FrameGen/FrameGenLib.cpp`, which `#include`s it. `Why:` bumping the submodule
 still pulls upstream library work, with no copy to drift. `fgtest` is not built. The

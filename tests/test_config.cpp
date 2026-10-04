@@ -1662,6 +1662,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( Settings{}.framegen.quality == "quality" );
     REQUIRE( Settings{}.framegen.safety == "default" );
     REQUIRE( Settings{}.framegen.hud_protection == "normal" );
+    REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
 
     Settings s{};
     s.framegen.mode = "target";
@@ -1672,6 +1673,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     s.framegen.quality = "performance";
     s.framegen.safety = "high";
     s.framegen.hud_protection = "strong";
+    s.framegen.ui_protection = "whole_screen";
     REQUIRE( SaveSections( s ) );
 
     const Settings loaded = LoadSections();
@@ -1683,6 +1685,12 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( loaded.framegen.quality == "performance" );
     REQUIRE( loaded.framegen.safety == "high" );
     REQUIRE( loaded.framegen.hud_protection == "strong" );
+    REQUIRE( loaded.framegen.ui_protection == "whole_screen" );
+
+    // "off" must survive a round trip too (it is not the default).
+    s.framegen.ui_protection = "off";
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().framegen.ui_protection == "off" );
 
     // The keys the Frame generation area's rows are bound to: the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this.
@@ -1694,6 +1702,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is Off/Qual
     REQUIRE( IsSettingsKey( "framegen.quality" ) );
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
+    REQUIRE( IsSettingsKey( "framegen.ui_protection" ) );
 }
 
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )
@@ -1708,6 +1717,7 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     s.framegen.quality = "ultra";         // unknown -> stays "quality"
     s.framegen.safety = "";               // unknown -> stays "default"
     s.framegen.hud_protection = "max";    // unknown -> stays "normal"
+    s.framegen.ui_protection = "all";     // unknown -> stays "crosshair"
     REQUIRE( SaveSections( s ) );
 
     Settings loaded = LoadSections();
@@ -1718,6 +1728,7 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     REQUIRE( loaded.framegen.quality == "quality" );
     REQUIRE( loaded.framegen.safety == "default" );
     REQUIRE( loaded.framegen.hud_protection == "normal" );
+    REQUIRE( loaded.framegen.ui_protection == "crosshair" );
 
     s.framegen.mode = "fixed";
     s.framegen.multiplier = 12;           // above 8 -> 8
