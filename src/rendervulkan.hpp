@@ -805,6 +805,30 @@ void vulkan_effects_preview_request();
 // false (leaving *pOut alone) when there is nothing newer. Any thread.
 bool vulkan_effects_preview_fetch( AbPreviewFrame_t *pOut, uint64_t ulHaveGeneration );
 
+// ---- The Inspector's UI-protection box preview (cs_fg_crop.comp) ----------
+// A crop of the game's frame, 8-bit sRGB RGBA, at most kUiCropMax square. The
+// frame-generation host records it into its OWN command buffer on a new real
+// frame while the Inspector's preview is on screen (FrameGen/FrameGenHost.cpp);
+// the pixels are read back later, once the command buffer has retired -- never
+// a wait.
+static constexpr uint32_t kUiCropMax = 128;
+
+struct UiCropRequest_t
+{
+	uint32_t uOriginX = 0, uOriginY = 0;   // the crop's top-left texel in the game's frame
+	uint32_t uWidth = 0, uHeight = 0;      // the OUTPUT size (<= kUiCropMax each)
+	uint32_t uFactor = 1;                  // source texels per output pixel, per axis
+	bool     bLinearToSrgb = false;        // the frame holds linear light (fp16 scRGB): encode it
+};
+
+// Records the crop pass and the copy into host-mappable staging into pCmd. The
+// caller submits pCmd and must not call this again until the previous crop was
+// read (the staging is single). False = nothing recorded (allocation failed).
+bool vulkan_ui_crop_record( CVulkanCmdBuffer *pCmd, const gamescope::Rc<CVulkanTexture> &pLayer0, const UiCropRequest_t &req );
+// Copies the staged crop (uWidth x uHeight, tightly packed RGBA8) out. Only
+// after the submission that recorded it has retired (g_device.completedSeqNo()).
+bool vulkan_ui_crop_read( uint8_t *pRgba, uint32_t uWidth, uint32_t uHeight );
+
 std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
 // Launch-time warm-up for the overlay layers -- called once from
@@ -1019,6 +1043,12 @@ struct VulkanOutput_t
 	gamescope::OwningRc<CVulkanTexture> effectsPreviewStaging;
 	gamescope::OwningRc<CVulkanTexture> effectsPreviewHistory;
 
+	// The Inspector's UI-protection box preview (cs_fg_crop.comp, FrameGen/
+	// FrameGenHost.cpp): the storage target of the crop pass and host-mappable
+	// staging for it, kUiCropMax x kUiCropMax, created on the first request.
+	gamescope::OwningRc<CVulkanTexture> uiCrop;
+	gamescope::OwningRc<CVulkanTexture> uiCropStaging;
+
 	// NIS
 	gamescope::OwningRc<CVulkanTexture> nisScalerImage;
 	gamescope::OwningRc<CVulkanTexture> nisUsmImage;
@@ -1064,6 +1094,7 @@ enum ShaderType {
 	SHADER_TYPE_FG_COPY, // cs_fg_copy.comp: the frame generation host's ring copy of the game's frame (src/FrameGen/FrameGenHost.cpp)
 	SHADER_TYPE_FG_COPY_RGB10, // ... the same source compiled with a rgb10_a2 `dst` (10-bit games)
 	SHADER_TYPE_FG_COPY_F16,   // ... and with an rgba16f `dst` (fp16 / scRGB games)
+	SHADER_TYPE_FG_CROP, // cs_fg_crop.comp: a small 8-bit crop of the game's frame for the Inspector's UI-protection box preview
 
 	SHADER_TYPE_COUNT
 };

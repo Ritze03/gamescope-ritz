@@ -95,6 +95,7 @@ shader_src = [
   'shaders/cs_nis_fp16.comp',
   'shaders/cs_rgb_to_nv12.comp',
   'shaders/cs_fg_copy.comp',
+  'shaders/cs_fg_crop.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
@@ -128,6 +129,7 @@ framegen_has_depfile = run_command(glsl_compiler, ['--version', '--depfile', 'du
 framegen_shaders = []
 foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfield', 'error', 'resolve', 'fallback', 'lookup',
                 'ui_detect', 'ui_box_update', 'ui_box_mask', 'ui_mask', 'ui_inpaint', 'ui_patch',
+                'ui_v2_update', 'ui_v2_mask', 'ui_v2_lumafill',
                 'blur_lookup', 'blur_error', 'blur_resolve']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
@@ -157,7 +159,7 @@ endforeach
 # two plane views and write one back, and the only layer-0 YCbCr surfaces are video
 # players (superdoc/features/frame-generation.md, "HDR and 10-bit games").
 framegen_colour_shaders = ['luma', 'error', 'resolve', 'fallback', 'ui_detect', 'ui_box_update', 'ui_inpaint', 'ui_patch',
-                           'blur_error', 'blur_resolve']
+                           'ui_v2_update', 'ui_v2_lumafill', 'blur_error', 'blur_resolve']
 foreach fmt : ['rgb10', 'f16']
   foreach name : framegen_colour_shaders
     fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '-DFG_FORMAT_' + fmt.to_upper() + '=1',
@@ -308,6 +310,7 @@ src = [
   'Overlay/Autoclicker.cpp',
   'Overlay/NullBinds.cpp',
   'Overlay/EffectPreview.cpp',
+  'Overlay/UiBoxPreview.cpp',
   'Overlay/Notifications.cpp',
   'Overlay/PanelShaders.cpp',
   'Overlay/PanelFrameGen.cpp',

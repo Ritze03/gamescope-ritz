@@ -3989,3 +3989,29 @@ TEST_CASE( "FilterPassApplies: FSR/NIS run at native res, not on downscale", "[u
 	REQUIRE_FALSE( FilterPassApplies( 0.5f, 1.5f ) );
 	REQUIRE_FALSE( FilterPassApplies( 1.5f, 0.5f ) );
 }
+
+TEST_CASE( "an Entry's ValueText() hook and Preview() are plain declarations", "[overlay_ui]" )
+{
+	// 2026-10-05: the Crosshair box size row shows "2.5% . 24 px", a value text the
+	// generic "value + unit" cannot say. The hook is data on the Entry, read back by
+	// the Shell's FormatDeclValue(); a Param has none.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "image.framegen", "Frame generation", ui::Section::Display );
+
+	float flPct = 2.5f;
+	ui::Entry &plain = area.Slider( "framegen.plain", "Plain", ui::Bind( &flPct ) )
+		.Range( 0.5f, 10.0f ).Help( "A slider without the hook." );
+	REQUIRE_FALSE( (bool)plain.ValueTextOf() );
+	REQUIRE( plain.PreviewOf() == ui::Entry::PreviewKind::Nothing );
+
+	ui::Entry &boxed = area.Slider( "framegen.ui_box_height", "Crosshair box size", ui::Bind( &flPct ) )
+		.Range( 0.5f, 10.0f ).Step( 0.1f ).Help( "The box." )
+		.ValueText( []( const ui::Value &v )
+		{
+			return std::to_string( (int)std::get<float>( v ) ) + " px";
+		} )
+		.Preview( ui::Entry::PreviewKind::UiBox );
+	REQUIRE( (bool)boxed.ValueTextOf() );
+	REQUIRE( boxed.ValueTextOf()( ui::Value{ 3.0f } ) == "3 px" );
+	REQUIRE( boxed.PreviewOf() == ui::Entry::PreviewKind::UiBox );
+}

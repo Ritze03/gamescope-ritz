@@ -64,6 +64,7 @@
 #include "Overlay/PanelLagBuffer.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
+#include "Overlay/UiBoxPreview.h"       // the Inspector's UI-protection box picture
 #include "Overlay/EffectPreview.h"   // the Inspector's Adaptive Brightness before/after strip
 
 #include "convar.h"
@@ -2932,6 +2933,12 @@ namespace gamescope::ui::shell
 					return decl.ZeroWord();
 			}
 
+			if constexpr ( std::is_same_v<TDecl, Entry> )
+			{
+				if ( decl.ValueTextOf() )
+					return decl.ValueTextOf()( v );
+			}
+
 			std::string s = ValueToString( v );
 			if ( !decl.Unit().empty() )
 				s += " " + decl.Unit();
@@ -5093,6 +5100,18 @@ namespace gamescope::ui::shell
 				const float flW = std::min( rcIn.Width(), Px( 240.0f ) );
 				const float flH = controls::ComparePreviewHeight( flW );
 				overlay::AbPreview_Draw( ImRect( rcIn.x0, y, rcIn.x0 + flW, y + flH ) );
+				y += flH + Px( tok::kM );
+			}
+
+			// The UI-protection box picture (frame generation's UI protection and Crosshair
+			// box size rows). Same placement rule as the strip above: before VALUES, so
+			// it is on screen while the slider is dragged, and its height is asked for
+			// before anything is drawn so the rows below never move.
+			if ( entry.PreviewOf() == Entry::PreviewKind::UiBox )
+			{
+				const float flW = rcIn.Width();
+				const float flH = overlay::UiBoxPreview_Height( flW );
+				overlay::UiBoxPreview_Draw( ImRect( rcIn.x0, y, rcIn.x0 + flW, y + flH ) );
 				y += flH + Px( tok::kM );
 			}
 

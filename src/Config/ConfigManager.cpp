@@ -345,8 +345,9 @@ namespace gamescope::config
                 if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
                     f.hud_protection = sHud;
                 const std::string sUi = JGetString( *pFrameGen, "ui_protection", f.ui_protection );
-                if ( sUi == "off" || sUi == "crosshair" || sUi == "whole_screen" )
+                if ( sUi == "off" || sUi == "crosshair" || sUi == "crosshair_v2" || sUi == "whole_screen" )
                     f.ui_protection = sUi;
+                f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 10.0f );
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -780,6 +781,8 @@ namespace gamescope::config
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;
             jFrameGen[ "ui_protection" ] = fg.ui_protection;
+            // Rounded to the slider's 0.1 step through a double, so 2.7f is stored as 2.7, not 2.7000000476...
+            jFrameGen[ "ui_box_height" ] = std::round( double( fg.ui_box_height ) * 10.0 ) / 10.0;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();

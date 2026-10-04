@@ -69,10 +69,18 @@ namespace fghost
 
 	// "UI protection": the FrameGen library's static-UI protection
 	// (framegen::UiProtection), independent of HudProtect. Crosshair = a centred
-	// box (3% of the frame's area), WholeScreen = every solid still HUD element
-	// too. Runtime (setSettings, no wait). Stored in the packed config at bits
-	// 24-25, so Off = 0 would be the all-zero word; the DEFAULT is Crosshair.
-	enum class UiProt : uint8_t { Off, Crosshair, WholeScreen };
+	// box (Config::uiBoxTenths of the frame's height), WholeScreen = every solid
+	// still HUD element too, CrosshairV2 = the box again with a different
+	// detector (only still, contrasty pixels; no fill-in). The values match the
+	// library's enum. Runtime (setSettings, no wait). Stored in the packed config
+	// at bits 24-25, so Off = 0 would be the all-zero word; the DEFAULT is Crosshair.
+	enum class UiProt : uint8_t { Off, Crosshair, WholeScreen, CrosshairV2 };
+
+	// The crosshair box's side, in tenths of a percent of the game's height
+	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
+	constexpr int kUiBoxMinTenths = 5;
+	constexpr int kUiBoxMaxTenths = 100;
+	constexpr int kUiBoxDefaultTenths = 25;
 
 	// What the user asked for. Off = nothing runs. Fixed = a multiplier of the
 	// game's rate (output saturates at the refresh rate, it never steps down).
@@ -177,6 +185,9 @@ namespace fghost
 		Safety safety = Safety::Off;
 		HudProtect hud = HudProtect::Strong;
 		UiProt ui = UiProt::Crosshair;
+		// The crosshair box (Crosshair / CrosshairV2), tenths of a percent of the
+		// game's height; clamped to [kUiBoxMinTenths, kUiBoxMaxTenths] by SetConfig().
+		int uiBoxTenths = kUiBoxDefaultTenths;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time
@@ -276,6 +287,49 @@ namespace fghost
 		InitFailed,   // the library (or its textures) could not be created / resized
 		RecordFailed, // a record call returned false for this frame
 	};
+
+	// ------------------------------------------------------------------
+	//  The UI-protection box preview (the Inspector's picture)
+	// ------------------------------------------------------------------
+	//
+	// "What is under the box": a crop of the game's centre -- the box plus
+	// context -- as the user would see it, so the box size can be judged against
+	// the actual crosshair (the user: "show an image of the area that's underneath
+	// the current UI, so he can see if the whole crosshair fits in"). The renderer
+	// records the crop (cs_fg_crop.comp) into the command buffer it already
+	// submits for a new real frame, at most ~10 times a second, and ONLY while the
+	// overlay keeps asking (BoxPreviewWanted() each frame the picture is on
+	// screen; it lapses by itself 400 ms after the last call). The pixels are read
+	// back on a later composite once that command buffer has retired -- never a
+	// wait. It needs the renderer to be running (Frame generation, Motion blur or
+	// the Lag spike buffer on); otherwise there are simply no frames.
+	constexpr uint32_t kBoxPreviewMax = 128;   // == rendervulkan.hpp's kUiCropMax
+
+	struct BoxPreview
+	{
+		uint64_t ulGeneration = 0;      // 0 = never captured; bumped per capture
+		uint64_t ulCapturedNs = 0;      // get_time_in_nanos() when the capture was published
+		uint32_t uGameW = 0, uGameH = 0;   // the game's frame the crop is from
+		uint32_t uBoxW = 0, uBoxH = 0;     // the box, game pixels
+		uint32_t uW = 0, uH = 0;           // the picture, pixels (<= kBoxPreviewMax)
+		uint32_t uFactor = 1;              // game pixels per picture pixel (1 = exact)
+		// The box inside the picture, in picture pixels (fractional when uFactor > 1).
+		float flBoxX = 0.0f, flBoxY = 0.0f, flBoxW = 0.0f, flBoxH = 0.0f;
+		bool bUiOn = true;                 // UI protection was on for this capture
+		// uW x uH, tightly packed, RGBA, 8-bit sRGB, top row first.
+		uint8_t rgba[ kBoxPreviewMax * kBoxPreviewMax * 4 ] = {};
+	};
+
+	// The overlay calls this every frame the picture is on screen. Cheap, any thread.
+	void BoxPreviewWanted();
+	// Copies the newest capture out when it is newer than ulHaveGeneration.
+	bool GetBoxPreview( BoxPreview *pOut, uint64_t ulHaveGeneration );
+	// The game's frame size as the renderer last saw it (false = it has not seen one).
+	bool GameFrameSize( uint32_t *puWidth, uint32_t *puHeight );
+	// The box's side in game pixels for a frame of w x h and a size in tenths of a
+	// percent of the height: the library's own boxSize(), so the number is the one
+	// it protects.
+	void UiBoxPixels( uint32_t uWidth, uint32_t uHeight, int nTenths, uint32_t *puBoxW, uint32_t *puBoxH );
 
 	const char *UnavailableText( Unavailable eReason );
 

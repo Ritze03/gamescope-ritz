@@ -1664,6 +1664,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( Settings{}.framegen.safety == "off" );
     REQUIRE( Settings{}.framegen.hud_protection == "strong" );
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
+    REQUIRE( Settings{}.framegen.ui_box_height == 2.5f );
 
     Settings s{};
     s.framegen.enabled = true;
@@ -1695,6 +1696,21 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( SaveSections( s ) );
     REQUIRE( LoadSections().framegen.ui_protection == "off" );
 
+    // Crosshair V2 and the box size (2026-10-05).
+    s.framegen.ui_protection = "crosshair_v2";
+    s.framegen.ui_box_height = 3.7f;
+    REQUIRE( SaveSections( s ) );
+    const Settings loadedV2 = LoadSections();
+    REQUIRE( loadedV2.framegen.ui_protection == "crosshair_v2" );
+    REQUIRE_THAT( loadedV2.framegen.ui_box_height, Catch::Matchers::WithinAbs( 3.7, 1e-6 ) );
+    // Out-of-range sizes clamp to 0.5..10 on load.
+    s.framegen.ui_box_height = 0.0f;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 0.5, 1e-6 ) );
+    s.framegen.ui_box_height = 55.0f;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 10.0, 1e-6 ) );
+
     // The keys the Frame generation area's rows are bound to: the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this.
     REQUIRE( IsSettingsKey( "framegen.enabled" ) );
@@ -1707,6 +1723,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
     REQUIRE( IsSettingsKey( "framegen.ui_protection" ) );
+    REQUIRE( IsSettingsKey( "framegen.ui_box_height" ) );
 }
 
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )

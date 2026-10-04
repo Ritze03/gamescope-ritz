@@ -2,7 +2,7 @@
 //
 // SHAPE. Nine per-profile rows -- Frame generation (the on/off switch), Multiplier
 // (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection,
-// UI protection -- plus
+// UI protection, Crosshair box size -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
@@ -22,12 +22,15 @@
 // momentary action; the Frame generation switch is the on/off.
 #include "PanelFrameGen.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
+#include "main.hpp"   // g_nNestedWidth / g_nNestedHeight, the game-size fallback
 
 namespace gamescope
 {
@@ -53,13 +56,16 @@ namespace gamescope
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
-		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 2, "Whole screen" } };
+		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
+		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
+		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" } };
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
-		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen" };
+		// Indexed by fghost::UiProt, so the index IS the option id above.
+		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen", "crosshair_v2" };
 
 		int IndexOf( const std::string &s, const char *const *ppszKeys, int n, int nFallback )
 		{
@@ -104,6 +110,37 @@ namespace gamescope
 			return n < 30 ? 30 : ( n > 1000 ? 1000 : n );
 		}
 
+		// The Crosshair box size row is a float percent (0.5..10, step 0.1); the host
+		// takes tenths of a percent.
+		int BoxTenths( float flPercent )
+		{
+			return std::clamp( (int)std::lround( flPercent * 10.0f ), fghost::kUiBoxMinTenths, fghost::kUiBoxMaxTenths );
+		}
+
+		// The game's frame size for the "px" figure: the renderer's own once it has
+		// seen a frame (the layer-0 size is what the library protects), else the
+		// nested resolution the game was asked for.
+		void GameSize( uint32_t *puW, uint32_t *puH )
+		{
+			if ( !fghost::GameFrameSize( puW, puH ) )
+			{
+				*puW = g_nNestedWidth > 0 ? (uint32_t)g_nNestedWidth : 1920u;
+				*puH = g_nNestedHeight > 0 ? (uint32_t)g_nNestedHeight : 1080u;
+			}
+		}
+
+		// "2.5% . 24 px": the setting and what it comes to for this game. Pure over
+		// its inputs (the live caller below feeds the game size), so the wording is
+		// one place.
+		std::string BoxSizeText( float flPercent, uint32_t uGameW, uint32_t uGameH )
+		{
+			uint32_t uBoxW = 0, uBoxH = 0;
+			fghost::UiBoxPixels( uGameW, uGameH, BoxTenths( flPercent ), &uBoxW, &uBoxH );
+			char sz[ 64 ];
+			std::snprintf( sz, sizeof( sz ), "%.1f%% · %u px", flPercent, uBoxW );
+			return sz;
+		}
+
 		fghost::Config ToHostConfig( const config::FrameGenSettings &f )
 		{
 			fghost::Config c;
@@ -119,7 +156,8 @@ namespace gamescope
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 3 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
-			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 3, 1 );
+			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
+			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			return c;
 		}
 
@@ -154,6 +192,12 @@ namespace gamescope
 		{
 			EnsureConfigLoaded();
 			return s_Settings.framegen.enabled;
+		}
+
+		bool UiOn()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.enabled && s_Settings.framegen.ui_protection != "off";
 		}
 
 		bool TargetMode()
@@ -374,17 +418,48 @@ namespace gamescope
 
 		a.Choice( "framegen.ui_protection", "UI protection",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.ui_protection, kUiKeys, 3, 1 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.ui_protection = kUiKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.ui_protection, kUiKeys, 4, 1 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.ui_protection = kUiKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kUiOptions, std::size( kUiOptions ) )
-			.Help( "Crosshair keeps a still crosshair in the middle of the screen pixel-exact. "
-			       "Whole screen does the same for every solid still HUD element (minimap, "
-			       "ammo, text), at a small extra cost. It cannot protect see-through or "
-			       "changing UI. With Whole screen on, Static HUD protection can usually be "
-			       "lowered. Off for racing games or anything without a fixed HUD." )
+			.Help( "Keeps a still crosshair in the middle of the screen pixel-exact. Crosshair V2 "
+			       "only protects pixels that stay still and stand out from what is behind them, "
+			       "never pastes over moving content and has no fill-in step, so the specks and "
+			       "moving patterns around the crosshair are gone (an opaque, unchanging crosshair "
+			       "only). Crosshair is the older method, kept to compare. Whole screen does the "
+			       "older method for every solid still HUD element too (minimap, ammo, text), at "
+			       "a small extra cost. None can protect see-through or changing UI. Off for "
+			       "racing games or anything without a fixed HUD. Select this row or the box size "
+			       "to see what lies under the box." )
 			.Default( 1 )
-			.Keywords( "frame generation ui protection crosshair hud whole screen minimap static pixel exact" )
+			.Preview( ui::Entry::PreviewKind::UiBox )
+			.Keywords( "frame generation ui protection crosshair v2 hud whole screen minimap static pixel exact specks artifacts" )
 			.DisabledUnless( On, "frame generation is off" );
+
+		a.Slider( "framegen.ui_box_height", "Crosshair box size",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.ui_box_height; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.ui_box_height = std::clamp( std::round( fl * 10.0f ) / 10.0f, 0.5f, 10.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "The side of the protected square in the middle of the screen, as a share of the "
+			       "game's height. Small is better: everything inside it is pasted from the real "
+			       "frame, so a box much bigger than the crosshair also holds some of the "
+			       "background. Make it just big enough for the whole crosshair - the picture "
+			       "in the Inspector shows exactly what it covers." )
+			.Range( 0.5f, 10.0f ).Step( 0.1f )
+			.Default( 2.5f )
+			.ValueText( []( const ui::Value &v )
+			{
+				uint32_t uW = 0, uH = 0;
+				GameSize( &uW, &uH );
+				return BoxSizeText( std::holds_alternative<float>( v ) ? std::get<float>( v ) : 2.5f, uW, uH );
+			} )
+			.Preview( ui::Entry::PreviewKind::UiBox )
+			.Keywords( "frame generation ui protection crosshair box size area percent height pixels specks" )
+			.DisabledUnless( UiOn, "UI protection or frame generation is off" );
 
 		a.Group( "Status" );
 

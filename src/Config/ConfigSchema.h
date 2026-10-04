@@ -509,9 +509,14 @@ namespace gamescope::config
         // Static HUD protection: "off" | "normal" | "strong"
         std::string hud_protection = "strong";
         // UI protection (the FrameGen library's static-UI protection, 2026-10-04):
-        // "off" | "crosshair" | "whole_screen". Independent of hud_protection.
-        // ADDITIVE: an older config has none and resolves to "crosshair".
+        // "off" | "crosshair" | "crosshair_v2" | "whole_screen". Independent of
+        // hud_protection. ADDITIVE: an older config has none and resolves to
+        // "crosshair" ("crosshair_v2" added 2026-10-05).
         std::string ui_protection = "crosshair";
+        // "Crosshair box size" (2026-10-05): the side of the protected square, in
+        // percent of the game's HEIGHT, 0.5..10 (clamped on load). ADDITIVE: absent
+        // loads 2.5. The old fixed box was 3% of the frame's AREA (192 px at 1280x960).
+        float ui_box_height = 2.5f;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

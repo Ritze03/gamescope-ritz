@@ -1,0 +1,66 @@
+#version 460
+
+// cs_fg_crop.comp -- a small crop of the game's frame, converted to 8-bit
+// sRGB, for the settings Inspector's "what is under the UI protection box"
+// picture (src/FrameGen/FrameGenHost.cpp's box preview, src/Overlay/
+// UiBoxPreview.cpp).
+//
+// Slot 0 is the game's frame bound the way every layer-0 pass binds it: raw
+// UNORM view (values as the game encoded them), unnormalised nearest sampler,
+// so each fetch is one exact source texel. One output pixel is the plain mean
+// of u_factor x u_factor source texels (u_factor = 1 whenever the crop is at
+// most kUiCropMax wide: then it is an exact pixel-for-pixel copy, which is the
+// point -- the user is judging individual pixels). A larger crop (a big box on
+// a high-resolution game) is a whole-number box reduction instead of a
+// stretch, so the picture never aliases.
+//
+// u_srgbEncode: 1 = the values are LINEAR light (an fp16 scRGB game), so they
+// are sRGB-encoded for display; 0 = already encoded (8-bit, 10-bit), only
+// clamped. Anything over 1.0 clips: this is a "can you see the crosshair"
+// picture, not a tone-mapped one.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "descriptor_set.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+// == rendervulkan.cpp's UiCropPushData_t, field for field.
+layout(binding = 0, scalar)
+uniform crop_t {
+    uvec2 u_origin;      // the crop's top-left source texel
+    uvec2 u_size;        // the output, pixels
+    uint  u_factor;      // source texels per output pixel, per axis
+    uint  u_srgbEncode;
+};
+
+float oetf(float c)
+{
+    c = clamp(c, 0.0, 1.0);
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+void main()
+{
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= u_size.x || p.y >= u_size.y)
+        return;
+
+    ivec2 srcSize = textureSize(s_samplers[0], 0);
+    vec3 sum = vec3(0.0);
+    for (uint j = 0u; j < u_factor; j++)
+    {
+        for (uint i = 0u; i < u_factor; i++)
+        {
+            ivec2 t = clamp(ivec2(u_origin + p * u_factor + uvec2(i, j)), ivec2(0), srcSize - ivec2(1));
+            sum += texelFetch(s_samplers[0], t, 0).rgb;
+        }
+    }
+    vec3 c = sum / float(u_factor * u_factor);
+    c = u_srgbEncode != 0u ? vec3(oetf(c.r), oetf(c.g), oetf(c.b)) : clamp(c, 0.0, 1.0);
+    imageStore(dst, ivec2(p), vec4(c, 1.0));
+}

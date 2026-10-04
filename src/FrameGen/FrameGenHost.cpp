@@ -37,7 +37,8 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled.
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed. The crosshair box size is
+		// its own word, g_uUiBox.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
@@ -61,9 +62,39 @@ namespace fghost
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 );
 		}
 
-		Config Unpack( uint32_t u )
+		// The crosshair box size, its own word (the main one is full): tenths of a
+		// percent of the game's height.
+		uint32_t PackBox( const Config &c )
+		{
+			return uint32_t( std::min( std::max( c.uiBoxTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ) );
+		}
+
+		std::atomic<uint32_t> g_uUiBox{ uint32_t( kUiBoxDefaultTenths ) };
+
+		// ---- the box preview (the Inspector's picture; see FrameGenHost.h) ----
+		std::atomic<uint64_t> g_ulBoxPreviewWantedNs{ 0 };   // when the overlay last asked
+		std::atomic<uint64_t> g_ulGameFrameSize{ 0 };        // (w << 32) | h of the last layer 0 the renderer saw
+		std::mutex g_BoxPreviewMutex;
+		BoxPreview g_BoxPreview;                             // guarded by g_BoxPreviewMutex
+		std::atomic<uint64_t> g_ulBoxPreviewGeneration{ 0 };
+
+		constexpr uint64_t kBoxPreviewLapseNs = 400ull * 1000ull * 1000ull;     // the overlay stopped asking
+		constexpr uint64_t kBoxPreviewIntervalNs = 100ull * 1000ull * 1000ull;  // at most 10 captures a second
+
+		// The one capture in flight (render thread only; the staging image is single).
+		struct BoxPending_t
+		{
+			bool bPending = false;
+			uint64_t ulSeq = 0;           // the submission that carries the crop
+			uint64_t ulLastRecordNs = 0;
+			BoxPreview meta;              // everything but the pixels, filled at record time
+		};
+		BoxPending_t g_BoxPending;
+
+		Config Unpack( uint32_t u, uint32_t uBox )
 		{
 			Config c;
+			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
 			c.multiplier = int( u & 0xFu );
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
 			c.safety = Safety( ( u >> 6 ) & 0x3u );
@@ -73,7 +104,7 @@ namespace fghost
 			c.priority = Priority( ( u >> 12 ) & 0x1u );
 			c.targetFps = int( ( u >> 13 ) & 0x3FFu );
 			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
-			c.ui = UiProt( std::min( ( u >> 24 ) & 0x3u, 2u ) );
+			c.ui = UiProt( ( u >> 24 ) & 0x3u );
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
 			return c;
 		}
@@ -404,13 +435,17 @@ namespace fghost
 				case HudProtect::Strong: s.hudBonus = 2.5f; break;
 			}
 
-			// UI protection is the library's (box size, still frames, threshold ...
-			// stay at its defaults: 3% crosshair box, 8 frames, 3.5 levels).
+			// UI protection is the library's. The box side is the user's (a fraction
+			// of the frame height); everything else (still frames, threshold, V2's
+			// contrast / leave / re-entry, uiEstimateFill = false) stays at the
+			// library's defaults.
+			s.uiBoxHeightFrac = float( c.uiBoxTenths ) / 1000.0f;
 			switch ( c.ui )
 			{
 				case UiProt::Off:         s.uiProtection = framegen::UiProtection::Off; break;
 				case UiProt::Crosshair:   s.uiProtection = framegen::UiProtection::Crosshair; break;
 				case UiProt::WholeScreen: s.uiProtection = framegen::UiProtection::WholeScreen; break;
+				case UiProt::CrosshairV2: s.uiProtection = framegen::UiProtection::CrosshairV2; break;
 			}
 
 			// Motion blur: the sample count and weights (runtime, no wait). The window
@@ -583,7 +618,8 @@ namespace fghost
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) ) ) | ( uint64_t( uBlurLib ) << 32 );
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+				| ( uint64_t( c.uiBoxTenths ) << 48 );
 
 			if ( !H.bLive )
 			{
@@ -856,6 +892,116 @@ namespace fghost
 					g_flLastSynthMs.load( std::memory_order_relaxed ), flPatchMs, nSynth, nBlurOutputs, H.nProfileBlurSamples );
 		}
 
+		// ---- the box preview: record (render thread) and publish ----
+		// The box as the library places it (Interpolator::computeBox): centred, the
+		// preview never uses an offset.
+		void BoxRect( uint32_t w, uint32_t h, int nTenths, uint32_t *pbw, uint32_t *pbh, int *pbx, int *pby )
+		{
+			framegen::Settings st;
+			st.uiBoxHeightFrac = float( nTenths ) / 1000.0f;
+			framegen::Interpolator::boxSize( st, w, h, pbw, pbh );
+			*pbx = ( int( w ) - int( *pbw ) ) / 2;
+			*pby = ( int( h ) - int( *pbh ) ) / 2;
+		}
+
+		// Records the crop pass for a NEW real frame into pCb, when the overlay wants
+		// it, none is in flight and the last was >= 100 ms ago. Returns true when it
+		// recorded: the caller submits pCb and then calls BoxPreviewSubmitted(seq).
+		bool BoxPreviewRecord( CVulkanCmdBuffer *pCb, const gamescope::Rc<CVulkanTexture> &pLayer0, const FormatPlan &plan, const Config &cfg )
+		{
+			const uint64_t ulNow = get_time_in_nanos();
+			const uint64_t ulWanted = g_ulBoxPreviewWantedNs.load( std::memory_order_relaxed );
+			if ( !ulWanted || ulNow - ulWanted > kBoxPreviewLapseNs )
+				return false;
+			// A capture that never retired (its command buffer was dropped) must not
+			// wedge the preview: give up on it after two seconds.
+			if ( g_BoxPending.bPending && ulNow - g_BoxPending.ulLastRecordNs > 2000ull * 1000ull * 1000ull )
+				g_BoxPending.bPending = false;
+			if ( g_BoxPending.bPending || ulNow - g_BoxPending.ulLastRecordNs < kBoxPreviewIntervalNs )
+				return false;
+
+			const uint32_t w = pLayer0->width(), h = pLayer0->height();
+			uint32_t bw, bh;
+			int bx, by;
+			BoxRect( w, h, cfg.uiBoxTenths, &bw, &bh, &bx, &by );
+
+			// The crop: the box with its own size again around it (a quarter of the box
+			// on every side is the least that shows what the box misses), at least 48
+			// px, never more than the frame. Reduced by a whole factor when it would
+			// not fit the picture, so large boxes on large frames stay exact means.
+			const uint32_t uBoxMax = std::max( bw, bh );
+			uint32_t uSide = std::min( std::max( uBoxMax * 2u, 48u ), std::min( w, h ) );
+			const uint32_t uFactor = ( uSide + kBoxPreviewMax - 1u ) / kBoxPreviewMax;
+			const uint32_t uOut = ( uSide + uFactor - 1u ) / uFactor;
+			const uint32_t uSrcSide = uOut * uFactor;
+			const int nCx = bx + int( bw ) / 2, nCy = by + int( bh ) / 2;
+			const int nX0 = std::min( std::max( nCx - int( uSrcSide ) / 2, 0 ), std::max( int( w ) - int( uSrcSide ), 0 ) );
+			const int nY0 = std::min( std::max( nCy - int( uSrcSide ) / 2, 0 ), std::max( int( h ) - int( uSrcSide ), 0 ) );
+
+			UiCropRequest_t req;
+			req.uOriginX = uint32_t( nX0 );
+			req.uOriginY = uint32_t( nY0 );
+			req.uWidth = uOut;
+			req.uHeight = uOut;
+			req.uFactor = uFactor;
+			req.bLinearToSrgb = plan.eFormat == framegen::Format::RgbaF16 && plan.eTransfer == framegen::Transfer::Linear;
+			if ( !vulkan_ui_crop_record( pCb, pLayer0, req ) )
+				return false;
+
+			BoxPreview &m = g_BoxPending.meta;
+			m.uGameW = w;
+			m.uGameH = h;
+			m.uBoxW = bw;
+			m.uBoxH = bh;
+			m.uW = uOut;
+			m.uH = uOut;
+			m.uFactor = uFactor;
+			m.flBoxX = float( bx - nX0 ) / float( uFactor );
+			m.flBoxY = float( by - nY0 ) / float( uFactor );
+			m.flBoxW = float( bw ) / float( uFactor );
+			m.flBoxH = float( bh ) / float( uFactor );
+			m.bUiOn = cfg.ui != UiProt::Off;
+			g_BoxPending.ulLastRecordNs = ulNow;
+			g_BoxPending.bPending = true;
+			g_BoxPending.ulSeq = ~0ull;   // set by BoxPreviewSubmitted(); never read as retired before that
+			return true;
+		}
+
+		void BoxPreviewSubmitted( uint64_t ulSeq )
+		{
+			g_BoxPending.ulSeq = ulSeq;
+		}
+
+		// Reads the crop once the submission that carries it has retired (a counter
+		// read, never a wait) and publishes it.
+		void BoxPreviewPoll()
+		{
+			if ( !g_BoxPending.bPending || g_BoxPending.ulSeq == ~0ull || g_device.completedSeqNo() < g_BoxPending.ulSeq )
+				return;
+			g_BoxPending.bPending = false;
+
+			std::lock_guard<std::mutex> lock( g_BoxPreviewMutex );
+			const BoxPreview &m = g_BoxPending.meta;
+			if ( !vulkan_ui_crop_read( g_BoxPreview.rgba, m.uW, m.uH ) )
+				return;
+			g_BoxPreview.uGameW = m.uGameW;
+			g_BoxPreview.uGameH = m.uGameH;
+			g_BoxPreview.uBoxW = m.uBoxW;
+			g_BoxPreview.uBoxH = m.uBoxH;
+			g_BoxPreview.uW = m.uW;
+			g_BoxPreview.uH = m.uH;
+			g_BoxPreview.uFactor = m.uFactor;
+			g_BoxPreview.flBoxX = m.flBoxX;
+			g_BoxPreview.flBoxY = m.flBoxY;
+			g_BoxPreview.flBoxW = m.flBoxW;
+			g_BoxPreview.flBoxH = m.flBoxH;
+			g_BoxPreview.bUiOn = m.bUiOn;
+			g_BoxPreview.ulCapturedNs = get_time_in_nanos();
+			// Published last: GetBoxPreview() checks the generation before taking the lock.
+			g_BoxPreview.ulGeneration = g_ulBoxPreviewGeneration.load( std::memory_order_relaxed ) + 1;
+			g_ulBoxPreviewGeneration.store( g_BoxPreview.ulGeneration, std::memory_order_release );
+		}
+
 		// UI protection while the renderer is inert (pass-through): the game is fast
 		// enough that frame generation is paused, so no frame is copied, observed or
 		// shown by us -- but the library's stillness counters must keep following the
@@ -902,7 +1048,10 @@ namespace fghost
 			pCmd->insertBarrier();
 			pCmd->bindTexture( 0, nullptr );
 			const bool bOk = H.interp.recordTrack( pCmd->rawBuffer(), pLayer0->srgbView() );
-			g_device.submit( std::move( pCmd ) );
+			const bool bPreview = BoxPreviewRecord( pCmd.get(), pLayer0, plan, cfg );
+			const uint64_t ulSeq = g_device.submit( std::move( pCmd ) );
+			if ( bPreview )
+				BoxPreviewSubmitted( ulSeq );
 
 			if ( bOk )
 			{
@@ -1028,7 +1177,40 @@ namespace fghost
 	{
 		const uint32_t uPacked = Pack( cfg );
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
+		g_uUiBox.store( PackBox( cfg ), std::memory_order_relaxed );
 		UpdateGate();
+	}
+
+	void BoxPreviewWanted()
+	{
+		g_ulBoxPreviewWantedNs.store( get_time_in_nanos(), std::memory_order_relaxed );
+	}
+
+	bool GetBoxPreview( BoxPreview *pOut, uint64_t ulHaveGeneration )
+	{
+		if ( !pOut || g_ulBoxPreviewGeneration.load( std::memory_order_acquire ) <= ulHaveGeneration )
+			return false;
+		std::lock_guard<std::mutex> lock( g_BoxPreviewMutex );
+		if ( g_BoxPreview.ulGeneration <= ulHaveGeneration )
+			return false;
+		*pOut = g_BoxPreview;
+		return true;
+	}
+
+	bool GameFrameSize( uint32_t *puWidth, uint32_t *puHeight )
+	{
+		const uint64_t ul = g_ulGameFrameSize.load( std::memory_order_relaxed );
+		if ( !ul )
+			return false;
+		*puWidth = uint32_t( ul >> 32 );
+		*puHeight = uint32_t( ul & 0xFFFFFFFFu );
+		return true;
+	}
+
+	void UiBoxPixels( uint32_t uWidth, uint32_t uHeight, int nTenths, uint32_t *puBoxW, uint32_t *puBoxH )
+	{
+		int bx, by;
+		BoxRect( uWidth, uHeight, std::min( std::max( nTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ), puBoxW, puBoxH, &bx, &by );
 	}
 
 	void SetBlurConfig( const BlurConfig &cfg )
@@ -1055,7 +1237,7 @@ namespace fghost
 
 	Config GetConfig()
 	{
-		return Unpack( g_uConfig.load( std::memory_order_relaxed ) );
+		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ) );
 	}
 
 	bool Enabled()
@@ -1152,7 +1334,7 @@ namespace fghost
 	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace )
 	{
 		const uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
-		const Config cfg = Unpack( uPackedConfig );
+		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ) );
 		const uint32_t uPackedBlur = g_uBlur.load( std::memory_order_relaxed );
 		const BlurConfig blurCfg = UnpackBlur( uPackedBlur );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
@@ -1176,6 +1358,11 @@ namespace fghost
 		// Not an eligible composite (partial / pre-emptive / already graded).
 		if ( !pLayer0 )
 			return nullptr;
+
+		// For the box-size slider's "px" figure and the preview: the game's frame
+		// size as the renderer sees it.
+		g_ulGameFrameSize.store( ( uint64_t( pLayer0->width() ) << 32 ) | pLayer0->height(), std::memory_order_relaxed );
+		BoxPreviewPoll();
 
 		FrameRequest req;
 		{
@@ -1269,6 +1456,7 @@ namespace fghost
 		gamescope::Rc<CVulkanTexture> pResult;
 
 		bool bObservedThisCb = false;
+		bool bBoxPreviewRecorded = false;
 
 		// D11: a newestId not seen before is a new real frame. Copy it into the next
 		// ring slot (in this very command buffer) whatever this composite shows, so
@@ -1299,6 +1487,10 @@ namespace fghost
 			// every later command on the queue, not just the rest of this buffer.
 			pCb->insertBarrier();
 			pCb->bindTexture( 0, nullptr );
+
+			// The Inspector's box preview, when it is on screen (a crop of this very
+			// frame; it rides in this command buffer, see BoxPreviewRecord).
+			bBoxPreviewRecorded = BoxPreviewRecord( pCb, pLayer0, H.plan, cfg );
 
 			// UI protection (the library's): hand it the new real frame, EVERY new real
 			// frame, also those that are only passed through -- its stillness counters
@@ -1500,6 +1692,8 @@ namespace fghost
 			const uint64_t ulSeq = g_device.submit( std::move( pCmd ) );
 			if ( bProfileWritten )
 				H.ulProfileSeq = ulSeq;
+			if ( bBoxPreviewRecorded )
+				BoxPreviewSubmitted( ulSeq );
 		}
 
 		// Cheap poll for the finished pair's timings (a counter read, never a wait).

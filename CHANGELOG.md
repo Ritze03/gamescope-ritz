@@ -9,6 +9,18 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.11.1] – 2026-10-05
+
+### Added
+- **Crosshair V2**: a new UI protection choice that avoids the specks and moving
+  patterns around the crosshair, next to the original Crosshair so you can compare.
+- **Crosshair box size**: a new slider under UI protection sets the protected box, with
+  a live picture of the game pixels under it in the Inspector.
+
+### Fixed
+- **Smaller default crosshair box**: the protected box is now 2.5% of the game's height
+  instead of 3% of its area, which removes most specks even with the original Crosshair.
+
 ## [0.11.0] – 2026-10-04
 
 ### Added

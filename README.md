@@ -35,7 +35,8 @@ links to its page in the docs.
   game's own, from the [frame-gen-ritz](https://github.com/Ritze03/frame-gen-ritz)
   library, at a fixed 2x to 8x or aimed at a Target fps, with a Low latency or
   Smoothness priority, Quality and Artifact safety settings, optional UI protection
-  (a still crosshair, or the whole screen) and a live status line. It stops at your
+  (a still crosshair, in an original or a speck-free V2 mode, with an adjustable box and a
+  live preview of what it covers, or the whole screen) and a live status line. It stops at your
   refresh rate unless you choose otherwise, works with VRR and tearing, and works in
   HDR and 10-bit games too.
 - **[Motion blur](superdoc/features/motion-blur.md)**: blends interpolated in-between

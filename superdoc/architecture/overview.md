@@ -95,7 +95,9 @@ one place that wires all of it together at startup.
   `BlurConfig` for motion blur, `LagBufferConfig` for the lag spike buffer; the ring follows the
   pacer's history depth) and `FrameGenLib.cpp` (wrapper that compiles the
   `subprojects/FrameGen` library -- optical flow, blur, UI protection **and the pacer**,
-  `gpu/pacing.h`, `framegen::pacing` -- into the binary). Glue:
+  `gpu/pacing.h`, `framegen::pacing` -- into the binary). The Inspector's UI-protection box
+  picture is `src/Overlay/UiBoxPreview.{h,cpp}` (texture + drawing) over the host's
+  `BoxPreview*` capture and `src/shaders/cs_fg_crop.comp`. Glue:
   `FrameGen_OnArrival/PrePaint/PostPaint` in `src/steamcompmgr.cpp` (feeds the library's
   pacer whenever any of the three features is on and applies its decision); the hook is
   `fghost::RecordBaseLayer` in `vulkan_composite()`; backends force a full composite while

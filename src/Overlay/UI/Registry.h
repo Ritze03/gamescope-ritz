@@ -408,6 +408,16 @@ namespace gamescope::ui
 		Entry &ZeroMeans( const char *pszWord );
 		Entry &Keywords( const char *pszKeywords );
 
+		// The value text of a row whose number alone says too little (2026-10-05:
+		// the Crosshair box size's "2.5% . 24 px", the pixel figure depending on the
+		// game's resolution). Replaces FormatDeclValue()'s "value + unit" for this
+		// Entry in every host that draws the value (sheet row, Inspector row), so
+		// they cannot disagree; ZeroMeans still wins at 0. Entry-only: no Parameter
+		// has needed one.
+		using ValueTextFn = std::function<std::string( const Value & )>;
+		Entry &ValueText( ValueTextFn fn ) { m_ValueText = std::move( fn ); return *this; }
+		const ValueTextFn &ValueTextOf() const { return m_ValueText; }
+
 		// One disabled mechanism, and there is no overload without a reason
 		// (API.md §5). The reason renders in Configure; the row draws at 0.55.
 		Entry &DisabledUnless( std::function<bool()> pred, const char *pszReason );
@@ -543,6 +553,9 @@ namespace gamescope::ui
 			// Adaptive Brightness's before/after strip
 			// (src/Overlay/EffectPreview.cpp).
 			AdaptiveBrightness,
+			// Frame generation's UI-protection box: the game's pixels under it
+			// (src/Overlay/UiBoxPreview.cpp, 2026-10-05).
+			UiBox,
 		};
 		Entry &Preview( PreviewKind eKind ) { m_ePreview = eKind; return *this; }
 		PreviewKind PreviewOf() const { return m_ePreview; }
@@ -716,6 +729,7 @@ namespace gamescope::ui
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
+		ValueTextFn m_ValueText;                     // ValueText() -- 2026-10-05
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;

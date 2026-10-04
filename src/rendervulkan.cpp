@@ -59,6 +59,7 @@
 #include "cs_fg_copy.h"
 #include "cs_fg_copy_rgb10.h"
 #include "cs_fg_copy_f16.h"
+#include "cs_fg_crop.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1055,6 +1056,7 @@ bool CVulkanDevice::createShaders()
 	if ( m_bSupportsStorageImageExtendedFormats )
 		SHADER(FG_COPY_RGB10, cs_fg_copy_rgb10);
 	SHADER(FG_COPY_F16, cs_fg_copy_f16);
+	SHADER(FG_CROP, cs_fg_crop);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1338,6 +1340,9 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	if ( m_bSupportsStorageImageExtendedFormats )
 		SHADER(FG_COPY_RGB10, 1, 1, 1);
 	SHADER(FG_COPY_F16, 1, 1, 1);
+	// The Inspector's UI-protection box preview crop: switched on by looking at a
+	// settings row mid-game, so precompiled for the same reason.
+	SHADER(FG_CROP, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -4537,6 +4542,86 @@ static void effects_preview_flush( uint64_t ulSequence )
 	// without the lock to decide whether there is anything to copy at all.
 	s_AbPreviewFrame.ulGeneration = s_ulAbPreviewGeneration.load( std::memory_order_relaxed ) + 1;
 	s_ulAbPreviewGeneration.store( s_AbPreviewFrame.ulGeneration, std::memory_order_release );
+}
+
+// ---- The Inspector's UI-protection box preview (see rendervulkan.hpp) ----
+struct UiCropPushData_t
+{
+	uint32_t uOriginX, uOriginY;
+	uint32_t uWidth, uHeight;
+	uint32_t uFactor;
+	uint32_t uSrgbEncode;
+
+	UiCropPushData_t( const UiCropRequest_t &r )
+		: uOriginX( r.uOriginX ), uOriginY( r.uOriginY ), uWidth( r.uWidth ), uHeight( r.uHeight )
+		, uFactor( r.uFactor ), uSrgbEncode( r.bLinearToSrgb ? 1u : 0u )
+	{
+	}
+};
+
+static bool update_ui_crop_images()
+{
+	if ( g_output.uiCrop == nullptr )
+	{
+		CVulkanTexture::createFlags flags;
+		flags.bStorage     = true;
+		flags.bSampled     = true;
+		flags.bTransferSrc = true;
+		g_output.uiCrop = new CVulkanTexture();
+		if ( !g_output.uiCrop->BInit( kUiCropMax, kUiCropMax, 1u, DRM_FORMAT_ABGR8888, flags, nullptr ) )
+		{
+			g_output.uiCrop = nullptr;
+			return false;
+		}
+	}
+	if ( g_output.uiCropStaging == nullptr )
+	{
+		CVulkanTexture::createFlags staging;
+		staging.bMappable    = true;
+		staging.bTransferDst = true;
+		g_output.uiCropStaging = new CVulkanTexture();
+		if ( !g_output.uiCropStaging->BInit( kUiCropMax, kUiCropMax, 1u, DRM_FORMAT_ABGR8888, staging, nullptr ) )
+		{
+			g_output.uiCropStaging = nullptr;
+			return false;
+		}
+	}
+	return true;
+}
+
+bool vulkan_ui_crop_record( CVulkanCmdBuffer *pCmd, const gamescope::Rc<CVulkanTexture> &pLayer0, const UiCropRequest_t &req )
+{
+	if ( !pCmd || !pLayer0 || req.uWidth == 0 || req.uHeight == 0 || req.uWidth > kUiCropMax || req.uHeight > kUiCropMax )
+		return false;
+	if ( !update_ui_crop_images() )
+		return false;
+
+	pCmd->uploadConstants<UiCropPushData_t>( req );
+	pCmd->bindPipeline( g_device.pipeline( SHADER_TYPE_FG_CROP ) );
+	pCmd->bindTexture( 0, pLayer0 );
+	pCmd->setTextureSrgb( 0, true );             // raw UNORM view: the game's encoded values
+	pCmd->setSamplerUnnormalized( 0, true );
+	pCmd->setSamplerNearest( 0, true );
+	pCmd->bindTarget( g_output.uiCrop );
+	pCmd->dispatch( div_roundup( req.uWidth, 8u ), div_roundup( req.uHeight, 8u ) );
+	pCmd->bindTexture( 0, nullptr );
+	pCmd->copyImage( g_output.uiCrop, g_output.uiCropStaging );
+	return true;
+}
+
+bool vulkan_ui_crop_read( uint8_t *pRgba, uint32_t uWidth, uint32_t uHeight )
+{
+	if ( !pRgba || !g_output.uiCropStaging || uWidth > kUiCropMax || uHeight > kUiCropMax )
+		return false;
+	const uint8_t *pPix = g_output.uiCropStaging->mappedData();
+	if ( !pPix )
+		return false;
+	const uint32_t uPitch = g_output.uiCropStaging->rowPitch();
+	// ABGR8888 == VK_FORMAT_R8G8B8A8_UNORM: R, G, B, A in memory. The pitch is the
+	// staging image's own (linear tiling pads rows), so per row, never one memcpy.
+	for ( uint32_t y = 0; y < uHeight; y++ )
+		memcpy( pRgba + size_t( y ) * uWidth * 4, pPix + size_t( y ) * uPitch, size_t( uWidth ) * 4 );
+	return true;
 }
 
 static bool init_nis_data()

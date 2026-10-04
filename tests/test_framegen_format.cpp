@@ -2,7 +2,10 @@
 // (frame-gen-ritz Format, Transfer, ring format) table of HDR / 10-bit frame
 // generation (superdoc/features/frame-generation.md, "HDR and 10-bit games").
 // No GPU, no compositor.
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <cmath>
 #include <string>
 
 #include "FrameGen/FrameGenFormat.h"
@@ -102,4 +105,49 @@ TEST_CASE( "framegen format: an inert composite tracks each new real frame once,
 	// A repaint of the frame the library already has (cursor move, overlay), or one it
 	// was just observed on the way into pass-through: never counted twice.
 	CHECK_FALSE( ShouldTrackUi( true, true, true, 42, 42 ) );
+}
+
+// ---------------------------------------------------------------------------
+//  UI protection (2026-10-05): the host's UiProt values ARE the library's, so
+//  the host can cast between them, and the box-size range is the slider's.
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "framegen ui: UiProt matches the library's UiProtection value for value", "[framegen_format]" )
+{
+	STATIC_REQUIRE( int( UiProt::Off ) == int( framegen::UiProtection::Off ) );
+	STATIC_REQUIRE( int( UiProt::Crosshair ) == int( framegen::UiProtection::Crosshair ) );
+	STATIC_REQUIRE( int( UiProt::WholeScreen ) == int( framegen::UiProtection::WholeScreen ) );
+	STATIC_REQUIRE( int( UiProt::CrosshairV2 ) == int( framegen::UiProtection::CrosshairV2 ) );
+	// Packed into two bits of the config word (FrameGenHost.cpp, bits 24-25).
+	STATIC_REQUIRE( int( UiProt::CrosshairV2 ) <= 3 );
+}
+
+TEST_CASE( "framegen ui: the box size defaults and range", "[framegen_format]" )
+{
+	// The slider's 2.5% default and 0.5%..10% range, in tenths of a percent.
+	CHECK( kUiBoxDefaultTenths == 25 );
+	CHECK( kUiBoxMinTenths == 5 );
+	CHECK( kUiBoxMaxTenths == 100 );
+	// The library default must equal the host's: a host that set nothing would
+	// otherwise protect a different box than the slider says.
+	CHECK_THAT( framegen::Settings{}.uiBoxHeightFrac,
+		Catch::Matchers::WithinAbs( double( kUiBoxDefaultTenths ) / 1000.0, 1e-6 ) );
+}
+
+TEST_CASE( "framegen ui: the box side the slider text and the library share", "[framegen_format]" )
+{
+	// The library's formula (Interpolator::boxSize, whose .cpp the unit tests do not
+	// link): side = clamp(round(H * frac), 8, min(W, H)). 24 px at 960, 27 at 1080,
+	// 36 at 1440, 54 at 2160 for the default.
+	auto Side = []( uint32_t w, uint32_t h, int nTenths )
+	{
+		const int nSide = int( std::lround( double( h ) * double( nTenths ) / 1000.0 ) );
+		return std::min( std::max( nSide, 8 ), int( std::min( w, h ) ) );
+	};
+	CHECK( Side( 1280, 960, kUiBoxDefaultTenths ) == 24 );
+	CHECK( Side( 1920, 1080, kUiBoxDefaultTenths ) == 27 );
+	CHECK( Side( 2560, 1440, kUiBoxDefaultTenths ) == 36 );
+	CHECK( Side( 3840, 2160, kUiBoxDefaultTenths ) == 54 );
+	CHECK( Side( 1920, 1080, kUiBoxMinTenths ) == 8 );      // 5.4 px, held at the library's 8 px floor
+	CHECK( Side( 1920, 1080, kUiBoxMaxTenths ) == 108 );
 }

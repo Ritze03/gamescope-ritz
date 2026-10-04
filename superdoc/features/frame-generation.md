@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`ec18261`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`615a2d1`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -195,9 +195,11 @@ which FG cannot substitute per output frame.
 
 ## UI protection
 
-The **UI protection** row (`framegen.ui_protection`: Off / **Crosshair** (default) / Whole
-screen) keeps a still crosshair, or with Whole screen every solid still HUD element,
-pixel-exact on generated frames. It is **independent of Static HUD protection**.
+The **UI protection** row (`framegen.ui_protection`: Off / **Crosshair** (default) /
+**Crosshair V2** / Whole screen) keeps a still crosshair, or with Whole screen every solid
+still HUD element, pixel-exact on generated frames. It is **independent of Static HUD
+protection**. Two more things sit with it: [Crosshair V2](#crosshair-v2-and-the-box-size)
+and the **Crosshair box size** slider, with a [live preview](#the-box-preview) in the Inspector.
 
 **It lives in the FrameGen library, not in this repository.** The library work is
 [Ritze03/frame-gen-ritz PR #1](https://github.com/Ritze03/frame-gen-ritz/pull/1) (branch
@@ -235,14 +237,15 @@ doesn't work as well if there's transparency, but it should work for most games.
 `INTEGRATION.md`): a pixel is *still* if no channel moved more than `uiStillThreshold`
 (3.5 levels) between two consecutive real frames, and is protected after `uiStillFrames` (8)
 consecutive still frames. Crosshair mode watches a centred square of side
-`round(sqrt(uiCrosshairArea * w * h))` (`uiCrosshairArea` 0.03, i.e. 332 px at 2560x1440);
+`round(H * uiBoxHeightFrac)` (default 0.025, i.e. 36 px at 2560x1440; until 2026-10-05 it was
+`round(sqrt(0.03 * w * h))`, 332 px there -- see [the box size](#crosshair-v2-and-the-box-size));
 Whole screen watches every pixel in cells and protects the still ones, giving up on a frame
 where more than `uiMaxStillFraction` (0.75) of it is still (a paused game, a loading
 screen). Per observed frame the library keeps its own **clean copy** with the protected
 pixels inpainted (reach `uiInpaintReach` 12 px); estimate and synth run on the clean copies,
 and every synth ends with `out = mix(out, real pixel, mask)`, reading the real pixels from
 the `curr` view it is given. All of these are runtime `Settings` fields; the host sets only
-`uiProtection` and leaves the rest at the library's defaults.
+`uiProtection` and `uiBoxHeightFrac` (the slider) and leaves the rest at the library's defaults.
 
 **Host wiring** (`FrameGenHost.cpp`):
 
@@ -349,6 +352,104 @@ With Whole screen on, **Static HUD protection can usually be lowered**: the soli
 longer needs the bias. **Off** for racing games or anything without a fixed HUD (the
 detector would spend its time on nothing, or on a still dashboard it should not freeze).
 The fork's own Crosshair (`system.crosshair`) is drawn after FG and unaffected either way.
+
+### Crosshair V2 and the box size
+
+**Crosshair V2** (`ui_protection = "crosshair_v2"`, library PR #14, `UiProtection::CrosshairV2`)
+is a second crosshair mode next to the original, which stays selectable as **Crosshair** so the
+two can be compared in the GUI. The user, on why both: *"Then do a V2 for now (in the GUI, so i
+can compare them). The V1 (current) does result in artifacting."* V1 hides the crosshair by
+inpainting it and pastes it back over a clean copy, which on a moving background leaves white
+specks and moving patterns inside the box. V2 has **no inpaint and no clean copy**: a pixel is
+protected only if it stays still **and** stands out from what is behind it
+(`uiContrastThreshold` 20), it leaves the mask only after `uiLeaveFrames` (4) consecutive changed
+frames and re-enters after `uiReentryFrames` (2), and a protected pixel is pasted back only if it did
+not change in the pair being synthesised -- it never pastes over moving content. Outside the pasted
+pixels its output is bit-identical to Off. `uiEstimateFill` (hide the UI from the motion estimate)
+stays **false**: it measured as a wash. The host does nothing different for it: `recordObserve` /
+`recordTrack` are called exactly as for V1 (V2's track is a full detect pass, 0.02 ms). Switching
+between V2 and another mode forgets the observed frames, so one pair goes unprotected; harmless.
+`Why` the numbers (library README, footage of 12 segments / 1173 frames): artifact pixels per frame
+(worse than Off by more than 24 levels) **V2 0.012**, V1 4.44 at a 27 px box and **20.9 at the old
+249 px box**; white specks 0.009 against 1.36; mask flips per frame 2.0 against 16.7; recall of the
+crosshair after 8 frames 0.977 against 0.917; V2's observe costs 0.022 ms at 1440p against V1's
+0.066 ms. Limits: opaque, static crosshairs only -- a semi-transparent one or one that changes shape
+stays unprotected while it changes, by design; a *thick* crosshair on a hard-edged moving background
+interpolates better around it with V1 (which inpaints it out of the estimate). Whole screen stays
+V1-style (no V2 variant exists yet). The enum value order is the library's (Off 0, Crosshair 1,
+Whole screen 2, CrosshairV2 3) and `fghost::UiProt` matches it, so `PanelFrameGen.cpp`'s `kUiKeys`
+is indexed by it; the GUI's *display* order (Off / Crosshair / Crosshair V2 / Whole screen) is only
+the order of `kUiOptions`. Pinned: `tests/test_framegen_format.cpp` asserts the values.
+
+**Crosshair box size** (`framegen.ui_box_height`, a float **percent of the game's height**,
+default 2.5, 0.5-10, step 0.1; row text `2.5% · 24 px`, the pixel figure being the library's own
+`Interpolator::boxSize()` for the game's frame). The side is `clamp(round(H * pct), 8, min(W, H))`:
+24 px at 960 rows, 27 at 1080, 36 at 1440, 54 at 2160. It applies to Crosshair, Crosshair V2 and the
+box part of Whole screen. `Why` a percentage of the **height**, not of the area: the old default
+was 3% of the frame's *area*, which is 192 px on the user's 1280x960 CS2 (249 px at 1080p, 332 at
+1440p) -- far more than a crosshair, and everything in the box beyond it is background that gets
+pasted from the real frame, which is where V1's specks came from (20.9 artifact pixels per frame
+against 4.44 at 27 px). A height fraction is also what a human can judge ("a bit bigger than the
+crosshair") and keeps the box square and independent of the aspect ratio. The smaller default also
+removes most of V1's specks on its own. `Why` a slider and not a fixed number: crosshairs differ
+(a dot, a thin cross, a big ring), and the preview below lets the user size it exactly. Per profile, like the other rows; the host takes it in **tenths of a percent** in its
+own atomic word (`g_uUiBox`; the main config word is full), and a change is a runtime `setSettings`,
+no wait. A game whose frame size changes needs nothing: the library recomputes the box from the
+fraction.
+
+### The box preview
+
+The two UI-protection rows (`framegen.ui_protection`, `framegen.ui_box_height`) declare
+`.Preview( Entry::PreviewKind::UiBox )`, so while either is the selected row the Shell's
+**Inspector** shows, above VALUES, the game's pixels under the box: a crop of the frame's centre
+(the box plus its own size again around it, at least 48 px), enlarged by a whole number with
+**nearest** replication so each game pixel is a crisp block, everything outside the box dimmed,
+the box outlined (a dark halo under an accent line), and `Box 24 × 24 px` / `Game frame 1280 × 960`
+under it. The user's request: *"a slider, so the user can adjust it for himself, and then in the
+right inspector rail we can show an image of the area, basically, that's underneath the current UI,
+so he can see if the whole crosshair fits in, and then the user can configure it, like, really
+precise."* It follows the **selected** row like the Adaptive Brightness strip does (a click on the row
+selects it); there is no hover-only preview.
+
+**How the picture gets its pixels (no GPU wait, no new threads):**
+
+- `fghost::BoxPreviewWanted()` is called by `UiBoxPreview_Draw()` every frame the block is on screen;
+  it lapses by itself 400 ms after the last call, so closing the Inspector, selecting another row or
+  closing the overlay stops all capture work with no hook. `Why` a lapse and not a visibility flag:
+  the block has more ways to leave the screen than the overlay has of closing (the same argument
+  `EffectPreview.cpp` makes for its strip).
+- While wanted, the renderer records the crop **into the command buffer it already submits for a new
+  real frame** (`BoxPreviewRecord()` in `FrameGenHost.cpp`, from the ring-copy branch and from
+  `TrackWhileInert()` for the pass-through case): one `cs_fg_crop.comp` dispatch (at most 128 x 128
+  threads) on **layer 0 itself**, i.e. the real game frame before any effect, the same pixels the
+  library protects, then a copy into a host-mappable 128 x 128 staging image. At most 10 captures a
+  second and one in flight. Cost: a dispatch of a few thousand threads plus a 64 KB copy per capture,
+  only while the preview is on screen.
+- The pixels are read back on a **later composite**, once `g_device.completedSeqNo()` shows the
+  submission has retired (`BoxPreviewPoll()`), never by waiting. This differs from the Adaptive
+  Brightness strip (`vulkan_effects_preview_*`), which arms one composite and waits once; that
+  mechanism lives inside the effects pre-pass, which does not run when no native effect is on, so it
+  could not serve a row of this area. `cs_fg_crop.comp` is new (`SHADER_TYPE_FG_CROP`, precompiled).
+- **Format handling:** the shader fetches the game's raw UNORM view like every layer-0 pass. 8-bit and
+  10-bit values are already display-encoded and are only clamped; an fp16 **scRGB** (linear) game is
+  sRGB-encoded for display, and anything above 1.0 clips; HDR10 (PQ) is shown as encoded, so it looks
+  flat. A crop wider than 128 px (a big box on a high-resolution game) is reduced by a whole factor with
+  a box mean, so it never aliases; the caption then says *(picture reduced)*. YCbCr / unsupported
+  formats are refused by the renderer as they are for generation, so there is no picture.
+- The overlay side (`src/Overlay/UiBoxPreview.{h,cpp}`) owns one fixed 192 x 192 `ImTextureData`
+  registered with ImGui's context (`ImGui::RegisterUserTexture`, the same user-texture path
+  `EffectPreview.cpp` uses, uploaded by the existing `ImGui_ImplVulkan` backend), enlarges the capture
+  by the largest whole factor that fits and uploads only that sub-rectangle.
+- **Placeholders:** with Frame generation, Motion blur and the Lag spike buffer all off the renderer is
+  not running (the rows are disabled then anyway): *"Turn Frame generation on to see what is under
+  the box."* With the renderer on but no capture in the last two seconds (no game frame, or the game
+  is paused): *"Waiting for a game frame."* With UI protection **Off** the picture still shows, and
+  the caption says protection is off. The box is the centred one (`uiBoxOffsetX/Y` stay 0).
+
+The Registry got one new generic hook for this: `Entry::ValueText( fn )`, a value-text override for a
+row whose number alone says too little (used by the box-size row for `2.5% · 24 px`); it replaces
+`FormatDeclValue()`'s "value + unit" in every host that draws the value (sheet row, Inspector row),
+so they cannot disagree.
 
 ## Backends
 
@@ -656,7 +757,8 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
-| `framegen.ui_protection` | `off` / `crosshair` (default) / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it |
+| `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
+| `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
 `"off"` again): `mode: "off"` -> `enabled = false`, `mode = "fixed"`, the stored
@@ -686,7 +788,7 @@ overridden-dot follows one key per row; disabled while the switch is off), **Tar
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
 rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Artifact safety (Off / Low / Default / High), Static HUD
-protection, UI protection (Off / Crosshair / Whole screen), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
+protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*
@@ -799,9 +901,9 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 The library has no root `meson.build`, and Meson's sandbox forbids handing files under
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
-nested subproject`), so `subproject()` is impossible. Its 20 shaders (11 for the interpolation, 6 for UI protection, 3 for motion blur --
+nested subproject`), so `subproject()` is impossible. Its 23 shaders (11 for the interpolation, 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
 `blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
-test-only `gpu/blendbench.comp` is not built), plus 10 colour-shader variants each for `rgb10` and `f16` (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
+test-only `gpu/blendbench.comp` is not built), plus 12 colour-shader variants each for `rgb10` and `f16` (`ui_v2_update` and `ui_v2_lumafill` are per-format) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work
