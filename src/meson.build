@@ -94,9 +94,53 @@ shader_src = [
   'shaders/cs_nis.comp',
   'shaders/cs_nis_fp16.comp',
   'shaders/cs_rgb_to_nv12.comp',
+  'shaders/cs_fg_copy.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
+
+# FRAME GENERATION (FrameGen library, subprojects/FrameGen, pinned submodule).
+# Compiled straight into gamescope -- no subproject() call, so it shares our
+# compiler flags, Vulkan headers and glslang. Why not subproject(): the library
+# ships its own meson.build that also builds the `fgtest` executable and wants
+# `buildtype=release`; none of that belongs in this build.
+#
+# MESON SANDBOX: meson refuses to hand a file under subprojects/ to anything but
+# that subproject ("Tried to grab file luma.comp from a nested subproject."),
+# which rules out generator.process() / files() on the library's own sources.
+# So the shaders go through custom_target() with the path as a plain command-line
+# STRING (meson never sees a file object; the depfile below still re-runs glslang
+# when a .comp or common.glsl changes), and the library's one .cpp is pulled in
+# by FrameGen/FrameGenLib.cpp with a relative #include, so it is still compiled
+# as part of gamescope with gamescope's flags.
+#
+# The library's framegen.cpp includes `<name>_spv.h` and reads a `<name>_spv`
+# array, which is its own naming (glsl_generator above emits `<name>.h` /
+# `<name>`), hence a separate rule with the same glslang binary and flags.
+# `--target-env vulkan1.2` matches the library's own build (the shaders were
+# validated against it). `#include "common.glsl"` resolves relative to each
+# .comp, so no -I is needed.
+framegen_gpu_dir = meson.project_source_root() / 'subprojects/FrameGen/gpu'
+framegen_has_depfile = run_command(glsl_compiler, ['--version', '--depfile', 'dummy.dep'], check: false).returncode() == 0
+framegen_shaders = []
+foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfield', 'error', 'resolve', 'fallback', 'lookup']
+  fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
+             '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
+  if framegen_has_depfile
+    framegen_shaders += custom_target(
+      'framegen_' + name + '_spv',
+      output  : name + '_spv.h',
+      command : [glsl_compiler, fg_args, '--depfile', '@DEPFILE@'],
+      depfile : name + '_spv.h.d',
+    )
+  else
+    framegen_shaders += custom_target(
+      'framegen_' + name + '_spv',
+      output  : name + '_spv.h',
+      command : [glsl_compiler, fg_args],
+    )
+  endif
+endforeach
 
 # M8 typography (issue #13, swapped to Geist by issue #53): embeds the
 # bundled Geist Sans/Mono weights (OFL-licensed, see
@@ -230,6 +274,8 @@ src = [
   'x11cursor.cpp',
   'InputEmulation.cpp',
   'LibInputHandler.cpp',
+  'FrameGen/FrameGenHost.cpp',
+  'FrameGen/FrameGenLib.cpp',
 ]
 
 luajit_dep = dependency( 'luajit' )
@@ -275,6 +321,7 @@ if get_option('enable_gamescope_wsi_layer')
 endif
 
 src += spirv_shaders
+src += framegen_shaders
 src += font_headers
 src += license_headers
 src += protocols_server_src

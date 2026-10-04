@@ -43,6 +43,7 @@
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
+#include "FrameGen/FrameGenHost.h"
 #include "convar.h"
 
 #include "cs_composite_blit.h"
@@ -55,6 +56,7 @@
 #include "cs_effects_bloom_blurv.h"
 #include "cs_effects_bloom_down.h"
 #include "cs_zoom.h"
+#include "cs_fg_copy.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1040,6 +1042,7 @@ bool CVulkanDevice::createShaders()
 	SHADER(EFFECTS_V2_BOX2, cs_effects_v2_box2);
 	SHADER(EFFECTS_V2_BOX1_FINE, cs_effects_v2_box1_fine);
 	SHADER(EFFECTS_V2_BOX2_FINE, cs_effects_v2_box2_fine);
+	SHADER(FG_COPY, cs_fg_copy);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1306,6 +1309,11 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	// Stage 3 Clarity's two (2026-09-14), same reason.
 	SHADER(EFFECTS_V2_BOX1_FINE, 1, 1, 1);
 	SHADER(EFFECTS_V2_BOX2_FINE, 1, 1, 1);
+	// Frame generation's ring copy (cs_fg_copy.comp): one tiny pipeline,
+	// precompiled so switching frame generation on mid-game does not compile
+	// on the render thread. (The FrameGen library builds its own pipelines
+	// at init, which is a one-off on that same switch.)
+	SHADER(FG_COPY, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {
@@ -1516,6 +1524,13 @@ uint64_t CVulkanDevice::submit( std::unique_ptr<CVulkanCmdBuffer> cmdBuffer)
 	uint64_t nextSeqNo = submitInternal(cmdBuffer.get());
 	m_pendingCmdBufs.emplace(nextSeqNo, std::move(cmdBuffer));
 	return nextSeqNo;
+}
+
+uint64_t CVulkanDevice::completedSeqNo()
+{
+	uint64_t currentSeqNo = 0;
+	vk_check( vk.GetSemaphoreCounterValue(device(), m_scratchTimelineSemaphore, &currentSeqNo) );
+	return currentSeqNo;
 }
 
 void CVulkanDevice::garbageCollect( void )
@@ -5410,6 +5425,37 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 		}
 		effectsFrameInfo.layers.get( 0 ).tex = std::move( pTex );
 	};
+
+	// FRAME GENERATION (src/FrameGen/FrameGenHost.h, decision D3): runs FIRST,
+	// on the RAW layer 0 -- before ReShade and before the native effects
+	// pre-pass -- and, when this composite shows a generated slot, hands back a
+	// texture that replaces layer 0 for everything below, exactly as the
+	// effects output does. ReShade, the pre-pass, zoom, FSR/NIS and the colour
+	// management then treat the generated frame as the frame.
+	//
+	// Off costs this one relaxed atomic load: RenderWanted() is false unless
+	// frame generation is on or still holds resources that this call must
+	// release (the release happens here because it needs a g_device.waitIdle(),
+	// and fghost does all its recording in a command buffer of its OWN, so that
+	// wait can never land in the middle of this function's upload-buffer use).
+	//
+	// Eligible composites only: not `partial` (layer 0 is then NOT the game:
+	// DRM's partial path has removed the base layer), not the pre-emptive
+	// upscale composite (pInCommandBuffer is only ever passed by that caller --
+	// its result is cached on the commit and presented later, which a per-slot
+	// substitution cannot be; steamcompmgr must not pre-upscale while
+	// fghost::Enabled()), and not a layer 0 that already carries the effects.
+	if ( fghost::RenderWanted() )
+	{
+		const bool bFgEligible = !partial && !pInCommandBuffer
+			&& !frameInfo->bBaseLayerEffectsApplied
+			&& frameInfo->layers.count() > 0 && frameInfo->layers.get( 0 ).tex;
+		gamescope::Rc<CVulkanTexture> pGenerated = fghost::RecordBaseLayer(
+			bFgEligible ? frameInfo->layers.get( 0 ).tex : nullptr,
+			bFgEligible ? frameInfo->layers.get( 0 ).colorspace : GAMESCOPE_APP_TEXTURE_COLORSPACE_SRGB );
+		if ( pGenerated )
+			SubstituteLayer0( std::move( pGenerated ) );
+	}
 
 	EOTF outputTF = frameInfo->outputEncodingEOTF;
 	if (!frameInfo->applyOutputColorMgmt)

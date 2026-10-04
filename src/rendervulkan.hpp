@@ -1061,6 +1061,7 @@ enum ShaderType {
 	// cs_effects_v2_box1_fine.comp / cs_effects_v2_box2_fine.comp.
 	SHADER_TYPE_EFFECTS_V2_BOX1_FINE,
 	SHADER_TYPE_EFFECTS_V2_BOX2_FINE,
+	SHADER_TYPE_FG_COPY, // cs_fg_copy.comp: the frame generation host's ring copy of the game's frame (src/FrameGen/FrameGenHost.cpp)
 
 	SHADER_TYPE_COUNT
 };
@@ -1328,6 +1329,11 @@ public:
 	// unsupported" instruction.
 	inline bool supportsTimestamps() {return m_bTimestampsSupported;}
 	inline float timestampPeriodNs() {return m_flTimestampPeriodNs;}
+	// The highest submission sequence number the GPU has finished (the timeline
+	// semaphore's counter), read without waiting. A submission whose sequence
+	// is <= this has retired. Used by the frame generation host to read GPU
+	// timestamps only after they exist (src/FrameGen/FrameGenHost.cpp).
+	uint64_t completedSeqNo();
 
 	inline std::pair<void *, uint32_t> uploadBufferData(uint32_t size)
 	{

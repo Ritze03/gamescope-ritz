@@ -18,6 +18,7 @@
 #include "ime.hpp"
 #include "refresh_rate.h"
 #include "edid.h"
+#include "FrameGen/FrameGenHost.h"
 #include "Ratio.h"
 #include "LibInputHandler.h"
 
@@ -1623,6 +1624,8 @@ namespace gamescope
         // The bundled effects (Shaders area) run as a compute pre-pass inside
         // vulkan_composite(), so direct scanout would skip them silently.
         bNeedsFullComposite |= vulkan_native_effects_active();
+        // Frame generation substitutes layer 0 inside vulkan_composite() too.
+        bNeedsFullComposite |= fghost::Enabled();
         bNeedsFullComposite |= !m_pBackend->UsesModifiers();
 
         if ( g_bOutputHDREnabled )

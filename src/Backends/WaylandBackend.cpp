@@ -13,6 +13,7 @@
 #include "Clipboard/ClipboardSync.h"
 #include "Clipboard/WaylandDataControl.h"
 #include "Config/ConfigManager.h"
+#include "FrameGen/FrameGenHost.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -1277,6 +1278,8 @@ namespace gamescope
             // The bundled effects (Shaders area) run as a compute pre-pass inside
             // vulkan_composite(), so direct scanout would skip them silently.
             bNeedsFullComposite |= vulkan_native_effects_active();
+            // Frame generation substitutes layer 0 inside vulkan_composite() too.
+            bNeedsFullComposite |= fghost::Enabled();
 
             if ( g_bOutputHDREnabled )
                 bNeedsFullComposite |= g_bHDRItmEnable;

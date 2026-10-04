@@ -33,6 +33,7 @@
 #include "Utils/Defer.h"
 #include "drm_include.h"
 #include "edid.h"
+#include "FrameGen/FrameGenHost.h"
 #include "gamescope_shared.h"
 #include "gpuvis_trace_utils.h"
 #include "log.hpp"
@@ -3638,7 +3639,14 @@ namespace gamescope
 			drm_log.debugf( "CDRMBackend::Present Begin: %lu -> delta: %lu", ulNow, ulNow - s_ulLastTime );
 			s_ulLastTime = ulNow;
 
-			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition;
+			// FRAME GENERATION: read ONCE, so the full-composite decision below and
+			// the partial-composite path further down cannot disagree if the user
+			// toggles it mid-Present. A scanned-out buffer never passes through
+			// vulkan_composite(), and a PARTIAL composite has already dropped the
+			// base layer from its frame info, so neither may happen while it is on.
+			const bool bFrameGenActive = fghost::Enabled();
+
+			bool bWantsPartialComposite = pFrameInfo->layers.count() >= 3 && !kDisablePartialComposition && !bFrameGenActive;
 
 			static bool s_bWasFirstFrame = true;
 			bool bWasFirstFrame = s_bWasFirstFrame;
@@ -3681,6 +3689,8 @@ namespace gamescope
 			// The bundled effects (Shaders area) run as a compute pre-pass inside
 			// vulkan_composite(), so direct scanout would skip them silently.
 			bNeedsFullComposite |= vulkan_native_effects_active();
+			// Frame generation substitutes layer 0 inside vulkan_composite() too.
+			bNeedsFullComposite |= bFrameGenActive;
 
 			if ( g_bOutputHDREnabled )
 			{
@@ -3772,9 +3782,11 @@ namespace gamescope
 			bool bDefer = !bNeedsFullComposite && ( !m_bWasCompositing || m_bWasPartialCompositing );
 
 			// If doing a partial composition then remove the baseplane
-			// from our frameinfo to composite.
+			// from our frameinfo to composite. Never reached with frame
+			// generation on: bNeedsFullComposite includes bFrameGenActive.
 			if ( !bNeedsFullComposite )
 			{
+				assert( !bFrameGenActive );
 				for ( int i = 1; i < compositeFrameInfo.layers.count(); i++ )
 					compositeFrameInfo.layers.get( i - 1 ) = compositeFrameInfo.layers.get( i );
 				compositeFrameInfo.layers.pop();
