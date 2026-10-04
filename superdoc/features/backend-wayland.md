@@ -131,6 +131,11 @@ initialize.
   backend — it's built unconditionally (`src/meson.build:99`), since libwayland-client is
   already a hard dependency of gamescope's own Wayland server.
 
+## Frame generation
+
+While [frame generation](frame-generation.md) is enabled, full composite is forced (`bNeedsFullComposite |= fghost::Enabled()`).
+
+
 ## Related links
 
 - [backend-sdl.md](backend-sdl.md) — the fallback nested backend, both at auto-select

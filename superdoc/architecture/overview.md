@@ -89,6 +89,14 @@ one place that wires all of it together at startup.
   `NullBinds_Tick()`, called once a frame from `steamcompmgr.cpp` next to
   `Zoom_FillRequest()`, keeps a profile's setting live even if the Shell is never
   opened. See [null-binds](../features/null-binds.md).
+- **Frame generation** — `src/FrameGen/`: `FrameGenHost.{h,cpp}` (`fghost`, the renderer
+  glue: frame ring, lazy per-slot synthesis, own command buffer, status), `Pacing.h`
+  (`fgpacing::Pacer`, the pure vblank-slot sequencer / interval estimator / cost guard)
+  and `FrameGenLib.cpp` (wrapper that compiles the `subprojects/FrameGen` library
+  into the binary). Glue: `FrameGen_OnArrival/PrePaint/PostPaint` in
+  `src/steamcompmgr.cpp`; the hook is `fghost::RecordBaseLayer` in `vulkan_composite()`;
+  backends force a full composite while it is on. See
+  [frame-generation](../features/frame-generation.md).
 - **Latent/unwired code** — `gamescope::CLibInputHandler` (`src/LibInputHandler.h:11`)
   is a fully-implemented `IWaitable` for driving raw `libinput` events without a seat
   (intended for a VR global-input path) but has **no call site anywhere in the
@@ -248,6 +256,11 @@ covered in depth on their own pages rather than repeated here:
   a rate-limited warning naming which layer was dropped, and the
   `layer_budget_stats` ConCommand (`src/rendervulkan.cpp`) prints the running
   drop count and the highest layer count any frame has reached.
+- **"Frame generation (2x/3x/4x) misbehaves, stutters or adds delay"** —
+  [frame-generation](../features/frame-generation.md): `src/FrameGen/` holds the
+  renderer host (`FrameGenHost.*`, `fghost`), the pure pacer (`Pacing.h`, `fgpacing`) and
+  `FrameGenLib.cpp` (wraps the `subprojects/FrameGen` library); pacing glue is
+  `FrameGen_*` in `src/steamcompmgr.cpp`, the hook is in `vulkan_composite()`.
 - **"I want to drive gamescope from outside"** —
   [control-ipc](../features/control-ipc.md) (`gamescopectl`, convars, screenshots) and
   [wayland-protocols](../features/wayland-protocols.md) for the full protocol index.

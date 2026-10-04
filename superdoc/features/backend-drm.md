@@ -113,6 +113,13 @@ largest and most hardware-facing of the four backends (~4200 lines).
   logind/seatd, handled through `wlsession_init()` (shared with every backend, but only
   load-bearing here since `IsSessionBased()` is `true`).
 
+## Frame generation
+
+While [frame generation](frame-generation.md) is enabled, full composite is forced and partial composite is disabled, so direct scanout is
+off too: a scanned-out buffer never passes `vulkan_composite()`, where the generated frames are
+substituted (`DRMBackend.cpp`, `bFrameGenActive`).
+
+
 ## Related links
 
 - [backend-sdl.md](backend-sdl.md), [backend-wayland.md](backend-wayland.md) — the

@@ -126,6 +126,11 @@ base, and before the scaling passes, so it is never upscaled — shifting every
 pushed overlay up one index. It carries `g_zposBase`, exists only on zoomed
 frames, and forces a full composite through `bNeedsDestinationBlend`.
 
+[Frame generation](frame-generation.md) substitutes layer 0 at the top of
+`vulkan_composite()`, before the effects pre-pass and ReShade, in its own command buffer;
+while it is enabled every backend forces a full composite (DRM also drops partial
+composite and direct scanout).
+
 ## Using it
 
 There's no direct end-user control surface here — this is the render core other

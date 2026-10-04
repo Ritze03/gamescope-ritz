@@ -32,13 +32,14 @@ carry their own LICENSE files under subprojects/.
   used here under MIT. Copyright (c) 2005 G-Truc Creation.
 - SPIRV-Headers -- MIT-style Khronos licence. Copyright (c) 2015-2018 The
   Khronos Group Inc. Text below.
+- FrameGen (subprojects/FrameGen) -- MIT. Copyright (c) 2026 Ritze03.
 - Geist and Geist Mono -- SIL Open Font License 1.1. Copyright 2024 The Geist
   Project Authors. The glyph outlines are embedded in the binary; full text
   at the end of this section.
 
 ### MIT License
 
-Applies to sol2, Dear ImGui, nlohmann/json, stb and GLM, each under its own
+Applies to sol2, Dear ImGui, nlohmann/json, stb, GLM and FrameGen, each under its own
 copyright notice listed above.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

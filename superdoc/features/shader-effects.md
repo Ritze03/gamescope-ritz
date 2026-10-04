@@ -69,6 +69,13 @@ and both halves are the same raw frame (raw|raw), at zero extra cost.
 see [reshade-effects](reshade-effects.md)) is unaffected; the split only touches this
 native pre-pass's own final store.
 
+## Where frame generation runs relative to the effects
+
+[Frame generation](frame-generation.md) substitutes the raw layer 0 *before* the effects
+pre-pass and ReShade, so every effect processes generated frames exactly like real ones.
+The adaptive effects therefore measure generated frames too, which is harmless (they
+smooth over many frames anyway).
+
 ## Why a native pre-pass, not the `.fx` (2026-09-05)
 
 The `.fx` was compiled at runtime from whichever copy won a four-directory search

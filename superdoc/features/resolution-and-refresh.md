@@ -170,6 +170,14 @@ never pointed at, which was the Rust report. A window smaller than the new scree
 alone. Details and the measurements: [cursor-pipeline.md](cursor-pipeline.md), "A window
 larger than the screen".
 
+## Frame generation and the Frame limiter
+
+The Frame limiter caps the *game*; [frame generation](frame-generation.md) multiplies the
+capped rate on screen, and never caps the game itself. refresh/N is the natural pairing
+(144 Hz, limit 48, 3x). Frame generation reads the refresh the vblank timer ticks at: the
+nested refresh if set, else the output refresh, and steps N down when the game is too fast
+for it.
+
 ## Honest limits (the help text says these too)
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:

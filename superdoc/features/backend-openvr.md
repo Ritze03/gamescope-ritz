@@ -106,6 +106,12 @@ instead of hotplug.
 Full text lives at `src/main.cpp:239`-`:252` (help output) and the `getopt_long` table
 at `src/main.cpp:99`-`:114`.
 
+## Frame generation
+
+While [frame generation](frame-generation.md) is enabled, full composite is forced
+(`bNeedsFullComposite |= fghost::Enabled()`), since the generated frames are substituted
+inside `vulkan_composite()`.
+
 ## Related links
 
 - [steamcompmgr-focus](steamcompmgr-focus.md) — what happens on the steamcompmgr side

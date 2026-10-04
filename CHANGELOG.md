@@ -9,6 +9,16 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.11.0] – 2026-10-04
+
+### Added
+- **Frame generation**: a new Frame generation area under Display (below Shaders) shows
+  2, 3 or 4 frames for every game frame, with Quality, Artifact safety and Static HUD
+  protection settings and a live status line.
+- **Steps down when it cannot help**: it lowers the multiplier, or passes real frames
+  through untouched, when the game runs too fast for your refresh rate or the GPU is
+  too slow, and for HDR content.
+
 ## [0.10.2] – 2026-09-29
 
 ### Added
