@@ -1807,6 +1807,14 @@ void CVulkanCmdBuffer::clearState()
 
 	m_target = nullptr;
 	m_useSrgb.reset();
+
+	// The LUT pointers are raw and non-owning. A recycled command buffer must not
+	// carry a previous composite's pointers: that texture may be freed by now, and
+	// dispatch() writes m_lut3D[i]->srgbView() into the descriptor. Frame
+	// generation's compute passes never call bindColorMgmtLuts(), so they would
+	// hand the driver a garbage view. Composites re-bind their LUTs after begin().
+	m_shaperLut.fill(nullptr);
+	m_lut3D.fill(nullptr);
 }
 
 template<class PushData, class... Args>

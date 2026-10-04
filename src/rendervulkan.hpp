@@ -1531,13 +1531,14 @@ private:
 	std::unordered_map<CVulkanTexture *, TextureState> m_textureState;
 
 	// Draw State
-	std::array<CVulkanTexture *, VKR_SAMPLER_SLOTS> m_boundTextures;
+	std::array<CVulkanTexture *, VKR_SAMPLER_SLOTS> m_boundTextures = {};
 	std::bitset<VKR_SAMPLER_SLOTS> m_useSrgb;
-	std::array<SamplerState, VKR_SAMPLER_SLOTS> m_samplerState;
-	CVulkanTexture *m_target;
+	std::array<SamplerState, VKR_SAMPLER_SLOTS> m_samplerState = {};
+	CVulkanTexture *m_target = nullptr;
 
-	std::array<CVulkanTexture *, VKR_LUT3D_COUNT> m_shaperLut;
-	std::array<CVulkanTexture *, VKR_LUT3D_COUNT> m_lut3D;
+	// Non-owning; zeroed by clearState() so recycled buffers never hold stale pointers.
+	std::array<CVulkanTexture *, VKR_LUT3D_COUNT> m_shaperLut = {};
+	std::array<CVulkanTexture *, VKR_LUT3D_COUNT> m_lut3D = {};
 
 	std::vector<VulkanTimelinePoint_t> m_ExternalDependencies;
 	std::vector<VulkanTimelinePoint_t> m_ExternalSignals;
