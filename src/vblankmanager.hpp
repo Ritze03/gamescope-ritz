@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <mutex>
 #include <optional>
 #include "waitable.h"
 
@@ -39,6 +42,13 @@ namespace gamescope
 
         static constexpr uint64_t kVRRFlushingTime = 300'000;
 
+        // Measured wake-up lead (frame generation / motion blur / lag spike buffer on,
+        // SetMeasuredLead(true)): the lead is the largest of the last kDrawTimeWindow
+        // draws plus this margin, instead of the rolling average + red zone (+ the
+        // 2.4 ms compositing floor) that gives about 4 ms whatever the draw costs.
+        static constexpr size_t   kDrawTimeWindow = 60;
+        static constexpr uint64_t kMeasuredLeadMargin = 750'000ul;
+
         CVBlankTimer();
         ~CVBlankTimer();
 
@@ -55,6 +65,17 @@ namespace gamescope
         bool WasCompositing() const;
         void UpdateWasCompositing( bool bCompositing );
         void UpdateLastDrawTime( uint64_t ulNanos );
+
+        // Frame generation & co. fed back from steamcompmgr every loop pass: size the
+        // wake-up lead from the measured draw time (see kMeasuredLeadMargin) instead of
+        // the upstream heuristic. Off = byte-identical to upstream.
+        void SetMeasuredLead( bool bMeasured );
+        bool UsesMeasuredLead() const;
+        // The lead the last (non-VRR or VRR) schedule used, ns: how long before its
+        // vblank the timer wakes. For the log; 0 before the first schedule.
+        uint64_t GetLastLead() const;
+        // The largest of the last kDrawTimeWindow draw times, ns (0 = none yet).
+        uint64_t GetRecentMaxDrawTime() const;
 
         void WaitToBeArmed();
         void ArmNextVBlank( bool bPreemptive );
@@ -96,6 +117,17 @@ namespace gamescope
         // 3ms by default to get the ball rolling.
         // This is calculated by steamcompmgr/drm and fed-back to the vblank timer.
         std::atomic<uint64_t> m_ulLastDrawTime = { kStartingVBlankDrawTime };
+
+        // The last kDrawTimeWindow draw times, and their maximum (published for the
+        // timer side). Written by whoever reports a draw (UpdateLastDrawTime()),
+        // under its own mutex so a second reporting thread cannot tear the ring.
+        std::mutex m_DrawRingMutex;
+        std::array<uint64_t, kDrawTimeWindow> m_DrawRing{};
+        size_t m_nDrawRingNext = 0;
+        size_t m_nDrawRingCount = 0;
+        std::atomic<uint64_t> m_ulRecentMaxDrawTime = { 0 };
+        std::atomic<bool> m_bMeasuredLead = { false };
+        std::atomic<uint64_t> m_ulLastLead = { 0 };
 
         //////////////////////////////////
         // VBlank timing tuneables below!

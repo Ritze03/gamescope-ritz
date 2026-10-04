@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`2991d45`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`ec18261`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -21,11 +21,12 @@ Code map:
 | Library build glue | `src/FrameGen/FrameGenLib.cpp` + the `custom_target()`s in `src/meson.build` |
 | Renderer host (`fghost`) | `src/FrameGen/FrameGenHost.{h,cpp}` |
 | Pacing (`framegen::pacing::Pacer`) | **the library**: `subprojects/FrameGen/gpu/pacing.h` (header-only; tests: its own `pacingtest`). gamescope's `src/FrameGen/Pacing.h` was deleted 2026-10-04 |
+| Wake-up lead | `src/vblankmanager.{hpp,cpp}` (`SetMeasuredLead`, `GetLastLead`) |
 | Pacing glue + the main-loop gate | `src/steamcompmgr.cpp` (`FrameGen_OnArrival` / `FrameGen_PrePaint` / `FrameGen_PostPaint` / `FrameGen_TimerPaced`, `PaintTick` in the paint decision) |
 | Composite hook | `src/rendervulkan.cpp` (`vulkan_composite()`, `fghost::RecordBaseLayer`) |
 | Frame-ring copy shader | `src/shaders/cs_fg_copy.comp` |
 | Settings area | `src/Overlay/PanelFrameGen.{h,cpp}` |
-| Tests | `tests/test_config.cpp` (the `framegen` and `motion_blur` keys); pacing is tested in the library |
+| Tests | `tests/test_config.cpp` (the `framegen` and `motion_blur` keys); `tests/test_framegen_pacing.cpp` (lag buffer off = 0 ms through the library's `Pacer`); pacing itself is tested in the library |
 
 Not to be confused with `lsfg-vk` (an external Vulkan layer): nothing in this tree uses
 it. FG here runs inside the compositor.
@@ -438,6 +439,81 @@ There is no `VariableRefresh` pass reason any more -- nothing passes through for
 timer ever stopped ticking under VRR, generation would stall; it does not: the main loop
 re-arms it after every tick (`ArmNextVBlank( true )` at the end of a timer iteration).
 
+### Latency: Low latency, the wake-up lead and tearing (2026-10-04)
+
+The user's complaint: input latency got *worse* with frame generation on, even with blur and
+the lag buffer off (nested in Hyprland, ~280 Hz, CS2 at 123-208 fps, target = refresh: Low
+latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each:
+
+1. **The library's Low latency margin** (frame-gen-ritz PR #8, `ec18261`): `D = max(0, i - o) +
+   margin`, `margin = min(p75, 1 ms, 20% of i)` (0 for a steady game), with **no paint-lead
+   term and no floor of one `o`**. At 120 / 160 / 210 fps on 280 Hz `D` is about 5.5 / 3.5 /
+   1.9 ms. `Why` it is that tight: `D` now sits right at the point where the next real frame is
+   expected, so a frame landing a little late leaves that tick with nothing new (one repeated
+   tick; the library measured 97-99% distinct ticks at +-1 ms jitter). The user prefers that to
+   latency. Details: the library's `INTEGRATION.md`, "Pacing".
+2. **gamescope's wake-up lead** (`src/vblankmanager.cpp`, `CVBlankTimer::CalcNextWakeupTime()`).
+   The timer wakes `offset` before the vblank it paints for, `offset = rollingMaxDrawTime +
+   redZone`. Upstream seeds the rolling draw time at 3 ms, floors it at 2.4 ms while compositing
+   (`m_ulVBlankDrawTimeMinCompositing`, a GPU-clock feedback-loop guard for the Steam Deck) and
+   adds a 1.65 ms red zone (internal screen types, which includes nested Wayland), so a
+   compositing frame **never** gets under about 4.05 ms whatever drawing really costs (measured
+   `vblank_debug`: `rollingMaxDrawTime 2.40 ms + redZone 1.65 ms = offset 4.05 ms`; at 280 Hz
+   that is more than a whole 3.57 ms refresh). The lead is latency the library cannot see: a
+   real frame landing inside it is shown one refresh late, and `now` is that much earlier than
+   `V` (`Inputs::presentNs`), so with a long lead Low latency fits no generated frames between
+   real ones (the PR #8 author: 240 of 560 ticks at 120 fps with a 4 ms lead). **Now, while any
+   of frame generation / motion blur / the lag spike buffer is on** (`fghost::Active()`, fed to
+   `CVBlankTimer::SetMeasuredLead()` every main-loop pass), `offset = min(max of the last 60
+   draw times + 0.75 ms, one refresh)` (`kDrawTimeWindow`, `kMeasuredLeadMargin`): the draw time
+   is wake-up -> present as the backends already report it through `UpdateLastDrawTime()`, so
+   the FG work is inside it; a rolling **max**, not an average, so one slow draw widens the lead
+   at once and it narrows only after 60 clean ones. VRR keeps its own small lead (0.3 ms red
+   zone). ConVar `vblank_measured_lead` (default on) turns it off. **With all three features off
+   nothing changed**: the upstream heuristic is untouched. `Why` it was left alone: it is
+   deliberate upstream tuning (and the user decides whether the same ~4 ms is also too long for
+   a plain game; it costs a frame landing in the lead one refresh, exactly as above). The
+   effective lead is in the debug status line: `wake-up lead 1.89 ms (measured, max draw 1.14
+   ms)` or `(default)`.
+3. **Tearing was off for generated frames.** The main loop forced `FlipType::Normal` while
+   `FrameGen_TimerPaced()` even with tearing on (the user's CS2 profile has it on). Now the paint
+   is still *decided* on the timer tick, but when `bTearing` (`cv_tearing_enabled &&
+   SupportsTearing() && the base commit wants async`, no overlay, no fade) it is *presented* as an
+   async flip (`bFGTearPresent` in the main loop, passed to `paint_all()`). FG's own
+   "rest of the pair" forced repaints tear too; a genuine forced repaint or a fade stays sync.
+   Under VRR without tearing it stays Normal. **Per backend:** DRM: yes, as above (works from the
+   code, **not tested on hardware**). `WasCompositing()` is deliberately not consulted: a
+   generating FG paint is always a full composite (`RenderWanted()`), so honouring it would turn
+   tearing off for good; `CDRMBackend::Present()` waits for the composite before it commits
+   (`vulkan_wait()`), which is what the historic "if we are compositing, force sync flips" guard
+   protects, and the output-timer branch already presents composites async. **Nested Wayland:
+   nothing to do and nothing changes** -- `CWaylandBackend::SupportsTearing()` returns false, the
+   backend ignores `bAsync` and binds no `wp_tearing_control`, so `bTearing` is false there for
+   real frames and generated ones alike (a nested window presents by commit and the host decides).
+   Adding the tearing-control hint would be a new backend feature that also changes the
+   non-frame-generation path; it was left out. SDL / OpenVR / headless: `SupportsTearing()` is
+   false or the flag unused.
+
+**Measured** (headless sway, nested Wayland, `vkcube` capped by MangoHud, FG on, Target = display
+refresh, Low latency; before = `6579889`, after = this change, library `ec18261`). Wake-up lead,
+`delay` (D), outputs presented per second:
+
+| Refresh / game | Lead before -> after | `delay` before -> after | Presented before -> after |
+| --- | --- | --- | --- |
+| 120 Hz / 30 fps | 4.05 -> 1.8-2.3 ms | 29.1 -> 25.1 ms | 117 -> 114 /s |
+| 240 Hz / 30 fps | ~4.05 -> 1.7-1.8 ms | 33.3 -> 29.6-30.0 ms | 241 -> 238 /s |
+| 280 Hz / 120 fps | 3.57 -> 1.9 ms | 8.4 -> 5.4 ms | 273 -> 253 /s |
+| 280 Hz / 150 fps | 3.57 -> 1.9-2.1 ms | 8.9 -> 3.9-4.1 ms | 273 -> 210-231 /s |
+
+(At 280 Hz upstream's heuristic is clamped to one refresh, 3.57 ms.) Low latency now trades
+output rate for delay, as the library documents: some ticks repeat when a real frame lands late
+(vkcube behind a headless sway has coarse arrival jitter, so these figures are not a CS2
+prediction). The lead is what makes generation possible at all at 280 Hz: the same build with
+`vblank_measured_lead 0` (lead 3.57 ms) presented 156 /s at 150 fps (1.04x, almost nothing
+generated) against 210 /s with the measured lead. FG, blur and the lag buffer all off: output equals
+the game rate (30.08 commits/s at a 30 fps game, identical before and after).
+
+
 **Phase B** (a per-output timer that is not the vblank timer) exists now, as the extra-frame timer
 of [Pause at refresh rate](#pause-at-refresh-rate-framegenpause_at_refresh): `tau = V - D`
 generalised unchanged, `V` being that timer's target time.
@@ -547,7 +623,7 @@ and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shel
 overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch), Quality, Artifact safety (Off / Low / Default / High), Static HUD
+rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Artifact safety (Off / Low / Default / High), Static HUD
 protection, UI protection (Off / Crosshair / Whole screen), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
@@ -644,13 +720,14 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 - YCbCr (video) layer 0 is not offered (NV12 / P010 are not built); everything RGB runs, SDR or HDR, see
   [HDR and 10-bit games](#hdr-and-10-bit-games).
 - Compute on the same queue, no async: FG time adds to composite time.
-- Adds delay (Low latency: (N-1)/N of a game frame at a fixed N; Smoothness: about one game
-  frame); not suited to twitch shooters.
+- Adds delay (Low latency: `max(0, i - o)` plus at most 1 ms, i.e. about (N-1)/N of a game
+  frame at a fixed N; Smoothness: about one game frame); not suited to twitch shooters.
 - Fast flicks can leave seams; a semi-transparent HUD over motion artifacts; scene cuts
   hold the nearer real frame. A game's own still crosshair / solid HUD is kept exact by [UI
   protection](#ui-protection) except when semi-transparent or changing.
 - With several virtual connectors (VR) an output repaint could be swallowed by the shared
   force-repaint flag.
+- Tearing for generated frames is DRM-only (see "Latency"); the nested Wayland backend has no tearing at all.
 - Under VRR, FG paints on timer ticks while generating, so the display runs at the timer's
   rate rather than following the game's frame times; FG does not turn VRR off.
 - With Pause at refresh rate off, going past the refresh works only on nested Wayland and (untested)

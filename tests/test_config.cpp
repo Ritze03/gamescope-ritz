@@ -2023,9 +2023,11 @@ TEST_CASE( "lag_buffer: every field round-trips, and an absent section is off/5/
     REQUIRE( loaded.lag_buffer.max_ms == 250 );
     REQUIRE( loaded.lag_buffer.test_mode == "max" );
 
+    // "Force minimum" was removed 2026-10-04 (the buffer's floor is 0 ms, which is
+    // what "off" already is): a profile that still stores "min" loads as "off".
     s.lag_buffer.test_mode = "min";
     REQUIRE( SaveSections( s ) );
-    REQUIRE( LoadSections().lag_buffer.test_mode == "min" );
+    REQUIRE( LoadSections().lag_buffer.test_mode == "off" );
 
     // The keys the Lag spike buffer area's rows are bound to.
     REQUIRE( IsSettingsKey( "lag_buffer.enabled" ) );
@@ -2034,7 +2036,7 @@ TEST_CASE( "lag_buffer: every field round-trips, and an absent section is off/5/
     REQUIRE( IsSettingsKey( "lag_buffer.test_mode" ) );
 }
 
-TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off", "[config]" )
+TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off, a stored min loads as off", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -2048,6 +2050,12 @@ TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test m
     REQUIRE( loaded.lag_buffer.lookback_min == 1 );      // below 1 -> 1
     REQUIRE( loaded.lag_buffer.max_ms == 250 );          // above 250 -> 250
     REQUIRE( loaded.lag_buffer.test_mode == "off" );     // unknown -> default
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "lag_buffer": { "enabled": true, "test_mode": "min" }
+    })";
+    REQUIRE( LoadSections().lag_buffer.test_mode == "off" );   // Force minimum was removed
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",

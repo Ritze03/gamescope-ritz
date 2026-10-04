@@ -357,7 +357,8 @@ namespace gamescope::config
             }
 
             // Lag spike buffer (2026-10-04). Additive: look-back and max are clamped,
-            // an unknown test mode keeps "off".
+            // an unknown test mode keeps "off". A stored "min" (Force minimum, removed
+            // 2026-10-04: the buffer's floor is 0 ms) loads as "off".
             if ( const nlohmann::json *pLag = JGetObject( j, "lag_buffer" ) )
             {
                 auto &l = s.lag_buffer;
@@ -365,8 +366,10 @@ namespace gamescope::config
                 l.lookback_min = std::clamp( JGetInt( *pLag, "lookback_min", l.lookback_min ), 1, 10 );
                 l.max_ms = std::clamp( JGetInt( *pLag, "max_ms", l.max_ms ), 0, 250 );
                 const std::string sMode = JGetString( *pLag, "test_mode", l.test_mode );
-                if ( sMode == "off" || sMode == "min" || sMode == "max" )
+                if ( sMode == "off" || sMode == "max" )
                     l.test_mode = sMode;
+                else if ( sMode == "min" )
+                    l.test_mode = "off";
             }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )

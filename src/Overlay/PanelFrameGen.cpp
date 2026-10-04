@@ -310,11 +310,12 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
-			.Help( "On stops generating once the game alone reaches your refresh rate, so the GPU "
-			       "does no pointless work. Off keeps generating even above it (e.g. 800 fps): "
-			       "useful with tearing or in a desktop window, where only the newest frame is "
-			       "shown; it costs GPU time, and on a real display without tearing it cannot go "
-			       "past the refresh rate." )
+			.Help( "On: frame generation stops once the game alone reaches your refresh rate - or "
+			       "your Target fps, whichever is lower - so the GPU does no pointless work. "
+			       "Off: it also keeps generating above your refresh rate (up to the Target fps, "
+			       "e.g. 800 fps): useful with tearing or in a desktop window, where only the "
+			       "newest frame is shown; it costs GPU time, and on a real display without "
+			       "tearing it cannot go past the refresh rate." )
 			.Default( true )
 			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
 			.DisabledUnless( On, "frame generation is off" );

@@ -1,8 +1,8 @@
 // The "Lag spike buffer" settings area -- see PanelLagBuffer.h.
 //
 // SHAPE. Four per-profile rows -- Lag spike buffer (the on/off switch), Look-back
-// (1..10 min), Max buffer (0..250 ms), Test mode (Off / Force minimum / Force
-// maximum) -- plus one live Status line. Every row's id IS its config key
+// (1..10 min), Max buffer (0..250 ms), Test mode (Off / Force maximum) -- plus one
+// live Status line. Every row's id IS its config key
 // (`lag_buffer.enabled`, `lag_buffer.lookback_min`, ...), which is how the Shell's
 // per-profile inherited/overridden dot and "Reset to inherited" find it. Every edit
 // calls fghost::SetLagBufferConfig() at once; the pacer reads it on the next frame.
@@ -37,15 +37,18 @@ namespace gamescope
 
 		// The config stores readable strings; the Choice row binds ints; fghost wants
 		// its own enum. An unknown string falls to "off".
-		constexpr ui::Option kTestOptions[] = { { 0, "Off" }, { 1, "Force minimum" }, { 2, "Force maximum" } };
-		constexpr const char *kTestKeys[] = { "off", "min", "max" };
+		// There is no "Force minimum": the buffer's floor is 0 ms, which is what Off
+		// already is (the picture follows the game as it runs right now). A stored
+		// "min" loads as "off" (ConfigManager.cpp); the library's ForceMin is never
+		// sent. `Why:` the user: "the test mode still lists a force minimum buffer,
+		// but that obviously doesn't exist ... make the minimum buffer 0 milliseconds,
+		// so it's always based on how the game is currently running".
+		constexpr ui::Option kTestOptions[] = { { 0, "Off" }, { 1, "Force maximum" } };
+		constexpr const char *kTestKeys[] = { "off", "max" };
 
 		int TestIndex( const std::string &s )
 		{
-			for ( int i = 0; i < 3; ++i )
-				if ( s == kTestKeys[ i ] )
-					return i;
-			return 0;
+			return s == kTestKeys[ 1 ] ? 1 : 0;
 		}
 
 		int ClampIdx( int n, int nMax ) { return n < 0 ? 0 : ( n > nMax ? nMax : n ); }
@@ -64,7 +67,7 @@ namespace gamescope
 			c.enabled = l.enabled;
 			c.lookbackMin = ClampLookback( l.lookback_min );
 			c.maxBufferMs = ClampMax( l.max_ms );
-			c.testMode = fghost::LagTest( TestIndex( l.test_mode ) );
+			c.testMode = TestIndex( l.test_mode ) == 1 ? fghost::LagTest::ForceMax : fghost::LagTest::Off;
 			return c;
 		}
 
@@ -104,7 +107,8 @@ namespace gamescope
 		// ---- the Status line ----------------------------------------------------
 		// One compact line, always. Pure over its inputs. The font is Basic Latin +
 		// Latin-1, so the middle dot renders.
-		//   Off                    -> "Off"
+		//   Off                    -> "Off · buffer 0 ms" (the live buffer, so the user sees
+		//                             it really is 0; it ramps down if it was running)
 		//   renderer refuses       -> its reason (HDR, 10-bit, YCbCr, ...)
 		//   nothing published yet  -> "Waiting for frames"
 		//   otherwise              -> "buffer 32 ms · 4 frames · last spike 28 ms"
@@ -115,8 +119,16 @@ namespace gamescope
 		// follows the buffer): it is what the memory scales with.
 		std::string StatusLine( const config::LagBufferSettings &l, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
 		{
+			// Off still shows the live buffer: the pacer reports what it is really
+			// adding (0 once the ramp is done, or while nothing runs at all), so the
+			// user can see that "off" is 0 ms and not a stale value.
 			if ( !l.enabled )
-				return "Off";
+			{
+				const int nMs = ps.valid ? int( std::lround( ps.bufferDelayMs ) ) : 0;
+				char szOff[ 48 ];
+				std::snprintf( szOff, sizeof( szOff ), "Off · buffer %d ms", nMs );
+				return szOff;
+			}
 
 			if ( rs.reason != fghost::Unavailable::Ok )
 				return fghost::UnavailableText( rs.reason );
@@ -132,9 +144,8 @@ namespace gamescope
 				n += std::snprintf( sz + n, sizeof( sz ) - n, " · no spikes yet" );
 			if ( ps.outliersIgnored > 0 )
 				n += std::snprintf( sz + n, sizeof( sz ) - n, " · ignored %d outlier%s (>max)", ps.outliersIgnored, ps.outliersIgnored == 1 ? "" : "s" );
-			const int nTest = TestIndex( l.test_mode );
-			if ( nTest != 0 )
-				std::snprintf( sz + n, sizeof( sz ) - n, " · test: %s", nTest == 1 ? "min" : "max" );
+			if ( TestIndex( l.test_mode ) == 1 )
+				std::snprintf( sz + n, sizeof( sz ) - n, " · test: max" );
 			return sz;
 		}
 	}
@@ -208,13 +219,14 @@ namespace gamescope
 		a.Choice( "lag_buffer.test_mode", "Test mode",
 			ui::AnyBind::Of<int>(
 				[]{ EnsureConfigLoaded(); return TestIndex( s_Settings.lag_buffer.test_mode ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.lag_buffer.test_mode = kTestKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.lag_buffer.test_mode = kTestKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
 			kTestOptions, std::size( kTestOptions ) )
-			.Help( "Forces the minimum (no buffer) or the maximum (Max buffer) so you can feel "
-			       "both ends. The change is smooth, not a jump. Leave it Off to size the buffer "
-			       "from the game's own spikes." )
+			.Help( "Force maximum holds the buffer at Max buffer so you can feel the worst case; "
+			       "the change is smooth, not a jump. Off sizes the buffer from the game's own "
+			       "spikes, and its smallest value is 0 ms, so with no recent spike the picture "
+			       "follows the game as it is running right now." )
 			.Default( 0 )
-			.Keywords( "lag spike buffer test mode force minimum maximum preview feel" )
+			.Keywords( "lag spike buffer test mode force maximum preview feel" )
 			.DisabledUnless( On, "the lag spike buffer is off" );
 
 		a.Group( "Status" );

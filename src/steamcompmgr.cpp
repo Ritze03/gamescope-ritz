@@ -8085,22 +8085,35 @@ namespace
 		// test max), last spike 28 ms, 3 in window, 1 outlier(s) ignored, 5 frames kept"
 		char szLag[ 192 ];
 		if ( !lag.enabled )
-			snprintf( szLag, sizeof( szLag ), "lag buffer off" );
+			snprintf( szLag, sizeof( szLag ), "lag buffer off, buffer %.1f ms", status.bufferDelayMs );
 		else
 			snprintf( szLag, sizeof( szLag ), "lag buffer %.1f ms (target %.1f, max %d, look-back %d min%s), last spike %.0f ms, %d in window, %d outlier(s) ignored, %d frames kept",
 				status.bufferDelayMs, status.bufferTargetMs, lag.maxBufferMs, lag.lookbackMin,
-				lag.testMode == fghost::LagTest::ForceMax ? ", test max" : ( lag.testMode == fghost::LagTest::ForceMin ? ", test min" : "" ),
+				lag.testMode == fghost::LagTest::ForceMax ? ", test max" : "",
 				status.lastSpikeMs, status.spikesInWindow, status.outliersIgnored, status.historyFrames );
 
+		// "wake-up lead 1.9 ms (measured: max draw 1.1 ms of the last 60)" / "wake-up lead
+		// 4.1 ms (default)": how long before its vblank the timer wakes to paint. It is
+		// the part of the latency the library cannot see, so it is in every line.
+		char szLead[ 112 ];
+		{
+			const gamescope::CVBlankTimer &Timer = GetVBlankTimer();
+			if ( Timer.UsesMeasuredLead() )
+				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (measured, max draw %.2f ms)",
+					Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6 );
+			else
+				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (default)", Timer.GetLastLead() / 1e6 );
+		}
+
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, pacing: \"%s\" (%u), renderer: %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
-				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag,
+				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
 		else
-			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, pacing: \"%s\", renderer: %s",
-				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag,
+			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
 	}
 
@@ -8234,7 +8247,11 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	// the vblank this paint is for; a paint that is not a vblank, or a target that
 	// is missing or implausible (the first frames, a stale value), falls back to
 	// now. A paint that woke after its target is presented at the next one, so V is
-	// never in the past.
+	// never in the past. `now` is the wake-up lead (the vblank timer's draw-time
+	// red zone, vblankmanager.cpp) EARLIER than V, and the library's Low latency no
+	// longer pads its delay for that gap (frame-gen-ritz PR #8: D = max(0, i - o) +
+	// a p75 jitter, no paint-lead term): the host keeps the lead no longer than
+	// drawing needs instead (CVBlankTimer::SetMeasuredLead(), set from fghost::Active()).
 	{
 		const uint64_t ulTarget = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
 		constexpr uint64_t kPlausibleNs = 1000ull * 1000ull * 1000ull;
@@ -10666,6 +10683,11 @@ steamcompmgr_main(int argc, char **argv)
 
 		bool bPainted = false;
 
+		// Frame generation / motion blur / the lag spike buffer on: the vblank timer
+		// sizes its wake-up lead from the measured draw time instead of upstream's
+		// ~4 ms heuristic (vblankmanager.cpp). One relaxed load + store.
+		GetVBlankTimer().SetMeasuredLead( fghost::Active() );
+
 		static int nIgnoredOverlayRepaints = 0;
 
 		if ( !hasRepaintNonBasePlane )
@@ -10756,7 +10778,7 @@ steamcompmgr_main(int argc, char **argv)
 			else if ( bFGExtraPaced && ulFGExtraTarget != 0 && bTearing && !bHasOverlay && !nIgnoredOverlayRepaints )
 				eFlipType = FlipType::Async;    // output frames shorter than a vblank on a tearing display: an immediate flip
 			else if ( bFGTimerPaced )
-				eFlipType = FlipType::Normal;   // frame generation is generating: paint on timer ticks, a normal flip, even under VRR or tearing
+				eFlipType = FlipType::Normal;   // frame generation is generating: paint on timer ticks (decided as a Normal flip, even under VRR or tearing); bFGTearPresent below only changes HOW it is presented
 			else if ( bVRR )
 				eFlipType = FlipType::VRR;
 			else if ( bTearing )
@@ -10772,6 +10794,30 @@ steamcompmgr_main(int argc, char **argv)
 			}
 			else
 				eFlipType = FlipType::Normal;
+
+			// Tearing for generated frames. The paint is still decided on the timer tick
+			// (the Normal case below), but when tearing is active -- the predicate the
+			// real frames use, minus WasCompositing -- it is PRESENTED as an async flip,
+			// so a generated frame tears like a real one instead of waiting for the
+			// vblank. Not under VRR without tearing (bTearing false), not over an
+			// overlay (same rule as real frames), not on a fade or a genuine forced
+			// repaint (a sync flip, as before). FG's own "rest of the pair" forces
+			// (bFGOwnForce) are the ones that DO tear: without that the second and third
+			// output of every pair would always be sync.
+			// WasCompositing is deliberately not consulted: with FG generating, every
+			// paint is a full composite (RenderWanted()), so honouring it would turn
+			// this off for good; the DRM backend waits for the composite before it
+			// commits (vulkan_wait() in CDRMBackend::Present()), which is the condition
+			// that comment ("we currently wait for composition to finish") protects, and
+			// the existing output-timer Async branch above already presents composites
+			// async. A kernel that refuses the async commit takes the same retry path as
+			// any failed drm_prepare().
+			// Nested Wayland: SupportsTearing() is false (no wp_tearing_control), so
+			// bTearing is false there and this never triggers -- see
+			// superdoc/features/frame-generation.md.
+			const bool bFGTearPresent = bFGTimerPaced && !bFGExtraPaced && bTearing &&
+				!bHasOverlay && !nIgnoredOverlayRepaints && !is_fading_out() &&
+				( !bForceRepaint || bFGOwnForce );
 
 			bool bShouldPaint = false;
 
@@ -10848,7 +10894,7 @@ steamcompmgr_main(int argc, char **argv)
 
 				if ( !bFGSkip )
 				{
-					paint_all( pPaintFocus, eFlipType == FlipType::Async );
+					paint_all( pPaintFocus, eFlipType == FlipType::Async || bFGTearPresent );
 
 					bPainted = true;
 				}

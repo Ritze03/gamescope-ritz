@@ -545,8 +545,10 @@ namespace gamescope::config
         // The cap on the buffer and the line between a spike and an outlier, in ms,
         // 0..250 (clamped on load).
         int max_ms = 50;
-        // "off" | "min" | "max": pin the buffer's target at 0 / at max_ms so the user
-        // can feel both ends. An unknown string keeps "off".
+        // "off" | "max": "max" pins the buffer's target at max_ms so the user can feel
+        // the worst case. There is no "min": the buffer's floor is 0 ms, which is what
+        // "off" already means (the picture follows the game as it runs), so a stored
+        // "min" from before 2026-10-04 loads as "off". An unknown string keeps "off".
         std::string test_mode = "off";
     };
 

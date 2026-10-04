@@ -32,7 +32,7 @@ Code map:
 | Glue: `Inputs::lagBuffer`, the status line | `src/steamcompmgr.cpp` (`FrameGen_PrePaint`, `FrameGen_ToStatus`, `FrameGen_LogStatus`) |
 | Settings area | `src/Overlay/PanelLagBuffer.{h,cpp}` |
 | Config | `src/Config/ConfigSchema.h` (`LagBufferSettings`), `ConfigManager.cpp` (`lag_buffer`) |
-| Tests | `tests/test_config.cpp` (the `lag_buffer` keys), `tests/test_overlay_ui.cpp` (rail order, icon census, accordion fit) |
+| Tests | `tests/test_config.cpp` (the `lag_buffer` keys, `min` loads as `off`), `tests/test_framegen_pacing.cpp` (off ramps to 0 ms; Max buffer / Force maximum have no effect while off, through the library's `Pacer`), `tests/test_overlay_ui.cpp` (rail order, icon census, accordion fit) |
 
 ## Why a separate tab, independent of frame generation
 
@@ -64,7 +64,7 @@ In short: a spike is an arrival interval above 1.75x the smoothed interval, its 
 missing time; `target = clamp(1.10 x newest weighted spike + 1 ms, 0, Max buffer)`; the live
 buffer ramps toward it at 3 % of real time (content plays at 0.97x while it grows, 1.03x
 while it shrinks, so it never jumps); **the first spike of a session still freezes**, because
-the buffer reacts. The test mode pins the target at 0 or at Max buffer through the same ramp.
+the buffer reacts. The test mode pins the target at Max buffer through the same ramp (Force maximum). There is no Force minimum: the buffer's floor is 0 ms, which Off already is.
 
 ## Settings
 
@@ -77,7 +77,7 @@ load).
 | `lag_buffer.enabled` | `false` (default) / `true` | the row "Lag spike buffer" (switch) |
 | `lag_buffer.lookback_min` | 1..10 (default 5) | the row "Look-back", minutes (`lookbackSec` = 60 x this; the library takes up to 600 s) |
 | `lag_buffer.max_ms` | 0..250 (default 50) | the row "Max buffer", ms: the cap on the buffer and the spike/outlier line |
-| `lag_buffer.test_mode` | `off` (default) / `min` / `max` | the row "Test mode": Off / Force minimum / Force maximum (`LagTestMode`); an unknown string keeps `off` |
+| `lag_buffer.test_mode` | `off` (default) / `max` | the row "Test mode": Off / Force maximum (`LagTestMode::Off` / `ForceMax`; `ForceMin` is never sent). An unknown string keeps `off`, and a stored `min` (the removed Force minimum, until 2026-10-04) loads as `off` |
 
 Rows, in order: **Lag spike buffer** (switch), **Look-back** (slider, step 1, `min`), **Max
 buffer** (slider, step 5, `ms`), **Test mode** (choice), **Status**. The other rows are
@@ -88,19 +88,19 @@ bridged instead of freezing; the newest big spike in the look-back sizes it and 
 fade; spikes above Max buffer (shader compiles) are ignored; the first spike of a session still
 freezes; it adds its buffer as input delay, so it is meant for controller and slower games;
 audio is not delayed, so above about 50-80 ms lip-sync drifts; memory is about one frame copy
-per 16 ms of buffer at 60 fps; test mode forces the minimum or maximum so you can feel both
-ends.
+per 16 ms of buffer at 60 fps; Force maximum holds the buffer at Max buffer so you can feel the worst case; Off
+sizes it from the game's own spikes and its smallest value is 0 ms.
 
-**Status line** (always one line): `Off`; the renderer's reason while it refuses (YCbCr, an unsupported format, ...);
+**Status line** (always one line): `Off · buffer 0 ms` (the live buffer the pacer reports, so the user can see "off" really is 0; it ramps down first if the buffer was running, and is 0 when nothing runs at all); the renderer's reason while it refuses (YCbCr, an unsupported format, ...);
 `Waiting for frames` before the first publish; otherwise `buffer 32 ms · 4 frames · last spike
 28 ms`, with `no spikes yet` in place of the last part, ` · ignored 1 outlier (>max)` when
-spikes above Max buffer are in the window, and ` · test: min` / ` · test: max` while a test mode
-pins the target. "frames" is the real frames the host keeps (`Report::historyFrames`): what the
+spikes above Max buffer are in the window, and ` · test: max` while Force maximum pins the target. "frames" is the real frames the host keeps (`Report::historyFrames`): what the
 memory scales with. Log: `FrameGen_LogStatus` adds a `lag buffer ...` part (delay, target, max,
-look-back, test mode, last spike, spikes in window, outliers, frames kept) to the one
+look-back, test mode (` , test max` only), last spike, spikes in window, outliers, frames kept) to the one
 `framegen_pacing` info line, written on change of the target, last spike, outliers, frame count,
 settings or whether the live buffer has reached its target (not on every ramp step), and to the
-periodic debug line.
+periodic debug line. With the switch off the part reads `lag buffer off, buffer 0.0 ms` (the live
+buffer, as in the Status line).
 
 ## gamescope wiring
 

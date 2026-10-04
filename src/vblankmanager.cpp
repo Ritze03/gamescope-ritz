@@ -1,5 +1,6 @@
 // Try to figure out when vblank is and notify steamcompmgr to render some time before it
 
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -24,6 +25,7 @@ LogScope g_VBlankLog("vblank");
 namespace gamescope
 {
 	ConVar<bool> vblank_debug( "vblank_debug", false, "Enable vblank debug spew to stderr." );
+	ConVar<bool> vblank_measured_lead( "vblank_measured_lead", true, "While frame generation, motion blur or the lag spike buffer is on, wake up for a vblank by the measured draw time (largest of the last 60 draws + 0.75 ms) instead of the fixed-ish red zone heuristic." );
 
 	CVBlankTimer::CVBlankTimer()
 	{
@@ -114,7 +116,22 @@ namespace gamescope
 
 		bool bVRR = pBackend && pBackend->GetCurrentConnector() && pBackend->GetCurrentConnector()->IsVRRActive();
 		uint64_t ulOffset = 0;
-		if ( !bVRR )
+		if ( !bVRR && m_bMeasuredLead.load( std::memory_order_relaxed ) && vblank_measured_lead )
+		{
+			// Frame generation (or blur, or the lag spike buffer) is running: its work is
+			// inside the draw we measure (wake-up -> present), so the lead only has to be
+			// what drawing actually needs. The upstream heuristic below never goes under
+			// 2.4 ms (compositing floor) + the red zone, which at 280 Hz is more than a
+			// whole refresh: a real frame landing in that lead is shown one refresh late,
+			// and the library's Low latency cannot fit generated frames between real ones.
+			// A rolling MAX (not an average) so one slow draw widens the lead at once and
+			// it narrows again only after kDrawTimeWindow clean ones.
+			const uint64_t ulMeasured = m_ulRecentMaxDrawTime.load( std::memory_order_relaxed );
+			const uint64_t ulDraw = ulMeasured ? ulMeasured : kStartingVBlankDrawTime;
+			// Never more than one refresh ahead: past that the wake-up just slips a vblank.
+			ulOffset = std::min( ulDraw + kMeasuredLeadMargin, ulRefreshInterval );
+		}
+		else if ( !bVRR )
 		{
 			// The redzone is relative to 60Hz for external displays.
 			// Scale it by our target refresh so we don't miss submitting for
@@ -188,6 +205,8 @@ namespace gamescope
 				VBlankDebugSpew( ulOffset, ulDrawTime, ulRedZone );
 		}
 
+		m_ulLastLead.store( ulOffset, std::memory_order_relaxed );
+
 		const uint64_t ulScheduledWakeupPoint = GetNextVBlank( ulOffset );
 		const uint64_t ulTargetVBlank = ulScheduledWakeupPoint + ulOffset;
 
@@ -227,6 +246,36 @@ namespace gamescope
 	void CVBlankTimer::UpdateLastDrawTime( uint64_t ulNanos )
 	{
 		m_ulLastDrawTime = ulNanos;
+
+		std::unique_lock lock( m_DrawRingMutex );
+		m_DrawRing[ m_nDrawRingNext ] = ulNanos;
+		m_nDrawRingNext = ( m_nDrawRingNext + 1 ) % kDrawTimeWindow;
+		if ( m_nDrawRingCount < kDrawTimeWindow )
+			m_nDrawRingCount++;
+		uint64_t ulMax = 0;
+		for ( size_t i = 0; i < m_nDrawRingCount; i++ )
+			ulMax = std::max( ulMax, m_DrawRing[ i ] );
+		m_ulRecentMaxDrawTime.store( ulMax, std::memory_order_relaxed );
+	}
+
+	void CVBlankTimer::SetMeasuredLead( bool bMeasured )
+	{
+		m_bMeasuredLead.store( bMeasured, std::memory_order_relaxed );
+	}
+
+	bool CVBlankTimer::UsesMeasuredLead() const
+	{
+		return m_bMeasuredLead.load( std::memory_order_relaxed ) && vblank_measured_lead;
+	}
+
+	uint64_t CVBlankTimer::GetLastLead() const
+	{
+		return m_ulLastLead.load( std::memory_order_relaxed );
+	}
+
+	uint64_t CVBlankTimer::GetRecentMaxDrawTime() const
+	{
+		return m_ulRecentMaxDrawTime.load( std::memory_order_relaxed );
 	}
 
 	void CVBlankTimer::WaitToBeArmed()

@@ -34,6 +34,14 @@ The newest version below is the one this build reports.
 - **Pause at refresh rate**: choose whether frame generation stops once the game
   reaches your refresh rate, or keeps generating above it.
 
+### Fixed
+- **Frame generation latency**: Low latency adds much less delay again, and generated
+  frames tear like real ones when tearing is on.
+- **Lag spike buffer test mode**: Test mode is now Off or Force maximum; the
+  non-existent Force minimum is gone, and Off follows the game with no buffer, which
+  the Status line shows as `Off · buffer 0 ms`.
+- **Pause at refresh rate help**: it now says generation also stops at your Target fps.
+
 ### Info
 - **MOTION group**: Frame generation and Motion blur moved to a new MOTION group
   between Display and Overlay.
