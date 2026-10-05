@@ -151,3 +151,11 @@ TEST_CASE( "framegen ui: the box side the slider text and the library share", "[
 	CHECK( Side( 1920, 1080, kUiBoxMinTenths ) == 8 );      // 5.4 px, held at the library's 8 px floor
 	CHECK( Side( 1920, 1080, kUiBoxMaxTenths ) == 108 );
 }
+
+TEST_CASE( "framegen: Pause at refresh rate is ignored in Target mode", "[framegen_format]" )
+{
+	CHECK( EffectiveCapAtRefresh( true, Mode::Fixed ) );
+	CHECK_FALSE( EffectiveCapAtRefresh( false, Mode::Fixed ) );
+	CHECK_FALSE( EffectiveCapAtRefresh( true, Mode::Target ) );
+	CHECK_FALSE( EffectiveCapAtRefresh( false, Mode::Target ) );
+}

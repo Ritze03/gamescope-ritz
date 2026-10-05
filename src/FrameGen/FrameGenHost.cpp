@@ -56,7 +56,7 @@ namespace fghost
 				| ( uint32_t( eMode ) << 10 )
 				| ( uint32_t( c.priority ) << 12 )
 				| ( uint32_t( nTarget ) << 13 )
-				| ( uint32_t( c.pauseAtRefresh ? 1 : 0 ) << 23 )
+				| ( uint32_t( EffectiveCapAtRefresh( c.pauseAtRefresh, eMode ) ? 1 : 0 ) << 23 )
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 );

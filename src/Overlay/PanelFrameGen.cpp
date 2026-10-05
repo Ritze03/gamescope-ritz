@@ -339,7 +339,9 @@ namespace gamescope
 			.Help( "The frame rate to aim for in Target fps mode. The number of generated frames "
 			       "follows the game's frame times on every frame: if the game drops from 120 to "
 			       "100 fps with a target of 240, it generates more per game frame at once. 0 "
-			       "aims at your display's refresh rate; a target above it is capped to it." )
+			       "aims at your display's refresh rate. A target above the refresh rate only takes "
+			       "effect where frames faster than the refresh can be shown (a desktop window, or "
+			       "tearing); on a normal display the refresh rate is the limit." )
 			.Range( 0.0f, 1000.0f ).Step( 5.0f ).Unit( "fps" )
 			.ZeroMeans( "Display refresh" )
 			.Default( 0 )
@@ -362,8 +364,8 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
-			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps the target already caps "
-			       "the output, so this has no effect there. On: frame generation stops once "
+			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps this switch has no "
+			       "effect and the target is used as set. On: frame generation stops once "
 			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
 			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
 			       "tearing or in a desktop window, where only the newest frame is shown; it "
@@ -371,7 +373,7 @@ namespace gamescope
 			       "the refresh rate." )
 			.Default( true )
 			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
-			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the target already caps the output)" );
+			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
 
 		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
 			ui::AnyBind::Of<bool>(

@@ -714,12 +714,20 @@ Target. The user: *"Then 'gray' out (disable) it, if adaptive mode is on."* ("Ad
 mode" is their name for Target fps.) `Why:` with a Target the output interval is already
 `1 / target` (`OutputIntervalMs`, target 0 = the refresh), so in the user's setup (Target
 0, 280 Hz) the switch did nothing and a live-looking switch that does nothing misleads.
-**What it still did in Target mode and no longer can be changed there:** with an *explicit*
-target above the refresh (say 400 on 280 Hz) on a backend that can show past the refresh
-(nested Wayland, tearing), Pause off lets the target stand (400) where On clamps it to 280,
-and the generate / pass decision follows (a 340 fps game is still generated for with Pause
-off and passed through with it on). A profile that already has Pause off keeps that
-behaviour while its row is grayed; switch to a fixed multiplier to change it.
+**Ignored in Target mode (2026-10-05, same day).** The switch is not only grayed, it has
+no effect there: `fghost::EffectiveCapAtRefresh( pause, mode )` (`FrameGenHost.h`, applied
+in `Pack()`, so every reader of `GetConfig()` including the extra-timer test and the pacer
+inputs sees it) is `pause && mode != Target`, i.e. in Target mode the library always runs as
+"Pause off". The one case where the stored value used to matter was an *explicit* target
+above the refresh (400 on 280 Hz) on a backend that can show past the refresh (nested
+Wayland, tearing): Pause on clamped it to 280, Pause off let 400 stand. Now 400 stands
+whatever was stored. On a backend that cannot show past the refresh the library still
+clamps (`Pacer::CapAtRefresh` is `pauseAtRefresh || !canExceedRefresh`), so on a normal
+display the refresh is the limit. Target 0 is still the refresh; fixed multipliers keep
+the switch exactly as before. `Why:` the user, on being offered "usable only when the target
+is above the refresh": *"No, it shouldn't be affected by the slider as well, it should then
+just have no effect rather."* Done in the host, not the library: it is a GUI-setting
+mapping. Pinned by `tests/test_framegen_format.cpp`.
 
 **Presenting between vblanks (the extra-frame timer).** The vblank timer ticks once per
 refresh, so an output interval shorter than a vblank needs another wakeup. When

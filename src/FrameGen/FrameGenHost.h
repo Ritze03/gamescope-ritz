@@ -87,6 +87,13 @@ namespace fghost
 	// Target = aim at an output frame rate whatever the game does.
 	enum class Mode : uint8_t { Off, Fixed, Target };
 
+	// The "Pause at refresh rate" value the pacer actually gets: the stored switch
+	// only means something for the fixed multipliers. In Target mode it is ignored
+	// (the target stands as set), whatever was stored. Why: the user -- "it
+	// shouldn't be affected by the slider as well, it should then just have no
+	// effect". Pack() applies it, so every reader of GetConfig() sees the result.
+	constexpr bool EffectiveCapAtRefresh( bool bPause, Mode eMode ) { return bPause && eMode != Mode::Target; }
+
 	// What pacing trades when the game's frame times jitter. LowLatency adds the
 	// least delay (the content time snaps to each new real frame, so uneven
 	// frame times show as uneven motion). Smoothness spaces the content evenly

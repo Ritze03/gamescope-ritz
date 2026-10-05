@@ -23,8 +23,8 @@ The newest version below is the one this build reports.
 - **HUD Both mode**: with Frame generation on it shows both numbers, `>` while
   generating and `-` otherwise, so the readout stops jumping; with it off it shows just
   the game's number.
-- **Pause at refresh rate**: grayed out in Target mode, where the target already caps
-  the output.
+- **Pause at refresh rate**: grayed out and ignored in Target mode, where the target
+  fps decides the output.
 - **Smaller default crosshair box**: the protected box is now 2.5% of the game's height
   instead of 3% of its area, which removes most specks even with the original Crosshair.
 
