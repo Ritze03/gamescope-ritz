@@ -200,6 +200,14 @@ namespace gamescope
 			return s_Settings.framegen.enabled && s_Settings.framegen.ui_protection != "off";
 		}
 
+		// Pause at refresh rate: a Target already caps the output at the target
+		// (0 = the refresh), so the switch only governs the fixed multipliers.
+		bool PauseRowUsable()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.enabled && s_Settings.framegen.mode != "target";
+		}
+
 		bool TargetMode()
 		{
 			EnsureConfigLoaded();
@@ -331,7 +339,7 @@ namespace gamescope
 			.Help( "The frame rate to aim for in Target fps mode. The number of generated frames "
 			       "follows the game's frame times on every frame: if the game drops from 120 to "
 			       "100 fps with a target of 240, it generates more per game frame at once. 0 "
-			       "aims at your display's refresh rate; a target above it is capped to it unless Pause at refresh rate is off." )
+			       "aims at your display's refresh rate; a target above it is capped to it." )
 			.Range( 0.0f, 1000.0f ).Step( 5.0f ).Unit( "fps" )
 			.ZeroMeans( "Display refresh" )
 			.Default( 0 )
@@ -354,15 +362,16 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
-			.Help( "On: frame generation stops once the game alone reaches your refresh rate - or "
-			       "your Target fps, whichever is lower - so the GPU does no pointless work. "
-			       "Off: it also keeps generating above your refresh rate (up to the Target fps, "
-			       "e.g. 800 fps): useful with tearing or in a desktop window, where only the "
-			       "newest frame is shown; it costs GPU time, and on a real display without "
-			       "tearing it cannot go past the refresh rate." )
+			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps the target already caps "
+			       "the output, so this has no effect there. On: frame generation stops once "
+			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
+			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
+			       "tearing or in a desktop window, where only the newest frame is shown; it "
+			       "costs GPU time, and on a real display without tearing it cannot go past "
+			       "the refresh rate." )
 			.Default( true )
 			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
-			.DisabledUnless( On, "frame generation is off" );
+			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the target already caps the output)" );
 
 		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
 			ui::AnyBind::Of<bool>(

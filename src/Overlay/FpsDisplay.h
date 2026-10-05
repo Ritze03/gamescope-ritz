@@ -134,13 +134,41 @@ namespace gamescope
 			return n == 1 ? "output" : n == 2 ? "both" : "game";
 		}
 
-		// "FPS shown" = Both always draws two numbers, "<game> > <output>" while frame
-		// generation is visibly generating and "<game> - <output>" otherwise
-		// (2026-10-05): the lone game number it used to fall back to made the readout
-		// jump. Plain ASCII, the overlay font atlas is Latin-1 only.
+		// "FPS shown" = Both draws two numbers while the Frame generation switch is on,
+		// "<game> > <output>" while frame generation is visibly generating and
+		// "<game> - <output>" while it is on but passing through (2026-10-05; see
+		// PlanShown() for the switch-off lone number).
+		// Plain ASCII, the overlay font atlas is Latin-1 only.
 		inline const char *BothSeparator( bool bGenerating )
 		{
 			return bGenerating ? " > " : " - ";
+		}
+
+		// What "FPS shown" draws, from the Frame generation SWITCH and the latched
+		// "generating" state (2026-10-05, both from the user's review of the Both
+		// mode):
+		//   bPair           Both draws two numbers only while the switch is on
+		//                   ("When the actual switch is off, it should only show the
+		//                   single number" -- even if motion blur or the lag spike
+		//                   buffer drive the pacer); off, it is the lone game number
+		//                   exactly like Game mode.
+		//   bOutputFromPacer the output number is the pacer's presentedFps only while
+		//                   generating -- the same latched state that draws '>', so
+		//                   number and separator change together ("It should then still
+		//                   show, what is actually being rendered (games 340 in this
+		//                   case)"); otherwise it is the game's own rate. A latch that
+		//                   lingers after the switch went off does not count.
+		struct ShownPlan
+		{
+			bool bPair = false;
+			bool bOutputFromPacer = false;
+		};
+		inline ShownPlan PlanShown( bool bFrameGenSwitchOn, bool bLatchedGenerating )
+		{
+			ShownPlan p;
+			p.bPair = bFrameGenSwitchOn;
+			p.bOutputFromPacer = bFrameGenSwitchOn && bLatchedGenerating;
+			return p;
 		}
 
 		// A pacing status older than this counts as "not generating": it is republished

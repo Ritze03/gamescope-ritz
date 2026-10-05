@@ -707,6 +707,20 @@ The library now measures game rates up to about 1000 fps (the interval clamp is 
   display cannot show more than its refresh) and on how much GPU the user wants to spend;
   the pacer cannot know, the user can.
 
+**Disabled in Target mode (2026-10-05).** The row is grayed out (`DisabledUnless(
+PauseRowUsable )`, enabled only with the switch on and Multiplier not Target; the stored
+value is untouched and the library is unchanged) and its help says it has no effect with a
+Target. The user: *"Then 'gray' out (disable) it, if adaptive mode is on."* ("Adaptive
+mode" is their name for Target fps.) `Why:` with a Target the output interval is already
+`1 / target` (`OutputIntervalMs`, target 0 = the refresh), so in the user's setup (Target
+0, 280 Hz) the switch did nothing and a live-looking switch that does nothing misleads.
+**What it still did in Target mode and no longer can be changed there:** with an *explicit*
+target above the refresh (say 400 on 280 Hz) on a backend that can show past the refresh
+(nested Wayland, tearing), Pause off lets the target stand (400) where On clamps it to 280,
+and the generate / pass decision follows (a 340 fps game is still generated for with Pause
+off and passed through with it on). A profile that already has Pause off keeps that
+behaviour while its row is grayed; switch to a fixed multiplier to change it.
+
 **Presenting between vblanks (the extra-frame timer).** The vblank timer ticks once per
 refresh, so an output interval shorter than a vblank needs another wakeup. When
 `Pacer::ExtraTimer()` is true (Off, generating, `o` below 98% of a vblank; back to the

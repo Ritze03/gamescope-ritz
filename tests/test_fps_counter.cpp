@@ -426,3 +426,27 @@ TEST_CASE( "a flapping signal never flickers the separator", "[fps_counter]" )
     }
     REQUIRE( nFlips == 0 );
 }
+
+// ---- what "FPS shown" draws (PlanShown) --------------------------------------
+
+TEST_CASE( "PlanShown: Both draws a pair only with the Frame generation switch on", "[fps_counter]" )
+{
+    // Switch off: the lone game number, whatever the latch says (motion blur or the
+    // lag spike buffer may be driving the pacer, a latch may still be lingering).
+    REQUIRE_FALSE( PlanShown( false, false ).bPair );
+    REQUIRE_FALSE( PlanShown( false, true ).bPair );
+    // Switch on: always two numbers, '>' or '-' decided by the latch.
+    REQUIRE( PlanShown( true, false ).bPair );
+    REQUIRE( PlanShown( true, true ).bPair );
+}
+
+TEST_CASE( "PlanShown: the output number is the pacer's only while generating", "[fps_counter]" )
+{
+    // Generating: the pacer's presentedFps ("120 > 280").
+    REQUIRE( PlanShown( true, true ).bOutputFromPacer );
+    // Switch on but passing through: the game's own rate ("340 - 340").
+    REQUIRE_FALSE( PlanShown( true, false ).bOutputFromPacer );
+    // Switch off: the game's own rate, even while a latch lingers.
+    REQUIRE_FALSE( PlanShown( false, false ).bOutputFromPacer );
+    REQUIRE_FALSE( PlanShown( false, true ).bOutputFromPacer );
+}

@@ -147,15 +147,31 @@ to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
 
 - **Game**: the game's real frame rate (the commit counter); exactly the HUD as
   it was before this option.
-- **Output**: what `count_generated_frames=true` did. `presentedFps` while the
-  pacer is driven and has a fresh status, the commit rate otherwise.
-- **Both** (always two numbers since 2026-10-05): `<game> > <output>` (e.g.
-  `40 > 280`) while Frame generation is generating, `<game> - <output>` (e.g.
-  `120 - 144`) otherwise. With the pacer not driven at all (Frame generation,
-  Motion blur and Lag spike buffer all off) nothing is generated and the output
-  rate *is* the game rate, so it reads `120 - 120`: the output number is the
-  game's own value there, not a second measurement of the same counter from a
-  different window phase (which would read `120 - 119`).
+- **Output**: what `count_generated_frames=true` did. The pacer's `presentedFps`
+  while Frame generation is *generating* (the latched signal below), the game's own
+  rate otherwise: a 340 fps game passed through on a 280 Hz display reads 340, not
+  about 280.
+- **Both**: `<game> > <output>` (e.g. `120 > 280`) while Frame generation is
+  generating, `<game> - <output>` (e.g. `340 - 340`) while the Frame generation
+  **switch** is on but it passes the game through. With the switch **off** it is
+  the lone game number, exactly like Game mode, even when Motion blur or the Lag
+  spike buffer drive the pacer. `fpsmath::PlanShown( switchOn, latchedGenerating )`
+  decides both the pair and the output number's source. The output number in a
+  pair is never a second measurement of the commit counter (that would read
+  `120 - 119` from a different window phase): without a generating latch it *is*
+  the game number.
+
+`Why` (switch off, the user's review of the first Both): *"When the actual switch
+is off, it should only show the single number."* The `120 - 120` pair this
+replaces was the previous rule (a pair whenever the pacer was not driven); with
+the switch off there is nothing to compare, so the lone number is right, and the
+box is pinned to the game-only string so it does not keep a wide empty half.
+
+`Why` (output number): *"It should then still show, what is actually being
+rendered (games 340 in this case)"*. The first Both took `presentedFps` whenever
+the pacer was driven, which in pass-through is about min(game, refresh), so it
+under-reported a game faster than the display. Now `presentedFps` is the output
+number only while generating.
 
 `Why:` the user, on the HUD flapping in Both with Pause at refresh rate off:
 *"it sometimes shows the generated frames and sometimes it just switches off for
@@ -183,26 +199,29 @@ doesn't move around as much in the bottom right of the corner of the screen."*
    (`kGeneratingLatchNs`). A safety net on top of (1): even a signal that does
    dip never flickers the separator faster than that.
 
-**The output number is measured independently of the separator.** Its source is
-"the pacer is driven and has a fresh status with `presentedFps > 0`" (that is
-the output frames actually presented: generated frames plus the real frames the
-pacer showed, so about min(game, refresh) while it passes the game through),
-otherwise the commit counter. `Why:` the old rule switched the source on
-`activeN >= 2`, and `RateWindows::Step` restarts the output windows on every
-source change, so each flip also made the output number jump; now they restart
-only when the pacer starts or stops being driven.
+**The output number follows the separator's latch.** The source is
+`s_GeneratingLatch` (the same state that draws `>`) AND the switch being on: latched
+generating means `presentedFps` (the output frames actually handed to present),
+anything else means the commit counter. `Why:` number and separator change
+together, so the HUD does not show `>` with the game's own rate or `-` with a
+generated one. A latch still lingering after the switch went off does not count.
 
-**Two independent windows.** `UpdateAndGetDisplayFps()` runs two `RateWindows`
-every call (`s_GameWindows`, `s_OutputWindows`), each with its own
-Smoothing/Immediate state. The status is published about every 250 ms and is
-already a rate, so the output windows average the per-paint samples of it
-instead of differencing a counter; when the output source flips (the
-pacer starts or stops being driven or publishing) only the output windows
-restart. `Why:` in Both the game number must not jump or restart when
-generation starts or stops, and always stepping both means changing "FPS shown"
-never shows a stale value.
+**Three windows, none ever restarted by a flip.** `UpdateAndGetDisplayFps()` runs
+`s_GameWindows` (commit counter) and `s_PacedWindows` (the pacer's `presentedFps`)
+every call, each with its own Smoothing/Immediate state, and picks one for the
+output number. The status is published about every 250 ms and is already a rate,
+so the paced windows average the per-paint samples instead of differencing a
+counter; with no fresh status (stale, pacer not driven) they are fed the game's
+own rate instead, so they are always warm. `Why:` `RateWindows::Step` restarts a
+window when its source flips, which would show 0 for a moment on the very frame the
+separator changes; keeping both running and only picking one means a flip is a
+switch between two ready numbers. It also means the game number never jumps or
+restarts when generation starts or stops, and changing "FPS shown" never shows a
+stale value.
 
-**Layout.** `MeasureFpsModule( nFps, nOut, bGenerating, ... )` builds the string
+**Layout.** `MeasureFpsModule( nFps, nOut, bGenerating, ... )` (`nOut < 0` = a lone
+number, which is Game, Output, and Both with the switch off; its pinned field is the
+game-only zero run) builds the string
 `"%d > %d"` or `"%d - %d"` (`fpsmath::BothSeparator`; plain ASCII — the overlay
 font atlas is Latin-1 only, an arrow glyph would be a missing glyph). The
 pinned box is `<game zeros> X <output zeros>`, each side padded to its own >= 3

@@ -332,10 +332,10 @@ namespace gamescope
 	// second is a real reading rather than a made-up 60.
 	//
 	// 2026-10-04: all of this state lives in a RateWindows so two independent
-	// copies can run -- the game's (commit counter) and the output's (Frame
-	// generation's presentedFps, see below). "FPS shown" = Both draws both
-	// numbers, and each must keep its own smoothing: the game number must not
-	// restart when generation starts or stops.
+	// copies can run -- the game's (commit counter) and the pacer's
+	// (presentedFps, see below). "FPS shown" = Both draws both numbers, and
+	// each must keep its own smoothing: the game number must not restart when
+	// generation starts or stops, and neither does the pacer's.
 	struct RateWindows
 	{
 		uint64_t ulSmoothingStartNs = 0;
@@ -355,9 +355,9 @@ namespace gamescope
 		// A rate source (presentedFps) is already a rate (published about
 		// every 250 ms), so it has no count to diff: each window averages the
 		// samples taken per call instead. bRateSource remembers which source
-		// the windows were filled from, so a switch (frame generation on/off,
-		// pass-through begins) restarts both windows instead of mixing a
-		// commit delta with a rate.
+		// the windows were filled from, so a switch restarts both windows
+		// instead of mixing a commit delta with a rate. (Each RateWindows now
+		// keeps one source for life, so this only fires on the very first call.)
 		bool   bRateSource = false;
 		double dImmediateSum = 0.0;
 		int    nImmediateN = 0;
@@ -438,7 +438,7 @@ namespace gamescope
 		}
 	};
 	static RateWindows s_GameWindows;   // the game's real frames (commit counter)
-	static RateWindows s_OutputWindows; // the output rate (pacing's presentedFps while it is published), else the commit counter
+	static RateWindows s_PacedWindows;  // pacing's presentedFps, always running; the output number picks it only while generating (fpsmath::PlanShown)
 	static fpsmath::GeneratingLatch s_GeneratingLatch; // Both mode's '>' vs '-'
 
 	// The lag-spike detector's own sample source: the per-commit frametime,
@@ -541,7 +541,7 @@ namespace gamescope
 	// regardless of which is selected, so switching modes in the settings
 	// panel never shows a stale value -- the bookkeeping is two timestamps
 	// and two counts, so there is nothing to save by pausing the other one.
-	struct DisplayRates { float flGame = 0.0f; float flOutput = 0.0f; bool bGenerating = false; };
+	struct DisplayRates { float flGame = 0.0f; float flOutput = 0.0f; bool bGenerating = false; bool bSwitchOn = false; };
 	static DisplayRates UpdateAndGetDisplayFps()
 	{
 		const config::FpsDisplaySettings &cfg = s_Settings.fps_display;
@@ -568,46 +568,40 @@ namespace gamescope
 		}
 
 		// ---- the output rate: what is sent to the display ----------------
-		// Measured the same way whether or not frame generation is generating
-		// (2026-10-05): while the pacer is driven (frame generation, motion blur or
-		// the lag spike buffer on) and has published a fresh status with a rate,
-		// the output rate is that status's presentedFps -- the output frames
-		// actually handed to present (generated frames plus the real frames pacing
-		// showed; also while it passes the game's frames straight through, then
-		// about min(game, refresh)), never a repaint of an already-shown output
-		// (UI, cursor, HUD keepalive); with Pause at refresh rate off it can
-		// exceed the refresh (e.g. ~800). Otherwise (everything off, no status yet,
-		// a stale one) nothing is generated and the output rate IS the game rate,
-		// so the commit counter is the number and the output reads the game's own
-		// value. The source follows "is there a fresh status", NOT "is it
-		// generating", so the output windows restart only when the pacer starts or
-		// stops being driven, never when the separator flips.
-		// Both windows always run, whatever "FPS shown" says, so changing it
-		// never shows a stale value, and neither restarts the other.
-		bool bRateSource = false;
+		// 2026-10-05 (user: "It should then still show, what is actually being
+		// rendered (games 340 in this case)"): the output number is the pacer's
+		// presentedFps ONLY while generating -- the latched signal that also draws
+		// '>' -- and the game's own rate otherwise, so a 340 fps game passed
+		// through on a 280 Hz display reads "340 - 340", not 280. The pacer's
+		// rate (while the pacer is driven and has published a fresh status; it can
+		// exceed the refresh with Pause at refresh rate off) always runs in its own
+		// windows, fed the game's rate when there is no fresh status, so the
+		// source flip is a pick between two warm, independent smoothings: no
+		// window restarts, so no gap and no 0 on a flip. Both windows always run,
+		// whatever "FPS shown" says, so changing it never shows a stale value.
 		bool bSignal = false;
-		float flPacedFps = 0.0f;
+		bool bSwitchOn = false;
+		float flPacedFps = -1.0f;
 		if ( fghost::Active() )
 		{
 			const fghost::PacingStatus st = fghost::GetPacingStatus();
 			const bool bFresh = st.valid && ulNowNanos >= st.publishedNs && ulNowNanos - st.publishedNs <= fpsmath::kPacingStaleNs;
 			if ( bFresh && st.presentedFps > 0.0f )
-			{
-				bRateSource = true;
 				flPacedFps = st.presentedFps;
-			}
-			bSignal = fpsmath::GeneratingSignal( fghost::Enabled(), st.valid, st.generating, st.publishedNs, ulNowNanos );
+			bSwitchOn = fghost::Enabled();
+			bSignal = fpsmath::GeneratingSignal( bSwitchOn, st.valid, st.generating, st.publishedNs, ulNowNanos );
 		}
 
 		DisplayRates r;
 		r.flGame = s_GameWindows.Step( ulNowNanos, ulCount, false, 0.0f, bImmediateMode );
-		const float flOutput = s_OutputWindows.Step( ulNowNanos, ulCount, bRateSource, flPacedFps, bImmediateMode );
-		// Without a rate source the output window above only re-measures the game's
-		// own commit counter from a different phase, which would read "120 - 119"
-		// for one quantity: show the game's number itself.
-		r.flOutput = bRateSource ? flOutput : r.flGame;
+		const float flPaced = s_PacedWindows.Step( ulNowNanos, ulCount, true, flPacedFps >= 0.0f ? flPacedFps : r.flGame, bImmediateMode );
 		r.bGenerating = s_GeneratingLatch.Step( bSignal, ulNowNanos );
-		s_bGliding.store( s_GameWindows.bGliding || s_OutputWindows.bGliding, std::memory_order_relaxed );
+		const fpsmath::ShownPlan plan = fpsmath::PlanShown( bSwitchOn, r.bGenerating );
+		r.bSwitchOn = plan.bPair;
+		// Not from the pacer: the output IS the game's number (the paced window
+		// would only re-measure the same quantity from another phase).
+		r.flOutput = plan.bOutputFromPacer ? flPaced : r.flGame;
+		s_bGliding.store( s_GameWindows.bGliding || s_PacedWindows.bGliding, std::memory_order_relaxed );
 		return r;
 	}
 
@@ -1295,8 +1289,11 @@ namespace gamescope
 			szPadded[i] = '0';
 		szPadded[nDigits] = '\0';
 		snprintf( L.szNum, sizeof( L.szNum ), "%d", std::min( nFps, 9999999 ) );
-		// "FPS shown" = Both (nOut >= 0): "<game> > <output>" while generating,
-		// "<game> - <output>" otherwise (2026-10-05). The pinned field becomes
+		// "FPS shown" = Both with the Frame generation switch on (nOut >= 0):
+		// "<game> > <output>" while generating, "<game> - <output>" otherwise
+		// (2026-10-05). With the switch off nOut is -1 and the pinned field is the
+		// game-only one, as before Both existed, so the box does not keep a wide
+		// empty half. The pinned field becomes
 		// "<game zeros> X <output zeros>", each side padded to its own >= 3 cells
 		// exactly like a lone number, so the box never resizes until one side
 		// gains a digit. X is whichever of '>' / '-' is WIDER in the font, in both
@@ -1604,12 +1601,12 @@ namespace gamescope
 		const DisplayRates rates = UpdateAndGetDisplayFps();
 		// "FPS shown" (fps_display.fps_shown): "game" is the game's own rate,
 		// "output" the rate sent to the display (frame-generated frames
-		// included), "both" always draws two numbers: "game > output" while generating
+		// included), "both" draws two numbers: "game > output" while generating
 		// (rates.bGenerating, library signal + latch) and "game - output" otherwise. Hide-above compares against the game number in
 		// Both mode (the number the user means by "my frame rate"), and
 		// against the one shown number otherwise.
 		const bool bOutputOnly = cfg.fps_shown == "output";
-		const bool bPair = cfg.fps_shown == "both" && s_nForcedFps < 0;
+		const bool bPair = cfg.fps_shown == "both" && rates.bSwitchOn && s_nForcedFps < 0;
 		const float flLiveDisplayFps = bOutputOnly ? rates.flOutput : rates.flGame;
 		const float flDisplayFps = ( s_nForcedFps >= 0 ) ? (float)s_nForcedFps : flLiveDisplayFps;
 
@@ -2441,8 +2438,9 @@ namespace gamescope
 			kFpsShownOptions, std::size( kFpsShownOptions ) )
 			.Key( "fps_display.fps_shown" )
 			.Help( "Game: the game's own frame rate. Output: what is actually sent to the "
-			       "display, including frames made by Frame generation. Both: always two numbers, "
-			       "game > output while Frame generation is generating, game - output otherwise." )
+			       "display (the game's own rate unless Frame generation is generating). Both: with "
+			       "the Frame generation switch on, two numbers, game > output while it is generating, "
+			       "game - output while it passes frames through; with it off, just the game's number." )
 			.Default( 0 )
 			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )
 			.DisabledUnless( MonitorOn, kOffReason );
