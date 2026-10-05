@@ -9,6 +9,7 @@
 #include <vector>
 #include <cstring>
 #include <string>
+#include <atomic>
 #if HAVE_LIBCAP
 #include <sys/capability.h>
 #endif
@@ -811,6 +812,49 @@ static float parse_float(const char *str, const char *optionName)
 
 struct sigaction handle_signal_action = {};
 
+// First shutdown-causing signal and its sender, recorded by the handler
+// (async-signal-safe: lock-free atomics only) and logged later from normal
+// context by LogShutdownSignal().
+static std::atomic< int > g_nShutdownSignal{ 0 };
+static std::atomic< int > g_nShutdownSignalPid{ 0 };
+
+void LogShutdownSignal()
+{
+	int nSig = g_nShutdownSignal.load();
+	if ( !nSig )
+		return;
+
+	int nPid = g_nShutdownSignalPid.load();
+	std::string szComm = "unknown";
+	if ( nPid == getpid() )
+	{
+		szComm = "self";
+	}
+	else if ( nPid > 0 )
+	{
+		char szPath[64];
+		snprintf( szPath, sizeof( szPath ), "/proc/%d/comm", nPid );
+		if ( FILE *pFile = fopen( szPath, "r" ) )
+		{
+			char szBuf[64] = {};
+			if ( fgets( szBuf, sizeof( szBuf ), pFile ) )
+			{
+				szBuf[ strcspn( szBuf, "\n" ) ] = '\0';
+				szComm = szBuf;
+			}
+			fclose( pFile );
+		}
+	}
+
+	const char *pszAbbrev = sigabbrev_np( nSig );
+	std::string szSig = pszAbbrev ? std::string( "SIG" ) + pszAbbrev : std::to_string( nSig );
+	const char *pszSig = szSig.c_str();
+	if ( nPid == getpid() )
+		console_log.warnf( "shutdown: received %s from self (pid %d); see the preceding shutdown line for the cause", pszSig, nPid );
+	else
+		console_log.warnf( "shutdown: received %s from pid %d (%s)", pszSig, nPid, szComm.c_str() );
+}
+
 void ShutdownGamescope()
 {
 	g_bRun = false;
@@ -822,10 +866,11 @@ static gamescope::ConCommand cc_shutdown( "shutdown", "Cleanly shutdown gamescop
 []( std::span<std::string_view> svArgs )
 {
 	console_log.infof( "Shutting down..." );
+	console_log.warnf( "shutdown: requested via console command" );
 	ShutdownGamescope();
 });
 
-static void handle_signal( int sig )
+static void handle_signal( int sig, siginfo_t *pInfo, void * )
 {
 	switch ( sig ) {
 	case SIGUSR2:
@@ -835,8 +880,13 @@ static void handle_signal( int sig )
 	case SIGQUIT:
 	case SIGTERM:
 	case SIGINT:
+	{
+		int nExpected = 0;
+		if ( g_nShutdownSignal.compare_exchange_strong( nExpected, sig ) )
+			g_nShutdownSignalPid = pInfo ? pInfo->si_pid : 0;
 		ShutdownGamescope();
 		break;
+	}
 	case SIGUSR1:
 		fprintf( stderr, "gamescope: hi :3\n" );
 		break;
@@ -1504,7 +1554,8 @@ int main(int argc, char **argv)
 
 	std::thread steamCompMgrThread( steamCompMgrThreadRun, argc, argv );
 
-	handle_signal_action.sa_handler = handle_signal;
+	handle_signal_action.sa_sigaction = handle_signal;
+	handle_signal_action.sa_flags = SA_SIGINFO;
 	sigaction(SIGHUP, &handle_signal_action, nullptr);
 	sigaction(SIGINT, &handle_signal_action, nullptr);
 	sigaction(SIGQUIT, &handle_signal_action, nullptr);

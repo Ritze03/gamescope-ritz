@@ -7632,6 +7632,8 @@ error(Display *dpy, XErrorEvent *ev)
 	return 0;
 }
 
+extern void LogShutdownSignal();
+
 static void
 steamcompmgr_exit(void)
 {
@@ -7639,6 +7641,7 @@ steamcompmgr_exit(void)
 	// laptop). Info-level so the last one printed before the abort names the
 	// stage in a plain journal read, without a debugger attached. Cheap and
 	// harmless to leave in; remove once the teardown is known clean.
+	LogShutdownSignal();
 	xwm_log.infof( "teardown: steamcompmgr_exit begin" );
 
 	// The friends poller's worker thread. Joined here so it can never
@@ -9971,11 +9974,19 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 		{
 			pthread_setname_np( pthread_self(), "gamescope-wait" );
 
-			gamescope::Process::WaitForChild( nPrimaryChildPid );
+			std::optional<int> oStatus = gamescope::Process::WaitForChild( nPrimaryChildPid );
 			s_LaunchLogScope.infof( "Primary child shut down!" );
 
 			if ( cv_shutdown_on_primary_child_death )
+			{
+				if ( oStatus && WIFEXITED( *oStatus ) )
+					s_LaunchLogScope.warnf( "shutdown: primary child exited (status %d)", WEXITSTATUS( *oStatus ) );
+				else if ( oStatus && WIFSIGNALED( *oStatus ) )
+					s_LaunchLogScope.warnf( "shutdown: primary child exited (killed by signal %d)", WTERMSIG( *oStatus ) );
+				else
+					s_LaunchLogScope.warnf( "shutdown: primary child exited (status unknown)" );
 				ShutdownGamescope();
+			}
 		});
 		waitThread.detach();
 	}

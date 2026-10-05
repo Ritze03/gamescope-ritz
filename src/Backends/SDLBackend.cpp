@@ -34,6 +34,7 @@
 // runtime refresh change the first time the window regained focus.
 static std::atomic<int> g_nOldNestedRefresh = { 0 };
 static bool g_bWindowFocused = true;
+static LogScope sdl_log( "sdl_backend" );
 
 static int g_nOutputWidthPts = 0;
 static int g_nOutputHeightPts = 0;
@@ -974,6 +975,7 @@ namespace gamescope
 					switch( event.window.event )
 					{
 						case SDL_WINDOWEVENT_CLOSE:
+							sdl_log.warnf( "shutdown: outer window close requested by the compositor" );
 							raise( SIGTERM );
 							break;
 						default:

@@ -2146,6 +2146,7 @@ namespace gamescope
 	}
     void CWaylandPlane::LibDecor_Frame_Close( libdecor_frame *pFrame )
     {
+        xdg_log.warnf( "shutdown: outer window close requested by the compositor" );
         raise( SIGTERM );
     }
     void CWaylandPlane::LibDecor_Frame_Commit( libdecor_frame *pFrame )
