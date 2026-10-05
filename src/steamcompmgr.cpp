@@ -7982,13 +7982,20 @@ namespace
 	// backend-type accessor (and Backends/ is not ours to extend), so Wayland is
 	// recognised by its connector's name; every backend with SupportsTearing() is
 	// DRM. bTearingNow = a tearing flip would be chosen for this paint.
-	bool FrameGen_CanExceedRefresh( bool bTearingNow )
+	bool FrameGen_IsNestedWayland()
 	{
 		gamescope::IBackend *pBackend = GetBackend();
 		gamescope::IBackendConnector *pConnector = pBackend ? pBackend->GetCurrentConnector() : nullptr;
-		if ( !pConnector )
+		const char *pszName = pConnector ? pConnector->GetName() : nullptr;
+		return pszName && strcmp( pszName, "Wayland" ) == 0;
+	}
+
+	bool FrameGen_CanExceedRefresh( bool bTearingNow )
+	{
+		gamescope::IBackend *pBackend = GetBackend();
+		if ( !pBackend || !pBackend->GetCurrentConnector() )
 			return false;
-		if ( const char *pszName = pConnector->GetName(); pszName && strcmp( pszName, "Wayland" ) == 0 )
+		if ( FrameGen_IsNestedWayland() )
 			return true;
 		return pBackend->SupportsTearing() && bTearingNow;
 	}
@@ -10823,7 +10830,16 @@ steamcompmgr_main(int argc, char **argv)
 			// Nested Wayland: SupportsTearing() is true when the host offers
 			// wp_tearing_control, so this triggers there as well -- see
 			// superdoc/features/frame-generation.md.
-			const bool bFGTearPresent = bFGTimerPaced && !bFGExtraPaced && bTearing &&
+			//
+			// Nested Wayland, output timer: the output frames come BETWEEN vblanks, and a
+			// host that is not told to tear shows only the newest buffer per refresh and
+			// discards the rest, so the extra frames never reach the screen. The hint
+			// must therefore not depend on the GAME's own present mode (bTearing needs
+			// the base commit to be IMMEDIATE/MAILBOX, which a vsynced game is not):
+			// "Allow tearing" + the host offering the protocol is enough.
+			const bool bFGHostTear = bFGExtraPaced && !bTearing && cv_tearing_enabled &&
+				GetBackend()->SupportsTearing() && FrameGen_IsNestedWayland();
+			const bool bFGTearPresent = bFGTimerPaced && ( ( !bFGExtraPaced && bTearing ) || bFGHostTear ) &&
 				!bHasOverlay && !nIgnoredOverlayRepaints && !is_fading_out() &&
 				( !bForceRepaint || bFGOwnForce );
 

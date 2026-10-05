@@ -135,8 +135,12 @@ if the host offers it.
   `STEAM_GAMESCOPE_TEARING_SUPPORTED` for Steam. Nothing in the Shell gates its tearing row
   on `SupportsTearing()` (only the startup log line `Supports Tearing:` does), so the row is
   unchanged. It is a **request**: the host decides whether the window really tears.
+- **Frame generation's output timer** also requests `async` when the game itself is
+  vsynced (`bFGHostTear`, 2026-10-05; see [frame-generation.md](frame-generation.md)),
+  since otherwise the host discards every extra frame. Each hint change is logged
+  (`wayland: tearing hint -> async` / `vsync`).
 - **Tearing off, or a host without the protocol:** `async` is only ever requested when
-  `bTearing` holds, so with the setting off the hint stays at its initial `vsync` and no
+  `bTearing` (or `bFGHostTear`, which needs the setting too) holds, so with the setting off the hint stays at its initial `vsync` and no
   request is sent; without the protocol no object is created. Wire behaviour is as before.
 - **Hyprland** (the user's host) needs all of: `general { allow_tearing = true }`; the
   gamescope window **fullscreen** (Hyprland only tears fullscreen windows); and, to force it

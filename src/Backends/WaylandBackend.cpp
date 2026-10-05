@@ -2012,6 +2012,7 @@ namespace gamescope
             return;
 
         m_bSentAsyncHint = bAsync;
+        xdg_log.infof( "wayland: tearing hint -> %s", bAsync ? "async" : "vsync" );
         wp_tearing_control_v1_set_presentation_hint( m_pTearingControl,
             bAsync ? WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC : WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC );
     }

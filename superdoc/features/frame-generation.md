@@ -643,6 +643,28 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    request with the same hint covering real frames. SDL / OpenVR / headless: `SupportsTearing()` is
    false or the flag unused.
 
+   **Nested Wayland, output timer (2026-10-05 fix).** `bTearing` also demands that the *game's*
+   base commit asked for async (IMMEDIATE/MAILBOX present mode, `bSurfaceWantsAsync`). A
+   vsynced (FIFO) game never does, so with the output timer running (Target mode, or Pause at
+   refresh off; `FrameGen_CanExceedRefresh()` is always true nested) the extra output frames
+   were committed with the `vsync` hint and the host discarded them: Hyprland reported
+   `tearingHint: 0`, `tearingBlockedBy: window settings`, with `allow_tearing true` on the
+   monitor. Now `bFGHostTear` (main loop, next to `bFGTearPresent`) = output timer && `Allow
+   tearing` on && `SupportsTearing()` && nested Wayland, independent of the game's present
+   mode, and feeds `bFGTearPresent`, so the `async` hint goes out while the output timer
+   generates and `vsync` returns when it stops (not over an overlay, a fade or a genuine forced
+   repaint, as before). The backend logs each change: `wayland: tearing hint -> async` /
+   `vsync` (info, `xdg_backend`). `Why:` the game's present mode says how the GAME wants its
+   own frames shown; frames generated between vblanks have no meaning to the host unless it is
+   told to show them at once, so gating that on the game is wrong. `Allow tearing` still gates
+   it: with it off the user has asked for no tearing, and the output then stays capped by the
+   host's vsync. Real frames from a game that does not request async still never tear.
+   **Hyprland needs** `allow_tearing = true` (general), the gamescope window **fullscreen**
+   (Hyprland tears only a fullscreen window) and a hint or rule: the hint now arrives, so no
+   rule is needed, but `windowrule = immediate` (Lua: `hl.window_rule({ match = { class =
+   "^gamescope$" }, immediate = true })`) forces it for any window state. Not fullscreen =
+   no tearing whatever the hint says.
+
 **Measured** (headless sway, nested Wayland, `vkcube` capped by MangoHud, FG on, Target = display
 refresh, Low latency; before = `6579889`, after = this change, library `ec18261`). Wake-up lead,
 `delay` (D), outputs presented per second:
