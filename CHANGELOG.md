@@ -27,6 +27,9 @@ The newest version below is the one this build reports.
   fps decides the output.
 - **Smaller default crosshair box**: the protected box is now 2.5% of the game's height
   instead of 3% of its area, which removes most specks even with the original Crosshair.
+- **Nested tearing**: frame generation's frames above the refresh rate now tear onto
+  the screen in a desktop window instead of being dropped, even when the game itself
+  is vsynced.
 
 ## [0.11.0] – 2026-10-04
 
