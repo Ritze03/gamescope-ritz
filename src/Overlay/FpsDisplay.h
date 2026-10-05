@@ -177,7 +177,8 @@ namespace gamescope
 		constexpr uint64_t kPacingStaleNs = 1000ull * 1000ull * 1000ull;
 		// The separator goes back from '>' to '-' only after "generating" has been
 		// false this long; the other way it is immediate. A safety net on top of the
-		// library's own steady signal (pacing.h Report::generating).
+		// library's own signal (pacing.h Report::generating: Generate state and a
+		// generated frame presented within 1 s, no multiplier gate).
 		constexpr uint64_t kGeneratingLatchNs = 1500ull * 1000ull * 1000ull;
 
 		// Is the library's "generating" signal usable right now: frame generation on,

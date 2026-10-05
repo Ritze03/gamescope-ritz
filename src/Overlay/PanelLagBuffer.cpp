@@ -108,7 +108,7 @@ namespace gamescope
 		// One compact line, always. Pure over its inputs. The font is Basic Latin +
 		// Latin-1, so the middle dot renders.
 		//   Off                    -> "Off · buffer 0 ms" (the live buffer, so the user sees
-		//                             it really is 0; it ramps down if it was running)
+		//                             it really is 0; it shrinks slowly if it was running)
 		//   renderer refuses       -> its reason (HDR, 10-bit, YCbCr, ...)
 		//   nothing published yet  -> "Waiting for frames"
 		//   otherwise              -> "buffer 32 ms · 4 frames · last spike 28 ms"
@@ -120,7 +120,7 @@ namespace gamescope
 		std::string StatusLine( const config::LagBufferSettings &l, const fghost::PacingStatus &ps, const fghost::RenderStatus &rs )
 		{
 			// Off still shows the live buffer: the pacer reports what it is really
-			// adding (0 once the ramp is done, or while nothing runs at all), so the
+			// adding (0 once it has shrunk, or while nothing runs at all), so the
 			// user can see that "off" is 0 ms and not a stale value.
 			if ( !l.enabled )
 			{
@@ -178,9 +178,11 @@ namespace gamescope
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.lag_buffer.enabled = b; PersistAndPush(); } ) )
 			.Help( "Detects the game's frame-time spikes and runs the picture slightly behind, so "
 			       "a repeat of a recent spike is bridged with generated frames instead of "
-			       "freezing. The newest big spike in the look-back window sizes the buffer; "
-			       "older ones fade. Spikes above Max buffer (for example shader compiles) are "
-			       "ignored. The first spike of a session still freezes, because it reacts. "
+			       "freezing. A spike bigger than the current buffer (but within Max buffer) makes "
+			       "the buffer grow at once, so the next one is bridged; only the very first one "
+			       "freezes, because it reacts. Small hiccups count too, from about 1.3 times a "
+			       "normal frame time. Spikes above Max buffer (for example shader compiles) are "
+			       "ignored. The buffer shrinks again slowly once spikes stop. "
 			       "It adds its buffer as input delay, so it is meant for controller and slower "
 			       "games. Audio is not delayed, so above about 50-80 ms lip-sync drifts. "
 			       "It works with or without Frame generation, and with Motion blur. Memory: "
@@ -194,8 +196,8 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return ClampLookback( s_Settings.lag_buffer.lookback_min ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.lag_buffer.lookback_min = ClampLookback( n ); PersistAndPush(); } ) )
 			.Help( "How far back spikes count, 1 to 10 minutes. Only the newest big spike inside "
-			       "this window really sizes the buffer; older ones fade out smoothly instead of "
-			       "dropping off. A longer window suits a game that hitches only every few "
+			       "this window sizes the buffer; once it falls out of the window the buffer "
+			       "shrinks slowly instead of dropping off. A longer window suits a game that hitches only every few "
 			       "minutes." )
 			.Range( float( fghost::kMinLagLookbackMin ), float( fghost::kMaxLagLookbackMin ) ).Step( 1.0f ).Unit( "min" )
 			.Default( 5 )
@@ -208,7 +210,7 @@ namespace gamescope
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.lag_buffer.max_ms = ClampMax( n ); PersistAndPush(); } ) )
 			.Help( "The most delay the buffer may add, 0 to 250 ms, and the line between a spike "
 			       "and an outlier: a spike bigger than this (a shader compile, a disk hitch) is "
-			       "ignored, not sized for. 50 ms covers about 3 missing frames at 60 fps. "
+			       "ignored, not sized for; anything within it makes the buffer grow at once. 50 ms covers about 3 missing frames at 60 fps. "
 			       "More is only for games that really need it, and costs input delay and "
 			       "memory (about one frame copy per 16 ms at 60 fps)." )
 			.Range( 0.0f, float( fghost::kMaxLagBufferMs ) ).Step( 5.0f ).Unit( "ms" )

@@ -60,11 +60,26 @@ features ([frame-generation](frame-generation.md)'s "How the three combine").
 - *"The amount of frames should be dynamically be determined by the buffer size."* -- see
   "The host ring follows the depth" below.
 
-In short: a spike is an arrival interval above 1.75x the smoothed interval, its size is the
-missing time; `target = clamp(1.10 x newest weighted spike + 1 ms, 0, Max buffer)`; the live
-buffer ramps toward it at 3 % of real time (content plays at 0.97x while it grows, 1.03x
-while it shrinks, so it never jumps); **the first spike of a session still freezes**, because
-the buffer reacts. The test mode pins the target at Max buffer through the same ramp (Force maximum). There is no Force minimum: the buffer's floor is 0 ms, which Off already is.
+In short (pacing fixes, library PR #16, 2026-10-05): a spike is an arrival interval above
+1.3x the smoothed interval **and** at least 2 ms longer (was 1.75x), its size is the missing
+time; `target = clamp(1.10 x newest weighted spike + 1 ms, 0, Max buffer)`. A spike within Max
+buffer that is **larger than the delay currently applied** grows the buffer **at once** (the
+library's "stall credit"): the content time resumes where the display had stood still, so the
+next spike is bridged. Non-stall growth and all shrinking still move at 3 % of real time
+(content plays at 0.97x while it grows, 1.03x while it shrinks), shrinking only after a 2 s
+dwell. Spikes above Max buffer stay outliers: ignored, no credit (the user: *"We need to keep
+ignoring everything above max, since thats what max is for."*). There is no jitter floor.
+**Only the very first spike of a session still freezes**, because the buffer reacts. The test
+mode pins the target at Max buffer through the same ramp (Force maximum). There is no Force minimum: the buffer's floor is 0 ms, which Off already is.
+
+`Why:` the user's model of the buffer, replacing the old pure 3 % ramp: *"it should behave
+more like a buffer ... if the lag spike was bigger than the buffer ... then it should increase
+the buffer and then it should start working again"*. A 3 % ramp caught up too slowly, so a
+second stall right after the first froze nearly as long again. Measured in the library's
+simulation (100 fps, Max buffer 50, 60 ms stalls at D = 0, 240 Hz tick quantisation): the
+output froze for 58 / 42 / 29 / 12 ms before and now freezes 58 / 12 / 12 / 12 ms. The 1.3x
+threshold is so a 14 ms hiccup in a 10 ms game counts. The host only rewrote the help texts
+and Status wording; the behaviour is entirely `pacing.h`.
 
 ## Settings
 

@@ -183,10 +183,15 @@ doesn't move around as much in the bottom right of the corner of the screen."*
 **What "generating" means** (`UpdateAndGetDisplayFps()`, pure parts in
 `fpsmath`: `GeneratingSignal`, `GeneratingLatch`, `BothSeparator`):
 
-1. **The library's steady signal**, `PacingStatus::generating` (frame-gen-ritz
-   `Pacer::Report::generating`, PR #15): the pacer is generating AND a generated
-   frame (an output with `t < 1` made from a pair) was presented within the last
-   1 s AND outputs per real frame over the last ~1 s >= 1.2 (>= 1.1 to stay on).
+1. **The library's signal**, `PacingStatus::generating` (frame-gen-ritz
+   `Pacer::Report::generating`, PR #15, simplified by PR #16): the pacer is in the
+   Generate state AND a generated frame (an output with `t < 1` made from a pair)
+   was presented within the last 1 s. **There is no multiplier gate any more**: PR
+   #15 also required outputs per real frame >= 1.2 (>= 1.1 to stay on), so a
+   steady 1.15x showed `-`; PR #16 removed those constants and `steadyMultiplier`
+   is informational only. The user: *"If its generating any frames, it should show
+   the '>'. Otherwise that differentiation is useless."* The host-side latch below
+   is unchanged.
    It replaced `activeN >= 2`: `activeN` is the pacer's *instantaneous* plan,
    clamped to at least 2, so an effective 0.89x pass counted as generating.
 2. **Staleness**: the status is stamped `publishedNs` by `PublishPacingStatus()`

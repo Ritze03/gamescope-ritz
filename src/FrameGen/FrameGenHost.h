@@ -411,6 +411,8 @@ namespace fghost
 		// while passing real frames through. It is the pacer's INSTANTANEOUS state: it
 		// reads 2 at an effective 0.9x-1.27x too, so it is NOT "frame generation is
 		// visibly adding frames" -- `generating` below is (the HUD's separator uses it).
+		// (Since PR #16 `generating` is the Generate state plus a recent generated
+		// frame, with no multiplier gate; this field stays the instantaneous state.)
 		int   activeN = 0;
 		float delayMs = 0.0f;     // D: the extra latency pacing adds, in milliseconds
 		// Each feature separately (pacing's Report), for its own settings line.
@@ -426,9 +428,11 @@ namespace fghost
 		int   historyFrames = 3;     // real frames the host keeps (pacer's HistoryDepth())
 		PassReason reason = PassReason::Normal; // why it is not generating as asked, or pass-through
 		// The library's steady "generating" signal (pacing.h Report::generating /
-		// steadyMultiplier, PR #15): fgActive AND a generated frame was presented
-		// within the last ~1 s AND outputs per real frame over the last ~1 s >= 1.2
-		// (>= 1.1 to stay on). Never true while passing through.
+		// steadyMultiplier): the pacer is in the Generate state AND a generated frame
+		// was presented within the last ~1 s. No multiplier gate (PR #16: the old
+		// 1.2 / 1.1 outputs-per-real-frame constants are gone, "if it's generating
+		// any frames, it should show the '>'"). Never true while passing through.
+		// steadyMultiplier is informational only.
 		float steadyMultiplier = 0.0f;
 		bool  generating = false;
 		// get_time_in_nanos() when this status was published (PublishPacingStatus stamps

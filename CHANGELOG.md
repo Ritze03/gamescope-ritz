@@ -20,9 +20,13 @@ The newest version below is the one this build reports.
 ### Fixed
 - **Frame generation flicker**: it no longer switches on and off about once a second
   when the game's frame rate is close to the target.
-- **HUD Both mode**: with Frame generation on it shows both numbers, `>` while
-  generating and `-` otherwise, so the readout stops jumping; with it off it shows just
-  the game's number.
+- **HUD Both mode**: with Frame generation on it shows both numbers, `>` whenever
+  generated frames are shown and `-` otherwise, so the readout stops jumping; with it
+  off it shows just the game's number.
+- **Frame generation timer**: it no longer stays on its above-refresh timer after the
+  target is set back to the display refresh.
+- **Lag spike buffer**: after a hitch bigger than the buffer, the buffer grows at once,
+  so the next one is bridged instead of freezing again.
 - **Pause at refresh rate**: grayed out and ignored in Target mode, where the target
   fps decides the output.
 - **Smaller default crosshair box**: the protected box is now 2.5% of the game's height

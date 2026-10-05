@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`83d1bb0`); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`98292d8` (PR #17 `extra-timer-leave`, on top of PR #16 `pacing-fixes`, on top of PR #15 `pacing-hysteresis`; none merged when pinned)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -699,6 +699,15 @@ simulation of that setup: hundreds a minute to under 1), and adds `Report::gener
 `steadyMultiplier` for a HUD. Details and measurements: `subprojects/FrameGen/INTEGRATION.md`,
 "The generate / pass decision". gamescope only plumbs the two new fields into `PacingStatus`.
 
+### Pacing fixes (2026-10-05, library PR #16)
+
+Pinned at `98292d8` (`c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
+than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
+excess (see [lag-spike-buffer](lag-spike-buffer.md)); the extra output timer got only tests and
+docs; and `Report::generating` is now just "Generate state and a generated frame presented
+within 1 s", with no 1.2 / 1.1 multiplier gate (see [fps-display](fps-display.md)). The host
+changes are help-text and comment wording only.
+
 ### Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
@@ -878,7 +887,7 @@ the real frames pacing decided to show) and **not** repaints of an already-shown
 (cursor, overlay) -- it used to be a paint count; `activeN` = the effective multiplier
 rounded, at least 2 while generating and 0 when passing through, but that is the pacer's instantaneous
 plan (it reads 2 at an effective 0.9x too); the steady "visibly generating" signal is
-`generating` / `steadyMultiplier` (library PR #15), stamped with `publishedNs`, which the
+`generating` / `steadyMultiplier` (library PR #15, gate removed by PR #16), stamped with `publishedNs`, which the
 HUD's *FPS shown* Both separator uses (see [fps-display](fps-display.md)); `chosenN` = the fixed N, 0 in target mode; `delayMs` = D.
 A vblank that holds a real frame while the next one is still to come re-presents it and is
 not counted, so under Low latency with a saturated display the distinct-frame rate is a
