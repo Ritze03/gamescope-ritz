@@ -108,6 +108,7 @@
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/FrameGenHost.h"
+#include "FrameGen/TearHint.h"
 #include "../subprojects/FrameGen/gpu/pacing.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
@@ -7897,6 +7898,9 @@ namespace
 	};
 	FrameGenPacing_t s_FrameGen;
 
+	// The nested-Wayland tearing hint's state (FrameGen/TearHint.h); main loop only.
+	fgtear::Hint s_TearHint;
+
 	// The timer that paces output frames shorter than a vblank. Created with the
 	// process (one fd), registered on g_SteamCompMgrWaiter in steamcompmgr_main().
 	// The callback only records that it fired: the main loop acts on it.
@@ -10856,11 +10860,26 @@ steamcompmgr_main(int argc, char **argv)
 			// must therefore not depend on the GAME's own present mode (bTearing needs
 			// the base commit to be IMMEDIATE/MAILBOX, which a vsynced game is not):
 			// "Allow tearing" + the host offering the protocol is enough.
-			const bool bFGHostTear = bFGExtraPaced && !bTearing && cv_tearing_enabled &&
-				GetBackend()->SupportsTearing() && FrameGen_IsNestedWayland();
-			const bool bFGTearPresent = bFGTimerPaced && ( ( !bFGExtraPaced && bTearing ) || bFGHostTear ) &&
+			//
+			// The hint is a STATE (fgtear::Hint, FrameGen/TearHint.h), not a per-paint
+			// value: async from the first loop iteration the output timer paces the
+			// output until it has been off for 250 ms, vblank-driven paints in between
+			// included; an overlay or a fade is an immediate exception. The per-paint
+			// predicate it replaces (timer-paced && !forced repaint && ...) flipped
+			// the hint 22,995 times in 44 minutes whenever one paint in a few was a
+			// forced repaint or a pass-through. A genuine forced repaint is therefore
+			// NOT an exclusion here: on this backend the hint only tells the host how it
+			// may schedule the buffer, it does not make the commit wait for anything
+			// (see superdoc/features/backend-wayland.md, Tearing).
+			const bool bHostTearOk = cv_tearing_enabled && GetBackend()->SupportsTearing() && FrameGen_IsNestedWayland();
+			const bool bFGHostAsync = bHostTearOk &&
+				s_TearHint.Update( get_time_in_nanos(), bFGExtraPaced, bHasOverlay || is_fading_out() );
+			// Real-frame tearing (the game's own async request) while frame generation
+			// paces on the vblank timer: unchanged, per paint.
+			const bool bFGTearPresent = bFGHostAsync ||
+				( bFGTimerPaced && !bFGExtraPaced && bTearing &&
 				!bHasOverlay && !nIgnoredOverlayRepaints && !is_fading_out() &&
-				( !bForceRepaint || bFGOwnForce );
+				( !bForceRepaint || bFGOwnForce ) );
 
 			bool bShouldPaint = false;
 
