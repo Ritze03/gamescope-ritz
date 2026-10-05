@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`98292d8` (PR #17 `extra-timer-leave`, on top of PR #16 `pacing-fixes`, on top of PR #15 `pacing-hysteresis`; none merged when pinned)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`fb34454` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes` and #17 `extra-timer-leave` merged; before the merge the pin was the PR-branch head `98292d8`)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -701,7 +701,7 @@ simulation of that setup: hundreds a minute to under 1), and adds `Report::gener
 
 ### Pacing fixes (2026-10-05, library PR #16)
 
-Pinned at `98292d8` (`c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
+Pinned at `fb34454` on main (PRs #15-#17 merged; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
 than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
 excess (see [lag-spike-buffer](lag-spike-buffer.md)); the extra output timer got only tests and
 docs; and `Report::generating` is now just "Generate state and a generated frame presented
