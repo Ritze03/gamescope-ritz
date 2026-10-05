@@ -8106,25 +8106,44 @@ namespace
 		// 4.1 ms (default)": how long before its vblank the timer wakes to paint. It is
 		// the part of the latency the library cannot see, so it is in every line.
 		char szLead[ 112 ];
+		// "draw mean 5.1 / max 9.7 ms, fg gpu: estimate 0.31 synth 0.42 pair 1.2 ui 0.05 ms,
+		// missed 37/60": where a paint's time goes. Draw = wake to end of Present over the
+		// last 60 paints; missed = those that ran past their wake-up lead (ended after
+		// their vblank); fg gpu = the library's GPU timestamps (last values), n/a without.
+		char szTiming[ 160 ];
 		{
-			const gamescope::CVBlankTimer &Timer = GetVBlankTimer();
+			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			if ( Timer.UsesMeasuredLead() )
 				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (measured, max draw %.2f ms)",
 					Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6 );
 			else
 				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (default)", Timer.GetLastLead() / 1e6 );
+
+			size_t nDraws = 0;
+			const size_t nMissed = Timer.GetRecentDrawsOver( Timer.GetLastLead(), &nDraws );
+			const fghost::RenderStatus rs = fghost::GetRenderStatus();
+			char szGpu[ 80 ];
+			auto Ms = []( float f, char *p, size_t cb ) { if ( f < 0.0f ) snprintf( p, cb, "n/a" ); else snprintf( p, cb, "%.2f", f ); };
+			char szE[ 12 ], szS[ 12 ], szP[ 12 ], szU[ 12 ];
+			Ms( rs.lastEstimateMs, szE, sizeof( szE ) );
+			Ms( rs.lastSynthMs, szS, sizeof( szS ) );
+			Ms( rs.lastPairGpuMs, szP, sizeof( szP ) );
+			Ms( rs.lastUiMs, szU, sizeof( szU ) );
+			snprintf( szGpu, sizeof( szGpu ), "estimate %s synth %s pair %s ui %s", szE, szS, szP, szU );
+			snprintf( szTiming, sizeof( szTiming ), "draw mean %.2f / max %.2f ms, fg gpu: %s ms, missed %zu/%zu",
+				Timer.GetRecentMeanDrawTime() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, szGpu, nMissed, nDraws );
 		}
 
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
 				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ) );
+				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming );
 		else
-			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s",
+			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s",
 				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ) );
+				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming );
 	}
 
 	fghost::PacingStatus FrameGen_ToStatus( const fgpacing::Pacer::Report &r )

@@ -279,6 +279,27 @@ namespace gamescope
 		return m_ulRecentMaxDrawTime.load( std::memory_order_relaxed );
 	}
 
+	uint64_t CVBlankTimer::GetRecentMeanDrawTime()
+	{
+		std::unique_lock lock( m_DrawRingMutex );
+		if ( !m_nDrawRingCount )
+			return 0;
+		uint64_t ulSum = 0;
+		for ( size_t i = 0; i < m_nDrawRingCount; i++ )
+			ulSum += m_DrawRing[ i ];
+		return ulSum / m_nDrawRingCount;
+	}
+
+	size_t CVBlankTimer::GetRecentDrawsOver( uint64_t ulLimit, size_t *pnCount )
+	{
+		std::unique_lock lock( m_DrawRingMutex );
+		size_t nOver = 0;
+		for ( size_t i = 0; i < m_nDrawRingCount; i++ )
+			nOver += m_DrawRing[ i ] > ulLimit ? 1 : 0;
+		*pnCount = m_nDrawRingCount;
+		return nOver;
+	}
+
 	void CVBlankTimer::WaitToBeArmed()
 	{
 		// Wait for m_bArmed to change *from* false.

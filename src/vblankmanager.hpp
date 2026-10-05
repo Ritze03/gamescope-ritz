@@ -95,6 +95,11 @@ namespace gamescope
         uint64_t GetLastLead() const;
         // The largest of the last kDrawTimeWindow draw times, ns (0 = none yet).
         uint64_t GetRecentMaxDrawTime() const;
+        // The mean of the last kDrawTimeWindow draw times, ns (0 = none yet), and how
+        // many of them ran longer than ulLimit (a paint that ended after its vblank
+        // when ulLimit is the wake-up lead); *pnCount = how many draws are in the ring.
+        uint64_t GetRecentMeanDrawTime();
+        size_t GetRecentDrawsOver( uint64_t ulLimit, size_t *pnCount );
 
         void WaitToBeArmed();
         void ArmNextVBlank( bool bPreemptive );
