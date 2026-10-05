@@ -908,6 +908,7 @@ lines from `steamcompmgr.cpp`:
 - info on `frame generation: on, <mode>, <priority>, motion blur on|off` at start and
   `frame generation and motion blur: off` when both are off;
 - debug, at most every 5 s while on: the same numbers (`frame generation status: ...`).
+- The framegen status lines end with `draw mean/max` (wake to end of Present over the last 60 paints), `fg gpu: estimate/synth/pair/ui` (GPU timestamp queries, `n/a` if unsupported) and `missed K/N` (paints in that window that ended after their wake-up lead's vblank), to tell raw FG GPU cost from queue-wait behind the game. The 5 s periodic line is debug level; the info line prints on state changes.
 
 Not keyed on the rounded multiplier: a game at a fractional ratio would flap between two
 values and spam the log.
