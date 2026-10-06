@@ -117,7 +117,7 @@ namespace gamescope
 		bool bVRR = pBackend && pBackend->GetCurrentConnector() && pBackend->GetCurrentConnector()->IsVRRActive();
 		uint64_t ulOffset = 0;
 		LeadKind eKind = LeadKind::Default;
-		if ( vblank_measured_lead )
+		if ( !bVRR && vblank_measured_lead )
 		{
 			// Low-latency wake-up (on by default): all the work of a frame (frame
 			// generation, blur, the lag buffer, plain compositing) is inside the draw
@@ -128,12 +128,9 @@ namespace gamescope
 			// and the library's Low latency cannot fit generated frames between real ones.
 			// A rolling MAX (not an average) so one slow draw widens the lead at once and
 			// it narrows again only after kDrawTimeWindow clean ones.
-			// Under VRR the same lead plus upstream's VRR flush allowance (the VRR branch
-			// below used a fixed 2.4 + 0.3 ms whatever the draws cost). The VRR branch's
-			// bookkeeping (resetting the unused rolling max) is kept.
-			if ( bVRR && !bPreemptive )
-				m_ulRollingMaxDrawTime = kStartingVBlankDrawTime;
-			ulOffset = MeasuredLeadFor( bVRR, m_ulRecentMaxDrawTime.load( std::memory_order_relaxed ), ulRefreshInterval );
+			// Not under VRR: it was tried (2026-10-06) and reverted, the lead sat at the
+			// full-refresh cap and raced the feedback-driven re-arm. VRR keeps upstream's.
+			ulOffset = MeasuredLead( m_ulRecentMaxDrawTime.load( std::memory_order_relaxed ), ulRefreshInterval );
 			eKind = LeadKind::Measured;
 
 			if ( vblank_debug && !bPreemptive )

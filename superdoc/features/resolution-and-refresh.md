@@ -193,14 +193,20 @@ push.
   frame measures tiny draws, and a lead sized from those would miss the first refresh after an
   overlay or composite appears. Applies with or without compositing and with or without frame
   generation, motion blur or the lag buffer.
-- **VRR**, Off: upstream's fixed lead (compositing floor 2.4 ms while compositing + 0.3 ms
-  flush = 2.70 ms), whatever the draws cost. **VRR**, On (2026-10-06): `min(MeasuredLead() +
-  0.3 ms flush, one refresh)` -- `CVBlankTimer::MeasuredLeadFor(bVRR, ...)`, unit-tested. `Why:`
-  a 280 Hz VRR CS2 session showed the lead pinned at 2.70 ms under 4-11 ms draws and `missed`
-  5-33 of 60, because the VRR branch ignored the measured draw time. This corrects what the
-  timer wakes for under VRR; it is not claimed to be the cause of any frame-rate shortfall. The
+- **VRR** (On or Off): upstream's fixed lead (compositing floor 2.4 ms while compositing +
+  0.3 ms flush = 2.70 ms), whatever the draws cost; the switch does not apply under VRR. The
   status line says `(measured, ...)` only when the timer really used the measured lead, else
-  `(vrr)` or `(default)` (`CVBlankTimer::GetLastLeadKind()`).
+  `(vrr)` or `(default)` (`CVBlankTimer::GetLastLeadKind()`). `Why:` the measured lead under
+  VRR was tried 2026-10-06 (`e8e6424`) and reverted the same day. At 280 Hz with max draws of
+  3-6 ms it sat at the full-refresh cap (3.57 ms) 99% of the time; under VRR the timer is
+  re-armed from each presentation feedback (`WaylandBackend.cpp`), and a full-refresh lead
+  makes the next wake "feedback + one refresh", which races the preemptive re-arm. A timing
+  model over 16 host-latency combinations gave 257.5 fps presented with 9.8% of frames longer
+  than 1.5 refresh intervals, against 272.6 fps and 2.6% with the 2.70 ms lead; the user's
+  session measured 250 +/- 19 presented, matching the measured-lead rows. User report: "it's
+  even worse than before ... sometimes the FPS I'm actually achieving are even lower ...
+  less smooth ... more prone to stutters". Without VRR both leads cap at 3.57 ms at 280 Hz,
+  so only VRR differed.
 
 **Trade-off** (stated in the help text): a draw that suddenly takes longer than the recent
 maximum misses the refresh, so the previous image shows once more (one stutter); the window is a

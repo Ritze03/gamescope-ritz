@@ -145,9 +145,4 @@ TEST_CASE( "vblank measured lead: max draw + 0.75 ms, floored, clamped to a refr
 	REQUIRE( CVBlankTimer::MeasuredLead( 750'000ull, k240 ) == 1'500'000ull );
 	// ...but the floor itself never exceeds a refresh.
 	REQUIRE( CVBlankTimer::MeasuredLead( 50'000ull, 1'000'000ull ) == 1'000'000ull );
-	// Under VRR: the same lead plus the flush allowance, still capped at one refresh.
-	REQUIRE( CVBlankTimer::MeasuredLeadFor( false, 1'100'000ull, k240 ) == 1'850'000ull );
-	REQUIRE( CVBlankTimer::MeasuredLeadFor( true, 1'100'000ull, k240 ) == 1'850'000ull + CVBlankTimer::kVRRFlushingTime );
-	REQUIRE( CVBlankTimer::MeasuredLeadFor( true, 2 * kMsNs, k280 ) == 2 * kMsNs + 750'000ull + 300'000ull );
-	REQUIRE( CVBlankTimer::MeasuredLeadFor( true, 11 * kMsNs, k280 ) == k280 );
 }

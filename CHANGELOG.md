@@ -19,8 +19,8 @@ The newest version below is the one this build reports.
 - **Target fps boost**: frame generation now boosts a game that runs a few percent under
   the target instead of only once it is about 9% under, and no longer gets stuck not
   boosting for a whole session.
-- **Wake-up lead under VRR**: with Low-latency wake-up on, the wake-up lead now follows
-  the measured draw time under VRR too, and the status line says which one it used.
+- **Wake-up lead status**: the status line now says which wake-up lead is in use
+  (measured, VRR or default).
 - **Crosshair V2**: panning no longer drags a second copy of the crosshair across the
   screen.
 
