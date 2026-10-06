@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`0015453` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave` and #18 `ui-box-margin` merged; the pin was `fb34454` before #18)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`cdad65b` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave`, #18 `ui-box-margin` and #19 `target-start-band` merged; the pin was `0015453` before #19)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -730,9 +730,17 @@ simulation of that setup: hundreds a minute to under 1), and adds `Report::gener
 `steadyMultiplier` for a HUD. Details and measurements: `subprojects/FrameGen/INTEGRATION.md`,
 "The generate / pass decision". gamescope only plumbs the two new fields into `PacingStatus`.
 
+**Target start band (2026-10-06, library PR #19).** Target mode's generate/pass band is now
+stop 1.005 / start 1.04 (was 1.02 / 1.10), and the first decision is re-taken until the
+steady rate is mature. `Why:` the user reported *"the adaptive mode sometimes for some
+reason doesn't boost up to the target FPS"*; a game at 255-274 fps on a 280 target stayed
+passed through (it had to be about 9% under), and about a quarter of simulated sessions got
+stranded on a premature first decision. After the fix 262-275 fps games generate 100% and
+present 280. No host code changed.
+
 ### Pacing fixes (2026-10-05, library PR #16)
 
-Pinned at `0015453` on main (PRs #15-#18 merged, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
+Pinned at `cdad65b` on main (PRs #15-#19 merged; #19 is the Target start band, below; `0015453` was PRs #15-#18, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
 than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
 excess (see [lag-spike-buffer](lag-spike-buffer.md)); the extra output timer got only tests and
 docs; and `Report::generating` is now just "Generate state and a generated frame presented

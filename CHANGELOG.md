@@ -16,6 +16,15 @@ The newest version below is the one this build reports.
   so the crosshair no longer smears with a small box or with motion blur.
 - **Nested tearing**: the tearing request in a desktop window no longer flips on and
   off many times a second while frame generation runs above the refresh rate.
+- **Target fps boost**: frame generation now boosts a game that runs a few percent under
+  the target instead of only once it is about 9% under, and no longer gets stuck not
+  boosting for a whole session.
+- **Wake-up lead under VRR**: with Low-latency wake-up on, the wake-up lead now follows
+  the measured draw time under VRR too, and the status line says which one it used.
+
+### Info
+- **Frame generation log**: the 5-second status line is now written to the normal log
+  while frame generation, motion blur or the lag spike buffer is on.
 
 ## [0.11.1] – 2026-10-05
 
