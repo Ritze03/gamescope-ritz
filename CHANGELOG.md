@@ -9,6 +9,14 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.11.2] – 2026-10-06
+
+### Fixed
+- **Crosshair box**: a box that just fits the crosshair now protects its soft edge too,
+  so the crosshair no longer smears with a small box or with motion blur.
+- **Nested tearing**: the tearing request in a desktop window no longer flips on and
+  off many times a second while frame generation runs above the refresh rate.
+
 ## [0.11.1] – 2026-10-05
 
 ### Added

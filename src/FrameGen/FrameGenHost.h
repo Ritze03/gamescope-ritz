@@ -322,6 +322,11 @@ namespace fghost
 		uint32_t uFactor = 1;              // game pixels per picture pixel (1 = exact)
 		// The box inside the picture, in picture pixels (fractional when uFactor > 1).
 		float flBoxX = 0.0f, flBoxY = 0.0f, flBoxW = 0.0f, flBoxH = 0.0f;
+		// The protected "work rectangle" (the box grown by the mode's margin: 2 px for
+		// V1, 1 px for V2, none otherwise; clamped to the frame): game pixels, and its
+		// place in the picture in picture pixels.
+		uint32_t uWorkW = 0, uWorkH = 0;
+		float flWorkX = 0.0f, flWorkY = 0.0f, flWorkW = 0.0f, flWorkH = 0.0f;
 		bool bUiOn = true;                 // UI protection was on for this capture
 		// uW x uH, tightly packed, RGBA, 8-bit sRGB, top row first.
 		uint8_t rgba[ kBoxPreviewMax * kBoxPreviewMax * 4 ] = {};

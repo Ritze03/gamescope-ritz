@@ -135,12 +135,15 @@ if the host offers it.
   `STEAM_GAMESCOPE_TEARING_SUPPORTED` for Steam. Nothing in the Shell gates its tearing row
   on `SupportsTearing()` (only the startup log line `Supports Tearing:` does), so the row is
   unchanged. It is a **request**: the host decides whether the window really tears.
-- **Frame generation's output timer** also requests `async` when the game itself is
-  vsynced (`bFGHostTear`, 2026-10-05; see [frame-generation.md](frame-generation.md)),
-  since otherwise the host discards every extra frame. Each hint change is logged
-  (`wayland: tearing hint -> async` / `vsync`).
+- **Frame generation's output timer** also requests `async` when the game itself is vsynced, as a
+  latched state (`fgtear::Hint`, `src/FrameGen/TearHint.h`; 2026-10-05, made a state 2026-10-06):
+  async while the timer paces the output and for 250 ms after it stops, vsync immediately over an
+  overlay or a fade (async again after 250 ms without one). `Why:` a per-paint value flipped 22,995
+  times in 44 minutes (about 23 per second) in a Forza Horizon 6 session. Each hint change is logged
+  (`wayland: tearing hint -> async` / `vsync`), so the log is one line per real transition. See
+  [frame-generation.md](frame-generation.md).
 - **Tearing off, or a host without the protocol:** `async` is only ever requested when
-  `bTearing` (or `bFGHostTear`, which needs the setting too) holds, so with the setting off the hint stays at its initial `vsync` and no
+  `bTearing` (or the output-timer state above, which needs the setting too) holds, so with the setting off the hint stays at its initial `vsync` and no
   request is sent; without the protocol no object is created. Wire behaviour is as before.
 - **Hyprland** (the user's host) needs all of: `general { allow_tearing = true }`; the
   gamescope window **fullscreen** (Hyprland only tears fullscreen windows); and, to force it

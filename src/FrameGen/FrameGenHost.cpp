@@ -893,15 +893,23 @@ namespace fghost
 		}
 
 		// ---- the box preview: record (render thread) and publish ----
-		// The box as the library places it (Interpolator::computeBox): centred, the
-		// preview never uses an offset.
-		void BoxRect( uint32_t w, uint32_t h, int nTenths, uint32_t *pbw, uint32_t *pbh, int *pbx, int *pby )
+		// The box as the library places it (Interpolator::boxRect: centred, the host
+		// sets no offset) and the work rectangle it protects (workRect: the box grown
+		// by the mode's margin, 2 px for V1, 1 px for V2). Asked of the library itself,
+		// with the live Config's mode, so the preview can never disagree with it.
+		void BoxRects( uint32_t w, uint32_t h, int nTenths, UiProt eUi, int32_t box[ 4 ], int32_t work[ 4 ] )
 		{
 			framegen::Settings st;
 			st.uiBoxHeightFrac = float( nTenths ) / 1000.0f;
-			framegen::Interpolator::boxSize( st, w, h, pbw, pbh );
-			*pbx = ( int( w ) - int( *pbw ) ) / 2;
-			*pby = ( int( h ) - int( *pbh ) ) / 2;
+			switch ( eUi )
+			{
+				case UiProt::Off:         st.uiProtection = framegen::UiProtection::Off; break;
+				case UiProt::Crosshair:   st.uiProtection = framegen::UiProtection::Crosshair; break;
+				case UiProt::WholeScreen: st.uiProtection = framegen::UiProtection::WholeScreen; break;
+				case UiProt::CrosshairV2: st.uiProtection = framegen::UiProtection::CrosshairV2; break;
+			}
+			framegen::Interpolator::boxRect( st, w, h, box );
+			framegen::Interpolator::workRect( st, w, h, work );
 		}
 
 		// Records the crop pass for a NEW real frame into pCb, when the overlay wants
@@ -921,16 +929,19 @@ namespace fghost
 				return false;
 
 			const uint32_t w = pLayer0->width(), h = pLayer0->height();
-			uint32_t bw, bh;
-			int bx, by;
-			BoxRect( w, h, cfg.uiBoxTenths, &bw, &bh, &bx, &by );
+			int32_t box[ 4 ], work[ 4 ];
+			BoxRects( w, h, cfg.uiBoxTenths, cfg.ui, box, work );
+			const int bx = box[ 0 ], by = box[ 1 ];
+			const uint32_t bw = uint32_t( box[ 2 ] ), bh = uint32_t( box[ 3 ] );
 
 			// The crop: the box with its own size again around it (a quarter of the box
 			// on every side is the least that shows what the box misses), at least 48
-			// px, never more than the frame. Reduced by a whole factor when it would
-			// not fit the picture, so large boxes on large frames stay exact means.
+			// px, never more than the frame, and always the work rectangle (the box
+			// plus its 1-2 px margin) with some context. Reduced by a whole factor when
+			// it would not fit the picture, so large boxes on large frames stay exact means.
 			const uint32_t uBoxMax = std::max( bw, bh );
-			uint32_t uSide = std::min( std::max( uBoxMax * 2u, 48u ), std::min( w, h ) );
+			const uint32_t uWorkMax = std::max( uint32_t( work[ 2 ] ), uint32_t( work[ 3 ] ) );
+			uint32_t uSide = std::min( std::max( { uBoxMax * 2u, uWorkMax + 16u, 48u } ), std::min( w, h ) );
 			const uint32_t uFactor = ( uSide + kBoxPreviewMax - 1u ) / kBoxPreviewMax;
 			const uint32_t uOut = ( uSide + uFactor - 1u ) / uFactor;
 			const uint32_t uSrcSide = uOut * uFactor;
@@ -960,6 +971,12 @@ namespace fghost
 			m.flBoxY = float( by - nY0 ) / float( uFactor );
 			m.flBoxW = float( bw ) / float( uFactor );
 			m.flBoxH = float( bh ) / float( uFactor );
+			m.uWorkW = uint32_t( work[ 2 ] );
+			m.uWorkH = uint32_t( work[ 3 ] );
+			m.flWorkX = float( work[ 0 ] - nX0 ) / float( uFactor );
+			m.flWorkY = float( work[ 1 ] - nY0 ) / float( uFactor );
+			m.flWorkW = float( work[ 2 ] ) / float( uFactor );
+			m.flWorkH = float( work[ 3 ] ) / float( uFactor );
 			m.bUiOn = cfg.ui != UiProt::Off;
 			g_BoxPending.ulLastRecordNs = ulNow;
 			g_BoxPending.bPending = true;
@@ -995,6 +1012,12 @@ namespace fghost
 			g_BoxPreview.flBoxY = m.flBoxY;
 			g_BoxPreview.flBoxW = m.flBoxW;
 			g_BoxPreview.flBoxH = m.flBoxH;
+			g_BoxPreview.uWorkW = m.uWorkW;
+			g_BoxPreview.uWorkH = m.uWorkH;
+			g_BoxPreview.flWorkX = m.flWorkX;
+			g_BoxPreview.flWorkY = m.flWorkY;
+			g_BoxPreview.flWorkW = m.flWorkW;
+			g_BoxPreview.flWorkH = m.flWorkH;
 			g_BoxPreview.bUiOn = m.bUiOn;
 			g_BoxPreview.ulCapturedNs = get_time_in_nanos();
 			// Published last: GetBoxPreview() checks the generation before taking the lock.
@@ -1209,8 +1232,9 @@ namespace fghost
 
 	void UiBoxPixels( uint32_t uWidth, uint32_t uHeight, int nTenths, uint32_t *puBoxW, uint32_t *puBoxH )
 	{
-		int bx, by;
-		BoxRect( uWidth, uHeight, std::min( std::max( nTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ), puBoxW, puBoxH, &bx, &by );
+		framegen::Settings st;
+		st.uiBoxHeightFrac = float( std::min( std::max( nTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ) ) / 1000.0f;
+		framegen::Interpolator::boxSize( st, uWidth, uHeight, puBoxW, puBoxH );
 	}
 
 	void SetBlurConfig( const BlurConfig &cfg )

@@ -9,7 +9,8 @@
 // configure it, like, really precise."
 //
 // A crop of the game's centre (the box plus context), pixel-exact, with the box
-// outlined and everything outside it dimmed. The pixels come from the
+// outlined, the protected area (the box plus its 1-2 px margin) outlined fainter,
+// and everything outside the protected area dimmed. The pixels come from the
 // frame-generation host (fghost::GetBoxPreview(): a small compute pass on the
 // game's real frame, captured while this picture is on screen and read back
 // without a wait); this file only owns the ImGui texture and the drawing.

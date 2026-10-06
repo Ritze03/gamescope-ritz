@@ -455,11 +455,12 @@ namespace gamescope
 					s_Settings.framegen.ui_box_height = std::clamp( std::round( fl * 10.0f ) / 10.0f, 0.5f, 10.0f );
 					PersistAndPush();
 				} ) )
-			.Help( "The side of the protected square in the middle of the screen, as a share of the "
-			       "game's height. Small is better: everything inside it is pasted from the real "
-			       "frame, so a box much bigger than the crosshair also holds some of the "
-			       "background. Make it just big enough for the whole crosshair - the picture "
-			       "in the Inspector shows exactly what it covers." )
+			.Help( "The side of the square in the middle of the screen where frame generation "
+			       "looks for the crosshair, as a share of the game's height. It should cover the "
+			       "crosshair's solid pixels; protection reaches a pixel or two beyond its edge, "
+			       "so the soft rim may stick out, and a bit of extra room is harmless. A box far "
+			       "bigger than the crosshair may protect some still background too. The picture "
+			       "in the Inspector shows the box and the protected area." )
 			.Range( 0.5f, 10.0f ).Step( 0.1f )
 			.Default( 2.5f )
 			.ValueText( []( const ui::Value &v )

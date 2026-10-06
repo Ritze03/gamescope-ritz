@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`fb34454` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes` and #17 `extra-timer-leave` merged; before the merge the pin was the PR-branch head `98292d8`)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`0015453` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave` and #18 `ui-box-margin` merged; the pin was `fb34454` before #18)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -397,15 +397,36 @@ own atomic word (`g_uUiBox`; the main config word is full), and a change is a ru
 no wait. A game whose frame size changes needs nothing: the library recomputes the box from the
 fraction.
 
+**The box margin (library PR #18, 2026-10-06).** The box is where UI is **detected**; what it
+protects reaches past it. The library grows the box by `Interpolator::boxMargin()` -- **2 px for
+Crosshair (V1), 1 px for Crosshair V2, 0 for Off / Whole screen** -- clamped to the frame, into a
+*work rectangle* (`Interpolator::workRect()`; the box itself is `boxRect()`). The mask dilation, the
+inpaint source and the paste-back use the work rectangle, so a box that just fits the crosshair
+also protects its anti-aliased rim; detection still stays inside the box. The host asks the
+library for both rectangles with the live mode (`BoxRects()` in `FrameGenHost.cpp`), so the
+preview cannot disagree with it. `Why:` the user set the box to 1.1% (11 px at 960 high) because
+the help text said *"Make it just big enough for the whole crosshair"* and *"Small is better"*;
+their CS2 crosshair (about 8x7 game px) then smeared under frame generation: *"my crosshair isn't
+protected"*, and *"with motion blur enabled, it also started smearing the crosshair even more"*.
+The rim fell outside the box. Library tests: 9 px boxes went from 3 / 1 / 6 crosshair pixels wrong
+to 0, a 34 px box on a 35 px test crosshair from 2-10 wrong to 0. The help text no longer says
+everything inside the box is pasted (false for V1, which pastes only still pixels plus a rim, and
+for V2, which pastes only confirmed unchanged pixels): it says the box is where the crosshair is
+looked for, should cover its solid pixels, the soft rim may stick out, and extra room is harmless.
+
 ### The box preview
 
 The two UI-protection rows (`framegen.ui_protection`, `framegen.ui_box_height`) declare
 `.Preview( Entry::PreviewKind::UiBox )`, so while either is the selected row the Shell's
 **Inspector** shows, above VALUES, the game's pixels under the box: a crop of the frame's centre
 (the box plus its own size again around it, at least 48 px), enlarged by a whole number with
-**nearest** replication so each game pixel is a crisp block, everything outside the box dimmed,
-the box outlined (a dark halo under an accent line), and `Box 24 × 24 px` / `Game frame 1280 × 960`
-under it. The user's request: *"a slider, so the user can adjust it for himself, and then in the
+**nearest** replication so each game pixel is a crisp block, everything outside the **protected area** (the work rectangle, see the
+box margin above) dimmed, the box outlined (a dark halo under an accent line) and the work
+rectangle outlined fainter (a thin translucent accent line, drawn only when the margin is at
+least a fraction of a screen pixel, so not for Off / Whole screen), and `Box 24 × 24 px · protected 28 × 28 px` /
+`Game frame 1280 × 960` under it (just `Box 24 × 24 px` when there is no margin; `· picture
+reduced` joins the second line when the crop is reduced). The crop is at least the work rectangle
+plus 16 px, so the margin is always inside the picture. The user's request: *"a slider, so the user can adjust it for himself, and then in the
 right inspector rail we can show an image of the area, basically, that's underneath the current UI,
 so he can see if the whole crosshair fits in, and then the user can configure it, like, really
 precise."* It follows the **selected** row like the Adaptive Brightness strip does (a click on the row
@@ -649,12 +670,22 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    refresh off; `FrameGen_CanExceedRefresh()` is always true nested) the extra output frames
    were committed with the `vsync` hint and the host discarded them: Hyprland reported
    `tearingHint: 0`, `tearingBlockedBy: window settings`, with `allow_tearing true` on the
-   monitor. Now `bFGHostTear` (main loop, next to `bFGTearPresent`) = output timer && `Allow
-   tearing` on && `SupportsTearing()` && nested Wayland, independent of the game's present
-   mode, and feeds `bFGTearPresent`, so the `async` hint goes out while the output timer
-   generates and `vsync` returns when it stops (not over an overlay, a fade or a genuine forced
-   repaint, as before). The backend logs each change: `wayland: tearing hint -> async` /
-   `vsync` (info, `xdg_backend`). `Why:` the game's present mode says how the GAME wants its
+   monitor. Now the hint is a **state**, `fgtear::Hint` (`src/FrameGen/TearHint.h`, main loop next to
+   `bFGTearPresent`): it goes `async` the first loop iteration the output timer paces the output
+   with `Allow tearing` on, `SupportsTearing()` and nested Wayland (independent of the game's
+   present mode), stays async on every paint, vblank-driven ones included, and returns to
+   `vsync` only once the output timer has been off for 250 ms. An overlay or a fade is an
+   immediate exception (vsync at once, async again after 250 ms without one). A genuine forced
+   repaint is not an exclusion on this backend. The backend logs each change:
+   `wayland: tearing hint -> async` / `vsync` (info, `xdg_backend`), now once per real
+   transition. `Why:` the first version recomputed the hint per paint from
+   `bFGTimerPaced && !forced repaint && ...`; with the pacer's plan flickering between
+   generating and passing through around the output rate, and forced repaints from the
+   HUD/overlays arriving between timer paints, it flipped **22,995 times in 44 minutes** of one
+   Forza Horizon 6 session (2026-10-05, ~23/s, only while generating), each a
+   `wp_tearing_control` request. The hint only tells the host how it may schedule the buffer; it
+   is not a per-frame decision. The game's own async request while frame generation paces on
+   the vblank timer is still per paint, unchanged. `Why:` the game's present mode says how the GAME wants its
    own frames shown; frames generated between vblanks have no meaning to the host unless it is
    told to show them at once, so gating that on the game is wrong. `Allow tearing` still gates
    it: with it off the user has asked for no tearing, and the output then stays capped by the
@@ -701,7 +732,7 @@ simulation of that setup: hundreds a minute to under 1), and adds `Report::gener
 
 ### Pacing fixes (2026-10-05, library PR #16)
 
-Pinned at `fb34454` on main (PRs #15-#17 merged; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
+Pinned at `0015453` on main (PRs #15-#18 merged, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
 than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
 excess (see [lag-spike-buffer](lag-spike-buffer.md)); the extra output timer got only tests and
 docs; and `Report::generating` is now just "Generate state and a generated frame presented

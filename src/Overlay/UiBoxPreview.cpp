@@ -15,9 +15,10 @@
 //     replication) before upload, so each game pixel is a crisp block rather than
 //     a bilinear smear -- the picture exists to judge individual pixels.
 //
-//  3. THE DRAWING: the picture, everything outside the box dimmed, the box's
-//     outline (a dark halo under an accent line, so it reads on any content), a
-//     caption with the box size in game pixels.
+//  3. THE DRAWING: the picture, everything outside the PROTECTED area (the box
+//     grown by its margin, the library's workRect()) dimmed, the box's outline (a
+//     dark halo under an accent line, so it reads on any content), a fainter
+//     outline for the protected area, a caption with both sizes in game pixels.
 //
 // `Why a fixed 192 px texture and not one sized per capture:` the capture's size
 // follows the box (24 px box -> ~56 px crop), and re-creating a texture per slider
@@ -199,29 +200,47 @@ namespace gamescope::overlay
 		const ImVec2 bmin( rcImage.Min.x + bp.flBoxX * flK, rcImage.Min.y + bp.flBoxY * flK );
 		const ImVec2 bmax( bmin.x + bp.flBoxW * flK, bmin.y + bp.flBoxH * flK );
 
-		// Everything outside the box dimmed, so what the box covers is what stands out.
+		// The work rectangle: the box grown by the mode's margin (V1 2 px, V2 1 px),
+		// which is what frame generation actually protects. Same mapping as the box.
+		const ImVec2 wmin( rcImage.Min.x + bp.flWorkX * flK, rcImage.Min.y + bp.flWorkY * flK );
+		const ImVec2 wmax( wmin.x + bp.flWorkW * flK, wmin.y + bp.flWorkH * flK );
+		const bool bMargin = ( bmin.x - wmin.x ) + ( bmin.y - wmin.y ) + ( wmax.x - bmax.x ) + ( wmax.y - bmax.y ) > 0.5f;
+
+		// Everything outside the PROTECTED area (the work rectangle) dimmed, so what
+		// frame generation keeps stands out; the box itself is the accent line and the
+		// margin ring between the two is the fainter outline below. `Why the work
+		// rectangle and not the box:` the dimming used to follow the box, which showed
+		// the soft rim of a crosshair as "unprotected" although the library pastes it.
 		const ImU32 colDim = IM_COL32( 0, 0, 0, 120 );
-		pDl->AddRectFilled( rcImage.Min, ImVec2( rcImage.Max.x, bmin.y ), colDim );                    // above
-		pDl->AddRectFilled( ImVec2( rcImage.Min.x, bmax.y ), rcImage.Max, colDim );                   // below
-		pDl->AddRectFilled( ImVec2( rcImage.Min.x, bmin.y ), ImVec2( bmin.x, bmax.y ), colDim );      // left
-		pDl->AddRectFilled( ImVec2( bmax.x, bmin.y ), ImVec2( rcImage.Max.x, bmax.y ), colDim );      // right
+		pDl->AddRectFilled( rcImage.Min, ImVec2( rcImage.Max.x, wmin.y ), colDim );                    // above
+		pDl->AddRectFilled( ImVec2( rcImage.Min.x, wmax.y ), rcImage.Max, colDim );                   // below
+		pDl->AddRectFilled( ImVec2( rcImage.Min.x, wmin.y ), ImVec2( wmin.x, wmax.y ), colDim );      // left
+		pDl->AddRectFilled( ImVec2( wmax.x, wmin.y ), ImVec2( rcImage.Max.x, wmax.y ), colDim );      // right
 
 		// Two coats, like the strip's divider: a dark halo under the accent line so it
-		// reads on bright and dark content alike.
+		// reads on bright and dark content alike. The work rectangle gets a thin,
+		// translucent accent line (drawn first, so the box line stays on top).
 		const float flHalo = std::max( 3.0f, Px( 3.0f ) );
 		const float flLine = std::max( 1.0f, Px( 1.5f ) );
+		if ( bMargin )
+		{
+			pDl->AddRect( wmin, wmax, IM_COL32( 0, 0, 0, 140 ), 0.0f, 0, std::max( 2.0f, Px( 2.0f ) ) );
+			pDl->AddRect( wmin, wmax, Accent( 0.55f ), 0.0f, 0, std::max( 1.0f, Px( 1.0f ) ) );
+		}
 		pDl->AddRect( bmin, bmax, IM_COL32( 0, 0, 0, 200 ), 0.0f, 0, flHalo );
 		pDl->AddRect( bmin, bmax, Accent( 1.0f ), 0.0f, 0, flLine );
 		pDl->AddRect( rcImage.Min, rcImage.Max, Col( Role::Line ) );
 
 		char sz[ 160 ];
-		std::snprintf( sz, sizeof( sz ), "Box %u × %u px%s", bp.uBoxW, bp.uBoxH,
-			bp.uFactor > 1 ? "  (picture reduced)" : "" );
+		if ( bp.uWorkW != bp.uBoxW || bp.uWorkH != bp.uBoxH )
+			std::snprintf( sz, sizeof( sz ), "Box %u × %u px · protected %u × %u px", bp.uBoxW, bp.uBoxH, bp.uWorkW, bp.uWorkH );
+		else
+			std::snprintf( sz, sizeof( sz ), "Box %u × %u px", bp.uBoxW, bp.uBoxH );
 		const float flLineH = MeasureText( TypeRole::Meta, "Ag" ).y;
 		DrawText( ImRect( rcCaption.Min.x, rcCaption.Min.y, rcCaption.Max.x, rcCaption.Min.y + flLineH ),
 		          TypeRole::Meta, Col( Role::TextLabel ), sz, TextAlign::Left );
-		std::snprintf( sz, sizeof( sz ), bp.bUiOn ? "Game frame %u × %u" : "Game frame %u × %u · UI protection is off",
-			bp.uGameW, bp.uGameH );
+		std::snprintf( sz, sizeof( sz ), "Game frame %u × %u%s%s", bp.uGameW, bp.uGameH,
+			bp.uFactor > 1 ? " · picture reduced" : "", bp.bUiOn ? "" : " · UI protection is off" );
 		DrawText( ImRect( rcCaption.Min.x, rcCaption.Min.y + flLineH, rcCaption.Max.x, rcCaption.Min.y + flLineH * 2.0f ),
 		          TypeRole::Meta, Col( Role::TextMeta ), sz, TextAlign::Left );
 	}

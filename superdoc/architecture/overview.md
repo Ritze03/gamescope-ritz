@@ -93,7 +93,8 @@ one place that wires all of it together at startup.
   `FrameGenHost.{h,cpp}` (`fghost`, the renderer glue: frame ring, lazy per-slot synthesis,
   the one `recordSynthBlur` call, own command buffer, status; `Config` for frame generation,
   `BlurConfig` for motion blur, `LagBufferConfig` for the lag spike buffer; the ring follows the
-  pacer's history depth) and `FrameGenLib.cpp` (wrapper that compiles the
+  pacer's history depth) and `TearHint.h` (`fgtear::Hint`, the latched nested-Wayland
+  tearing hint for the output timer), `Pacing.h` and `FrameGenLib.cpp` (wrapper that compiles the
   `subprojects/FrameGen` library -- optical flow, blur, UI protection **and the pacer**,
   `gpu/pacing.h`, `framegen::pacing` -- into the binary). The Inspector's UI-protection box
   picture is `src/Overlay/UiBoxPreview.{h,cpp}` (texture + drawing) over the host's
