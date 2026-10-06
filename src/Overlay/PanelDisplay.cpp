@@ -681,7 +681,7 @@ namespace gamescope
 		a.Facts( "display.wakeup_lead", "Wake-up lead", []{
 			const gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			char sz[ 96 ];
-			if ( Timer.UsesMeasuredLead() )
+			if ( Timer.GetLastLeadKind() == gamescope::CVBlankTimer::LeadKind::Measured )
 				std::snprintf( sz, sizeof( sz ), "%.1f ms (measured, max draw %.1f ms)",
 					Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6 );
 			else

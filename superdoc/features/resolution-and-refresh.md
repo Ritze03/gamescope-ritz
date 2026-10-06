@@ -193,7 +193,14 @@ push.
   frame measures tiny draws, and a lead sized from those would miss the first refresh after an
   overlay or composite appears. Applies with or without compositing and with or without frame
   generation, motion blur or the lag buffer.
-- **VRR** keeps its own small lead (0.3 ms red zone plus the compositing floor) in both modes.
+- **VRR**, Off: upstream's fixed lead (compositing floor 2.4 ms while compositing + 0.3 ms
+  flush = 2.70 ms), whatever the draws cost. **VRR**, On (2026-10-06): `min(MeasuredLead() +
+  0.3 ms flush, one refresh)` -- `CVBlankTimer::MeasuredLeadFor(bVRR, ...)`, unit-tested. `Why:`
+  a 280 Hz VRR CS2 session showed the lead pinned at 2.70 ms under 4-11 ms draws and `missed`
+  5-33 of 60, because the VRR branch ignored the measured draw time. This corrects what the
+  timer wakes for under VRR; it is not claimed to be the cause of any frame-rate shortfall. The
+  status line says `(measured, ...)` only when the timer really used the measured lead, else
+  `(vrr)` or `(default)` (`CVBlankTimer::GetLastLeadKind()`).
 
 **Trade-off** (stated in the help text): a draw that suddenly takes longer than the recent
 maximum misses the refresh, so the previous image shows once more (one stutter); the window is a

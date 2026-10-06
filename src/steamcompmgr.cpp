@@ -8044,7 +8044,7 @@ namespace
 
 	// One line when the mode / multiplier / target / priority, whether it is
 	// generating, motion blur's settings or whether it is applied, the pass reason
-	// or the renderer's reason changes, plus (debug) a compact one at most every 5 s
+	// or the renderer's reason changes, plus (info) a compact one at most every 5 s
 	// while FG or blur is on. Called where the pacing status
 	// is published and when the renderer's reason moves, never per frame. (Not
 	// keyed on the rounded multiplier: a game at a fractional ratio would flap
@@ -8117,11 +8117,15 @@ namespace
 		char szTiming[ 160 ];
 		{
 			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
-			if ( Timer.UsesMeasuredLead() )
+			// What the timer actually used last: measured (also under VRR), VRR's fixed
+			// upstream lead, or upstream's non-VRR timing.
+			const gamescope::CVBlankTimer::LeadKind eKind = Timer.GetLastLeadKind();
+			if ( eKind == gamescope::CVBlankTimer::LeadKind::Measured )
 				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (measured, max draw %.2f ms)",
 					Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6 );
 			else
-				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (default)", Timer.GetLastLead() / 1e6 );
+				snprintf( szLead, sizeof( szLead ), "wake-up lead %.2f ms (%s)", Timer.GetLastLead() / 1e6,
+					eKind == gamescope::CVBlankTimer::LeadKind::Vrr ? "vrr" : "default" );
 
 			size_t nDraws = 0;
 			const size_t nMissed = Timer.GetRecentDrawsOver( Timer.GetLastLead(), &nDraws );
@@ -8138,6 +8142,9 @@ namespace
 				Timer.GetRecentMeanDrawTime() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, szGpu, nMissed, nDraws );
 		}
 
+		// The periodic line is info too (it was debug): a steady-state shortfall (e.g.
+		// 257-279 presented against a 280 target while still "generating") never
+		// changes state, so it never appeared. One line per 5 s, only while active.
 		if ( bChanged )
 			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
@@ -8145,7 +8152,7 @@ namespace
 				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming );
 		else
-			fg_log.debugf( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s",
+			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s",
 				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming );
 	}

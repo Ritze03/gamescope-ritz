@@ -642,7 +642,7 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    the user then approved the measured lead for all play, with the trade-off stated in the
    setting's help text. The
    effective lead is in the debug status line: `wake-up lead 1.89 ms (measured, max draw 1.14
-   ms)` or `(default)`.
+   ms)` or `(default)` (`(vrr)` too, since 2026-10-06).
 3. **Tearing was off for generated frames.** The main loop forced `FlipType::Normal` while
    `FrameGen_TimerPaced()` even with tearing on (the user's CS2 profile has it on). Now the paint
    is still *decided* on the timer tick, but when `bTearing` (`cv_tearing_enabled &&
@@ -938,8 +938,8 @@ lines from `steamcompmgr.cpp`:
   whether it is applied too;
 - info on `frame generation: on, <mode>, <priority>, motion blur on|off` at start and
   `frame generation and motion blur: off` when both are off;
-- debug, at most every 5 s while on: the same numbers (`frame generation status: ...`).
-- The framegen status lines end with `draw mean/max` (wake to end of Present over the last 60 paints), `fg gpu: estimate/synth/pair/ui` (GPU timestamp queries, `n/a` if unsupported) and `missed K/N` (paints in that window that ended after their wake-up lead's vblank), to tell raw FG GPU cost from queue-wait behind the game. The 5 s periodic line is debug level; the info line prints on state changes.
+- info (since 2026-10-06; was debug), at most every 5 s while on: the same numbers (`frame generation status: ...`).
+- The framegen status lines end with `draw mean/max` (wake to end of Present over the last 60 paints), `fg gpu: estimate/synth/pair/ui` (GPU timestamp queries, `n/a` if unsupported) and `missed K/N` (paints in that window that ended after their wake-up lead's vblank), to tell raw FG GPU cost from queue-wait behind the game. The 5 s periodic line is info level too (2026-10-06), so a steady-state shortfall (e.g. 257-279 presented against a 280 target while still "generating") is visible; the longer state-change line is unchanged. The lead reads `(measured, max draw ...)`, `(vrr)` or `(default)`.
 
 Not keyed on the rounded multiplier: a game at a fractional ratio would flap between two
 values and spam the log.

@@ -69,6 +69,16 @@ namespace gamescope
             return ulLead < ulRefreshInterval ? ulLead : ulRefreshInterval;
         }
 
+        // The measured lead for the current display: MeasuredLead(), plus the VRR flush
+        // allowance (kVRRFlushingTime, upstream's VRR red zone) when VRR is active, still
+        // capped at one refresh. Under VRR upstream's lead is a fixed compositing floor
+        // + flush (2.7 ms) whatever the draws cost, which a 4-11 ms draw overruns.
+        static constexpr uint64_t MeasuredLeadFor( bool bVRR, uint64_t ulRecentMaxDraw, uint64_t ulRefreshInterval )
+        {
+            const uint64_t ulLead = MeasuredLead( ulRecentMaxDraw, ulRefreshInterval ) + ( bVRR ? kVRRFlushingTime : 0 );
+            return ulLead < ulRefreshInterval ? ulLead : ulRefreshInterval;
+        }
+
         CVBlankTimer();
         ~CVBlankTimer();
 
@@ -88,8 +98,12 @@ namespace gamescope
 
         // Whether the wake-up lead is sized from the measured draw time (the
         // vblank_measured_lead ConVar); off = byte-identical to upstream. (Reads
-        // true under VRR too, which keeps its own small lead either way.)
+        // true under VRR too, where the measured lead gets the VRR flush added.)
         bool UsesMeasuredLead() const;
+        // What the last schedule actually used, for the log: measured (also under VRR),
+        // VRR's fixed upstream lead, or upstream's fixed-ish non-VRR lead.
+        enum class LeadKind { Default, Vrr, Measured };
+        LeadKind GetLastLeadKind() const;
         // The lead the last (non-VRR or VRR) schedule used, ns: how long before its
         // vblank the timer wakes. For the log; 0 before the first schedule.
         uint64_t GetLastLead() const;
@@ -151,6 +165,7 @@ namespace gamescope
         size_t m_nDrawRingCount = 0;
         std::atomic<uint64_t> m_ulRecentMaxDrawTime = { 0 };
         std::atomic<uint64_t> m_ulLastLead = { 0 };
+        std::atomic<LeadKind> m_eLastLeadKind = { LeadKind::Default };
 
         //////////////////////////////////
         // VBlank timing tuneables below!
