@@ -21,6 +21,8 @@ The newest version below is the one this build reports.
   boosting for a whole session.
 - **Wake-up lead under VRR**: with Low-latency wake-up on, the wake-up lead now follows
   the measured draw time under VRR too, and the status line says which one it used.
+- **Crosshair V2**: panning no longer drags a second copy of the crosshair across the
+  screen.
 
 ### Info
 - **Frame generation log**: the 5-second status line is now written to the normal log

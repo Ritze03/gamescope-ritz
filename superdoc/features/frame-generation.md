@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`cdad65b` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave`, #18 `ui-box-margin` and #19 `target-start-band` merged; the pin was `0015453` before #19)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`b77d058` on the library's main (PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave`, #18 `ui-box-margin` and #19 `target-start-band` merged; the pin was `0015453` before #19)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:
@@ -397,6 +397,18 @@ own atomic word (`g_uUiBox`; the main config word is full), and a change is a ru
 no wait. A game whose frame size changes needs nothing: the library recomputes the box from the
 fraction.
 
+**The doubled crosshair (library PR #20, 2026-10-06).** V2 left the *static* crosshair in the
+frames the colour warp samples, so any warp tap that landed on it copied it to
+`crosshair +/- motion*t`: a second, fainter crosshair offset along the camera pan. The patch
+only pastes the real crosshair at its true spot and could not hide that copy. The fix
+(`gpu/shaders/ui_reject.glsl`, included by the existing shaders; no host API change, no new
+shader file, `src/meson.build` untouched): a warp tap whose bilinear footprint touches the
+frame's own V2 mask uses the other frame's sample instead. CS2-like test scenes: ghost pixels
+23-28 -> 0-1, crosshair still exact, cost <= ~0.01 ms per pair; `uiEstimateFill` stays off.
+`Why:` the user's report: *"V2 has major artifacting ... (doubled crosshair)"*. PR #14's tests
+compared V2 against Off, which has the very same ghosts, so they could not see it; the new
+tests count ghost pixels directly.
+
 **The box margin (library PR #18, 2026-10-06).** The box is where UI is **detected**; what it
 protects reaches past it. The library grows the box by `Interpolator::boxMargin()` -- **2 px for
 Crosshair (V1), 1 px for Crosshair V2, 0 for Off / Whole screen** -- clamped to the frame, into a
@@ -740,7 +752,7 @@ present 280. No host code changed.
 
 ### Pacing fixes (2026-10-05, library PR #16)
 
-Pinned at `cdad65b` on main (PRs #15-#19 merged; #19 is the Target start band, below; `0015453` was PRs #15-#18, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
+Pinned at `b77d058` on main (PRs #15-#19 merged; #19 is the Target start band, below; `0015453` was PRs #15-#18, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
 than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
 excess (see [lag-spike-buffer](lag-spike-buffer.md)); the extra output timer got only tests and
 docs; and `Report::generating` is now just "Generate state and a generated frame presented
