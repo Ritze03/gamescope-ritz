@@ -546,14 +546,14 @@ namespace gamescope
 						QueueSave();
 					} ) )
 				.Help( "Plays the game's audio into a private output of its own first, so the Game "
-				       "volume below controls exactly the game's sound and nothing is guessed. While "
-				       "this is on, the game's audio goes straight to the system's default output, so "
-				       "it bypasses EasyEffects (and any other per-app routing) unless EasyEffects "
-				       "is the default output. Turning it off sends the game's audio where it went "
-				       "before. If the private output cannot be created, the Mixer falls back to "
+				       "volume below controls exactly the game's sound and nothing is guessed. The "
+				       "processed audio then goes wherever the game's audio was headed before it was "
+				       "captured (for example EasyEffects, when it processes all outputs), otherwise "
+				       "to the system's default output. Turning it off sends the game's audio where it "
+				       "went before. If the private output cannot be created, the Mixer falls back to "
 				       "guessing the game's stream; Diagnostics says why." )
 				.Default( true )
-				.Keywords( "capture game audio sink pipewire output route easyeffects bypass default" );
+				.Keywords( "capture game audio sink pipewire output route easyeffects default" );
 
 			if ( s_bCaptureActive )
 			{
@@ -714,6 +714,11 @@ namespace gamescope
 				.Keywords( "capture sink wpctl pipewire wireplumber detection status diagnostics" )
 				.Live( "capture", []{
 					return ui::Fact{ "capture", CaptureStatusLine() };
+				} )
+				.Live( "plays_to", []{
+					return ui::Fact{ "capture plays to", Audio::Capture::Active()
+						? Audio::Capture::Route::Describe( Audio::Capture::PlaybackRoute() )
+						: std::string( "nothing (capture is not active)" ) };
 				} )
 				.Live( "drives", []{
 					return ui::Fact{ "game volume drives", GameVolumeDrives() };

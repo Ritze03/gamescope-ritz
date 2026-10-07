@@ -48,9 +48,11 @@ alongside every other action — see
   config key itself (`config::AudioSettings::capture`, JSON `audio.capture`), declared in
   the "Game audio" group at the top. Writing it goes through `EnqueueRoutedWrite()`; the
   live apply hook (`ritz_apply_config_live()` → `Capture::SetWanted()`) creates or
-  destroys the sink on the spot. Its help says what D8 says: while on, the game's audio
-  goes straight to the system default output, so it **bypasses EasyEffects** (and any
-  other per-app routing) unless EasyEffects is the default output.
+  destroys the sink on the spot. Its help says where the audio goes: wherever it was
+  headed before capture (e.g. EasyEffects when it processes all outputs), otherwise the
+  default output (audio-capture.md's "The original route"; this replaced the first cut's
+  "bypasses EasyEffects", plan D8, on the user's request). Diagnostics has a "capture
+  plays to" fact (`Capture::PlaybackRoute()`).
 - **`audio.stream`** ("Stream", a `Choice`; group "Game stream", retitled "Game stream
   (used if capture is off)" while capture is active) — only the fallback path uses it;
   its help says so. "Automatic" (index 0, the
@@ -82,7 +84,8 @@ alongside every other action — see
 - **Diagnostics** (`audio.server`, a read-only `Facts` row) — **capture** (`Capture::
   StatusText()` plus the live stream count while Active, e.g. `Active
   (gamescope-ritz.1234), 2 streams`, or `Off (switched off in this profile)` /
-  `Unavailable: …` / `Error: …` — why capture is not in use), **game volume drives**
+  `Unavailable: …` / `Error: …` — why capture is not in use), **capture plays to**
+  (`easyeffects_sink (game's original route)` or `default output`), **game volume drives**
   (`the capture sink (gamescope-ritz.1234)`, `a guessed stream (<method>)`, or `nothing`),
   then wpctl present/missing, the detection method in play, matched node ids, total
   stream count (with the tied-candidates case reported, never silently resolved), the

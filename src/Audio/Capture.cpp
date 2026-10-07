@@ -47,6 +47,7 @@ namespace gamescope::Audio::Capture
 			uint32_t uPlaybackNodeId = 0;
 			uint64_t uSerial = 0;
 			int nStreams = 0;
+			std::string sRoute;      // node.name our playback is pointed at ("" = default output)
 			float flVolume = 1.0f;   // display curve: what the sink reports now
 			bool bMute = false;
 			// What the caller asked for, kept across a live off/on (a recreated sink
@@ -66,6 +67,7 @@ namespace gamescope::Audio::Capture
 	std::string SinkName() { std::lock_guard lock( s_SnapMutex ); return s_Snap.sSinkName; }
 	uint32_t SinkNodeId() { std::lock_guard lock( s_SnapMutex ); return s_Snap.uNodeId; }
 	uint32_t PlaybackNodeId() { std::lock_guard lock( s_SnapMutex ); return s_Snap.uPlaybackNodeId; }
+	std::string PlaybackRoute() { std::lock_guard lock( s_SnapMutex ); return s_Snap.bActive ? s_Snap.sRoute : std::string{}; }
 	uint64_t SinkSerial() { std::lock_guard lock( s_SnapMutex ); return s_Snap.uSerial; }
 	bool Active() { std::lock_guard lock( s_SnapMutex ); return s_Snap.bActive; }
 	std::string StatusText() { std::lock_guard lock( s_SnapMutex ); return s_Snap.sStatus; }
@@ -103,6 +105,7 @@ namespace gamescope::Audio::Capture
 		// `target.node`, which loses to a writer (EasyEffects) that sets
 		// `target.object`.
 		constexpr const char *kTargetKey = "target.object";
+		constexpr const char *kTargetNodeKey = "target.node";
 
 		struct Impl;
 
@@ -122,12 +125,11 @@ namespace gamescope::Audio::Capture
 		{
 			uint32_t nReasserts = 0;
 			bool bMoved = false;
-		};
-
-		struct SinkInfo
-		{
-			std::string sName;
-			std::string sPosition;   // "FL,FR"
+			// The stream's own node props, as first seen: where it asked to go
+			// (the original route's source (b)). Raw values; resolved when needed.
+			std::string sPropObject;   // target.object
+			std::string sPropNode;     // node.target
+			bool bRouteTried = false;  // the original route was read for this stream
 		};
 
 		struct Impl
@@ -175,7 +177,23 @@ namespace gamescope::Audio::Capture
 			spa_latency_info latency[2]{};
 
 			std::string sDefaultSink;                  // from the metadata's default.audio.sink
-			std::map<uint32_t, SinkInfo> sinks;        // node id -> name + audio.position
+			std::map<uint32_t, SinkInfo> sinks;        // node id -> name, audio.position, serial (never ours)
+			std::map<uint32_t, std::pair<uint32_t, uint32_t>> links;   // link id -> (output node, input node)
+			// Every node's target entries in the `default` metadata (raw values), so
+			// where a stream was headed can be read at the moment we move it.
+			std::map<uint32_t, std::string> metaTargetObject;   // subject -> target.object
+			std::map<uint32_t, std::string> metaTargetNode;     // subject -> target.node
+
+			// The ORIGINAL ROUTE: the node.name of the sink the game's audio was
+			// headed to before we moved it ("" = the default output). Our playback
+			// is pointed there.
+			// ponytail: ONE route per session. Several tagged streams with
+			// different routes (a game playing some sounds to a headset and some to
+			// the speakers) share the most recently recorded one; honouring each
+			// would need one playback stream per route.
+			std::string sRoute;
+			std::string sPlayWritten;        // the target.object value we wrote for our playback ("" = none)
+			uint32_t nPlayReasserts = 0;
 			std::map<uint32_t, NodeWatch *> watches;   // every bound node
 			std::map<uint32_t, Tagged> tagged;         // our session's streams
 
@@ -214,14 +232,102 @@ namespace gamescope::Audio::Capture
 			s_Snap.uPlaybackNodeId = p->bActive && p->uPlayId != SPA_ID_INVALID ? p->uPlayId : 0;
 			s_Snap.uSerial = p->bActive ? p->uSinkSerial : 0;
 			s_Snap.nStreams = nMoved;
+			s_Snap.sRoute = Route::PlaybackTargetFor( p->sRoute, p->sSinkName );
 		}
 
 		// ---- the mover ----------------------------------------------------------
+
+		// Our playback's `target.object`, from the recorded route. With no route
+		// nothing is written (and what we wrote is removed): WirePlumber then links
+		// us to the default output and follows default changes. Never our own sink.
+		// `bForce` rewrites an unchanged value (the re-assert).
+		void ApplyPlaybackRoute( Impl *p, bool bForce = false )
+		{
+			if ( !p->pMeta || p->uPlayId == SPA_ID_INVALID )
+				return;
+			const std::string sWant = Route::PlaybackTargetFor( p->sRoute, p->sSinkName );
+			if ( sWant.empty() )
+			{
+				if ( !p->sPlayWritten.empty() )
+					pw_metadata_set_property( p->pMeta, p->uPlayId, kTargetKey, nullptr, nullptr );
+				p->sPlayWritten.clear();
+				return;
+			}
+			if ( sWant == p->sPlayWritten && !bForce )
+				return;
+			if ( sWant != p->sPlayWritten )
+				p->nPlayReasserts = 0;
+			// By node.name, as a string: it survives a restart of the target (a
+			// serial does not). The spike found both forms work.
+			pw_metadata_set_property( p->pMeta, p->uPlayId, kTargetKey, "Spa:String", sWant.c_str() );
+			p->sPlayWritten = sWant;
+			s_CaptureLog.infof( "playback -> %s", sWant.c_str() );
+		}
+
+		void SetRoute( Impl *p, const std::string &sRoute )
+		{
+			if ( p->sRoute == sRoute )
+				return;
+			s_CaptureLog.infof( "original route: %s", sRoute.empty() ? "(default output)" : sRoute.c_str() );
+			p->sRoute = sRoute;
+			ApplyPlaybackRoute( p );
+			Publish( p );
+		}
+
+		// A raw target value of `uSubject` in the metadata -> a sink's node.name.
+		std::string ResolveMetaTarget( Impl *p, uint32_t uSubject )
+		{
+			auto itObj = p->metaTargetObject.find( uSubject );
+			if ( itObj != p->metaTargetObject.end() )
+			{
+				std::string s = Route::ResolveRouteValue( itObj->second, false, p->sinks );
+				if ( !s.empty() )
+					return s;
+			}
+			auto itNode = p->metaTargetNode.find( uSubject );
+			return itNode != p->metaTargetNode.end() ? Route::ResolveRouteValue( itNode->second, true, p->sinks ) : std::string{};
+		}
+
+		// The sink a stream is linked to right now, if any (ours is not in `sinks`).
+		std::string LinkedSinkOf( Impl *p, uint32_t uStreamId )
+		{
+			for ( const auto &[ id, io ] : p->links )
+			{
+				if ( io.first != uStreamId )
+					continue;
+				auto it = p->sinks.find( io.second );
+				if ( it != p->sinks.end() )
+					return it->second.sName;
+			}
+			return {};
+		}
+
+		// Reads where the stream was headed BEFORE our first write for it
+		// (metadata entry, else its own props, else its link) and records that as
+		// the route when it names one. Once per stream: after our move every one of
+		// those sources points at us.
+		void ObserveOriginalRoute( Impl *p, uint32_t uStreamId, Tagged &t )
+		{
+			if ( t.bRouteTried )
+				return;
+			t.bRouteTried = true;
+
+			Route::Observation obs;
+			obs.sMetaTarget = ResolveMetaTarget( p, uStreamId );
+			obs.sPropTarget = Route::ResolveRouteValue( t.sPropObject, false, p->sinks );
+			if ( obs.sPropTarget.empty() )
+				obs.sPropTarget = Route::ResolveRouteValue( t.sPropNode, true, p->sinks );
+			obs.sLinkedSink = LinkedSinkOf( p, uStreamId );
+			const std::string sRoute = Route::PickInitialRoute( obs, p->sSinkName, p->sDefaultSink );
+			if ( !sRoute.empty() )
+				SetRoute( p, sRoute );
+		}
 
 		void MoveStream( Impl *p, uint32_t uStreamId, Tagged &t )
 		{
 			if ( !p->pMeta || p->sSinkSerialStr.empty() )
 				return;
+			ObserveOriginalRoute( p, uStreamId, t );
 			pw_metadata_set_property( p->pMeta, uStreamId, kTargetKey, "Spa:Id", p->sSinkSerialStr.c_str() );
 			t.bMoved = true;
 		}
@@ -244,7 +350,15 @@ namespace gamescope::Audio::Capture
 					pw_metadata_set_property( p->pMeta, id, kTargetKey, nullptr, nullptr );
 				t.bMoved = false;
 				t.nReasserts = 0;
+				t.bRouteTried = false;
 			}
+			// Our playback's own entry too: it names a route that is no longer ours
+			// to keep, and the node is about to go.
+			if ( p->uPlayId != SPA_ID_INVALID )
+				pw_metadata_set_property( p->pMeta, p->uPlayId, kTargetKey, nullptr, nullptr );
+			p->sPlayWritten.clear();
+			p->nPlayReasserts = 0;
+			p->sRoute.clear();
 		}
 
 		// Writes the wished volume/mute onto the capture stream. Loop thread (lock
@@ -615,6 +729,8 @@ namespace gamescope::Audio::Capture
 			p->uSinkId = p->uPlayId = SPA_ID_INVALID;
 			p->uSinkSerial = 0;
 			p->sSinkSerialStr.clear();
+			p->sRoute.clear();
+			p->sPlayWritten.clear();
 			p->sPairError.clear();
 			p->processLatency = {};
 			p->latency[ 0 ] = p->latency[ 1 ] = {};
@@ -662,12 +778,13 @@ namespace gamescope::Audio::Capture
 				PW_KEY_MEDIA_TYPE, "Audio",
 				PW_KEY_MEDIA_CATEGORY, "Playback",
 				"stream.dont-remix", "true",
-				// A user's EasyEffects (process-all-outputs) writes a target into the
-				// `default` metadata for EVERY output stream; without dont-move our
-				// playback is hijacked into it instead of going to the default
-				// device. WirePlumber's follow-default-target still re-links a
-				// target-less stream when the default output changes.
-				"node.dont-move", "true",
+				// No node.dont-move: our playback goes where the game's audio would
+				// have gone without us (the original route, written into the
+				// `default` metadata for this node by ApplyPlaybackRoute()); with
+				// no route recorded it stays target-less, so WirePlumber links it
+				// to the default output and follows default changes. EasyEffects'
+				// "process all outputs" also writes a target for it, which is the
+				// same sink whenever that is the game's route.
 				nullptr );
 			if ( !pCapProps || !pPlayProps )
 			{
@@ -727,7 +844,7 @@ namespace gamescope::Audio::Capture
 				return;
 			}
 
-			s_CaptureLog.infof( "created %s (%u channels: %s) -> default output", p->sSinkName.c_str(), p->uChannels, sPosition.c_str() );
+			s_CaptureLog.infof( "created %s (%u channels: %s)", p->sSinkName.c_str(), p->uChannels, sPosition.c_str() );
 			ApplyWants( p );
 			UpdateActive( p );
 		}
@@ -771,15 +888,70 @@ namespace gamescope::Audio::Capture
 				return 0;
 			}
 
-			// EasyEffects (and anything else that writes target.object) races us:
-			// put ours back whenever a tagged stream's value differs, a bounded
-			// number of times so two writers can never fight forever.
-			if ( !p->bActive || uSubject == 0 || ( pszKey && strcmp( pszKey, kTargetKey ) != 0 ) )
+			if ( uSubject == 0 )
 				return 0;
+
+			// Remember every node's target entries (a clear, key == null, drops both):
+			// where a stream was headed is read from here at the moment we move it.
+			const bool bObject = pszKey && !strcmp( pszKey, kTargetKey );
+			const bool bNode = pszKey && !strcmp( pszKey, kTargetNodeKey );
+			if ( !pszKey || bObject )
+			{
+				if ( pszValue ) p->metaTargetObject[ uSubject ] = pszValue; else p->metaTargetObject.erase( uSubject );
+			}
+			if ( !pszKey || bNode )
+			{
+				if ( pszValue ) p->metaTargetNode[ uSubject ] = pszValue; else p->metaTargetNode.erase( uSubject );
+			}
+			if ( !p->bActive || ( pszKey && !bObject && !bNode ) )
+				return 0;
+
+			// Someone wrote a target for OUR playback (EasyEffects' "process all
+			// outputs" does, for every output stream). Fight it only when we know where
+			// we should go and it is a different sink (Route::ShouldReassertPlayback),
+			// capped like the game streams' below.
+			// ponytail: with no route recorded we do not fight at all; the default
+			// output is only a guess at "where the game would have gone", and a
+			// writer that states a target for us is as good a guess.
+			if ( uSubject == p->uPlayId )
+			{
+				if ( !bObject )
+					return 0;   // target.node loses to our target.object anyway
+				const std::string sOurs = Route::PlaybackTargetFor( p->sRoute, p->sSinkName );
+				const std::string sForeign = pszValue ? Route::ResolveRouteValue( pszValue, false, p->sinks ) : std::string{};
+				if ( !Route::ShouldReassertPlayback( sOurs, sForeign ) )
+					return 0;
+				if ( p->nPlayReasserts >= kMaxReasserts )
+				{
+					if ( p->nPlayReasserts == kMaxReasserts )
+						s_CaptureLog.warnf( "playback: giving up re-asserting its target after %u tries (another writer keeps changing it)", kMaxReasserts );
+					p->nPlayReasserts++;
+					return 0;
+				}
+				p->nPlayReasserts++;
+				s_CaptureLog.debugf( "playback: target.object changed by someone else (%s), re-asserting (#%u)", sForeign.c_str(), p->nPlayReasserts );
+				ApplyPlaybackRoute( p, true );
+				return 0;
+			}
+
 			auto it = p->tagged.find( uSubject );
 			if ( it == p->tagged.end() )
 				return 0;
-			if ( pszKey && pszValue && strtoull( pszValue, nullptr, 10 ) == p->uSinkSerial )
+
+			// A foreign write for a game stream (not ours, and it names a known sink)
+			// is where the game would have gone without us: the latest one wins.
+			if ( pszValue )
+			{
+				const std::string sForeign = Route::ResolveRouteValue( pszValue, bNode, p->sinks );
+				SetRoute( p, Route::RecordForeignWrite( p->sRoute, sForeign, p->sSinkName ) );
+			}
+
+			// EasyEffects (and anything else that writes target.object) races us:
+			// put ours back whenever a tagged stream's value differs, a bounded
+			// number of times so two writers can never fight forever.
+			if ( bNode )
+				return 0;   // target.node loses to our target.object, nothing to put back
+			if ( pszKey && pszValue && ( strtoull( pszValue, nullptr, 10 ) == p->uSinkSerial || p->sSinkName == pszValue ) )
 				return 0;   // ours, or already the right value
 			if ( it->second.nReasserts >= kMaxReasserts )
 			{
@@ -812,7 +984,10 @@ namespace gamescope::Audio::Capture
 			{
 				const char *pszName = spa_dict_lookup( pInfo->props, PW_KEY_NODE_NAME );
 				const char *pszPos = spa_dict_lookup( pInfo->props, "audio.position" );
-				p->sinks[ w->uId ] = SinkInfo{ pszName ? pszName : "", pszPos ? pszPos : "" };
+				SinkInfo &s = p->sinks[ w->uId ];   // created with its serial at RegGlobal()
+				if ( pszName )
+					s.sName = pszName;
+				s.sPosition = pszPos ? pszPos : "";
 				return;
 			}
 
@@ -829,6 +1004,10 @@ namespace gamescope::Audio::Capture
 			const char *pszApp = spa_dict_lookup( pInfo->props, PW_KEY_APP_NAME );
 			s_CaptureLog.infof( "tagged stream: node %u (%s)", w->uId, pszApp ? pszApp : "?" );
 			Tagged &t = p->tagged[ w->uId ];
+			const char *pszPropObject = spa_dict_lookup( pInfo->props, kTargetKey );
+			const char *pszPropNode = spa_dict_lookup( pInfo->props, "node.target" );
+			t.sPropObject = pszPropObject ? pszPropObject : "";
+			t.sPropNode = pszPropNode ? pszPropNode : "";
 			if ( p->bActive )
 				MoveStream( p, w->uId, t );
 			Publish( p );
@@ -883,6 +1062,17 @@ namespace gamescope::Audio::Capture
 				return;
 			}
 
+			if ( !strcmp( pszType, PW_TYPE_INTERFACE_Link ) )
+			{
+				// Only to answer "which sink is this stream linked to" (the original
+				// route's last source).
+				const char *pszOut = spa_dict_lookup( pProps, PW_KEY_LINK_OUTPUT_NODE );
+				const char *pszIn = spa_dict_lookup( pProps, PW_KEY_LINK_INPUT_NODE );
+				if ( pszOut && pszIn )
+					p->links[ uId ] = { (uint32_t)strtoul( pszOut, nullptr, 10 ), (uint32_t)strtoul( pszIn, nullptr, 10 ) };
+				return;
+			}
+
 			if ( strcmp( pszType, PW_TYPE_INTERFACE_Node ) != 0 )
 				return;
 
@@ -904,6 +1094,11 @@ namespace gamescope::Audio::Capture
 				}
 				else
 				{
+					// Its serial is kept so a metadata value (a serial) resolves to a name.
+					const char *pszSerial = spa_dict_lookup( pProps, PW_KEY_OBJECT_SERIAL );
+					SinkInfo &s = p->sinks[ uId ];
+					s.sName = pszName ? pszName : "";
+					s.uSerial = pszSerial ? strtoull( pszSerial, nullptr, 10 ) : 0;
 					WatchNode( p, uId, true );
 				}
 			}
@@ -912,6 +1107,7 @@ namespace gamescope::Audio::Capture
 				if ( pszName && p->sPlayName == pszName )
 				{
 					p->uPlayId = uId;
+					ApplyPlaybackRoute( p );
 					Publish( p );
 				}
 				else
@@ -932,7 +1128,21 @@ namespace gamescope::Audio::Capture
 				UnwatchNode( it->second );
 				p->watches.erase( it );
 			}
-			p->sinks.erase( uId );
+			p->links.erase( uId );
+			p->metaTargetObject.erase( uId );
+			p->metaTargetNode.erase( uId );
+			auto itSink = p->sinks.find( uId );
+			if ( itSink != p->sinks.end() )
+			{
+				// The original route's node went away (EasyEffects quit): our playback's
+				// target would point at nothing, so drop the route and fall back to the
+				// default output. If the sink comes back, the next foreign write for a
+				// game stream records it again.
+				const bool bRoute = !p->sRoute.empty() && itSink->second.sName == p->sRoute;
+				p->sinks.erase( itSink );
+				if ( bRoute )
+					SetRoute( p, "" );
+			}
 			if ( p->tagged.erase( uId ) )
 				Publish( p );
 			if ( uId == p->uMetaId )

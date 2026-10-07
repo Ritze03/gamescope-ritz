@@ -5,9 +5,11 @@
 // Why: notes):
 //   * A loopback pair on its own libpipewire thread. A capture stream announced
 //     as `media.class = Audio/Sink` ("gamescope-ritz (game)") that games can
-//     play into, and a playback stream to the system's DEFAULT output, which
-//     follows the default when it changes. The samples pass through our own
-//     code in between (Capture.cpp's playback_process(), the DSP hook point).
+//     play into, and a playback stream that goes where the game's audio would
+//     have gone without us (the ORIGINAL ROUTE, e.g. EasyEffects' sink when it
+//     processes all outputs), else to the system's DEFAULT output, which it
+//     follows when it changes. The samples pass through our own code in
+//     between (Capture.cpp's PlaybackProcess(), the DSP hook point).
 //   * A session TAG in the game's environment (PIPEWIRE_PROPS / PULSE_PROP:
 //     `gamescope.ritz.session=<pid>`), injected by ApplyGameEnvironment()
 //     before the game is launched.
@@ -31,7 +33,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <string_view>
 
@@ -59,6 +63,147 @@ namespace gamescope::Audio::Capture
 	inline std::string SinkNameFor( std::string_view svSessionId )
 	{
 		return "gamescope-ritz." + std::string( svSessionId );
+	}
+
+	// ---- The original route (where the game's audio was headed before us) -----
+	//
+	// Pure decision logic, header-only so tests/test_audio_capture.cpp pins it
+	// without PipeWire. Everything speaks in node.names: a serial or id changes
+	// if EasyEffects restarts, its name does not (Capture.cpp resolves a metadata
+	// value to a name with ResolveRouteValue() before asking anything).
+	//
+	// Why the playback follows the game's route (user, 2026-10-07, replacing the
+	// plan's D8): "the audio should go to the previous default (before us
+	// overwriting it). So if easyeffects process all audio streams is set,
+	// respect it."
+
+	// A sink the registry showed us (an Audio/Sink node other than ours).
+	struct SinkInfo
+	{
+		std::string sName;       // node.name
+		std::string sPosition;   // audio.position "FL,FR" (empty until its info arrived)
+		uint64_t uSerial = 0;    // object.serial
+	};
+
+	namespace Route
+	{
+		// A target value a metadata entry or a node prop carried -> the node.name
+		// of the known sink it means, or "" (not a known sink, or no target:
+		// "-1", "", a stale name). `bIsNodeId` says what a number is: for
+		// `target.node` / `node.target` a node id, for `target.object` an
+		// object.serial; a number that matches nothing as that is tried as the
+		// other (writers are not consistent). A non-number is a node.name.
+		// Only known sinks resolve: a route to a node we cannot see would leave
+		// our playback pointing at nothing.
+		inline std::string ResolveRouteValue( std::string_view svValue, bool bIsNodeId, const std::map<uint32_t, SinkInfo> &sinks )
+		{
+			if ( svValue.empty() || svValue == "-1" )
+				return {};
+
+			bool bNumber = true;
+			for ( char c : svValue )
+				bNumber = bNumber && c >= '0' && c <= '9';
+
+			if ( !bNumber )
+			{
+				for ( const auto &[ id, s ] : sinks )
+					if ( s.sName == svValue )
+						return s.sName;
+				return {};
+			}
+
+			const uint64_t uValue = strtoull( std::string( svValue ).c_str(), nullptr, 10 );
+			auto fnById = [ & ]() -> std::string
+			{
+				if ( uValue > UINT32_MAX )
+					return {};
+				auto it = sinks.find( (uint32_t)uValue );
+				return it != sinks.end() ? it->second.sName : std::string{};
+			};
+			auto fnBySerial = [ & ]() -> std::string
+			{
+				for ( const auto &[ id, s ] : sinks )
+					if ( s.uSerial != 0 && s.uSerial == uValue )
+						return s.sName;
+				return {};
+			};
+			std::string sFirst = bIsNodeId ? fnById() : fnBySerial();
+			return !sFirst.empty() ? sFirst : ( bIsNodeId ? fnBySerial() : fnById() );
+		}
+
+		// What was observed about ONE tagged stream before we move it, each value
+		// already resolved to a node.name ("" = nothing, or unresolvable).
+		struct Observation
+		{
+			std::string sMetaTarget;    // (a) its target.object / target.node in the `default` metadata
+			std::string sPropTarget;    // (b) its own node props target.object / node.target
+			std::string sLinkedSink;    // (c) the sink it is currently linked to
+		};
+
+		// Not usable as a route: empty, or ours. Pointing our playback at our own
+		// sink would be a feedback loop.
+		inline bool NotARoute( std::string_view svName, std::string_view svOurSink )
+		{
+			return svName.empty() || svName == svOurSink || svName == std::string( svOurSink ) + ".out";
+		}
+
+		// Where the stream was headed: (a), else (b), else (c), else "" (= the
+		// default output). A value that is ours (left from an earlier move, or the
+		// stream is already linked into our sink) is skipped rather than ending
+		// the search: the next source still gets its say.
+		// (c) is skipped when the link goes to the CURRENT DEFAULT sink: that is
+		// WirePlumber's own choice, not a route the game or the user asked for, and
+		// recording it would pin our playback to that device by name so it no
+		// longer followed a later change of the default. (a) and (b) are explicit
+		// targets and count even when they name the default.
+		inline std::string PickInitialRoute( const Observation &obs, std::string_view svOurSink, std::string_view svDefaultSink )
+		{
+			if ( !NotARoute( obs.sMetaTarget, svOurSink ) )
+				return obs.sMetaTarget;
+			if ( !NotARoute( obs.sPropTarget, svOurSink ) )
+				return obs.sPropTarget;
+			if ( !NotARoute( obs.sLinkedSink, svOurSink ) && obs.sLinkedSink != svDefaultSink )
+				return obs.sLinkedSink;
+			return {};
+		}
+
+		// A FOREIGN write (EasyEffects racing us) for a tagged stream is the route
+		// the game would have had: the latest one wins. Ours, or one that does not
+		// resolve to a known sink, leaves the recorded route as it was.
+		inline std::string RecordForeignWrite( std::string_view svCurrent, std::string_view svForeign, std::string_view svOurSink )
+		{
+			return NotARoute( svForeign, svOurSink ) ? std::string( svCurrent ) : std::string( svForeign );
+		}
+
+		// What our playback's `target.object` should be: the recorded route, or ""
+		// (write nothing: WirePlumber links us to the default output and follows
+		// default changes) when none is recorded or it is our own sink.
+		inline std::string PlaybackTargetFor( std::string_view svRecorded, std::string_view svOurSink )
+		{
+			return NotARoute( svRecorded, svOurSink ) ? std::string{} : std::string( svRecorded );
+		}
+
+		// Someone else wrote a target for OUR playback node (EasyEffects'
+		// "process all outputs" writes one for every output stream). Re-assert ours
+		// only when we have a target to assert and the foreign value is a
+		// DIFFERENT known sink. With no route recorded nothing says where we
+		// should go, so the writer is not fought; with the same sink there is
+		// nothing to fight.
+		// ponytail: an unresolvable foreign value (a stale name, "-1") is not
+		// fought either, and the re-assert is capped (kMaxReasserts) like the
+		// game streams'.
+		inline bool ShouldReassertPlayback( std::string_view svOurTarget, std::string_view svForeign )
+		{
+			return !svOurTarget.empty() && !svForeign.empty() && svForeign != svOurTarget;
+		}
+
+		// The Diagnostics fact: "easyeffects_sink (game's original route)" or
+		// "default output".
+		inline std::string Describe( std::string_view svTarget )
+		{
+			return svTarget.empty() ? std::string( "default output" )
+			                        : std::string( svTarget ) + " (game's original route)";
+		}
 	}
 
 	// ---- The playback copy, safe by construction ------------------------------
@@ -227,7 +372,8 @@ namespace gamescope::Audio::Capture
 	// The per-profile switch (`audio.capture`, default on). Safe to call at any
 	// time, any number of times: before Start() it only records the wish;
 	// afterwards it creates or destroys the sink live. Destroying it clears the
-	// metadata we wrote, so the game's streams fall back to the default sink.
+	// metadata we wrote (the game streams' targets and our playback's own), so the
+	// game's streams fall back to wherever WirePlumber routes them.
 	void SetWanted( bool bWanted );
 	bool GetWanted();
 
@@ -270,6 +416,11 @@ namespace gamescope::Audio::Capture
 	// default output). It is a Stream/Output/Audio node like the game's, so a
 	// stream list built from `wpctl status` shows it: filter it out. 0 until Active().
 	uint32_t PlaybackNodeId();
+	// The node.name of the sink our playback was pointed at because the game's
+	// audio was headed there before us (the ORIGINAL ROUTE, e.g. "easyeffects_sink"
+	// while EasyEffects processes all outputs), or "" when we play to the default
+	// output. Never blocks. Route::Describe() words it for Diagnostics.
+	std::string PlaybackRoute();
 
 	// ---- Volume and mute (act on the sink node) ----------------------------------
 	//

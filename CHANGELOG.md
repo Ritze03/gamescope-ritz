@@ -15,6 +15,9 @@ The newest version below is the one this build reports.
 - **Game audio capture**: the game's audio is now routed into a private PipeWire sink
   that gamescope-ritz creates for the session, with no stream guessing; it is on by
   default and set per profile (`audio.capture`).
+- **Captured audio keeps its route**: the captured game audio plays to wherever it was
+  headed before (such as EasyEffects, when it processes all outputs), otherwise to the
+  default output.
 - **Mixer capture switch**: the Mixer has a "Capture game audio" switch, and while it is
   on "Game volume" and mute control the whole game's sound; Diagnostics shows the
   capture status.

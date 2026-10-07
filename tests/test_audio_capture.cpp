@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -228,4 +229,139 @@ TEST_CASE( "copy: garbage bytes as floats can never come out above full scale", 
 		REQUIRE( f <= 1.0f );
 		REQUIRE( f >= -1.0f );
 	}
+}
+
+// ---- the original route: where the game's audio was headed before us --------
+
+namespace
+{
+	const char *kOurSink = "gamescope-ritz.4242";
+	const char *kDefault = "alsa_output.pci-0000_00_1f.3.analog-stereo";
+
+	std::map<uint32_t, SinkInfo> Sinks()
+	{
+		return {
+			{ 60, SinkInfo{ "alsa_output.pci-0000_00_1f.3.analog-stereo", "FL,FR", 51 } },
+			{ 61, SinkInfo{ "easyeffects_sink", "FL,FR", 77 } },
+			{ 62, SinkInfo{ "bluez_output.headset", "FL,FR", 90 } },
+		};
+	}
+}
+
+TEST_CASE( "route: a metadata value resolves to a known sink's node.name", "[audio_capture]" )
+{
+	const auto sinks = Sinks();
+	// target.object: a serial, or a name.
+	REQUIRE( Route::ResolveRouteValue( "77", false, sinks ) == "easyeffects_sink" );
+	REQUIRE( Route::ResolveRouteValue( "easyeffects_sink", false, sinks ) == "easyeffects_sink" );
+	// target.node: a node id.
+	REQUIRE( Route::ResolveRouteValue( "62", true, sinks ) == "bluez_output.headset" );
+	// A number that is no serial / id of that kind is tried as the other.
+	REQUIRE( Route::ResolveRouteValue( "62", false, sinks ) == "bluez_output.headset" );
+	REQUIRE( Route::ResolveRouteValue( "90", true, sinks ) == "bluez_output.headset" );
+	// Nothing, "no target", a stale name, an unknown number: not a route.
+	REQUIRE( Route::ResolveRouteValue( "", false, sinks ).empty() );
+	REQUIRE( Route::ResolveRouteValue( "-1", true, sinks ).empty() );
+	REQUIRE( Route::ResolveRouteValue( "gone_sink", false, sinks ).empty() );
+	REQUIRE( Route::ResolveRouteValue( "12345", false, sinks ).empty() );
+	REQUIRE( Route::ResolveRouteValue( "99999999999999", true, sinks ).empty() );
+}
+
+TEST_CASE( "route: the initial route is the metadata entry, else the node prop, else the link", "[audio_capture]" )
+{
+	Route::Observation o;
+	o.sMetaTarget = "easyeffects_sink";
+	o.sPropTarget = "bluez_output.headset";
+	o.sLinkedSink = "other_sink";
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == "easyeffects_sink" );
+
+	o.sMetaTarget.clear();
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == "bluez_output.headset" );
+
+	o.sPropTarget.clear();
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == "other_sink" );
+
+	// Nothing known: the default output.
+	o.sLinkedSink.clear();
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ).empty() );
+}
+
+TEST_CASE( "route: ours is never recorded, and does not end the search", "[audio_capture]" )
+{
+	Route::Observation o;
+	// An entry left from an earlier move of ours: the next source still speaks.
+	o.sMetaTarget = kOurSink;
+	o.sPropTarget = "easyeffects_sink";
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == "easyeffects_sink" );
+
+	// Linked into our own sink (already moved) and nothing else: no route.
+	o.sMetaTarget.clear();
+	o.sPropTarget.clear();
+	o.sLinkedSink = kOurSink;
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ).empty() );
+
+	// Our playback node's name is ours too.
+	o.sLinkedSink = std::string( kOurSink ) + ".out";
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ).empty() );
+
+	// A foreign write that is ours leaves the recorded route alone.
+	REQUIRE( Route::RecordForeignWrite( "easyeffects_sink", kOurSink, kOurSink ) == "easyeffects_sink" );
+	REQUIRE( Route::RecordForeignWrite( "", kOurSink, kOurSink ).empty() );
+	// ...and so does one that resolved to nothing.
+	REQUIRE( Route::RecordForeignWrite( "easyeffects_sink", "", kOurSink ) == "easyeffects_sink" );
+
+	// Playback is never pointed at our own sink, whatever got recorded.
+	REQUIRE( Route::PlaybackTargetFor( kOurSink, kOurSink ).empty() );
+	REQUIRE( Route::PlaybackTargetFor( "", kOurSink ).empty() );
+	REQUIRE( Route::PlaybackTargetFor( "easyeffects_sink", kOurSink ) == "easyeffects_sink" );
+}
+
+TEST_CASE( "route: a link to the current default sink is the default, not a route", "[audio_capture]" )
+{
+	// WirePlumber's own choice: recording it would pin us to that device by
+	// name and we would stop following a later change of the default.
+	Route::Observation o;
+	o.sLinkedSink = kDefault;
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ).empty() );
+
+	// A link to anything else is a route.
+	o.sLinkedSink = "easyeffects_sink";
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == "easyeffects_sink" );
+
+	// An explicit target is one even when it names the default.
+	o.sLinkedSink.clear();
+	o.sMetaTarget = kDefault;
+	REQUIRE( Route::PickInitialRoute( o, kOurSink, kDefault ) == kDefault );
+}
+
+TEST_CASE( "route: the latest foreign write wins", "[audio_capture]" )
+{
+	std::string sRoute;
+	sRoute = Route::RecordForeignWrite( sRoute, "easyeffects_sink", kOurSink );
+	REQUIRE( sRoute == "easyeffects_sink" );
+	sRoute = Route::RecordForeignWrite( sRoute, "bluez_output.headset", kOurSink );
+	REQUIRE( sRoute == "bluez_output.headset" );
+	// Ours in between changes nothing.
+	sRoute = Route::RecordForeignWrite( sRoute, kOurSink, kOurSink );
+	REQUIRE( sRoute == "bluez_output.headset" );
+	sRoute = Route::RecordForeignWrite( sRoute, "easyeffects_sink", kOurSink );
+	REQUIRE( sRoute == "easyeffects_sink" );
+}
+
+TEST_CASE( "route: our playback is re-asserted only against a different known sink", "[audio_capture]" )
+{
+	// A route is recorded and a writer sends us elsewhere: fight.
+	REQUIRE( Route::ShouldReassertPlayback( "bluez_output.headset", "easyeffects_sink" ) );
+	// The same sink (EasyEffects' write agrees with the game's route): nothing to do.
+	REQUIRE_FALSE( Route::ShouldReassertPlayback( "easyeffects_sink", "easyeffects_sink" ) );
+	// No route recorded: nothing says where we should go, so no fight.
+	REQUIRE_FALSE( Route::ShouldReassertPlayback( "", "easyeffects_sink" ) );
+	// A foreign value that is no known sink is not fought.
+	REQUIRE_FALSE( Route::ShouldReassertPlayback( "easyeffects_sink", "" ) );
+}
+
+TEST_CASE( "route: the Diagnostics wording", "[audio_capture]" )
+{
+	REQUIRE( Route::Describe( "easyeffects_sink" ) == "easyeffects_sink (game's original route)" );
+	REQUIRE( Route::Describe( "" ) == "default output" );
 }
