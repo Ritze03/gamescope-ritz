@@ -37,6 +37,7 @@
 #include "Utils/Defer.h"
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
+#include "Audio/Capture.h"
 #include "LaunchOptions.h"
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
@@ -639,6 +640,11 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// the first key event of the process, not from the first time the settings
 	// shell is drawn -- the shell is the thing the binding OPENS.
 	gamescope::PanelKeybinds_SeedFromConfig( config );
+
+	// Game audio capture (audio.capture, per profile): the wish is recorded
+	// here from the first call; once the sink is up (steamcompmgr.cpp's
+	// LaunchNestedChildren) a later change creates or destroys it live.
+	gamescope::Audio::Capture::SetWanted( config.audio.capture );
 
 	if ( !Given( Opt::AdaptiveSync ) )
 		cv_adaptive_sync = config.gamescope.vrr_enabled;
@@ -1570,6 +1576,10 @@ int main(int argc, char **argv)
 
 	gamescope::Process::KillAllChildren( getpid(), SIGTERM );
 	gamescope::Process::WaitForAllChildren();
+	// The game's audio sink goes after the game, so its last sounds are not
+	// cut by the sink vanishing under them. (A SIGKILLed gamescope needs no
+	// teardown: PipeWire removes a dead client's nodes itself.)
+	gamescope::Audio::Capture::Shutdown();
 	// Anything printed after this line comes from a static destructor or a
 	// thread still running at exit -- see steamcompmgr_exit()'s note.
 	console_log.infof( "teardown: children reaped; leaving main (static destructors next)" );

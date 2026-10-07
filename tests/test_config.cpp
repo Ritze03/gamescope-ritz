@@ -2095,6 +2095,33 @@ TEST_CASE( "lag_buffer: every field round-trips, and an absent section is off/5/
     REQUIRE( IsSettingsKey( "lag_buffer.test_mode" ) );
 }
 
+// Game audio capture (2026-10-07, Audio/Capture.{h,cpp}): per-profile, under
+// "audio", additive (no schema bump), default ON.
+TEST_CASE( "audio: capture defaults on, round-trips, and an absent section is on", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.audio.capture == true );
+
+    // A profile written before the section existed loads the default.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "mode": "fixed", "multiplier": 2 }
+    })";
+    REQUIRE( LoadSections().audio.capture == true );
+
+    Settings s;
+    s.audio.capture = false;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().audio.capture == false );
+    s.audio.capture = true;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().audio.capture == true );
+
+    REQUIRE( IsSettingsKey( "audio.capture" ) );
+}
+
 TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off, a stored min loads as off", "[config]" )
 {
     TempConfigHome home;

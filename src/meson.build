@@ -272,6 +272,7 @@ src = [
   'Config/AppId.cpp',
   'Config/ConfigManager.cpp',
   'Audio/Volume.cpp',
+  'Audio/Capture.cpp',
   'Clipboard/ClipboardSync.cpp',
   'Script/Script.cpp',
   'BufferMemo.cpp',

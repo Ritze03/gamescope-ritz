@@ -539,6 +539,16 @@ namespace gamescope::config
         std::string weights = "gaussian";
     };
 
+    // Game audio capture (2026-10-07, Audio/Capture.{h,cpp}): the per-profile switch for
+    // the private PipeWire sink the game's audio is captured into. ADDITIVE, so no schema
+    // bump: an older config has no "audio" object (the pre-schema-3 `audio` section, which
+    // held a stream pick, is gone and never read here) and resolves to on. Changing it
+    // acts live: the sink is created or destroyed on the spot.
+    struct AudioSettings
+    {
+        bool capture = true;
+    };
+
     // Lag spike buffer (2026-10-04, this fork's own addition -- see
     // Overlay/PanelLagBuffer.cpp and FrameGen/FrameGenHost.h's fghost::LagBufferConfig).
     // Per profile. ADDITIVE, so no schema bump: an older config has no "lag_buffer"
@@ -1307,6 +1317,7 @@ namespace gamescope::config
         FrameGenSettings framegen;
         MotionBlurSettings motion_blur;
         LagBufferSettings lag_buffer;
+        AudioSettings audio;
         ReshadeSettings reshade;
         OverlaySettings overlay;
         NotificationSettings notifications;

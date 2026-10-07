@@ -106,6 +106,9 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 - [Mixer](features/audio-mixer.md) — per-app PipeWire volume: detection strategies, the
   dynamic volume row title, the Mixer hotkey.
+- [Game audio capture](features/audio-capture.md) — a private per-session PipeWire sink
+  the game's streams are tagged and moved into (no stream guessing): the loopback pair, the
+  env tag, the mover, volume/mute on the sink, and why the playback copy is clamped.
 
 ### Input
 

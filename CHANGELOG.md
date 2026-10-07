@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.12.0] – 2026-10-07
+
+### Added
+- **Game audio capture**: the game's audio is now routed into a private PipeWire sink
+  that gamescope-ritz creates for the session, with no stream guessing; it is on by
+  default and set per profile (`audio.capture`).
+
 ## [0.11.2] – 2026-10-06
 
 ### Fixed

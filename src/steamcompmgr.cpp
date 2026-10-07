@@ -113,6 +113,7 @@
 #include "Config/ConfigManager.h"
 #include "Overlay/LogCapture.h"
 #include "Audio/Volume.h"
+#include "Audio/Capture.h"
 #include "BufferMemo.h"
 #include "Utils/Process.h"
 #include "Utils/Algorithm.h"
@@ -9982,6 +9983,18 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 	// primary child yet, so the Audio panel has a live state to read as
 	// soon as the overlay itself can open. See src/Audio/Volume.h.
 	gamescope::Audio::Init();
+
+	// Game audio capture (superdoc/features/audio-capture.md): tag the game's
+	// environment with this session (always: it is inert, and lets capture be
+	// switched on live later), and bring the private sink up BEFORE the game
+	// is spawned so it exists when the game's first stream appears. Only when
+	// there is a game to host: with no child, nothing would play into it and a
+	// stray sink would sit in the user's device list for nothing.
+	if ( ppPrimaryChildArgv && *ppPrimaryChildArgv )
+	{
+		gamescope::Audio::Capture::ApplyGameEnvironment( gamescope::Audio::Capture::GetWanted() );
+		gamescope::Audio::Capture::Start();
+	}
 
 	// Issue #39: LOG panel's Gamescope tab -- registers the global
 	// LogScope listener. Harmless if the overlay never opens the panel;

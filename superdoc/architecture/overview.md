@@ -106,6 +106,14 @@ one place that wires all of it together at startup.
   `Overlay/PanelLagBuffer.cpp`. See [frame-generation](../features/frame-generation.md),
   [motion-blur](../features/motion-blur.md) and
   [lag-spike-buffer](../features/lag-spike-buffer.md).
+- **Game audio capture** — `src/Audio/Capture.{h,cpp}`: a private PipeWire sink per
+  session (a loopback pair on its own `pw_thread_loop`, thread `"gamescope-audio"`),
+  the session tag injected into the game's env by `ApplyGameEnvironment()` from
+  `LaunchNestedChildren()` (`src/steamcompmgr.cpp`), the registry/metadata mover that
+  moves tagged streams into the sink, volume/mute on the sink node; live switch
+  `audio.capture` via `ritz_apply_config_live()` and teardown in `main()`
+  (`src/main.cpp`). Independent of the Mixer's wpctl guesser (`Audio/Volume.*`), which
+  stays the fallback. See [audio-capture](../features/audio-capture.md).
 - **Latent/unwired code** — `gamescope::CLibInputHandler` (`src/LibInputHandler.h:11`)
   is a fully-implemented `IWaitable` for driving raw `libinput` events without a seat
   (intended for a VR global-input path) but has **no call site anywhere in the

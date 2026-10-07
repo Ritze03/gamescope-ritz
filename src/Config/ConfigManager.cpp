@@ -382,6 +382,10 @@ namespace gamescope::config
                     l.test_mode = "off";
             }
 
+            // Game audio capture (2026-10-07). Additive: absent = on.
+            if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
+                s.audio.capture = JGetBool( *pAudio, "capture", s.audio.capture );
+
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
                 // Preview (split screen) (NEW 2026-09-14) -- a bare key, not
@@ -883,6 +887,9 @@ namespace gamescope::config
             nlohmann::json jSystem = nlohmann::json::object();
             jSystem[ "clipboard_sync" ] = s.system.clipboard_sync;
 
+            nlohmann::json jAudio = nlohmann::json::object();
+            jAudio[ "capture" ] = s.audio.capture;
+
             nlohmann::json j = nlohmann::json::object();
             j[ "gamescope" ] = std::move( jGamescope );
             j[ "fps_display" ] = std::move( jFps );
@@ -893,6 +900,7 @@ namespace gamescope::config
             j[ "framegen" ] = std::move( jFrameGen );
             j[ "motion_blur" ] = std::move( jMotionBlur );
             j[ "lag_buffer" ] = std::move( jLagBuffer );
+            j[ "audio" ] = std::move( jAudio );
             j[ "reshade" ] = std::move( jReshade );
             j[ "notifications" ] = std::move( jNotifications );
             j[ "system" ] = std::move( jSystem );
