@@ -15,6 +15,12 @@
 // volume) -- but it does persist the manual stream *selection*, per game,
 // via gamescope::config::AudioSettings::manual_node_binary (a node
 // selection is not a volume value -- see Volume.h's header comment).
+//
+// Since 2026-10-07 the "Game volume" row has two paths: while game audio capture
+// is active (src/Audio/Capture.h) it controls the capture sink, and the stream
+// guessing above is only the fallback for when capture is off or failed. The
+// panel also carries the per-profile `audio.capture` switch and Capture's
+// status in Diagnostics. See superdoc/features/audio-mixer.md.
 #pragma once
 
 #include <cstddef>

@@ -8,9 +8,10 @@ game it hosts into it, so "which stream is the game?" is no longer a guess. Code
 `main()` (`src/main.cpp`), the config key `audio.capture` (`src/Config/`). Tests:
 `tests/test_audio_capture.cpp`.
 
-This is the **capture** half. The Mixer's *Game volume* row still drives the stream
-guesser (`Volume.{h,cpp}`) until the next task wires it to this sink's volume
-(`Capture::SetVolume/SetMute`); dynamics (compressor/limiter) come in Phase B.
+This is the **capture** half. The Mixer's *Game volume* row drives this sink's volume
+(`Capture::SetVolume/SetMute`) while capture is `Active()`, and the stream guesser
+(`Volume.{h,cpp}`) is only the fallback — see [audio-mixer.md](audio-mixer.md);
+dynamics (compressor/limiter) come in Phase B.
 
 ## The pieces
 
@@ -111,10 +112,13 @@ one value, and an external change comes back into `GetVolume()`/`GetMute()`.
 `Why the wish is kept apart from what the sink reports:` the setters record a *wish*
 that is applied the moment a sink is ready, **before any sample flows**, and survives a
 live off/on (a recreated sink starts at unity). The units are the Mixer's display curve
-(`DisplayToLinearVolume`); **observed:** `SetVolume(0.5)` writes `channelVolumes
-0.125` and `wpctl get-volume` reports `0.50`, i.e. wpctl on this WirePlumber (0.5.18)
-reads/writes the cubic scale, while `Volume.h` documents wpctl as raw linear — check
-that before wiring the Mixer to both.
+(`DisplayToLinearVolume`: `channelVolumes = display^3`, the pavucontrol curve).
+**Verified 2026-10-07** (wpctl 0.5.18, read-only against live nodes): `wpctl
+get-volume` reports the cube root of `channelVolumes` (0.38742 → `0.73`, 0.511977 →
+`0.80`, 0.713888 → `0.89`), i.e. wpctl speaks the same cubic scale as the display
+fraction, so `SetVolume(0.5)` writes `channelVolumes 0.125` and `wpctl get-volume`
+reports `0.50` — the two agree. `Volume.cpp` used to treat wpctl as raw linear and got
+this wrong on its own (fallback) path; fixed, see audio-mixer.md's "wpctl scale".
 
 ## The playback copy is safe by construction
 
@@ -150,7 +154,8 @@ without libpipewire, every function is a no-op and `StatusText()` says so.
 `audio.capture` — per profile, default **on** (`config::AudioSettings`, JSON
 `"audio": { "capture": true }`). Additive, no schema bump: a profile without the object
 reads as on. Read at startup and pushed live by `ritz_apply_config_live()` →
-`Capture::SetWanted()`. (The UI row is the Mixer integration task.)
+`Capture::SetWanted()`. The Mixer's "Capture game audio" switch row is `audio.capture`
+(see audio-mixer.md).
 
 ## Known limits (`ponytail:`)
 
@@ -159,8 +164,14 @@ reads as on. Read at startup and pushed live by `ritz_apply_config_live()` →
 - If an outer gamescope-ritz already tagged the environment, an inner one leaves the outer
   tag standing (the game is captured by the outermost).
 - A game started by something *other* than gamescope's child tree is never tagged.
-- The Mixer's stream list will show our playback node (`Capture::PlaybackNodeId()`);
-  the integration should filter it.
+- The Mixer's stream list would show our playback node (a Stream/Output/Audio node like
+  the game's); `Volume.cpp`'s poll drops our nodes at the source (by `PlaybackNodeId()` /
+  `SinkNodeId()` and by the `gamescope-ritz.` `node.name` prefix, since the playback node
+  can reach the registry before its id is published), so they are never listed or guessed.
+- The sink's volume and mute are not persisted: every session starts at 100% / unmuted
+  (a fresh sink is created each session; its `node.name` carries the pid). The
+  guessing path never persisted either, but WirePlumber restored the game's own stream
+  volume per app, which still applies to the stream inside the sink.
 
 ## Live checks
 

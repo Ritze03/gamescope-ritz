@@ -49,6 +49,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -96,7 +97,7 @@ namespace gamescope::Audio
 		std::string sBinary;   // application.process.binary, empty if the client never set it
 		std::string sAppName;  // application.name, empty if the client never set it
 		pid_t nPid = 0;        // application.process.id, 0 if absent/unparsable
-		float flVolume = 1.0f; // this node's own live display-curve volume, 0..1.5 - see DisplayToLinearVolume
+		float flVolume = 1.0f; // this node's own live display-curve volume, 0..1.5 - see "Volume curve"
 		bool bMuted = false;   // this node's own live mute state
 	};
 
@@ -113,17 +114,29 @@ namespace gamescope::Audio
 		int nTotalAudioStreams = 0;   // every Stream/Output/Audio node currently on the system, matched or not - lets the panel say "nothing is playing anywhere yet" vs "N streams exist, none are this game"
 		bool bManualSelectionStale = false; // a manual override is set but didn't match any current stream (game not outputting audio right now, or the pick no longer applies)
 		std::string sManualSelection; // echoes the currently-applied manual override identity (empty == none) - what SetManualSelection() last set, as actually picked up by the background thread
-		float flVolume = 1.0f;        // display-curve fraction, 0..1 (up to 1.5 with boost) - see DisplayToLinearVolume
+		float flVolume = 1.0f;        // display-curve fraction, 0..1 (up to 1.5 with boost) - see "Volume curve"
 		bool bMuted = false;
 	};
 
 	// ---- Volume curve ---------------------------------------------------
-	// PipeWire's SPA_PROP_channelVolumes (and what `wpctl set-volume`/
-	// `get-volume` read and write) is raw linear amplitude. UI sliders in
-	// this ecosystem (pavucontrol, wpctl's own docs) instead present a
-	// perceptual cubic curve: linear = display_fraction^3. This is the one
-	// place that conversion happens - callers (UI code) should only ever
-	// think in display fractions, never in raw linear amplitude.
+	// Three numbers describe one volume, and they are NOT the same scale:
+	//   * channelVolumes (PipeWire's SPA_PROP_channelVolumes) -- raw linear
+	//     amplitude, what the audio actually gets multiplied by;
+	//   * the display fraction -- what the UI sliders show (1.0 = unity, up to
+	//     1.5), the perceptual cubic curve pavucontrol uses: channelVolumes =
+	//     display^3;
+	//   * what `wpctl get-volume` / `set-volume` speak -- WirePlumber's wpctl
+	//     uses that SAME cubic scale (its mixer-api "scale" is cubic), so wpctl's
+	//     number IS the display fraction, and wpctl does the cube itself.
+	// Why this is spelled out: until 2026-10-07 this file treated wpctl's number
+	// as raw linear -- it sent display^3 to `set-volume` (wpctl then cubed it
+	// again: a 50% slider wrote channelVolumes 0.002) and ran cbrt() over the
+	// `get-volume` reading (so a stream at 80% showed as 93%). Checked read-only
+	// against live nodes on wpctl 0.5.18: channelVolumes 0.38742 / 0.511977 /
+	// 0.713888 read back as `Volume: 0.73` / `0.80` / `0.89`, each exactly the cube
+	// root. So callers think in display fractions; wpctl is handed the display
+	// fraction unchanged; only code that writes channelVolumes itself
+	// (Capture.cpp, through pw_stream_set_control) needs DisplayToLinearVolume().
 	constexpr float DisplayToLinearVolume( float flDisplayFraction )
 	{
 		return flDisplayFraction * flDisplayFraction * flDisplayFraction;
@@ -148,6 +161,13 @@ namespace gamescope::Audio
 	// appear afterward can ever count as "new."
 	void SetTargetPid( pid_t nRootPid );
 
+	// Tells the poll which PipeWire node ids are gamescope-ritz's OWN capture nodes
+	// (Capture::PlaybackNodeId() / SinkNodeId(); 0 = none): the poll drops them from
+	// every list and from the guessing, in addition to the node.name check
+	// (Parse::IsOwnCaptureNodeName). Pushed in, not read from Capture, so this file
+	// stays independent of Capture.cpp. Cheap; PanelAudio calls it every frame.
+	void SetOwnNodeIds( uint32_t nPlaybackNodeId, uint32_t nSinkNodeId );
+
 	// Non-blocking read of the last-known state. Safe to call every frame.
 	VolumeState GetState();
 
@@ -171,7 +191,9 @@ namespace gamescope::Audio
 	// targeting whichever node(s) the *current* detection/manual-override
 	// result resolves as "the game" at apply time (VolumeState::
 	// vecMatchedNodeIds) - i.e. the panel's primary/first slider.
-	// flDisplayFraction is in display-curve units (see above), 0..1.5.
+	// flDisplayFraction is in display-curve units (see above), 0..1.5. This is
+	// the FALLBACK path: while game-audio capture is active, the Mixer drives
+	// Capture::SetVolume() instead (PanelAudio.cpp), not a guessed stream.
 	void RequestVolume( float flDisplayFraction );
 	void RequestMute( bool bMuted );
 
@@ -202,17 +224,27 @@ namespace gamescope::Audio
 
 		struct VolumeReading
 		{
-			float flLinear;
+			float flVolume;   // wpctl's cubic-scale number == the display fraction (see "Volume curve")
 			bool bMuted;
 		};
 		// Parses `wpctl get-volume` output, e.g. "Volume: 0.30" or
 		// "Volume: 0.30 [MUTED]".
 		std::optional<VolumeReading> GetVolumeOutput( std::string_view svOutput );
 
-		// Formats a linear volume for a wpctl command line without going
-		// through a locale-sensitive float-to-string conversion (wpctl
-		// expects a plain '.'-decimal number regardless of process locale).
-		std::string FormatLinearVolume( float flLinear );
+		// Formats a volume (the display fraction, which is what wpctl takes)
+		// for a wpctl command line without going through a locale-sensitive
+		// float-to-string conversion (wpctl expects a plain '.'-decimal
+		// number regardless of process locale).
+		std::string FormatVolume( float flDisplayFraction );
+
+		// True for a node gamescope-ritz's own game-audio capture created
+		// (Capture.h): the sink "gamescope-ritz.<pid>" and the playback stream
+		// "gamescope-ritz.<pid>.out", matched by the node.name prefix. The poll
+		// thread drops these from every list it builds, so the Mixer neither
+		// shows them nor guesses them as "the game" -- by name as well as by the
+		// ids Capture reports, because the playback node can show up in the
+		// registry before Capture has published its id.
+		bool IsOwnCaptureNodeName( std::string_view svNodeName );
 
 		// ---- Candidate selection (detection strategies 2-4 above) --------
 

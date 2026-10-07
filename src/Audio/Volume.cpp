@@ -130,26 +130,32 @@ namespace gamescope::Audio
 			if ( nPos == nStart )
 				return std::nullopt;
 
-			float flLinear = std::strtof( std::string( svOutput.substr( nStart, nPos - nStart ) ).c_str(), nullptr );
+			float flVolume = std::strtof( std::string( svOutput.substr( nStart, nPos - nStart ) ).c_str(), nullptr );
 			bool bMuted = svOutput.find( "MUTED", nPos ) != std::string_view::npos;
-			return VolumeReading{ flLinear, bMuted };
+			return VolumeReading{ flVolume, bMuted };
 		}
 
-		std::string FormatLinearVolume( float flLinear )
+		std::string FormatVolume( float flDisplayFraction )
 		{
-			if ( flLinear < 0.0f )
-				flLinear = 0.0f;
+			if ( flDisplayFraction < 0.0f )
+				flDisplayFraction = 0.0f;
 
 			// Round to 4 decimal places by hand rather than via a
 			// locale-sensitive float formatter - wpctl expects a plain
 			// '.'-decimal number regardless of the process locale.
-			long lMilli = std::lround( flLinear * 10000.0f );
+			long lMilli = std::lround( flDisplayFraction * 10000.0f );
 			long lWhole = lMilli / 10000;
 			long lFrac = lMilli % 10000;
 
 			char szBuf[ 32 ];
 			snprintf( szBuf, sizeof( szBuf ), "%ld.%04ld", lWhole, lFrac );
 			return szBuf;
+		}
+
+		bool IsOwnCaptureNodeName( std::string_view svNodeName )
+		{
+			static constexpr std::string_view k_svPrefix = "gamescope-ritz.";
+			return svNodeName.substr( 0, k_svPrefix.size() ) == k_svPrefix;
 		}
 
 		// ---- Candidate selection ---------------------------------------
@@ -398,7 +404,7 @@ namespace gamescope::Audio
 				return std::nullopt;
 
 			// Every argument we splice in is either a fixed literal or a
-			// number we formatted ourselves (pid_t, node id, FormatLinearVolume) -
+			// number we formatted ourselves (pid_t, node id, FormatVolume) -
 			// never an arbitrary string - so building this via popen()'s
 			// shell is not an injection risk.
 			std::string sCmd = "wpctl " + sArgs + " 2>/dev/null";
@@ -460,7 +466,7 @@ namespace gamescope::Audio
 
 		struct PendingCommand
 		{
-			std::optional<float> oflLinearVolume;
+			std::optional<float> oflVolume;   // display fraction == wpctl's own (cubic) scale, see Volume.h
 			std::optional<bool> obMuted;
 		};
 
@@ -480,6 +486,12 @@ namespace gamescope::Audio
 		std::vector<StreamCandidate> g_AvailableStreams;
 
 		std::atomic<pid_t> g_nTargetRootPid{ 0 };
+
+		// Capture's own node ids (SetOwnNodeIds), 0 = unknown. Pushed in rather than
+		// read from Capture:: so this file does not depend on Capture.cpp (the unit
+		// tests link Volume.cpp alone, without libpipewire).
+		std::atomic<uint32_t> g_nOwnPlaybackNodeId{ 0 };
+		std::atomic<uint32_t> g_nOwnSinkNodeId{ 0 };
 
 		std::mutex g_ManualMutex;
 		std::optional<std::string> g_osManualSelection;
@@ -551,6 +563,9 @@ namespace gamescope::Audio
 
 				if ( newState.bWpctlAvailable )
 				{
+					const uint32_t nOwnPlaybackId = g_nOwnPlaybackNodeId.load( std::memory_order_relaxed );
+					const uint32_t nOwnSinkId = g_nOwnSinkNodeId.load( std::memory_order_relaxed );
+
 					std::optional<std::string> osStatus = RunWpctl( "status" );
 					if ( osStatus )
 					{
@@ -560,6 +575,15 @@ namespace gamescope::Audio
 						{
 							std::optional<std::string> osInspect = RunWpctl( "inspect " + std::to_string( nNodeId ) );
 							if ( !osInspect || !Parse::IsAudioOutputStream( *osInspect ) )
+								continue;
+
+							// Our own capture playback stream is a Stream/Output/Audio
+							// node like the game's: never list it, never guess it as
+							// "the game" (it would also be the newest stream, which is
+							// exactly what tier 3 picks). By id AND by node.name.
+							if ( ( nOwnPlaybackId != 0 && (uint32_t)nNodeId == nOwnPlaybackId ) ||
+							     ( nOwnSinkId != 0 && (uint32_t)nNodeId == nOwnSinkId ) ||
+							     Parse::IsOwnCaptureNodeName( Parse::InspectField( *osInspect, "node.name" ).value_or( std::string{} ) ) )
 								continue;
 
 							Parse::NodeInfo node;
@@ -580,8 +604,8 @@ namespace gamescope::Audio
 							auto itNodeCmd = nodeCommands.find( nNodeId );
 							if ( itNodeCmd != nodeCommands.end() )
 							{
-								if ( itNodeCmd->second.oflLinearVolume )
-									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatLinearVolume( *itNodeCmd->second.oflLinearVolume ) );
+								if ( itNodeCmd->second.oflVolume )
+									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatVolume( *itNodeCmd->second.oflVolume ) );
 								if ( itNodeCmd->second.obMuted )
 									RunWpctl( "set-mute " + std::to_string( nNodeId ) + " " + ( *itNodeCmd->second.obMuted ? "1" : "0" ) );
 							}
@@ -610,7 +634,7 @@ namespace gamescope::Audio
 							{
 								if ( auto oReading = Parse::GetVolumeOutput( *osVol ) )
 								{
-									candidate.flVolume = LinearToDisplayVolume( oReading->flLinear );
+									candidate.flVolume = oReading->flVolume;
 									candidate.bMuted = oReading->bMuted;
 								}
 							}
@@ -652,12 +676,12 @@ namespace gamescope::Audio
 						// namespace mismatch breaks, so it would silently
 						// undo everything the process-name/newest tiers
 						// exist to fix.
-						if ( !selection.vecMatchedNodeIds.empty() && ( cmd.oflLinearVolume || cmd.obMuted ) )
+						if ( !selection.vecMatchedNodeIds.empty() && ( cmd.oflVolume || cmd.obMuted ) )
 						{
 							for ( int nNodeId : selection.vecMatchedNodeIds )
 							{
-								if ( cmd.oflLinearVolume )
-									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatLinearVolume( *cmd.oflLinearVolume ) );
+								if ( cmd.oflVolume )
+									RunWpctl( "set-volume " + std::to_string( nNodeId ) + " " + Parse::FormatVolume( *cmd.oflVolume ) );
 								if ( cmd.obMuted )
 									RunWpctl( "set-mute " + std::to_string( nNodeId ) + " " + ( *cmd.obMuted ? "1" : "0" ) );
 							}
@@ -670,7 +694,7 @@ namespace gamescope::Audio
 							{
 								if ( auto oReading = Parse::GetVolumeOutput( *osVol ) )
 								{
-									newState.flVolume = LinearToDisplayVolume( oReading->flLinear );
+									newState.flVolume = oReading->flVolume;
 									newState.bMuted = oReading->bMuted;
 
 									// The primary command (if any) was
@@ -725,6 +749,12 @@ namespace gamescope::Audio
 		g_nTargetRootPid.store( nRootPid, std::memory_order_relaxed );
 	}
 
+	void SetOwnNodeIds( uint32_t nPlaybackNodeId, uint32_t nSinkNodeId )
+	{
+		g_nOwnPlaybackNodeId.store( nPlaybackNodeId, std::memory_order_relaxed );
+		g_nOwnSinkNodeId.store( nSinkNodeId, std::memory_order_relaxed );
+	}
+
 	VolumeState GetState()
 	{
 		std::lock_guard<std::mutex> lock( g_StateMutex );
@@ -748,7 +778,7 @@ namespace gamescope::Audio
 	void RequestVolume( float flDisplayFraction )
 	{
 		std::lock_guard<std::mutex> lock( g_PendingMutex );
-		g_PendingCommand.oflLinearVolume = DisplayToLinearVolume( flDisplayFraction );
+		g_PendingCommand.oflVolume = flDisplayFraction;
 	}
 
 	void RequestMute( bool bMuted )
@@ -760,7 +790,7 @@ namespace gamescope::Audio
 	void RequestVolumeForNode( int nNodeId, float flDisplayFraction )
 	{
 		std::lock_guard<std::mutex> lock( g_PendingNodeMutex );
-		g_PendingNodeCommands[ nNodeId ].oflLinearVolume = DisplayToLinearVolume( flDisplayFraction );
+		g_PendingNodeCommands[ nNodeId ].oflVolume = flDisplayFraction;
 	}
 
 	void RequestMuteForNode( int nNodeId, bool bMuted )

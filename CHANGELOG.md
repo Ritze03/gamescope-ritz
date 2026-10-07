@@ -15,6 +15,13 @@ The newest version below is the one this build reports.
 - **Game audio capture**: the game's audio is now routed into a private PipeWire sink
   that gamescope-ritz creates for the session, with no stream guessing; it is on by
   default and set per profile (`audio.capture`).
+- **Mixer capture switch**: the Mixer has a "Capture game audio" switch, and while it is
+  on "Game volume" and mute control the whole game's sound; Diagnostics shows the
+  capture status.
+
+### Fixed
+- **Mixer volume scale**: per-app sliders now match what `wpctl` and pavucontrol show,
+  instead of setting a far quieter volume than the slider said (50% was about 0.2%).
 
 ## [0.11.2] – 2026-10-06
 

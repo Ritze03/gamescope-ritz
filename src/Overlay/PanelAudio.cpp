@@ -4,9 +4,17 @@
 // This panel is deliberately thin: Audio::GetState() already hands back a
 // fully-resolved snapshot (wpctl availability, detection method, matched/
 // candidate counts, current display-fraction volume, mute) and the curve is
-// applied inside src/Audio/Volume.cpp -- see DisplayToLinearVolume()'s
-// comment there. The slider below reads/writes display-fraction units only
-// and never re-applies a curve of its own (that would double-apply it).
+// handled inside src/Audio/Volume.cpp -- see Volume.h's "Volume curve"
+// comment. The slider below reads/writes display-fraction units only and
+// never re-applies a curve of its own (that would double-apply it).
+//
+// Two paths drive the "Game volume" row (superdoc/features/audio-mixer.md):
+//   - CAPTURE (game audio capture is Active, src/Audio/Capture.h): the row
+//     is Capture::SetVolume()/SetMute() on the private sink the game plays
+//     into -- one control for everything the game plays, no guessing.
+//   - FALLBACK (capture off, or it failed): the stream-guessing strategies
+//     below (manual pick, PID tree, process name, newest stream), exactly as
+//     before capture existed.
 //
 // Every "control isn't usable (yet)" state is explained, never just a
 // silently-dead slider (DECISIONS.md #22/#23):
@@ -23,6 +31,7 @@
 // it's wrong.
 #include "PanelAudio.h"
 
+#include "../Audio/Capture.h"
 #include "../Audio/Volume.h"
 #include "Config/ConfigManager.h"
 #include "UI/Registry.h"
@@ -87,6 +96,7 @@ namespace gamescope
 		constexpr std::chrono::milliseconds k_PendingTimeout{ 1000 };
 		constexpr float k_flVolumeConfirmEpsilon = 0.005f; // ~0.5%, well under a whole UI percent
 
+		PendingRowState s_PendingCapture; // the same, for the Game volume row while it drives the capture sink
 		PendingRowState s_PendingPrimary; // the panel's first/"the game" slider - no stable node id from the UI's POV (see VolumeState::vecMatchedNodeIds), so kept separate from the per-node map below
 		std::unordered_map<int, PendingRowState> s_PendingByNode; // every other stream row, keyed by its own node id
 
@@ -208,6 +218,7 @@ namespace gamescope
 		// rather than calling Audio::GetState() itself, so all the rows in
 		// one frame agree about what the audio server looked like.
 		Audio::VolumeState                  s_AreaState;
+		bool                                s_bCaptureActive = false;   // Audio::Capture::Active() this frame: which path Game volume drives
 		std::vector<Audio::StreamCandidate> s_vecAreaStreams;
 
 		// ui::Option holds a `const char *`, so the option labels need
@@ -272,6 +283,9 @@ namespace gamescope
 			EnsureConfigLoaded();
 
 			s_AreaState      = Audio::GetState();
+			s_bCaptureActive = Audio::Capture::Active();
+			// So the poll never lists or guesses our own capture nodes (also caught by name).
+			Audio::SetOwnNodeIds( Audio::Capture::PlaybackNodeId(), Audio::Capture::SinkNodeId() );
 			s_vecAreaStreams = Audio::GetAvailableStreams();
 			std::sort( s_vecAreaStreams.begin(), s_vecAreaStreams.end(),
 				[]( const Audio::StreamCandidate &a, const Audio::StreamCandidate &b )
@@ -300,6 +314,8 @@ namespace gamescope
 			};
 
 			Mix( s_AreaState.bWpctlAvailable ? "wpctl" : "no-wpctl" );
+			// Which path the Game volume row drives changes the row set.
+			Mix( s_bCaptureActive ? "capture" : "no-capture" );
 			Mix( s_AreaState.bDetected ? "detected" : "undetected" );
 			Mix( s_AreaState.sManualSelection );
 			Mix( s_sManualNode );
@@ -429,6 +445,61 @@ namespace gamescope
 			return DetectionMethodLabel( s_AreaState.eMethod );
 		}
 
+		// "Active (gamescope-ritz.1234), 2 streams" -- Capture's own status line, plus
+		// how many of the game's streams are in the sink right now (only meaningful
+		// while it is Active; every other status already says why it is not).
+		std::string CaptureStatusLine()
+		{
+			std::string s = Audio::Capture::StatusText();
+			if ( Audio::Capture::Active() )
+			{
+				const int n = Audio::Capture::StreamCount();
+				s += ", " + std::to_string( n ) + ( n == 1 ? " stream" : " streams" );
+			}
+			return s;
+		}
+
+		// Which path the Game volume row is driving right now, in words.
+		std::string GameVolumeDrives()
+		{
+			if ( s_bCaptureActive )
+				return "the capture sink (" + Audio::Capture::SinkName() + ")";
+			if ( s_AreaState.bWpctlAvailable && s_AreaState.bDetected )
+				return std::string( "a guessed stream (" ) + DetectionMethodLabel( s_AreaState.eMethod ) + ")";
+			return Audio::Capture::GetWanted()
+				? "nothing yet (capture is not active, and no game stream was found)"
+				: "nothing (capture is off, and no game stream was found)";
+		}
+
+		// The Game volume row, the same on both paths apart from what it is bound
+		// to and how it explains itself. Its id never changes (the settings audit,
+		// the palette's identity and anything else keyed on it are unaffected).
+		void EmitGameVolumeRow( ui::Area &a, const std::string &sTitle, ui::AnyBind volume, ui::AnyBind mute, const char *pszHelp )
+		{
+			a.Slider( "audio.stream.volume", sTitle.c_str(), std::move( volume ) )
+				.Help( pszHelp )
+				.Range( 0.0f, 150.0f )
+				// The binding is an int percent, so the range is 151 discrete
+				// values -- over the 100-position budget on its own. 5% is
+				// the granularity a volume control is normally read at, and
+				// 100%, the default and the unity point, is on the grid.
+				.Step( 5.0f )    // 31 positions
+				.Default( 100 )
+				.Unit( "%" )
+				// "game volume" kept as a literal keyword (not just
+				// the two words separately) because the row's own
+				// TITLE -- which the palette also searches -- isn't
+				// always "Game volume" any more (see
+				// PrimaryStreamRowLabel() below): while Automatic
+				// detection is showing a stream's own name instead,
+				// a search for "game volume" would otherwise find
+				// nothing here.
+				.Keywords( "volume gain level loudness game audio game volume stream mixer detected capture" )
+				.Param( "mute", "Mute", std::move( mute ) )
+					.Help( "Mutes the sound without changing its volume." )
+					.Default( false );
+		}
+
 		// The "Game volume" row's own title -- threads the live state
 		// (s_sManualNode, the detected primary stream, how many other
 		// nodes moved with it) into the pure decision in PanelAudio.h's
@@ -457,13 +528,72 @@ namespace gamescope
 		{
 			RebuildStreamOptions();
 
-			// wpctl is a RUNTIME dependency (DECISIONS.md #22). Without it
-			// there is nothing to control, so the area builds exactly one
-			// row -- the Diagnostics readout -- rather than a sheet full of
-			// dead sliders. The Overview and that row say why.
+			// ---- game audio capture -------------------------------------
+			// The switch is audio.capture (per profile, default on), applied live
+			// by main.cpp's ritz_apply_config_live() -> Capture::SetWanted(); the
+			// row id is the config key itself. While capture is Active the Game
+			// volume row acts on the capture sink (no guessing); it needs no
+			// wpctl, so it is drawn whatever the wpctl state below is.
+			a.Group( "Game audio" );
+
+			a.Switch( "audio.capture", "Capture game audio",
+				ui::AnyBind::Of<bool>(
+					[]{ EnsureConfigLoaded(); return s_CachedSettings.audio.capture; },
+					[]( bool b )
+					{
+						EnsureConfigLoaded();
+						s_CachedSettings.audio.capture = b;
+						QueueSave();
+					} ) )
+				.Help( "Plays the game's audio into a private output of its own first, so the Game "
+				       "volume below controls exactly the game's sound and nothing is guessed. While "
+				       "this is on, the game's audio goes straight to the system's default output, so "
+				       "it bypasses EasyEffects (and any other per-app routing) unless EasyEffects "
+				       "is the default output. Turning it off sends the game's audio where it went "
+				       "before. If the private output cannot be created, the Mixer falls back to "
+				       "guessing the game's stream; Diagnostics says why." )
+				.Default( true )
+				.Keywords( "capture game audio sink pipewire output route easyeffects bypass default" );
+
+			if ( s_bCaptureActive )
+			{
+				EmitGameVolumeRow( a, "Game volume",
+					ui::AnyBind::Of<int>(
+						[]{
+							return (int)std::lround(
+								ResolveDisplayVolume( s_PendingCapture, Audio::Capture::GetVolume() ) * 100.0f );
+						},
+						[]( int nPercent )
+						{
+							const float flFrac = std::clamp( nPercent, 0, 150 ) / 100.0f;
+							Audio::Capture::SetVolume( flFrac );
+							s_PendingCapture.bHasVolume = true;
+							s_PendingCapture.flVolume   = flFrac;
+							s_PendingCapture.tWhen      = std::chrono::steady_clock::now();
+						} ),
+					ui::AnyBind::Of<bool>(
+						[]{ return ResolveDisplayMute( s_PendingCapture, Audio::Capture::GetMute() ); },
+						[]( bool bMuted )
+						{
+							Audio::Capture::SetMute( bMuted );
+							s_PendingCapture.bHasMute = true;
+							s_PendingCapture.bMuted   = bMuted;
+							s_PendingCapture.tWhen    = std::chrono::steady_clock::now();
+						} ),
+					"The game's volume, applied to the private output all of its sound plays through "
+					"(Capture game audio, above), so it moves every one of the game's sounds together "
+					"and cannot land on the wrong app. Going above 100% is a real boost that can "
+					"distort the sound, not just extra headroom. It starts at 100% in every new session." );
+			}
+
+			// wpctl is a RUNTIME dependency (DECISIONS.md #22) of everything
+			// below: the stream guessing (the fallback path) and the per-app
+			// rows. Without it there is nothing more to control, so the area
+			// builds only the capture rows above and the Diagnostics readout
+			// rather than a sheet full of dead sliders.
 			if ( s_AreaState.bWpctlAvailable )
 			{
-				a.Group( "Game stream" );
+				a.Group( s_bCaptureActive ? "Game stream (used if capture is off)" : "Game stream" );
 
 				a.Choice( "audio.stream", "Stream",
 					ui::AnyBind::Of<int>(
@@ -477,23 +607,25 @@ namespace gamescope
 							SaveManualNode();
 						} ),
 					s_vecStreamOptions.data(), s_vecStreamOptions.size() )
-					.Help( "Which audio stream is this game's. Automatic finds it on its own, or pick "
+					.Help( "Which audio stream is this game's, for when Capture game audio is off or "
+					       "unavailable (while it is on, the game's sound is captured, not guessed, and "
+					       "this has no effect on Game volume). Automatic finds it on its own, or pick "
 					       "one by hand if the wrong app's audio gets controlled instead -- remembered "
 					       "for this game across relaunches." )
 					.Default( 0 )
 					.Keywords( "stream node pipewire application pick manual override wpctl" );
 
-				// The matched stream's own row, present only when detection
-				// actually resolved something. It drives Audio::RequestVolume(),
-				// NOT the per-node call -- when a game owns several nodes this
-				// row moves all of them together, which is the behaviour the
-				// legacy primary row had and the per-stream rows below cannot
-				// express.
-				if ( s_AreaState.bDetected )
+				// The matched stream's own row, the FALLBACK path: present only
+				// when capture is not active and detection actually resolved
+				// something. It drives Audio::RequestVolume(), NOT the per-node
+				// call -- when a game owns several nodes this row moves all of
+				// them together, which is the behaviour the legacy primary row
+				// had and the per-stream rows below cannot express.
+				if ( !s_bCaptureActive && s_AreaState.bDetected )
 				{
 					const std::string sPrimaryLabel = PrimaryStreamRowLabel();
 
-					a.Slider( "audio.stream.volume", sPrimaryLabel.c_str(),
+					EmitGameVolumeRow( a, sPrimaryLabel,
 						ui::AnyBind::Of<int>(
 							[]{
 								return (int)std::lround(
@@ -506,52 +638,37 @@ namespace gamescope
 								s_PendingPrimary.bHasVolume = true;
 								s_PendingPrimary.flVolume   = flFrac;
 								s_PendingPrimary.tWhen      = std::chrono::steady_clock::now();
-							} ) )
-						.Help( "The game's volume. Going above 100% is a real boost that can distort "
-						       "the sound, not just extra headroom, and moves every one of the game's "
-						       "sounds together. While Automatic detection is picking the stream (the "
-						       "Stream row above reads \"Automatic\"), this row is titled with the "
-						       "detected stream's own name so you can confirm it found the right app; "
-						       "picking a stream by hand reverts the title to plain \"Game volume\"." )
-						.Range( 0.0f, 150.0f )
-						// The binding is an int percent, so the range is 151 discrete
-						// values -- over the 100-position budget on its own. 5% is
-						// the granularity a volume control is normally read at, and
-						// 100%, the default and the unity point, is on the grid.
-						.Step( 5.0f )    // 31 positions
-						.Default( 100 )
-						.Unit( "%" )
-						// "game volume" kept as a literal keyword (not just
-						// the two words separately) because the row's own
-						// TITLE -- which the palette also searches -- isn't
-						// always "Game volume" any more (see
-						// PrimaryStreamRowLabel() above): while Automatic
-						// detection is showing a stream's own name instead,
-						// a search for "game volume" would otherwise find
-						// nothing here.
-						.Keywords( "volume gain level loudness game audio game volume stream mixer detected" )
-						.Param( "mute", "Mute",
-							ui::AnyBind::Of<bool>(
-								[]{ return ResolveDisplayMute( s_PendingPrimary, s_AreaState.bMuted ); },
-								[]( bool bMuted )
-								{
-									Audio::RequestMute( bMuted );
-									s_PendingPrimary.bHasMute = true;
-									s_PendingPrimary.bMuted   = bMuted;
-									s_PendingPrimary.tWhen    = std::chrono::steady_clock::now();
-								} ) )
-							.Help( "Mutes the sound without changing its volume." )
-							.Default( false );
+							} ),
+						ui::AnyBind::Of<bool>(
+							[]{ return ResolveDisplayMute( s_PendingPrimary, s_AreaState.bMuted ); },
+							[]( bool bMuted )
+							{
+								Audio::RequestMute( bMuted );
+								s_PendingPrimary.bHasMute = true;
+								s_PendingPrimary.bMuted   = bMuted;
+								s_PendingPrimary.tWhen    = std::chrono::steady_clock::now();
+							} ),
+						"The game's volume, on the stream gamescope guessed is the game's (Capture game "
+						"audio is off or unavailable). Going above 100% is a real boost that can distort "
+						"the sound, not just extra headroom, and moves every one of the game's sounds "
+						"together. While Automatic detection is picking the stream (the Stream row above "
+						"reads \"Automatic\"), this row is titled with the detected stream's own name so "
+						"you can confirm it found the right app; picking a stream by hand reverts the "
+						"title to plain \"Game volume\"." );
 				}
 
 				// ---- one row per live stream ---------------------------
-				// Issue #36. The matched stream is skipped because the row
-				// above already covers it -- listing it twice would put two
-				// controls on one node, which is how a value fights itself.
+				// Issue #36. On the fallback path the matched stream is skipped
+				// because the Game volume row above already covers it -- listing
+				// it twice would put two controls on one node, which is how a
+				// value fights itself. On the capture path Game volume is the
+				// sink, not a stream, so every stream (the game's own included)
+				// keeps its row. Our own capture nodes never get here: Volume.cpp
+				// drops them at the source.
 				a.Group( "Streams" );
 				for ( const Audio::StreamCandidate &c : s_vecAreaStreams )
 				{
-					if ( s_AreaState.bDetected && IsPrimaryNode( c.nNodeId ) )
+					if ( !s_bCaptureActive && s_AreaState.bDetected && IsPrimaryNode( c.nNodeId ) )
 						continue;
 
 					// The id carries the NODE, which is what makes this row
@@ -582,13 +699,25 @@ namespace gamescope
 			a.Group( "Diagnostics" );
 			a.Facts( "audio.server", "Audio server",
 				[]{
-					return DetectionSummary() + "  ·  " +
+					std::string s;
+					if ( s_bCaptureActive )
+						s = "capture on  ·  ";
+					else if ( Audio::Capture::GetWanted() )
+						s = "capture not active  ·  ";
+					return s + DetectionSummary() + "  ·  " +
 					       std::to_string( s_AreaState.nTotalAudioStreams ) + " stream" +
 					       ( s_AreaState.nTotalAudioStreams == 1 ? "" : "s" );
 				} )
-				.Help( "Shows how the game's audio is being found and how many sounds are playing. "
-				       "Read-only, nothing here can be changed." )
-				.Keywords( "wpctl pipewire wireplumber detection status diagnostics" )
+				.Help( "Shows whether the game's audio is being captured, what Game volume is driving, "
+				       "how the game's stream is being found when it is not captured, and how many sounds "
+				       "are playing. Read-only, nothing here can be changed." )
+				.Keywords( "capture sink wpctl pipewire wireplumber detection status diagnostics" )
+				.Live( "capture", []{
+					return ui::Fact{ "capture", CaptureStatusLine() };
+				} )
+				.Live( "drives", []{
+					return ui::Fact{ "game volume drives", GameVolumeDrives() };
+				} )
 				.Live( "wpctl", []{
 					return ui::Fact{ "wpctl", s_AreaState.bWpctlAvailable
 						? "present"
@@ -643,6 +772,12 @@ namespace gamescope
 		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
 		a.Keywords( "audio volume mute mixer pipewire wireplumber wpctl stream per-app" );
 		a.Summary( []{
+			if ( s_bCaptureActive )
+			{
+				const int nCaptured = Audio::Capture::StreamCount();
+				return "game audio captured  ·  " + std::to_string( nCaptured ) +
+				       ( nCaptured == 1 ? " stream" : " streams" );
+			}
 			if ( !s_AreaState.bWpctlAvailable )
 				return std::string( "wpctl not found -- per-app volume unavailable" );
 			const int nStreams = (int)s_vecAreaStreams.size();

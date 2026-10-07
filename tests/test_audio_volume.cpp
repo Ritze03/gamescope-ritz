@@ -42,12 +42,45 @@ TEST_CASE( "Volume curve conversion", "[audio_volume]" )
 	}
 }
 
-TEST_CASE( "FormatLinearVolume avoids locale-sensitive formatting", "[audio_volume]" )
+TEST_CASE( "wpctl speaks the display (cubic) scale, not raw linear", "[audio_volume]" )
 {
-	REQUIRE( Parse::FormatLinearVolume( 0.3f ) == "0.3000" );
-	REQUIRE( Parse::FormatLinearVolume( 0.064f ) == "0.0640" );
-	REQUIRE( Parse::FormatLinearVolume( 1.0f ) == "1.0000" );
-	REQUIRE( Parse::FormatLinearVolume( -1.0f ) == "0.0000" ); // clamped
+	// Read-only measurements from live nodes on wpctl 0.5.18 (2026-10-07):
+	// raw channelVolumes (pw-dump) against `wpctl get-volume` of the same node.
+	// wpctl's number is the cube root of channelVolumes, i.e. exactly the
+	// display fraction -- so it must be used as one (Volume.h's "Volume curve"),
+	// never cbrt()'d again on read or cubed again before `set-volume`.
+	struct { float flChannelVolumes; const char *pszWpctl; } k_Live[] = {
+		{ 0.38742f,  "Volume: 0.73\n" },
+		{ 0.511977f, "Volume: 0.80\n" },
+		{ 0.713888f, "Volume: 0.89\n" },
+	};
+	for ( const auto &live : k_Live )
+	{
+		auto oReading = Parse::GetVolumeOutput( live.pszWpctl );
+		REQUIRE( oReading.has_value() );
+		// The reading is the display fraction: the cube root of channelVolumes (wpctl
+		// prints two decimals, hence the tolerance).
+		REQUIRE( std::abs( oReading->flVolume - LinearToDisplayVolume( live.flChannelVolumes ) ) < 0.005f );
+	}
+}
+
+TEST_CASE( "FormatVolume avoids locale-sensitive formatting", "[audio_volume]" )
+{
+	REQUIRE( Parse::FormatVolume( 0.3f ) == "0.3000" );
+	REQUIRE( Parse::FormatVolume( 0.064f ) == "0.0640" );
+	REQUIRE( Parse::FormatVolume( 1.0f ) == "1.0000" );
+	REQUIRE( Parse::FormatVolume( -1.0f ) == "0.0000" ); // clamped
+}
+
+TEST_CASE( "IsOwnCaptureNodeName matches the capture sink and its playback stream", "[audio_volume]" )
+{
+	REQUIRE( Parse::IsOwnCaptureNodeName( "gamescope-ritz.1234" ) );
+	REQUIRE( Parse::IsOwnCaptureNodeName( "gamescope-ritz.1234.out" ) );
+	REQUIRE_FALSE( Parse::IsOwnCaptureNodeName( "" ) );
+	REQUIRE_FALSE( Parse::IsOwnCaptureNodeName( "gamescope-ritz" ) );
+	REQUIRE_FALSE( Parse::IsOwnCaptureNodeName( "gamescope" ) );
+	REQUIRE_FALSE( Parse::IsOwnCaptureNodeName( "paplay" ) );
+	REQUIRE_FALSE( Parse::IsOwnCaptureNodeName( "my-gamescope-ritz.1" ) );
 }
 
 static constexpr std::string_view k_svStatusStreams =
@@ -118,8 +151,8 @@ TEST_CASE( "GetVolumeOutput parses unmuted and muted forms", "[audio_volume]" )
 {
 	auto oUnmuted = Parse::GetVolumeOutput( "Volume: 0.30\n" );
 	REQUIRE( oUnmuted.has_value() );
-	REQUIRE( oUnmuted->flLinear > 0.299f );
-	REQUIRE( oUnmuted->flLinear < 0.301f );
+	REQUIRE( oUnmuted->flVolume > 0.299f );
+	REQUIRE( oUnmuted->flVolume < 0.301f );
 	REQUIRE_FALSE( oUnmuted->bMuted );
 
 	auto oMuted = Parse::GetVolumeOutput( "Volume: 0.30 [MUTED]\n" );
