@@ -27,13 +27,23 @@ has today's Mixer. The two never both drive a row: the id `audio.stream.volume` 
 declared once, by whichever path is current, and `AudioGeneration()` mixes
 `Capture::Active()` into the row-set hash so the area rebuilds when it flips.
 
-Persistence: the Mixer keeps no volume value of its own. On the fallback path WirePlumber
-already remembers per-application stream volume; the capture sink is created fresh each
-session, so **its volume and mute start at 100% / unmuted every session** (a deliberate
-non-feature, per the plan: persistence was not part of this step). What IS persisted, per
-game, is the manual stream *selection* (`config::GameEntry(appId).audio_node`) — a
-different thing from a volume value, since WirePlumber has no concept of "which stream
-did the user mean." The capture switch itself (`audio.capture`) is per profile.
+Persistence: on the fallback path the Mixer keeps no volume value of its own;
+WirePlumber already remembers per-application stream volume there. On the capture path
+the **Game volume** slider is saved per profile as `audio.game_volume` (display
+fraction 0..1.5, default 1.0, additive so no schema bump) -- written only when the user
+moves that slider (`PanelAudio.cpp` setter -> `s_CachedSettings.audio.game_volume` +
+`QueueSave()`), never from a value mirrored in from `wpctl`/pavucontrol, and **never
+from the fallback slider**. `ritz_apply_config_live()` hands the saved value to
+`Capture::SetVolume()` at startup and on a profile switch, so the sink is at the saved
+level before the first sample flows. **Mute is deliberately not saved**: a game that
+came up muted on the next launch would look broken, not remembered. `Why:` the user,
+2026-10-10: *"We need some way of saving the game volume"* -- the capture sink is
+created fresh each session and carries `state.restore-props=false` so WirePlumber
+cannot remember its level either, so without this the slider restarted at 100% every
+launch. What else is persisted, per game, is the manual stream *selection*
+(`config::GameEntry(appId).audio_node`) -- a different thing from a volume value, since
+WirePlumber has no concept of "which stream did the user mean." The capture switch
+itself (`audio.capture`) is per profile.
 
 **Hotkey** (2026-09-27) — the `mixer` **keybind action**, default
 `Ctrl+Shift+M`, opens the settings shell directly on this area (or switches

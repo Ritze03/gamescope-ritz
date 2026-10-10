@@ -544,9 +544,16 @@ namespace gamescope::config
     // bump: an older config has no "audio" object (the pre-schema-3 `audio` section, which
     // held a stream pick, is gone and never read here) and resolves to on. Changing it
     // acts live: the sink is created or destroyed on the spot.
+    //
+    // game_volume (2026-10-10, also additive): the Mixer's "Game volume" on the capture
+    // sink, in the Mixer's DISPLAY curve (1.0 = unity, the value Capture::SetVolume()
+    // takes, NOT a raw linear gain), clamped to 0..1.5 on load. Saved only when the user
+    // moves that slider; mute is deliberately not saved. Why: the sink is created fresh
+    // every session, so without this the level reset to 100% each launch.
     struct AudioSettings
     {
         bool capture = true;
+        float game_volume = 1.0f;
     };
 
     // Lag spike buffer (2026-10-04, this fork's own addition -- see

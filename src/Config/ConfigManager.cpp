@@ -384,7 +384,11 @@ namespace gamescope::config
 
             // Game audio capture (2026-10-07). Additive: absent = on.
             if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
+            {
                 s.audio.capture = JGetBool( *pAudio, "capture", s.audio.capture );
+                // Saved game volume (2026-10-10): display fraction, never above 1.5.
+                s.audio.game_volume = std::clamp( JGetFloat( *pAudio, "game_volume", s.audio.game_volume ), 0.0f, 1.5f );
+            }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
@@ -889,6 +893,7 @@ namespace gamescope::config
 
             nlohmann::json jAudio = nlohmann::json::object();
             jAudio[ "capture" ] = s.audio.capture;
+            jAudio[ "game_volume" ] = std::clamp( s.audio.game_volume, 0.0f, 1.5f );
 
             nlohmann::json j = nlohmann::json::object();
             j[ "gamescope" ] = std::move( jGamescope );

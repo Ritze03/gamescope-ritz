@@ -2122,6 +2122,58 @@ TEST_CASE( "audio: capture defaults on, round-trips, and an absent section is on
     REQUIRE( IsSettingsKey( "audio.capture" ) );
 }
 
+// Saved game volume (2026-10-10): per-profile audio.game_volume, additive (no schema
+// bump), a display fraction 0..1.5, default 1.0.
+TEST_CASE( "audio: game_volume defaults to 1, round-trips, and is clamped to 0..1.5 on load", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.audio.game_volume == 1.0f );
+    REQUIRE( IsSettingsKey( "audio.game_volume" ) );
+
+    // Missing key (a profile with an audio object but no game_volume, and one with
+    // no audio object at all) loads the default.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "capture": false }
+    })";
+    REQUIRE( LoadSections().audio.game_volume == 1.0f );
+    REQUIRE( LoadSections().audio.capture == false );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general"
+    })";
+    REQUIRE( LoadSections().audio.game_volume == 1.0f );
+
+    // Out-of-range stored values clamp; a non-number falls back to the default.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "game_volume": 9.0 }
+    })";
+    REQUIRE( LoadSections().audio.game_volume == 1.5f );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "game_volume": -2.0 }
+    })";
+    REQUIRE( LoadSections().audio.game_volume == 0.0f );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "game_volume": "loud" }
+    })";
+    REQUIRE( LoadSections().audio.game_volume == 1.0f );
+
+    // Last: SaveSections() makes the in-process mirror the freshest copy of "T", so
+    // any hand-written file above would no longer be read after it.
+    // Round trip, including the two ends of the range.
+    for ( float fl : { 0.0f, 0.35f, 1.0f, 1.5f } )
+    {
+        Settings s;
+        s.audio.game_volume = fl;
+        REQUIRE( SaveSections( s ) );
+        REQUIRE( std::fabs( LoadSections().audio.game_volume - fl ) < 1e-6f );
+    }
+}
+
 TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off, a stored min loads as off", "[config]" )
 {
     TempConfigHome home;

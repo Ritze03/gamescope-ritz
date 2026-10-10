@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.12.1] – 2026-10-10
+
+### Added
+- **Saved game volume**: the Mixer's Game volume (with game audio capture on) is now
+  remembered per profile and restored on launch and when you switch profiles; mute is
+  not saved.
+
 ## [0.12.0] – 2026-10-07
 
 ### Added

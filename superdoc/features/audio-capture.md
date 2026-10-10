@@ -224,10 +224,22 @@ reads as on. Read at startup and pushed live by `ritz_apply_config_live()` →
   the game's); `Volume.cpp`'s poll drops our nodes at the source (by `PlaybackNodeId()` /
   `SinkNodeId()` and by the `gamescope-ritz.` `node.name` prefix, since the playback node
   can reach the registry before its id is published), so they are never listed or guessed.
-- The sink's volume and mute are not persisted: every session starts at 100% / unmuted
-  (a fresh sink is created each session; its `node.name` carries the pid). The
-  guessing path never persisted either, but WirePlumber restored the game's own stream
-  volume per app, which still applies to the stream inside the sink.
+- The sink's **volume is saved per profile** (`audio.game_volume`, 2026-10-10); **mute
+  is not** (every session starts unmuted). A fresh sink is created each session (its
+  `node.name` carries the pid) and carries `state.restore-props=false`, so WirePlumber
+  remembers nothing for it; the saved value is the sink's volume *wish*:
+  `ritz_apply_config_live()` calls `Capture::SetVolume(config.audio.game_volume)`, which
+  only records the wish before `Start()` and applies it at connect / PAUSED / STREAMING,
+  so it is in place before the first sample. On a profile switch it is re-applied, but
+  only when the value changed (so an unrelated config bump does not undo a level set
+  from `wpctl`). Only a Mixer slider move saves; external changes mirrored into
+  `GetVolume()` are not persisted and applying config never saves, so there is no
+  feedback loop. The value is clamped to 0..1.5 on load and on write (a display
+  fraction, not raw linear). `Why:` the user, 2026-10-10: *"We need some way of saving
+  the game volume"*. Mute stays session-only on purpose: a game that starts muted next
+  launch would look broken. The guessing path is unchanged (WirePlumber restores the
+  game's own stream volume per app there, and `audio.game_volume` is not applied to a
+  guessed stream).
 
 ## Live checks
 

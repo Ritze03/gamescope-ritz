@@ -435,8 +435,9 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
   the same scope as `reset`). The key a row resolves to is its `Entry::Key()` /
   `Parameter::Key()` (`"fps_display.enabled"`), else its registry id when that is
   already a real key (`crosshair.line_length`); a row that resolves to nothing
-  (`audio.*`, `cursor.*`, the Log's filter) shows nothing (`Registry::KeyStateFor()`,
-  `config::IsSettingsKey()`). The Profiles area installs the answers through
+  (`audio.*` other than `audio.capture` and the capture-path Game volume, which carries
+  `audio.game_volume`; `cursor.*`, the Log's filter) shows nothing
+  (`Registry::KeyStateFor()`, `config::IsSettingsKey()`). The Profiles area installs the answers through
   `Registry::Inheritance()`, so the registry itself stays free of the config layer.
 - The **badge** in every area's sheet header is the session profile as the list labels
   it (`[Game] Rust`, or `Casual (launch)` under `--profile`) -- `Registry::DefaultBadge()`,
