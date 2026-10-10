@@ -218,6 +218,16 @@ namespace gamescope::config
     GameAssignment GameEntry( std::string_view svAppId );
     void SetGameAudioNode( std::string_view svAppId, std::string_view svBinary );
 
+    // The saved Mixer "Game volume" (games.<key>.game_volume, display fraction 0..1.5,
+    // absent = 1.0). <key> is ChooseGameVolumeKey() (AppId.h): the app id, else the
+    // launched command's executable basename. NoteLaunchCommand() is told that
+    // command once, from LaunchNestedChildren; SessionGameVolumeKey() is the key for
+    // this session, nullopt when there is neither (then nothing is saved or restored).
+    void NoteLaunchCommand( std::string_view svPrimaryArgv0 );
+    std::optional<std::string> SessionGameVolumeKey();
+    float GetGameVolume( std::string_view svKey );
+    void SetGameVolume( std::string_view svKey, float flDisplayFraction );
+
     // ---- the game's display name -------------------------------------------------
     // "[Game] Rust" needs a name; the code knows the focused window's title
     // (steamcompmgr) and the app id, nothing more. The first title seen for

@@ -34,9 +34,17 @@ dropdown, a "Filter game profiles" switch and one Status row -- see
 - **Appearance** (`overlay.*`: UI scale, accent, opacities, cursor look, window
   geometry, toast placement) stays in `global.json`, as before. It is about the
   player's screen, not the game, and never rides in a profile.
-- The one per-game fact that is not a setting -- which PipeWire stream is this
-  game's (`audio_node`) -- lives on the game's entry in `global.json`, not in a
-  profile, because it names one game's process and a profile can be shared.
+- The per-game facts that are not settings -- which PipeWire stream is this
+  game's (`audio_node`), and the Mixer's saved Game volume (`game_volume`, a display
+  fraction 0..1.5, absent = 1.0) -- live on the game's entry in `global.json`, not in a
+  profile, because `audio_node` names one game's process and a profile can be shared.
+  `Why:` the saved volume was first a per-profile key; the user corrected it: *"Even if
+  two games use the same profile, it has to somehow differentiate between them"*. Its
+  key is the app id, else (no app id) the launched executable's basename
+  (`config::ChooseGameVolumeKey()`) -- such a fallback entry carries only `game_volume`,
+  has an empty `selected`, and so is never read as a profile assignment; assignment and
+  the Friends gate still ask only `SessionAppId()`/`ResolveAppId()`, so a non-Steam game
+  does not become a "game" by having a volume saved. See audio-capture.md.
 
 ## Files
 
@@ -56,7 +64,7 @@ dropdown, a "Filter game profiles" switch and one Status row -- see
   "profiles": {
     "last_general": "Comp",
     "games": {
-      "252490": { "selected": "Rust", "audio_node": "RustClient.exe" }
+      "252490": { "selected": "Rust", "audio_node": "RustClient.exe", "game_volume": 0.6 }
     }
   }
 }
@@ -435,8 +443,7 @@ Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
   the same scope as `reset`). The key a row resolves to is its `Entry::Key()` /
   `Parameter::Key()` (`"fps_display.enabled"`), else its registry id when that is
   already a real key (`crosshair.line_length`); a row that resolves to nothing
-  (`audio.*` other than `audio.capture` and the capture-path Game volume, which carries
-  `audio.game_volume`; `cursor.*`, the Log's filter) shows nothing
+  (`audio.*`, `cursor.*`, the Log's filter) shows nothing
   (`Registry::KeyStateFor()`, `config::IsSettingsKey()`). The Profiles area installs the answers through
   `Registry::Inheritance()`, so the registry itself stays free of the config layer.
 - The **badge** in every area's sheet header is the session profile as the list labels
@@ -458,7 +465,7 @@ does not have yet, flagged rather than faked.
 | select | `SelectProfile(name)` |
 | Create / Copy / Edit / Delete | `CreateProfile(meta, from=nullptr)`, `CopyProfile(src, meta)`, `EditProfileMeta(old, meta)`, `DeleteProfile(name)` -- each returns a `ProfileOp` (`ok`, `error` text for the modal) |
 | markers | `OverriddenKeys()`, `ResetKeyToInherited(dottedKey)` |
-| the game entry | `GameEntry(appId)` -> `{ selected, audio_node }`, `SetGameAudioNode(appId, binary)` |
+| the game entry | `GameEntry(appId)` -> `{ selected, audio_node, game_volume }`, `SetGameAudioNode(appId, binary)`, `GetGameVolume(key)` / `SetGameVolume(key, fraction)` / `SessionGameVolumeKey()` |
 | launch option / live switch | `UseSessionProfile(rawName)` -> `{ ok, name, created }` (a missing name is created empty) |
 | writes | `EnqueueRoutedWrite(settings)` (every panel), `SaveProfile(meta, settings)` (sync), `EnqueueProfileWrite(meta, settings)` |
 

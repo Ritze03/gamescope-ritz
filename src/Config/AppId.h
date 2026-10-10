@@ -68,4 +68,19 @@ namespace gamescope::config
     // global.json, both of which tolerate any string), but '/' and '\' are
     // refused anyway on the chance a future caller ever does path-join it.
     std::optional<std::string> SanitizeAppId( std::string_view svRawAppId );
+
+    // The key a game's SAVED GAME VOLUME is stored under (global.json's
+    // games.<key>.game_volume), chosen from what this session knows:
+    //   1. the resolved app id (ResolveAppId()), when there is one -- passed
+    //      through SanitizeAppId() like every other id that reaches config;
+    //   2. else the basename of the primary child's executable (argv[0] of the
+    //      command gamescope launches), through the same SanitizeAppId() rule;
+    //   3. else nullopt -- nothing to key a saved level on, so nothing is saved
+    //      or restored and the slider is session-only.
+    // Pure (no env, no globals) so the choice is unit-tested. It is used for the
+    // volume ONLY: the fallback key must never make a non-Steam game count as a
+    // "game" for profile assignment or the Friends list, which keep asking
+    // ResolveAppId()/SessionAppId() directly.
+    std::optional<std::string> ChooseGameVolumeKey( const std::optional<std::string> &oAppId,
+                                                    std::string_view svPrimaryArgv0 );
 }

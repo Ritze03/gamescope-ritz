@@ -9992,6 +9992,14 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 	// stray sink would sit in the user's device list for nothing.
 	if ( ppPrimaryChildArgv && *ppPrimaryChildArgv )
 	{
+		// The saved Game volume is per GAME (games.<key>.game_volume): the key is
+		// the app id, else this command's executable basename, and is only known
+		// here. Recorded as the volume wish BEFORE Start() so it is in place
+		// before the first sample flows; no key = nothing saved, stays at 100%.
+		gamescope::config::NoteLaunchCommand( *ppPrimaryChildArgv );
+		if ( const std::optional<std::string> oVolumeKey = gamescope::config::SessionGameVolumeKey() )
+			gamescope::Audio::Capture::SetVolume( gamescope::config::GetGameVolume( *oVolumeKey ) );
+
 		gamescope::Audio::Capture::ApplyGameEnvironment( gamescope::Audio::Capture::GetWanted() );
 		gamescope::Audio::Capture::Start();
 	}

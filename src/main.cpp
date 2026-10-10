@@ -645,19 +645,6 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// here from the first call; once the sink is up (steamcompmgr.cpp's
 	// LaunchNestedChildren) a later change creates or destroys it live.
 	gamescope::Audio::Capture::SetWanted( config.audio.capture );
-	// The profile's saved game volume (audio.game_volume) is the capture sink's
-	// volume wish: recorded here before Start() so it is in place before the
-	// first sample flows, and re-applied on a profile switch. Only when the
-	// value CHANGED, so an unrelated config bump (creating a profile, say) does
-	// not undo a level someone set from wpctl/pavucontrol. Not saved from here.
-	{
-		static float s_flAppliedGameVolume = -1.0f;
-		if ( config.audio.game_volume != s_flAppliedGameVolume )
-		{
-			s_flAppliedGameVolume = config.audio.game_volume;
-			gamescope::Audio::Capture::SetVolume( config.audio.game_volume );
-		}
-	}
 
 	if ( !Given( Opt::AdaptiveSync ) )
 		cv_adaptive_sync = config.gamescope.vrr_enabled;

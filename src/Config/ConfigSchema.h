@@ -544,16 +544,9 @@ namespace gamescope::config
     // bump: an older config has no "audio" object (the pre-schema-3 `audio` section, which
     // held a stream pick, is gone and never read here) and resolves to on. Changing it
     // acts live: the sink is created or destroyed on the spot.
-    //
-    // game_volume (2026-10-10, also additive): the Mixer's "Game volume" on the capture
-    // sink, in the Mixer's DISPLAY curve (1.0 = unity, the value Capture::SetVolume()
-    // takes, NOT a raw linear gain), clamped to 0..1.5 on load. Saved only when the user
-    // moves that slider; mute is deliberately not saved. Why: the sink is created fresh
-    // every session, so without this the level reset to 100% each launch.
     struct AudioSettings
     {
         bool capture = true;
-        float game_volume = 1.0f;
     };
 
     // Lag spike buffer (2026-10-04, this fork's own addition -- see
@@ -1379,6 +1372,17 @@ namespace gamescope::config
         // names one game's process -- in a profile shared by two games it
         // would point one game's volume control at the other's process.
         std::string audio_node;
+        // The Mixer's "Game volume" on the capture sink (2026-10-10), in the
+        // Mixer's DISPLAY curve (1.0 = unity, the value Capture::SetVolume()
+        // takes, NOT a raw linear gain), clamped to 0..1.5 on load and write;
+        // absent = 1.0. Per GAME, not per profile, for the same reason as
+        // audio_node: two games can share one profile and still need their own
+        // level. Keyed by ChooseGameVolumeKey() (AppId.h), so a non-Steam game
+        // with no app id is keyed by its executable's basename -- an entry that
+        // exists only for this value and has no `selected`, which every
+        // profile-assignment lookup treats as "never chose". Saved only when the
+        // user moves the slider; mute is deliberately not saved.
+        float game_volume = 1.0f;
     };
 
     // global.json's `profiles` object: the pointers. Assignments are

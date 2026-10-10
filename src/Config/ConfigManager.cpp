@@ -384,11 +384,7 @@ namespace gamescope::config
 
             // Game audio capture (2026-10-07). Additive: absent = on.
             if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
-            {
                 s.audio.capture = JGetBool( *pAudio, "capture", s.audio.capture );
-                // Saved game volume (2026-10-10): display fraction, never above 1.5.
-                s.audio.game_volume = std::clamp( JGetFloat( *pAudio, "game_volume", s.audio.game_volume ), 0.0f, 1.5f );
-            }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
@@ -893,7 +889,6 @@ namespace gamescope::config
 
             nlohmann::json jAudio = nlohmann::json::object();
             jAudio[ "capture" ] = s.audio.capture;
-            jAudio[ "game_volume" ] = std::clamp( s.audio.game_volume, 0.0f, 1.5f );
 
             nlohmann::json j = nlohmann::json::object();
             j[ "gamescope" ] = std::move( jGamescope );
@@ -1409,6 +1404,7 @@ namespace gamescope::config
                     GameAssignment g;
                     g.selected = JGetString( *it, "selected", "" );
                     g.audio_node = JGetString( *it, "audio_node", "" );
+                    g.game_volume = std::clamp( JGetFloat( *it, "game_volume", 1.0f ), 0.0f, 1.5f );
                     a.games[ it.key() ] = std::move( g );
                 }
             }
@@ -1422,11 +1418,15 @@ namespace gamescope::config
             {
                 // An entry that says nothing is not written: the map would
                 // otherwise grow one empty row per game ever launched.
-                if ( g.selected.empty() && g.audio_node.empty() )
+                // (An absent game_volume means 1.0, so unity is not "something".)
+                const float flVolume = std::clamp( g.game_volume, 0.0f, 1.5f );
+                if ( g.selected.empty() && g.audio_node.empty() && flVolume == 1.0f )
                     continue;
                 nlohmann::json jg = nlohmann::json::object();
                 jg[ "selected" ] = g.selected;
                 jg[ "audio_node" ] = g.audio_node;
+                if ( flVolume != 1.0f )
+                    jg[ "game_volume" ] = flVolume;
                 jGames[ sAppId ] = std::move( jg );
             }
             nlohmann::json j = nlohmann::json::object();
@@ -2886,6 +2886,40 @@ namespace gamescope::config
             return;
         g.audio_node = std::string( svBinary );
         EnqueueGlobalFromMirror();
+    }
+
+    namespace
+    {
+        std::string s_sLaunchArgv0; // set once by NoteLaunchCommand()
+    }
+
+    void NoteLaunchCommand( std::string_view svPrimaryArgv0 )
+    {
+        s_sLaunchArgv0 = std::string( svPrimaryArgv0 );
+    }
+
+    std::optional<std::string> SessionGameVolumeKey()
+    {
+        return ChooseGameVolumeKey( SessionAppId(), s_sLaunchArgv0 );
+    }
+
+    float GetGameVolume( std::string_view svKey )
+    {
+        return std::clamp( GameEntry( svKey ).game_volume, 0.0f, 1.5f );
+    }
+
+    void SetGameVolume( std::string_view svKey, float flDisplayFraction )
+    {
+        EnsureGlobalLoaded();
+        const float fl = std::clamp( flDisplayFraction, 0.0f, 1.5f );
+        auto it = s_Assignments.games.find( std::string( svKey ) );
+        if ( it == s_Assignments.games.end() && fl == 1.0f )
+            return; // unity is "absent": do not create an empty row for it
+        GameAssignment &g = it != s_Assignments.games.end() ? it->second : s_Assignments.games[ std::string( svKey ) ];
+        if ( g.game_volume == fl )
+            return;
+        g.game_volume = fl;
+        EnqueueGlobalFromMirror(); // coalesced: a slider drag costs one write
     }
 
     // ---- the game's display name ----------------------------------------------------

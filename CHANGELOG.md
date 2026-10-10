@@ -13,7 +13,7 @@ The newest version below is the one this build reports.
 
 ### Added
 - **Saved game volume**: the Mixer's Game volume (with game audio capture on) is now
-  remembered per profile and restored on launch and when you switch profiles; mute is
+  remembered per game and restored on launch, even if games share a profile; mute is
   not saved.
 
 ## [0.12.0] – 2026-10-07

@@ -474,18 +474,10 @@ namespace gamescope
 		// The Game volume row, the same on both paths apart from what it is bound
 		// to and how it explains itself. Its id never changes (the settings audit,
 		// the palette's identity and anything else keyed on it are unaffected).
-		//
-		// pszConfigKey: the profile key the volume binding persists to, or null
-		// for a row that saves nothing (the guessed-stream fallback, which
-		// WirePlumber's own per-app memory covers). It only feeds the
-		// inherited/overridden marker; the binding itself does the writing.
-		void EmitGameVolumeRow( ui::Area &a, const std::string &sTitle, ui::AnyBind volume, ui::AnyBind mute, const char *pszHelp,
-		                        const char *pszConfigKey = nullptr )
+		void EmitGameVolumeRow( ui::Area &a, const std::string &sTitle, ui::AnyBind volume, ui::AnyBind mute, const char *pszHelp )
 		{
-			ui::Entry &row = a.Slider( "audio.stream.volume", sTitle.c_str(), std::move( volume ) );
-			if ( pszConfigKey )
-				row.Key( pszConfigKey );
-			row.Help( pszHelp )
+			a.Slider( "audio.stream.volume", sTitle.c_str(), std::move( volume ) )
+				.Help( pszHelp )
 				.Range( 0.0f, 150.0f )
 				// The binding is an int percent, so the range is 151 discrete
 				// values -- over the 100-position budget on its own. 5% is
@@ -575,12 +567,12 @@ namespace gamescope
 						{
 							const float flFrac = std::clamp( nPercent, 0, 150 ) / 100.0f;
 							Audio::Capture::SetVolume( flFrac );
-							// Saved per profile (audio.game_volume): only a slider move
-							// persists, never an external change mirrored into GetVolume(),
-							// and never mute. The 5% step keeps a drag to a few writes.
-							EnsureConfigLoaded();
-							s_CachedSettings.audio.game_volume = flFrac;
-							QueueSave();
+							// Saved per GAME (games.<key>.game_volume), not per profile:
+							// only a slider move persists, never an external change
+							// mirrored into GetVolume(), and never mute. The 5% step
+							// keeps a drag to a few (coalesced) writes. No key = not saved.
+							if ( const std::optional<std::string> oKey = config::SessionGameVolumeKey() )
+								config::SetGameVolume( *oKey, flFrac );
 							s_PendingCapture.bHasVolume = true;
 							s_PendingCapture.flVolume   = flFrac;
 							s_PendingCapture.tWhen      = std::chrono::steady_clock::now();
@@ -597,8 +589,7 @@ namespace gamescope
 					"The game's volume, applied to the private output all of its sound plays through "
 					"(Capture game audio, above), so it moves every one of the game's sounds together "
 					"and cannot land on the wrong app. Going above 100% is a real boost that can "
-					"distort the sound, not just extra headroom. The volume is saved per profile; mute is not saved.",
-					"audio.game_volume" );
+					"distort the sound, not just extra headroom. The volume is saved per game; mute is not saved." );
 			}
 
 			// wpctl is a RUNTIME dependency (DECISIONS.md #22) of everything

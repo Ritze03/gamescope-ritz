@@ -224,22 +224,35 @@ reads as on. Read at startup and pushed live by `ritz_apply_config_live()` →
   the game's); `Volume.cpp`'s poll drops our nodes at the source (by `PlaybackNodeId()` /
   `SinkNodeId()` and by the `gamescope-ritz.` `node.name` prefix, since the playback node
   can reach the registry before its id is published), so they are never listed or guessed.
-- The sink's **volume is saved per profile** (`audio.game_volume`, 2026-10-10); **mute
-  is not** (every session starts unmuted). A fresh sink is created each session (its
-  `node.name` carries the pid) and carries `state.restore-props=false`, so WirePlumber
-  remembers nothing for it; the saved value is the sink's volume *wish*:
-  `ritz_apply_config_live()` calls `Capture::SetVolume(config.audio.game_volume)`, which
-  only records the wish before `Start()` and applies it at connect / PAUSED / STREAMING,
-  so it is in place before the first sample. On a profile switch it is re-applied, but
-  only when the value changed (so an unrelated config bump does not undo a level set
-  from `wpctl`). Only a Mixer slider move saves; external changes mirrored into
-  `GetVolume()` are not persisted and applying config never saves, so there is no
-  feedback loop. The value is clamped to 0..1.5 on load and on write (a display
-  fraction, not raw linear). `Why:` the user, 2026-10-10: *"We need some way of saving
-  the game volume"*. Mute stays session-only on purpose: a game that starts muted next
-  launch would look broken. The guessing path is unchanged (WirePlumber restores the
-  game's own stream volume per app there, and `audio.game_volume` is not applied to a
-  guessed stream).
+- The sink's **volume is saved per game** (`games.<key>.game_volume` in `global.json`,
+  2026-10-10), not per profile; **mute is not saved** (every session starts unmuted). A
+  fresh sink is created each session (its `node.name` carries the pid) and carries
+  `state.restore-props=false`, so WirePlumber remembers nothing for it; the saved value
+  is the sink's volume *wish*. `LaunchNestedChildren` (`steamcompmgr.cpp`) tells config
+  the launched command (`config::NoteLaunchCommand(argv[0])`), asks
+  `config::SessionGameVolumeKey()` for the key and calls
+  `Capture::SetVolume(config::GetGameVolume(key))` right before `Capture::Start()`;
+  `SetVolume` only records the wish before `Start()` and applies it at connect / PAUSED /
+  STREAMING, so it is in place before the first sample. **The key**
+  (`config::ChooseGameVolumeKey()`, `AppId.h`, pure and unit-tested): the resolved app
+  id when there is one, else the basename of the primary child's executable, both
+  through `SanitizeAppId()`; with neither (no child, no id) nothing is saved or restored
+  and the slider is session-only. Only a Mixer slider move saves (`config::SetGameVolume`,
+  the debounced `global.json` write); external changes mirrored into `GetVolume()` are
+  not persisted and applying never saves, so there is no feedback loop. The value is a
+  display fraction clamped to 0..1.5 on load and write; absent = 1.0, and unity writes
+  nothing. `Why:` the user, 2026-10-10: *"We need some way of saving the game volume"*,
+  then, correcting a first per-profile cut: *"Even if two games use the same profile, it
+  has to somehow differentiate between them"* -- hence per game. Mute stays session-only
+  on purpose: a game that starts muted next launch would look broken. Stored in the
+  existing `games` map (next to `selected` / `audio_node`) because nothing there treats
+  an entry's presence as "this is a game": profile assignment looks up only
+  `SessionAppId()` (the fallback key is never one), the Friends gate asks
+  `ResolveAppId()`, and an entry with an empty `selected` means "never chose". Weakness:
+  a command like `wine game.exe` or `env ... game` keys on `wine` / `env`, shared by every
+  such game -- set `RITZ_GS_APPID` to separate them. The guessing path is unchanged
+  (WirePlumber restores the game's own stream volume per app there, and the saved value
+  is not applied to a guessed stream).
 
 ## Live checks
 

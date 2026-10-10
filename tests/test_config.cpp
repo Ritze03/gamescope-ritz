@@ -2122,58 +2122,6 @@ TEST_CASE( "audio: capture defaults on, round-trips, and an absent section is on
     REQUIRE( IsSettingsKey( "audio.capture" ) );
 }
 
-// Saved game volume (2026-10-10): per-profile audio.game_volume, additive (no schema
-// bump), a display fraction 0..1.5, default 1.0.
-TEST_CASE( "audio: game_volume defaults to 1, round-trips, and is clamped to 0..1.5 on load", "[config]" )
-{
-    TempConfigHome home;
-    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-
-    REQUIRE( Settings{}.audio.game_volume == 1.0f );
-    REQUIRE( IsSettingsKey( "audio.game_volume" ) );
-
-    // Missing key (a profile with an audio object but no game_volume, and one with
-    // no audio object at all) loads the default.
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "audio": { "capture": false }
-    })";
-    REQUIRE( LoadSections().audio.game_volume == 1.0f );
-    REQUIRE( LoadSections().audio.capture == false );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general"
-    })";
-    REQUIRE( LoadSections().audio.game_volume == 1.0f );
-
-    // Out-of-range stored values clamp; a non-number falls back to the default.
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "audio": { "game_volume": 9.0 }
-    })";
-    REQUIRE( LoadSections().audio.game_volume == 1.5f );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "audio": { "game_volume": -2.0 }
-    })";
-    REQUIRE( LoadSections().audio.game_volume == 0.0f );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "audio": { "game_volume": "loud" }
-    })";
-    REQUIRE( LoadSections().audio.game_volume == 1.0f );
-
-    // Last: SaveSections() makes the in-process mirror the freshest copy of "T", so
-    // any hand-written file above would no longer be read after it.
-    // Round trip, including the two ends of the range.
-    for ( float fl : { 0.0f, 0.35f, 1.0f, 1.5f } )
-    {
-        Settings s;
-        s.audio.game_volume = fl;
-        REQUIRE( SaveSections( s ) );
-        REQUIRE( std::fabs( LoadSections().audio.game_volume - fl ) < 1e-6f );
-    }
-}
-
 TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off, a stored min loads as off", "[config]" )
 {
     TempConfigHome home;
@@ -2661,6 +2609,93 @@ TEST_CASE( "GameEntry / SetGameAudioNode live in global.json's game entry, never
     ResetSessionRoutingForTests();
     REQUIRE( GameEntry( "77" ).audio_node == "eldenring.exe" );
     REQUIRE( GameEntry( "78" ).audio_node.empty() );
+}
+
+TEST_CASE( "ChooseGameVolumeKey: app id first, else the launched command's basename, else nothing", "[config]" )
+{
+    using Opt = std::optional<std::string>;
+
+    // An app id wins over a command; the command is ignored entirely.
+    REQUIRE( ChooseGameVolumeKey( Opt( "252490" ), "/usr/bin/wine" ) == "252490" );
+    REQUIRE( ChooseGameVolumeKey( Opt( "252490" ), "" ) == "252490" );
+    // A manually-set, non-numeric id is an id like any other (sanitised: trimmed).
+    REQUIRE( ChooseGameVolumeKey( Opt( "  my game " ), "foo" ) == "my game" );
+
+    // No app id: the executable's basename, with or without a directory.
+    REQUIRE( ChooseGameVolumeKey( std::nullopt, "/opt/games/hl2_linux" ) == "hl2_linux" );
+    REQUIRE( ChooseGameVolumeKey( std::nullopt, "./game.x86_64" ) == "game.x86_64" );
+    REQUIRE( ChooseGameVolumeKey( std::nullopt, "hl2_linux" ) == "hl2_linux" );
+
+    // Neither: nothing to key a saved level on.
+    REQUIRE( !ChooseGameVolumeKey( std::nullopt, "" ) );
+    // A command that names no file ("dir/", "/"), or a name SanitizeAppId() refuses.
+    REQUIRE( !ChooseGameVolumeKey( std::nullopt, "/opt/games/" ) );
+    REQUIRE( !ChooseGameVolumeKey( std::nullopt, "/" ) );
+    REQUIRE( !ChooseGameVolumeKey( std::nullopt, "bad\x01name" ) );
+    REQUIRE( !ChooseGameVolumeKey( std::nullopt, "   " ) );
+    // An id that does not survive sanitising falls through to the command.
+    REQUIRE( ChooseGameVolumeKey( Opt( "a\\b" ), "/x/game" ) == "game" );
+    REQUIRE( ChooseGameVolumeKey( Opt( "" ), "/x/game" ) == "game" );
+    REQUIRE( !ChooseGameVolumeKey( Opt( "" ), "" ) );
+}
+
+// Saved game volume (2026-10-10): per GAME, in global.json's games.<key>.game_volume,
+// NOT in a profile. A display fraction 0..1.5, absent = 1.0.
+TEST_CASE( "game volume: per game, defaults to 1, clamps, round-trips and keeps games apart", "[config]" )
+{
+    TempConfigHome home;
+
+    REQUIRE( GameEntry( "x" ).game_volume == 1.0f );
+    REQUIRE( GetGameVolume( "x" ) == 1.0f );
+    REQUIRE( !IsSettingsKey( "audio.game_volume" ) ); // not a profile key
+
+    // Unity on an unknown game creates nothing: no empty row, no file content.
+    SetGameVolume( "x", 1.0f );
+    FlushPendingWrites();
+    REQUIRE( ReadText( GlobalConfigPath() ).find( "\"x\"" ) == std::string::npos );
+
+    // Two games sharing the same profile keep separate values; out-of-range
+    // writes clamp.
+    SetGameVolume( "252490", 0.35f );
+    SetGameVolume( "hl2_linux", 9.0f );
+    SetGameVolume( "gone", -3.0f );
+    REQUIRE( GetGameVolume( "252490" ) == 0.35f );
+    REQUIRE( GetGameVolume( "hl2_linux" ) == 1.5f );
+    REQUIRE( GetGameVolume( "gone" ) == 0.0f );
+    REQUIRE( GetGameVolume( "never" ) == 1.0f );
+    FlushPendingWrites();
+
+    // Survives a fresh process, and does not ride in any profile file.
+    ResetSessionRoutingForTests();
+    REQUIRE( std::fabs( GetGameVolume( "252490" ) - 0.35f ) < 1e-6f );
+    REQUIRE( GetGameVolume( "hl2_linux" ) == 1.5f );
+    REQUIRE( GetGameVolume( "gone" ) == 0.0f );
+    REQUIRE( GameEntry( "252490" ).selected.empty() ); // a volume entry assigns no profile
+    EnqueueRoutedWrite( Settings{} );
+    FlushPendingWrites();
+    REQUIRE( ReadText( ProfilePath( SessionProfile() ) ).find( "game_volume" ) == std::string::npos );
+
+    // Back to unity: the row is dropped again (absent = 1.0) once nothing else
+    // is in it, while the other games stay.
+    SetGameVolume( "252490", 1.0f );
+    FlushPendingWrites();
+    const std::string sGlobal = ReadText( GlobalConfigPath() );
+    REQUIRE( sGlobal.find( "\"252490\"" ) == std::string::npos );
+    REQUIRE( sGlobal.find( "\"hl2_linux\"" ) != std::string::npos );
+
+    // Load clamps a hand-edited value; a non-number reads as unity.
+    WriteText( GlobalConfigPath(), R"({
+        "schema_version": 5,
+        "profiles": { "last_general": "", "games": {
+            "a": { "game_volume": 9.0 }, "b": { "game_volume": -2.0 },
+            "c": { "game_volume": "loud" }, "d": { "selected": "", "audio_node": "n" } } }
+    })" );
+    ResetSessionRoutingForTests();
+    REQUIRE( GetGameVolume( "a" ) == 1.5f );
+    REQUIRE( GetGameVolume( "b" ) == 0.0f );
+    REQUIRE( GetGameVolume( "c" ) == 1.0f );
+    REQUIRE( GetGameVolume( "d" ) == 1.0f );
+    REQUIRE( GameEntry( "d" ).audio_node == "n" );
 }
 
 TEST_CASE( "notification placement and panel geometry are global-only and never ride in a profile", "[config]" )

@@ -111,4 +111,17 @@ namespace gamescope::config
 
         return std::string{ svTrimmed };
     }
+
+    std::optional<std::string> ChooseGameVolumeKey( const std::optional<std::string> &oAppId,
+                                                    std::string_view svPrimaryArgv0 )
+    {
+        if ( oAppId )
+            if ( std::optional<std::string> oKey = SanitizeAppId( *oAppId ) )
+                return oKey;
+
+        if ( svPrimaryArgv0.empty() )
+            return std::nullopt;
+        // filename() of "dir/" is empty, which SanitizeAppId() then rejects.
+        return SanitizeAppId( std::filesystem::path( svPrimaryArgv0 ).filename().string() );
+    }
 }
