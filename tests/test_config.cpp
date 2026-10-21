@@ -2122,6 +2122,88 @@ TEST_CASE( "audio: capture defaults on, round-trips, and an absent section is on
     REQUIRE( IsSettingsKey( "audio.capture" ) );
 }
 
+// Dynamics (2026-10-21, Audio/Dynamics.{h,cpp}): per-profile, under "audio.dynamics",
+// additive (no schema bump), default preset off.
+TEST_CASE( "audio.dynamics: defaults, round-trip of the preset and every Advanced value, clamping", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    const Settings def;
+    REQUIRE( def.audio.dynamics.preset == "off" );
+
+    // A profile written before the key existed (an "audio" object with only capture,
+    // and none at all) loads the defaults.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "capture": false }
+    })";
+    {
+        const Settings s = LoadSections();
+        REQUIRE( s.audio.capture == false );
+        REQUIRE( s.audio.dynamics.preset == "off" );
+        REQUIRE( s.audio.dynamics.ratio == def.audio.dynamics.ratio );
+    }
+
+    // Out-of-range values clamp; an unknown preset keeps off.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "dynamics": { "preset": "banana", "threshold_db": -500, "ratio": 99,
+                                 "attack_ms": 0, "release_ms": 99999, "makeup_db": 80,
+                                 "ceiling_db": 6 } }
+    })";
+    {
+        const auto d = LoadSections().audio.dynamics;
+        REQUIRE( d.preset == "off" );
+        REQUIRE( d.threshold_db == -80.0f );
+        REQUIRE( d.ratio == 20.0f );
+        REQUIRE( d.attack_ms == 0.1f );
+        REQUIRE( d.release_ms == 5000.0f );
+        REQUIRE( d.makeup_db == 24.0f );
+        REQUIRE( d.ceiling_db == 0.0f );
+    }
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "audio": { "dynamics": { "threshold_db": 10, "ratio": 0.2, "attack_ms": 9999,
+                                 "release_ms": -1, "makeup_db": -80, "ceiling_db": -90 } }
+    })";
+    {
+        const auto d = LoadSections().audio.dynamics;
+        REQUIRE( d.threshold_db == 0.0f );
+        REQUIRE( d.ratio == 1.0f );
+        REQUIRE( d.attack_ms == 500.0f );
+        REQUIRE( d.release_ms == 1.0f );
+        REQUIRE( d.makeup_db == -24.0f );
+        REQUIRE( d.ceiling_db == -24.0f );
+    }
+
+    // (Last: SaveSections() makes later raw file writes invisible to LoadSections().)
+    // Round trip: every value, for every preset string.
+    for ( const char *pszPreset : { "off", "even_out", "night", "limiter_only", "custom" } )
+    {
+        Settings s;
+        s.audio.dynamics.preset = pszPreset;
+        s.audio.dynamics.threshold_db = -33.5f;
+        s.audio.dynamics.ratio = 7.5f;
+        s.audio.dynamics.attack_ms = 3.5f;
+        s.audio.dynamics.release_ms = 420.0f;
+        s.audio.dynamics.makeup_db = -4.5f;
+        s.audio.dynamics.ceiling_db = -3.0f;
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.audio.dynamics.preset == pszPreset );
+        REQUIRE( l.audio.dynamics.threshold_db == -33.5f );
+        REQUIRE( l.audio.dynamics.ratio == 7.5f );
+        REQUIRE( l.audio.dynamics.attack_ms == 3.5f );
+        REQUIRE( l.audio.dynamics.release_ms == 420.0f );
+        REQUIRE( l.audio.dynamics.makeup_db == -4.5f );
+        REQUIRE( l.audio.dynamics.ceiling_db == -3.0f );
+    }
+
+    for ( const char *pszKey : { "preset", "threshold_db", "ratio", "attack_ms", "release_ms", "makeup_db", "ceiling_db" } )
+        REQUIRE( IsSettingsKey( std::string( "audio.dynamics." ) + pszKey ) );
+}
+
 TEST_CASE( "lag_buffer: look-back and max are clamped on load, an unknown test mode keeps off, a stored min loads as off", "[config]" )
 {
     TempConfigHome home;

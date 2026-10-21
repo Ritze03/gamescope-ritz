@@ -108,7 +108,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
   dynamic volume row title, the Mixer hotkey.
 - [Game audio capture](features/audio-capture.md) — a private per-session PipeWire sink
   the game's streams are tagged and moved into (no stream guessing): the loopback pair, the
-  env tag, the mover, volume/mute on the sink, and why the playback copy is clamped.
+  env tag, the mover, volume/mute on the sink, why the playback copy is clamped, and the
+  Dynamics (compressor/limiter) stage: threading, latency, click-free toggling.
 
 ### Input
 

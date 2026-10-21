@@ -258,6 +258,10 @@ TEST_CASE( "Dynamics: Off is a bit-exact, zero-delay pass-through", "[audio_dyna
 		Run( proc, loud, 480 );
 		proc.SetParams( PresetParams( Preset::Off ) );
 		REQUIRE( proc.LatencyFrames() == 0 );
+		// Switching off is an 8 ms fade, not a cut; once it has run out (here: a
+		// quiet stretch longer than that) the pass-through is bit-exact again.
+		Planes quiet( 3, std::vector<float>( 1000, 0.0f ) );
+		Run( proc, quiet, 333 );
 		Planes again = orig;
 		Run( proc, again, 333 );
 		for ( size_t c = 0; c < again.size(); c++ )
@@ -469,4 +473,108 @@ TEST_CASE( "Dynamics: presets", "[audio_dynamics]" )
 		REQUIRE( flLoud - flQuiet < 34.0 - 10.0 ); // 34 dB apart in, well under 24 dB out
 		REQUIRE( flQuiet > -40.0 + 5.0 );          // and the quiet one is actually louder
 	}
+}
+
+TEST_CASE( "Dynamics: toggling is click-free", "[audio_dynamics]" )
+{
+	// A steady loud sine (so a cut between delayed/live or silent/live would be a
+	// big step), toggled on, off, and through preset switches. The largest
+	// sample-to-sample jump of the output may not exceed the sine's own largest
+	// step by more than a small margin: no click.
+	const uint32_t uRate = 48000;
+	const double flHz = 400.0, flAmp = 0.3;
+	const double flOwnStep = flAmp * 2.0 * kPi * flHz / uRate; // the sine's largest per-sample step
+	const size_t nTotal = uRate;
+	Planes planes{ Sine( nTotal, uRate, flHz, flAmp ), Sine( nTotal, uRate, flHz, flAmp, 0.5 ) };
+
+	Processor proc;
+	REQUIRE( proc.Prepare( uRate, 2 ) );
+	proc.SetParams( PresetParams( Preset::Off ) );
+
+	// Block by block with a parameter change at fixed frames.
+	struct Change { size_t nAt; Preset ePreset; };
+	const Change aChanges[] = {
+		{ 6000, Preset::LimiterOnly }, { 15000, Preset::Off }, { 24001, Preset::EvenOut },
+		{ 30000, Preset::Night }, { 36000, Preset::EvenOut }, { 42000, Preset::Off } };
+	size_t nNext = 0;
+	std::vector<float *> vPtrs( 2 );
+	const size_t nBlock = 480;
+	for ( size_t nPos = 0; nPos < nTotal; nPos += nBlock )
+	{
+		if ( nNext < std::size( aChanges ) && aChanges[nNext].nAt <= nPos )
+			proc.SetParams( PresetParams( aChanges[nNext++].ePreset ) );
+		vPtrs[0] = planes[0].data() + nPos;
+		vPtrs[1] = planes[1].data() + nPos;
+		proc.Process( vPtrs.data(), (uint32_t)std::min( nBlock, nTotal - nPos ) );
+	}
+	REQUIRE( nNext == std::size( aChanges ) );
+
+	for ( auto &vPlane : planes )
+	{
+		double flMaxJump = 0.0;
+		size_t nAt = 0;
+		for ( size_t i = 1; i < vPlane.size(); i++ )
+			if ( std::fabs( vPlane[i] - vPlane[i - 1] ) > flMaxJump )
+				flMaxJump = std::fabs( vPlane[i] - vPlane[i - 1] ), nAt = i;
+		INFO( "max jump " << flMaxJump << " at " << nAt << " vs the sine's own " << flOwnStep );
+		// Even out / Night change the level (a +6/+10 dB make-up on a -10 dBFS
+		// sine), so the steady output may legitimately step a few times larger;
+		// a click is an order of magnitude beyond that (a cut is up to 2*amp).
+		REQUIRE( flMaxJump < 3.0 * flOwnStep );
+	}
+}
+
+TEST_CASE( "Dynamics: turning on stays dry for the look-ahead, then ends up fully processed", "[audio_dynamics]" )
+{
+	const uint32_t uRate = 48000;
+	Processor proc;
+	REQUIRE( proc.Prepare( uRate, 1 ) );
+	proc.SetParams( PresetParams( Preset::Off ) );
+
+	// Run Off for a while (so the processor is no longer "fresh"), then on.
+	Planes warm{ Sine( 2000, uRate, 300.0, 0.1 ) };
+	Run( proc, warm, 480 );
+	proc.SetParams( PresetParams( Preset::LimiterOnly ) );
+
+	// 0.1-amplitude sine: the limiter does nothing, so the fully-on output is the
+	// input delayed by the look-ahead. Right after the switch it is the (undelayed)
+	// input, and in the end the delayed one.
+	Planes planes{ Sine( 6000, uRate, 300.0, 0.1 ) };
+	Planes orig = planes;
+	Run( proc, planes, 480 );
+	const size_t nLook = proc.LatencyFrames();
+	REQUIRE( nLook > 0 );
+	for ( size_t i = 0; i < 40; i++ )
+		REQUIRE( planes[0][i] == orig[0][i] ); // dry, not a silent gap
+	for ( size_t i = 3000; i < 6000; i++ )
+		REQUIRE( std::fabs( planes[0][i] - orig[0][i - nLook] ) < 1e-5f );
+}
+
+TEST_CASE( "Dynamics: make-up gain glides instead of stepping", "[audio_dynamics]" )
+{
+	const uint32_t uRate = 48000;
+	Processor proc;
+	REQUIRE( proc.Prepare( uRate, 1 ) );
+	Params p = PresetParams( Preset::LimiterOnly );
+	p.flMakeupDb = 0.0f;
+	proc.SetParams( p );
+
+	Planes planes{ std::vector<float>( 24000, 0.05f ) }; // DC, so the level IS the sample
+	std::vector<float *> vPtrs( 1 );
+	for ( size_t nPos = 0; nPos < planes[0].size(); nPos += 480 )
+	{
+		if ( nPos == 9600 )
+		{
+			p.flMakeupDb = 12.0f;
+			proc.SetParams( p );
+		}
+		vPtrs[0] = planes[0].data() + nPos;
+		proc.Process( vPtrs.data(), 480 );
+	}
+	double flMaxStep = 0.0;
+	for ( size_t i = 9000; i < 12000; i++ )
+		flMaxStep = std::max( flMaxStep, (double)std::fabs( planes[0][i] - planes[0][i - 1] ) );
+	// 0.05 -> 0.2 over ~10 ms (480 frames); a step would be 0.15.
+	REQUIRE( flMaxStep < 0.005 );
+	REQUIRE( std::fabs( planes[0][20000] - 0.05f * 3.98107f ) < 0.002f );
 }

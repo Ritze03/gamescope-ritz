@@ -384,7 +384,24 @@ namespace gamescope::config
 
             // Game audio capture (2026-10-07). Additive: absent = on.
             if ( const nlohmann::json *pAudio = JGetObject( j, "audio" ) )
+            {
                 s.audio.capture = JGetBool( *pAudio, "capture", s.audio.capture );
+                // Dynamics (2026-10-21). Additive: absent = off. Out-of-range values clamp
+                // to what Dynamics.cpp would enforce anyway; an unknown preset is "off".
+                if ( const nlohmann::json *pDyn = JGetObject( *pAudio, "dynamics" ) )
+                {
+                    auto &d = s.audio.dynamics;
+                    const std::string sPreset = JGetString( *pDyn, "preset", d.preset );
+                    if ( sPreset == "off" || sPreset == "even_out" || sPreset == "night" || sPreset == "limiter_only" || sPreset == "custom" )
+                        d.preset = sPreset;
+                    d.threshold_db = std::clamp( JGetFloat( *pDyn, "threshold_db", d.threshold_db ), -80.0f, 0.0f );
+                    d.ratio = std::clamp( JGetFloat( *pDyn, "ratio", d.ratio ), 1.0f, 20.0f );
+                    d.attack_ms = std::clamp( JGetFloat( *pDyn, "attack_ms", d.attack_ms ), 0.1f, 500.0f );
+                    d.release_ms = std::clamp( JGetFloat( *pDyn, "release_ms", d.release_ms ), 1.0f, 5000.0f );
+                    d.makeup_db = std::clamp( JGetFloat( *pDyn, "makeup_db", d.makeup_db ), -24.0f, 24.0f );
+                    d.ceiling_db = std::clamp( JGetFloat( *pDyn, "ceiling_db", d.ceiling_db ), -24.0f, 0.0f );
+                }
+            }
 
             if ( const nlohmann::json *pReshade = JGetObject( j, "reshade" ) )
             {
@@ -889,6 +906,18 @@ namespace gamescope::config
 
             nlohmann::json jAudio = nlohmann::json::object();
             jAudio[ "capture" ] = s.audio.capture;
+            {
+                const auto &d = s.audio.dynamics;
+                nlohmann::json jDyn = nlohmann::json::object();
+                jDyn[ "preset" ] = d.preset;
+                jDyn[ "threshold_db" ] = d.threshold_db;
+                jDyn[ "ratio" ] = d.ratio;
+                jDyn[ "attack_ms" ] = d.attack_ms;
+                jDyn[ "release_ms" ] = d.release_ms;
+                jDyn[ "makeup_db" ] = d.makeup_db;
+                jDyn[ "ceiling_db" ] = d.ceiling_db;
+                jAudio[ "dynamics" ] = std::move( jDyn );
+            }
 
             nlohmann::json j = nlohmann::json::object();
             j[ "gamescope" ] = std::move( jGamescope );

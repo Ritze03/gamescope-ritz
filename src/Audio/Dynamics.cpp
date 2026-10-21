@@ -15,6 +15,8 @@ namespace gamescope::Audio::Dynamics
 		constexpr float kKneeDb = 6.0f;             // soft knee, internal
 		constexpr float kLimiterReleaseMs = 50.0f;  // internal: not a user parameter
 		constexpr float kLookaheadMs = 1.5f;
+		constexpr float kFadeMs = 8.0f;             // dry <-> processed crossfade on a toggle
+		constexpr float kMakeupSmoothMs = 10.0f;    // make-up gain glides, so a preset switch doesn't step
 		constexpr float kMaxInput = 1.0e6f;         // keeps gain * input finite
 		constexpr float kDbPerLog2 = 6.02059991f;   // 20 * log10( 2 )
 
@@ -87,11 +89,15 @@ namespace gamescope::Audio::Dynamics
 		m_uSampleRate = uSampleRate;
 		m_uLookahead = LookaheadFrames( uSampleRate );
 		m_flLimiterReleaseCoef = TimeCoef( kLimiterReleaseMs, uSampleRate );
+		m_flMakeupCoef = TimeCoef( kMakeupSmoothMs, uSampleRate );
+		m_flFadeStep = 1.0f / ( kFadeMs * 0.001f * (float)uSampleRate );
 		m_vDelay.assign( (size_t)uChannels * m_uLookahead, 0.0f );
 		m_vGainRing.assign( m_uLookahead + 1, 1.0f );
 		m_vMinIndex.assign( m_uLookahead + 1, 0 );
 		m_vMinValue.assign( m_uLookahead + 1, 1.0f );
 		m_uChannels = uChannels;
+		m_bRunning = false;
+		m_bFresh = true;
 		Reset();
 		return true;
 	}
@@ -109,6 +115,8 @@ namespace gamescope::Audio::Dynamics
 		m_nMinHead = 0;
 		m_nMinCount = 0;
 		m_uFrame = 0;
+		m_uFill = 0;
+		m_flMix = 0.0f;
 	}
 
 	void Processor::SetParams( const Params &p )
@@ -129,26 +137,52 @@ namespace gamescope::Audio::Dynamics
 
 	void Processor::Process( float *const *ppChannels, uint32_t uFrames )
 	{
-		if ( !m_uChannels || !m_bEnabled.load( std::memory_order_relaxed ) )
+		const bool bOn = m_bEnabled.load( std::memory_order_relaxed );
+		if ( !m_uChannels || ( !bOn && !m_bRunning ) )
 		{
-			m_bWasOn = false; // Off: leave the audio (and the delay line) alone
+			m_bFresh = false; // Off: leave the audio (and the delay line) alone
 			return;
 		}
-		if ( !m_bWasOn )
+		// Snapshot the parameters once per block -- while on. A fade-out keeps the
+		// last "on" values: "Off" carries default numbers (ratio 1, make-up 0), and
+		// applying those to the still-audible processed signal would step its gain.
+		if ( bOn )
 		{
-			Reset(); // coming on: start from silence, not from stale audio
-			m_bWasOn = true;
+			m_Snap.flThresholdDb = Sane( m_flThresholdDb.load( std::memory_order_relaxed ), -80.0f, 0.0f, 0.0f );
+			m_Snap.flRatio = Sane( m_flRatio.load( std::memory_order_relaxed ), 1.0f, 20.0f, 1.0f );
+			m_Snap.flAttackMs = Sane( m_flAttackMs.load( std::memory_order_relaxed ), 0.1f, 500.0f, 10.0f );
+			m_Snap.flReleaseMs = Sane( m_flReleaseMs.load( std::memory_order_relaxed ), 1.0f, 5000.0f, 150.0f );
+			m_Snap.flMakeupDb = Sane( m_flMakeupDb.load( std::memory_order_relaxed ), -24.0f, 24.0f, 0.0f );
+			m_Snap.flCeilingDb = Sane( m_flCeilingDb.load( std::memory_order_relaxed ), -24.0f, 0.0f, -1.0f );
 		}
+		const float flMakeupTarget = m_Snap.flMakeupDb;
+		if ( !m_bRunning )
+		{
+			// Coming on: the delay line starts empty, so the first L frames of the
+			// processed signal are silence. Rather than play them, the output stays
+			// DRY until the line is full and only then crossfades (kFadeMs) -- no
+			// gap, no step. A processor that has never run yet (stream start) has
+			// nothing to cross from and goes straight to fully on.
+			Reset();
+			m_bRunning = true;
+			m_flMakeupCur = flMakeupTarget;
+			if ( m_bFresh )
+			{
+				m_uFill = m_uLookahead;
+				m_flMix = 1.0f;
+			}
+		}
+		m_bFresh = false;
 
-		// Snapshot the parameters once per block.
-		const float flThresholdDb = Sane( m_flThresholdDb.load( std::memory_order_relaxed ), -80.0f, 0.0f, 0.0f );
-		const float flRatio = Sane( m_flRatio.load( std::memory_order_relaxed ), 1.0f, 20.0f, 1.0f );
-		const float flAttack = TimeCoef( Sane( m_flAttackMs.load( std::memory_order_relaxed ), 0.1f, 500.0f, 10.0f ), m_uSampleRate );
-		const float flRelease = TimeCoef( Sane( m_flReleaseMs.load( std::memory_order_relaxed ), 1.0f, 5000.0f, 150.0f ), m_uSampleRate );
-		const float flMakeupDb = Sane( m_flMakeupDb.load( std::memory_order_relaxed ), -24.0f, 24.0f, 0.0f );
-		const float flCeiling = DbToLinear( Sane( m_flCeilingDb.load( std::memory_order_relaxed ), -24.0f, 0.0f, -1.0f ) );
-		const float flMakeup = DbToLinear( flMakeupDb );
-		const bool bCompress = flRatio > 1.0001f;
+		const float flThresholdDb = m_Snap.flThresholdDb;
+		const float flRatio = m_Snap.flRatio;
+		const float flAttack = TimeCoef( m_Snap.flAttackMs, m_uSampleRate );
+		const float flRelease = TimeCoef( m_Snap.flReleaseMs, m_uSampleRate );
+		const float flCeiling = DbToLinear( m_Snap.flCeilingDb );
+		float flMakeup = DbToLinear( m_flMakeupCur );
+		// Ratio 1 stops adding reduction but lets what is already applied release at
+		// its own pace (a preset switch from 3:1 must not drop 9 dB in one sample).
+		const bool bCompress = flRatio > 1.0001f || m_flCompReduction > 0.0f;
 		const float flSlope = 1.0f - 1.0f / flRatio; // dB removed per dB over the threshold
 
 		const size_t nLook = m_uLookahead;
@@ -175,6 +209,17 @@ namespace gamescope::Audio::Dynamics
 			// reduction in dB ("smooth decoupled peak detector": the release-held
 			// maximum is what the attack smooths, so a sine's reduction does not
 			// ripple with its waveform and the steady-state curve stays exact).
+			// The make-up glides to its target (10 ms) so a preset switch or a slider
+			// jump is not a step in level. The ceiling is not smoothed:
+			// ponytail: a ceiling change steps; moving it down mid-window may count a
+			// backstop hit or two while the look-ahead window catches up.
+			if ( m_flMakeupCur != flMakeupTarget )
+			{
+				m_flMakeupCur = flMakeupTarget + m_flMakeupCoef * ( m_flMakeupCur - flMakeupTarget );
+				if ( std::fabs( m_flMakeupCur - flMakeupTarget ) < 1.0e-3f )
+					m_flMakeupCur = flMakeupTarget;
+				flMakeup = DbToLinear( m_flMakeupCur );
+			}
 			float flGain = flMakeup;
 			if ( bCompress )
 			{
@@ -191,7 +236,9 @@ namespace gamescope::Audio::Dynamics
 				if ( m_flCompHeld < 1.0e-6f )
 					m_flCompHeld = 0.0f; // no denormals while idle
 				m_flCompReduction = flAttack * m_flCompReduction + ( 1.0f - flAttack ) * m_flCompHeld;
-				flGain = DbToLinear( flMakeupDb - m_flCompReduction );
+				if ( m_flCompReduction < 1.0e-6f )
+					m_flCompReduction = 0.0f;
+				flGain = DbToLinear( m_flMakeupCur - m_flCompReduction );
 			}
 
 			// ---- Limiter. The gain needed to bring this frame's (post-compressor)
@@ -229,25 +276,41 @@ namespace gamescope::Audio::Dynamics
 			m_nGainPos = ( m_nGainPos + 1 ) % nWindow;
 			float flLimit = (float)( m_dGainSum * dInvWindow );
 
+			// ---- Mix: dry while the delay line fills, then ramps to the processed
+			// signal (on) or back to dry (off). Linear (equal-gain) because dry and
+			// processed are the same signal 1.5 ms apart, i.e. correlated.
+			if ( m_uFill < nLook )
+				m_uFill++;
+			else if ( bOn )
+				m_flMix = std::min( 1.0f, m_flMix + m_flFadeStep );
+			else
+				m_flMix = std::max( 0.0f, m_flMix - m_flFadeStep );
+
 			// ---- Out: the delayed compressed sample times the limiter gain.
 			for ( uint32_t c = 0; c < m_uChannels; c++ )
 			{
 				float *pSlot = pDelay + (size_t)c * nLook + m_nDelayPos;
+				const float flDry = ppChannels[c][n];
 				float y = *pSlot * flLimit;
-				*pSlot = ppChannels[c][n] * flGain;
+				*pSlot = flDry * flGain;
 
 				// The backstop: float rounding in the sum, or a ceiling that moved
 				// mid-window, can leave a hair over; clamp it, and count real misses.
 				if ( std::fabs( y ) > flCeiling )
 				{
 					if ( std::fabs( y ) > flCeiling * 1.0001f )
-						m_uBackstopHits++;
+						m_uBackstopHits.store( m_uBackstopHits.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed ); // single writer
 					y = std::min( std::max( y, -flCeiling ), flCeiling );
 				}
-				ppChannels[c][n] = y;
+				ppChannels[c][n] = m_flMix >= 1.0f ? y : flDry + m_flMix * ( y - flDry );
 			}
 			m_nDelayPos = ( m_nDelayPos + 1 ) % nLook;
 			m_uFrame++;
 		}
+
+		// Faded all the way out: stop (and stop costing anything); the next
+		// "on" starts clean.
+		if ( !bOn && m_flMix <= 0.0f )
+			m_bRunning = false;
 	}
 }

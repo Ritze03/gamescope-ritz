@@ -113,7 +113,9 @@ one place that wires all of it together at startup.
   moves tagged streams into the sink, volume/mute on the sink node; live switch
   `audio.capture` via `ritz_apply_config_live()` and teardown in `main()`
   (`src/main.cpp`). Independent of the Mixer's wpctl guesser (`Audio/Volume.*`), which
-  stays the fallback. See [audio-capture](../features/audio-capture.md).
+  stays the fallback. Its realtime playback callback also runs the Dynamics
+  compressor/limiter (`src/Audio/Dynamics.{h,cpp}`, `audio.dynamics.*`, Mixer group).
+  See [audio-capture](../features/audio-capture.md).
 - **Latent/unwired code** — `gamescope::CLibInputHandler` (`src/LibInputHandler.h:11`)
   is a fully-implemented `IWaitable` for driving raw `libinput` events without a seat
   (intended for a VR global-input path) but has **no call site anywhere in the

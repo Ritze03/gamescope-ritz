@@ -26,6 +26,9 @@
 #include <cstddef>
 #include <string>
 
+#include "Audio/Dynamics.h"
+#include "Config/ConfigSchema.h"
+
 namespace gamescope
 {
 	namespace ui { class Registry; class Area; }
@@ -80,6 +83,35 @@ namespace gamescope
 		if ( nOtherMatchedNodes > 0 )
 			sTitle += "  (+" + std::to_string( nOtherMatchedNodes ) + ")";
 		return sTitle;
+	}
+
+	// The Dynamics group's stored choice -> what the processor runs. `audio.dynamics.preset`
+	// is "off" | "even_out" | "night" | "limiter_only" | "custom". A named preset runs the
+	// library's own values (PresetParams), which the sliders were loaded with when it was
+	// picked; "custom" runs the six stored values; anything else (an unknown string that
+	// somehow got past the loader) is off. Used by main.cpp's ritz_apply_config_live() and
+	// by the panel, so what you hear is never different from what the rows say.
+	inline Audio::Dynamics::Params AudioDynamicsParams( const config::AudioDynamicsSettings &d )
+	{
+		using namespace Audio::Dynamics;
+		if ( d.preset == "even_out" )
+			return PresetParams( Preset::EvenOut );
+		if ( d.preset == "night" )
+			return PresetParams( Preset::Night );
+		if ( d.preset == "limiter_only" )
+			return PresetParams( Preset::LimiterOnly );
+		Params p;
+		if ( d.preset == "custom" )
+		{
+			p.bEnabled = true;
+			p.flThresholdDb = d.threshold_db;
+			p.flRatio = d.ratio;
+			p.flAttackMs = d.attack_ms;
+			p.flReleaseMs = d.release_ms;
+			p.flMakeupDb = d.makeup_db;
+			p.flCeilingDb = d.ceiling_db;
+		}
+		return p;
 	}
 
 	// P3 part B: the E2 registration for `audio.mixer`.

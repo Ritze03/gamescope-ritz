@@ -41,6 +41,8 @@
 
 #include <unistd.h>
 
+#include "Dynamics.h"
+
 namespace gamescope::Audio::Capture
 {
 	// ---- Pure helpers (header-only so the unit tests need no PipeWire) -------
@@ -234,6 +236,29 @@ namespace gamescope::Audio::Capture
 		bool bEmptyOrCorrupt = false;     // spa_chunk::flags & (EMPTY | CORRUPTED)
 	};
 
+	// The last step of the copy, and of the DSP after it: every float in
+	// pDst[0, uBytes) to [-1, 1], NaN/inf to 0. Idempotent.
+	inline void ClampPlaneSafe( uint8_t *pDst, uint32_t uBytes )
+	{
+		for ( uint32_t i = 0; i + 4 <= uBytes; i += 4 )
+		{
+			float f;
+			uint32_t u;
+			memcpy( &u, pDst + i, 4 );
+			// NaN/inf are tested on the bits: the project builds with -ffast-math,
+			// under which a float `f == f` test may be compiled away.
+			if ( ( u & 0x7f800000u ) == 0x7f800000u )
+				f = 0.0f;
+			else
+				memcpy( &f, &u, 4 );
+			if ( f > 1.0f )
+				f = 1.0f;
+			else if ( f < -1.0f )
+				f = -1.0f;
+			memcpy( pDst + i, &f, 4 );
+		}
+	}
+
 	// Writes `uWantBytes` (clamped to uDstMaxSize, floored to whole floats) of
 	// audio to pDst and returns the number of bytes written, which is what the
 	// caller must put in the destination chunk's size. pSrc may be null.
@@ -256,26 +281,9 @@ namespace gamescope::Audio::Capture
 		if ( uOut > uValid )
 			memset( pDst + uValid, 0, uOut - uValid );
 
-		// DSP hook (Phase B): per-channel float samples in pDst[0, uOut), after the
-		// copy and before the final clamp below.
-
-		for ( uint32_t i = 0; i < uOut; i += 4 )
-		{
-			float f;
-			uint32_t u;
-			memcpy( &u, pDst + i, 4 );
-			// NaN/inf are tested on the bits: the project builds with -ffast-math,
-			// under which a float `f == f` test may be compiled away.
-			if ( ( u & 0x7f800000u ) == 0x7f800000u )
-				f = 0.0f;
-			else
-				memcpy( &f, &u, 4 );
-			if ( f > 1.0f )
-				f = 1.0f;
-			else if ( f < -1.0f )
-				f = -1.0f;
-			memcpy( pDst + i, &f, 4 );
-		}
+		// The DSP (Dynamics) runs over all planes AFTER this, then ClampPlaneSafe()
+		// runs again over its result: see Capture.cpp's PlaybackProcess().
+		ClampPlaneSafe( pDst, uOut );
 		return uOut;
 	}
 
@@ -436,4 +444,24 @@ namespace gamescope::Audio::Capture
 	float GetVolume();
 	void SetMute( bool bMute );
 	bool GetMute();
+
+	// ---- Dynamics (the compressor/limiter on the captured audio) ------------------
+	//
+	// Applied by the playback stream's realtime process callback to everything the
+	// game plays through the capture sink (see Dynamics.h and
+	// superdoc/features/audio-capture.md). SetDynamics() may be called at any time
+	// from one thread, before Start() included: the values are kept and used from
+	// the first block. It does nothing audible while capture is not Active() (there
+	// is no capture node to process).
+	void SetDynamics( const Dynamics::Params &params );
+
+	struct DynamicsStatus
+	{
+		bool bEnabled = false;       // the last SetDynamics() said on
+		uint32_t uSampleRate = 0;    // 0 = no capture stream negotiated yet
+		uint32_t uChannels = 0;
+		float flLatencyMs = 0.0f;    // what the stage adds right now: 0 while off
+		uint64_t uBackstopHits = 0;  // samples the limiter's last-resort clamp caught (should stay 0)
+	};
+	DynamicsStatus GetDynamicsStatus();
 }

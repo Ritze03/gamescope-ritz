@@ -26,12 +26,14 @@
 //   LatencyFrames()  any thread.
 //
 // ---- Switching on and off -----------------------------------------------
-// Off is a bit-exact, zero-delay pass-through that never touches the delay line.
-// Turning on starts from silence (the delay line is empty), so the first
-// LatencyFrames() output frames are zero, and turning off jumps from the delayed
-// to the live signal: at worst a faint tick for ~1.5 ms, once per toggle.
-// ponytail: not crossfaded; a caller that cares can fade its own gain around
-// the switch.
+// Off (settled) is a bit-exact, zero-delay pass-through that never touches the
+// delay line. A toggle is a crossfade, not a cut: turning on keeps the output dry
+// for the 1.5 ms the delay line needs to fill and then fades to the processed
+// signal over 8 ms; turning off fades back over 8 ms and then goes quiet. The
+// make-up gain glides (10 ms) so a preset switch is not a step in level. During
+// the fades the output is a blend with the unprocessed signal, so the ceiling
+// is only guaranteed once fully on (and from the first frame for a processor that
+// is already enabled when its first block arrives).
 #pragma once
 
 #include <atomic>
@@ -98,7 +100,7 @@ namespace gamescope::Audio::Dynamics
 		// Samples the final hard clamp had to catch beyond 0.001 dB over the
 		// ceiling. The limiter is meant to do the work, so anything but 0 is a
 		// bug; kept for the tests (and a debug line, if wanted).
-		uint64_t BackstopHits() const { return m_uBackstopHits; }
+		uint64_t BackstopHits() const { return m_uBackstopHits.load( std::memory_order_relaxed ); }
 
 	private:
 		void Reset();
@@ -123,7 +125,18 @@ namespace gamescope::Audio::Dynamics
 		std::atomic<float> m_flCeilingDb{ -1.0f };
 
 		// ---- RT-thread state ----
-		bool m_bWasOn = false;
+		struct Snapshot // the last block's parameters while on (held through a fade-out)
+		{
+			float flThresholdDb = -24.0f, flRatio = 1.0f, flAttackMs = 10.0f, flReleaseMs = 150.0f;
+			float flMakeupDb = 0.0f, flCeilingDb = -1.0f;
+		} m_Snap;
+		bool m_bRunning = false; // state is live: on, or fading out
+		bool m_bFresh = true;    // no Process() call since Prepare()
+		uint32_t m_uFill = 0;    // frames since coming on, capped at m_uLookahead
+		float m_flMix = 0.0f;    // 0 dry .. 1 processed
+		float m_flFadeStep = 0.0f;
+		float m_flMakeupCoef = 0.0f;
+		float m_flMakeupCur = 0.0f; // dB, glides to the target
 		float m_flCompHeld = 0.0f;     // dB of reduction: release-held peak
 		float m_flCompReduction = 0.0f; // dB of reduction: after the attack smoothing
 		float m_flLimiterGain = 1.0f;  // release-smoothed target gain
@@ -133,6 +146,6 @@ namespace gamescope::Audio::Dynamics
 		size_t m_nMinHead = 0; // deque: oldest entry
 		size_t m_nMinCount = 0;
 		uint64_t m_uFrame = 0;
-		uint64_t m_uBackstopHits = 0;
+		std::atomic<uint64_t> m_uBackstopHits{ 0 }; // read by the UI thread
 	};
 }

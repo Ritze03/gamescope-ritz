@@ -107,6 +107,34 @@ alongside every other action — see
   the legacy pre-E2 panel printed as prose lands here as a live fact instead of dead
   prose.
 
+## Dynamics group (2026-10-21)
+
+A "Dynamics" group in this area, between Game volume and the stream rows — **not a new
+rail area**. `Why (plan D15):` all the game-audio controls live in one place, and the rail
+was already full. It acts on the captured audio (audio-capture.md's "Dynamics"), so its
+rows are dimmed with the reason "Capture game audio is off or not active" unless
+`Capture::Active()`; the choice is still stored per profile.
+
+- **`audio.dynamics.preset`** ("Preset", a `Choice`: Off / Even out / Night / Limiter only /
+  Custom, default Off). Picking one of the three presets loads its values into the
+  sliders (`SetDynamicsPreset()`); Off keeps the slider values; Custom keeps them too.
+  `Why presets plus Advanced (D7):` presets are easy to get right in the middle of a game,
+  Advanced covers fine-tuning. `Why default Off (D13):` effects are the user's choice, not
+  something imposed on how the game sounds.
+- **"Dynamics: Advanced" group**: `audio.dynamics.threshold_db` (−80..0 dB, step 1),
+  `.ratio` (1..20 :1, step 0.5), `.attack_ms` (1..100, step 1), `.release_ms` (10..1000,
+  step 10), `.makeup_db` (±24, step 1), `.ceiling_db` (−24..0, step 0.5). Moving any of
+  them sets the preset to **Custom** and keeps the values (so even from Off it turns the
+  stage on, with those values). Slider ranges are narrower than the config clamps (which
+  are the processor's own limits) where the full range is unusable by hand.
+  Row id = config key, like `audio.capture`.
+- **Diagnostics**: a `dynamics` fact: `off`, `waiting for capture`, or
+  `Even out · adds 1.5 ms · limiter backstop hits 0` (preset, the look-ahead the stage
+  adds, and how many samples the limiter's last-resort clamp had to catch, which should
+  stay 0).
+
+Config and the processing path: audio-capture.md's "Config".
+
 ## Our own nodes are never listed or guessed
 
 Capture's playback stream (`gamescope-ritz.<pid>.out`) is a Stream/Output/Audio node like

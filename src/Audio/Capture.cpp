@@ -4,6 +4,7 @@
 #include "../log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cerrno>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if HAVE_PIPEWIRE
@@ -62,6 +64,48 @@ namespace gamescope::Audio::Capture
 
 		// Start()/Shutdown()/the setters serialise on this; getters never take it.
 		std::mutex s_LifeMutex;
+	}
+
+	// ---- Dynamics: the one processor the playback stream runs ---------------------
+	//
+	// A static, not a member of the pair: SetDynamics() can arrive before the pair
+	// exists (startup config) and the params survive a live capture off/on.
+	//
+	// Threading. Process() runs on PipeWire's data-loop thread (the playback stream
+	// has PW_STREAM_FLAG_RT_PROCESS); Prepare() runs from the stream's param_changed
+	// event, on the libpipewire (main-loop) thread -- a different thread, so they
+	// CAN overlap, and Prepare() must not (Dynamics.h). s_bDynBusy is the guard: the
+	// realtime side only TRY-locks it and skips the DSP for that block when Prepare
+	// holds it (never waits, never allocates); Prepare spins, which is fine off the
+	// realtime thread because a Process() block takes microseconds. The prepared
+	// channel count is written inside the same guard, so the realtime side compares
+	// it to the planes in front of it under the lock.
+	namespace
+	{
+		Dynamics::Processor s_Dyn;
+		std::atomic<bool> s_bDynBusy{ false };
+		std::atomic<uint32_t> s_uDynRate{ 0 };
+		std::atomic<uint32_t> s_uDynChannels{ 0 };
+		std::atomic<bool> s_bDynOn{ false };
+		uint32_t s_aDynPositions[ Dynamics::kMaxChannels ] = {}; // SPA channel ids, guarded by s_bDynBusy
+	}
+
+	void SetDynamics( const Dynamics::Params &params )
+	{
+		s_Dyn.SetParams( params );
+		s_bDynOn.store( params.bEnabled, std::memory_order_relaxed );
+	}
+
+	DynamicsStatus GetDynamicsStatus()
+	{
+		DynamicsStatus st;
+		st.bEnabled = s_bDynOn.load( std::memory_order_relaxed );
+		st.uSampleRate = s_uDynRate.load( std::memory_order_relaxed );
+		st.uChannels = s_uDynChannels.load( std::memory_order_relaxed );
+		if ( st.bEnabled && st.uChannels )
+			st.flLatencyMs = 1000.0f * (float)Dynamics::Processor::LookaheadFrames( st.uSampleRate ) / (float)st.uSampleRate;
+		st.uBackstopHits = s_Dyn.BackstopHits();
+		return st;
 	}
 
 	std::string SinkName() { std::lock_guard lock( s_SnapMutex ); return s_Snap.sSinkName; }
@@ -430,11 +474,67 @@ namespace gamescope::Audio::Capture
 			}
 		}
 
+		// Non-realtime: (re)prepares the processor for the negotiated format. 0
+		// channels = no format (processing off). See the threading note above.
+		void DynamicsPrepare( uint32_t uRate, uint32_t uChannels, const uint32_t *pPositions )
+		{
+			while ( s_bDynBusy.exchange( true, std::memory_order_acquire ) )
+				std::this_thread::yield();
+			const bool bOk = uChannels && s_Dyn.Prepare( uRate, uChannels );
+			for ( uint32_t i = 0; i < Dynamics::kMaxChannels; i++ )
+				s_aDynPositions[ i ] = bOk && pPositions && i < uChannels ? pPositions[ i ] : 0;
+			s_uDynRate.store( bOk ? uRate : 0, std::memory_order_relaxed );
+			s_uDynChannels.store( bOk ? uChannels : 0, std::memory_order_relaxed );
+			s_bDynBusy.store( false, std::memory_order_release );
+			if ( uChannels )
+				s_CaptureLog.infof( "dynamics: %s (%u Hz, %u channels)", bOk ? "ready" : "not available for this format", uRate, uChannels );
+		}
+
+		// The per-direction hook (plan D3): a later sound-direction display reads
+		// the finished, final samples here. Called once per block on the realtime
+		// thread, after the DSP and the last clamp, with the planar float planes
+		// (ppPlanes[c][0, uFrames)), their SPA channel positions (SPA_AUDIO_CHANNEL_*,
+		// e.g. FL/FR) and the frame count. Must not allocate, lock or log.
+		// Nothing is behind it yet: deliberately a no-op.
+		inline void DirectionHook( const float *const * /*ppPlanes*/, const uint32_t * /*pPositions*/, uint32_t /*uChannels*/, uint32_t /*uFrames*/ )
+		{
+		}
+
+		// The DSP over the finished planes of the output buffer, then one more
+		// clamp so what leaves is within [-1, 1] whatever the DSP did. Skipped
+		// (the audio passes as copied) when Prepare() holds the processor, or the
+		// buffer doesn't match what was prepared: a different plane count, a
+		// missing plane, planes of unequal length.
+		void RunDynamics( const spa_buffer *pBuf )
+		{
+			const uint32_t uPlanes = pBuf->n_datas;
+			if ( uPlanes == 0 || uPlanes > Dynamics::kMaxChannels )
+				return;
+			float *aPlanes[ Dynamics::kMaxChannels ];
+			uint32_t uBytes = 0;
+			for ( uint32_t i = 0; i < uPlanes; i++ )
+			{
+				const spa_data *d = &pBuf->datas[ i ];
+				if ( !d->data || !d->chunk || ( d->chunk->size & 3 ) || ( i && d->chunk->size != uBytes ) )
+					return;
+				uBytes = d->chunk->size;
+				aPlanes[ i ] = static_cast<float *>( d->data ); // chunk->offset was set to 0 by the copy
+			}
+			if ( s_bDynBusy.exchange( true, std::memory_order_acquire ) )
+				return; // Prepare() is running
+			if ( s_uDynChannels.load( std::memory_order_relaxed ) == uPlanes )
+			{
+				s_Dyn.Process( aPlanes, uBytes / 4 );
+				for ( uint32_t i = 0; i < uPlanes; i++ )
+					ClampPlaneSafe( reinterpret_cast<uint8_t *>( aPlanes[ i ] ), uBytes );
+				DirectionHook( aPlanes, s_aDynPositions, uPlanes, uBytes / 4 );
+			}
+			s_bDynBusy.store( false, std::memory_order_release );
+		}
+
 		// Playback side: takes the newest captured buffer and copies it into its
-		// own. THE DSP HOOK POINT: whatever should happen to the game's audio
-		// (Phase B's compressor/limiter, a later per-channel sample hook) goes
-		// into CopyPlaneSafe() (Capture.h), between the copy and its final clamp,
-		// on the realtime thread.
+		// own, then runs the Dynamics stage over all planes (THE DSP HOOK POINT) and
+		// the per-direction hook, on the realtime thread.
 		void PlaybackProcess( void *data )
 		{
 			Impl *p = static_cast<Impl *>( data );
@@ -495,6 +595,8 @@ namespace gamescope::Audio::Capture
 					dst->chunk->stride = sizeof( float );
 					dst->chunk->flags = SPA_CHUNK_FLAG_NONE;
 				}
+
+				RunDynamics( pOutBuf );
 			}
 
 			if ( pIn )
@@ -600,6 +702,18 @@ namespace gamescope::Audio::Capture
 		void PlayParamChanged( void *data, uint32_t uId, const spa_pod *pParam )
 		{
 			Impl *p = static_cast<Impl *>( data );
+			if ( uId == SPA_PARAM_Format )
+			{
+				// The negotiated format (rate follows the graph and can change):
+				// (re)prepare the Dynamics processor for it.
+				spa_audio_info_raw info;
+				spa_zero( info );
+				if ( pParam && spa_format_audio_raw_parse( pParam, &info ) >= 0 && info.format == SPA_AUDIO_FORMAT_F32P )
+					DynamicsPrepare( info.rate, info.channels, info.position );
+				else
+					DynamicsPrepare( 0, 0, nullptr );
+				return;
+			}
 			ParamChanged( p, uId, pParam, p->pCap );
 		}
 
@@ -725,6 +839,7 @@ namespace gamescope::Audio::Capture
 				pw_stream_destroy( p->pCap );
 				p->pCap = nullptr;
 			}
+			DynamicsPrepare( 0, 0, nullptr ); // both streams are gone: nothing to process
 			p->eCapState = p->ePlayState = PW_STREAM_STATE_UNCONNECTED;
 			p->uSinkId = p->uPlayId = SPA_ID_INVALID;
 			p->uSinkSerial = 0;

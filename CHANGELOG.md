@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.13.0] – 2026-10-21
+
+### Added
+- **Game audio dynamics**: the Mixer's new Dynamics group evens out or limits the game's
+  sound (presets Off, Even out, Night, Limiter only, plus Advanced sliders), saved per
+  profile.
+
 ## [0.12.1] – 2026-10-10
 
 ### Added

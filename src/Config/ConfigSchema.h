@@ -544,9 +544,28 @@ namespace gamescope::config
     // bump: an older config has no "audio" object (the pre-schema-3 `audio` section, which
     // held a stream pick, is gone and never read here) and resolves to on. Changing it
     // acts live: the sink is created or destroyed on the spot.
+    // Dynamics (2026-10-21, Audio/Dynamics.{h,cpp}): the Mixer's compressor/limiter on the
+    // captured audio. Also per profile and additive (absent = preset "off"). `preset` is
+    // "off" | "even_out" | "night" | "limiter_only" | "custom"; the six values are the
+    // Advanced sliders and are kept whatever the preset says (picking a preset loads its
+    // values into them, moving one makes the preset "custom"). Clamped on load to the
+    // ranges Dynamics.cpp enforces anyway. Defaults are the Even out values, so the first
+    // "custom" starts somewhere sensible. Acts live on the capture node.
+    struct AudioDynamicsSettings
+    {
+        std::string preset = "off";
+        float threshold_db = -24.0f; // -80..0
+        float ratio = 3.0f;          // 1..20
+        float attack_ms = 10.0f;     // 0.1..500
+        float release_ms = 150.0f;   // 1..5000
+        float makeup_db = 6.0f;      // -24..24
+        float ceiling_db = -1.0f;    // -24..0
+    };
+
     struct AudioSettings
     {
         bool capture = true;
+        AudioDynamicsSettings dynamics;
     };
 
     // Lag spike buffer (2026-10-04, this fork's own addition -- see

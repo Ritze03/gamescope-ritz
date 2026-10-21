@@ -44,6 +44,7 @@
 #include "Overlay/PanelFrameGen.h"
 #include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelLagBuffer.h"
+#include "Overlay/PanelAudio.h"
 #include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
@@ -645,6 +646,9 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// here from the first call; once the sink is up (steamcompmgr.cpp's
 	// LaunchNestedChildren) a later change creates or destroys it live.
 	gamescope::Audio::Capture::SetWanted( config.audio.capture );
+	// Its Dynamics stage (audio.dynamics.*, per profile, default off): the same
+	// path, so a profile switch or a slider move lands on the next audio block.
+	gamescope::Audio::Capture::SetDynamics( gamescope::AudioDynamicsParams( config.audio.dynamics ) );
 
 	if ( !Given( Opt::AdaptiveSync ) )
 		cv_adaptive_sync = config.gamescope.vrr_enabled;
