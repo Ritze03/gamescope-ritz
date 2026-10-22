@@ -589,16 +589,24 @@ Inherited rows draw nothing -- the parent's values are the baseline, and marking
 would bury the deviations the dot exists to show. The words (`inherited from Comp`,
 `overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
 
-### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7; seven since MOTION 2026-10-04)
+### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7; seven since MOTION 2026-10-04; eight since AUDIO 2026-10-22)
 
-The rail's group headers mark **seven** fixed groups today, in this order: **DISPLAY**
+The rail's group headers mark **eight** fixed groups today, in this order: **DISPLAY**
 (General, Resolution, Upscaling, Frame limiter, HDR, Shaders), **MOTION** (Frame generation,
 Motion blur -- added 2026-10-04; Frame generation moved here out of DISPLAY, where it had sat
 below Shaders for a day), **OVERLAY** (HUD, Crosshair,
-Zoom, Cursor), **INPUT** (General, Autoclicker, Null binds), **MISC** (Friends, Mixer),
-**SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
+Zoom, Cursor), **INPUT** (General, Autoclicker, Null binds), **AUDIO** (Mixer, Effects --
+added 2026-10-22), **MISC** (Friends alone since the Mixer left), **SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
 icon-collapsed rail draws one icon button per group (see "Rail accordion" below) rather than
 a bare divider now, since I2's own accordion rework.
+
+`Why:` (AUDIO, 2026-10-22) the user: *"We should have a seperate audio category. 1. Mixer
+(Volume Only) 2. Effects (Compressor Only for now) 3. Visualizer (New, audio direction
+visualizer)"*. Mixer keeps the volume rows; the compressor ("Dynamics") moved out of it into
+the new Effects area; the Visualizer is a later task and has no area yet. AUDIO sits between
+INPUT and MISC (both about the game's I/O, ahead of the leftovers). The group icon is a
+speaker (`railgroup.audio`), Effects' area icon a waveform squeezed between two lines
+(`audio.effects`).
 
 `Why:` (I7) the user's own table (lightly reflowed from its original bulleted form): *"lets
 reorder some of the categories: Display: General, Resolution, Upscaling. Overlay: HUD,

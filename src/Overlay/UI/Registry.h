@@ -1221,7 +1221,13 @@ namespace gamescope::ui
 	// features are separate switches that work alone and together ("all of them are
 	// kind of separate, but they can all be turned on at the same time"), so they
 	// are one group of their own rather than two more rows in DISPLAY.
-	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Misc, Settings, Other, Nothing };
+	//
+	// AUDIO (2026-10-22) is the eighth group, between INPUT and MISC: Mixer (volume
+	// only) and Effects (the compressor/limiter, "Dynamics"). The user: "We should
+	// have a seperate audio category. 1. Mixer (Volume Only) 2. Effects (Compressor
+	// Only for now) 3. Visualizer ..." (the Visualizer is a later task). Mixer left
+	// MISC, which is now Friends alone.
+	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Audio, Misc, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 

@@ -1951,6 +1951,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twenty-fourth (2026-10-04): the lag spike buffer, directly below
 		// Motion blur in MOTION. See PanelLagBuffer.cpp and Icons.cpp.
 		"image.lagbuffer",
+		// The twenty-fifth (2026-10-22): Effects (the compressor), directly
+		// below Mixer in the new AUDIO group. See PanelAudio.cpp and Icons.cpp.
+		"audio.effects",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2072,10 +2075,10 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 {
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	const size_t nGroups = sizeof( eGroups ) / sizeof( eGroups[ 0 ] );
 
-	const ui::Icon *pIcons[ 7 ];
+	const ui::Icon *pIcons[ 8 ];
 	for ( size_t i = 0; i < nGroups; ++i )
 	{
 		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
@@ -2156,7 +2159,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // RailGroup enum and Registry::RailAreas() for the "a slot with no
 // registered area is skipped, not a crash" contract that makes landing the
 // table and the area in separate commits safe.
-TEST_CASE( "rail: the seven groups are in the order the request named", "[overlay_ui]" )
+TEST_CASE( "rail: the eight groups are in the order the request named", "[overlay_ui]" )
 {
 	struct Expected { const char *pszId; ui::RailGroup eGroup; };
 	const Expected expected[] = {
@@ -2178,8 +2181,11 @@ TEST_CASE( "rail: the seven groups are in the order the request named", "[overla
 		{ "input.general",         ui::RailGroup::Input },
 		{ "system.autoclicker",    ui::RailGroup::Input },
 		{ "system.null_binds",     ui::RailGroup::Input },
+		// AUDIO (2026-10-22): Mixer (volume only) and Effects (the compressor),
+		// between INPUT and MISC; MISC is Friends alone.
+		{ "audio.mixer",           ui::RailGroup::Audio },
+		{ "audio.effects",         ui::RailGroup::Audio },
 		{ "system.friends",        ui::RailGroup::Misc },
-		{ "audio.mixer",           ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
@@ -2215,6 +2221,7 @@ TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" 
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Motion ) )   == "MOTION" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Overlay ) )  == "OVERLAY" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Input ) )    == "INPUT" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Audio ) )    == "AUDIO" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Settings ) ) == "SETTINGS" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Other ) )    == "OTHER" );
@@ -2283,12 +2290,13 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	reg.Add( "display.general",    "General",    ui::Section::Display );
 	reg.Add( "display.upscaling",  "Upscaling",  ui::Section::Display );
 	reg.Add( "audio.mixer",        "Mixer",      ui::Section::System );
+	reg.Add( "audio.effects",      "Effects",    ui::Section::System );
 	reg.Add( "system.friends",     "Friends",    ui::Section::System );
 	reg.Add( "setup.profiles",     "Profiles",   ui::Section::Setup );
 	reg.Add( "system.log",         "Log",        ui::Section::System );
 
 	const std::vector<const ui::Area *> railAreas = reg.RailAreas();
-	REQUIRE( railAreas.size() == 6 );
+	REQUIRE( railAreas.size() == 7 );
 
 	// Display open: only its two rows, in RailOrder()'s order -- nothing
 	// from Misc, Settings or Other leaks in.
@@ -2297,13 +2305,16 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	REQUIRE( display[ 0 ]->Id() == "display.general" );
 	REQUIRE( display[ 1 ]->Id() == "display.upscaling" );
 
-	// Misc open: its two -- I7 (2026-09-27) narrowed Misc down to Friends
-	// and Mixer (Crosshair moved to Overlay; see the rail-order test just
-	// above) -- likewise nothing else leaks in.
+	// Audio open: Mixer then Effects (2026-10-22) -- likewise nothing else leaks in.
+	const std::vector<const ui::Area *> audio = ui::VisibleRailAreas( railAreas, RailGroup::Audio );
+	REQUIRE( audio.size() == 2 );
+	REQUIRE( audio[ 0 ]->Id() == "audio.mixer" );
+	REQUIRE( audio[ 1 ]->Id() == "audio.effects" );
+
+	// Misc open: Friends alone since AUDIO took the Mixer (2026-10-22).
 	const std::vector<const ui::Area *> misc = ui::VisibleRailAreas( railAreas, RailGroup::Misc );
-	REQUIRE( misc.size() == 2 );
+	REQUIRE( misc.size() == 1 );
 	REQUIRE( misc[ 0 ]->Id() == "system.friends" );
-	REQUIRE( misc[ 1 ]->Id() == "audio.mixer" );
 
 	// RailGroup::Nothing -- every group collapsed -- lists nothing at all.
 	REQUIRE( ui::VisibleRailAreas( railAreas, RailGroup::Nothing ).empty() );
@@ -2332,7 +2343,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"image.framegen", "image.motionblur", "image.lagbuffer",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
 		"input.general", "system.autoclicker", "system.null_binds",
-		"system.friends", "audio.mixer",
+		"audio.mixer", "audio.effects", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",
 		"system.log", "system.changelog",
@@ -2354,7 +2365,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	for ( RailGroup eGroup : eGroups )
 	{
 		INFO( "group " << ui::RailGroupName( eGroup ) );
@@ -2442,7 +2453,9 @@ TEST_CASE( "rail accordion: I5 spacing splits the open group's gap top/bottom, t
 		+ kHeaderGapOpen
 		+ ( kHeaderH + kHeaderGap )
 		+ kPad;
-	REQUIRE_THAT( ui::RailContentHeightPx( railAreas, RailGroup::Misc ),
+	// audio.mixer is this table's one "middle group" area (its group was Misc
+	// before 2026-10-22, Audio since); the arithmetic does not care which.
+	REQUIRE_THAT( ui::RailContentHeightPx( railAreas, RailGroup::Audio ),
 	              Catch::Matchers::WithinAbs( flExpectedMiscOpen, 1e-4f ) );
 
 	// Total stays the same as the OLD (pre-I5) formula would have given for

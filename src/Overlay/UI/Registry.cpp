@@ -935,6 +935,7 @@ namespace gamescope::ui
 			case RailGroup::Motion:   return "MOTION";
 			case RailGroup::Overlay:  return "OVERLAY";
 			case RailGroup::Input:    return "INPUT";
+			case RailGroup::Audio:    return "AUDIO";
 			case RailGroup::Misc:     return "MISC";
 			case RailGroup::Settings: return "SETTINGS";
 			case RailGroup::Other:    return "OTHER";
@@ -948,7 +949,7 @@ namespace gamescope::ui
 
 	namespace
 	{
-		// Seven groups since 2026-10-04 (MOTION; six since 2026-09-27, I7) -- see the section comment above
+		// Eight groups since 2026-10-22 (AUDIO; seven since 2026-10-04, MOTION; six since 2026-09-27, I7) -- see the section comment above
 		// the RailGroup enum in Registry.h for the user's own table and the
 		// reasoning behind the split. input.general is not a registered
 		// Area yet (a sibling task adds it); its slot sits here anyway --
@@ -985,11 +986,15 @@ namespace gamescope::ui
 			{ "input.general",         RailGroup::Input },
 			{ "system.autoclicker",    RailGroup::Input },
 			{ "system.null_binds",     RailGroup::Input },
+			// ---- AUDIO -- 2026-10-22: the game's sound. Mixer is volume
+			// only; Effects holds the compressor/limiter (Dynamics) that
+			// used to be a group inside the Mixer. A Visualizer joins later.
+			{ "audio.mixer",           RailGroup::Audio },
+			{ "audio.effects",         RailGroup::Audio },
 			// ---- MISC -- I7: the true leftover once Overlay and Input
-			// took their own concerns out -- two areas with nothing else
-			// in common besides "neither of the above".
+			// took their own concerns out; Friends alone since AUDIO took
+			// the Mixer (2026-10-22).
 			{ "system.friends",        RailGroup::Misc },
-			{ "audio.mixer",           RailGroup::Misc },
 			// ---- SETTINGS -- unchanged by I7 except Cursor's departure.
 			{ "setup.profiles",        RailGroup::Settings },
 			{ "system.general",        RailGroup::Settings },

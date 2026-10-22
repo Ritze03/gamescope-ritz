@@ -208,7 +208,8 @@ means whatever the DSP does, what reaches the speakers is within [-1, 1] and fin
 "safe by construction" guarantee below holds with the stage in the path.
 
 User-facing: presets Off / Even out / Night / Limiter only plus six Advanced values, per
-profile, in the Mixer (`audio.dynamics.*`, see [audio-mixer.md](audio-mixer.md)). Default
+profile, in the Effects area (`audio.effects`; rows `audio.dynamics.*`, see
+[audio-mixer.md](audio-mixer.md)). Default
 **Off**: Off is a bit-exact zero-delay pass-through.
 
 **Threading — the one real hazard.** `Process()` runs on PipeWire's **data-loop thread**
@@ -283,7 +284,7 @@ load to the ranges `Dynamics.cpp` enforces (−80..0 dB, 1..20, 0.1..500 ms, 1..
 `Dynamics::Params`: a named preset runs the library's own values, `custom` runs the six
 stored ones. Applied at startup and on a profile
 switch by `ritz_apply_config_live()` → `Capture::SetDynamics()`, and on every in-session
-edit by the Mixer rows themselves: `AudioDynamicsPickPreset()` / `AudioDynamicsSetValue()`
+edit by the Effects rows themselves: `AudioDynamicsPickPreset()` / `AudioDynamicsSetValue()`
 (`PanelAudio.h`) write the stored settings and call `SetDynamics()` through a callback.
 `Why:` a routed write does not bump the config generation, so the live-apply hook never
 runs for it; until 2026-10-22 the rows only saved and a preset did nothing until a restart

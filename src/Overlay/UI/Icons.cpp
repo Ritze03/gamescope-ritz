@@ -242,6 +242,17 @@ namespace gamescope::ui
 			Rect( 4.0f, 8.0f, 10.0f, 14.5f ),
 			Rect( 14.0f, 12.0f, 20.0f, 18.5f ) } },
 
+		{ "audio.effects", 3, {
+			// Effects (2026-10-22): a waveform squeezed between a ceiling and a
+			// floor -- the compressor's own picture. Two long horizontal lines
+			// with a jagged path between them; unlike audio.mixer's rectangles on
+			// vertical tracks, nothing here is a block or runs vertically.
+			Line( { 3.5f, 5.5f }, { 20.5f, 5.5f } ),
+			Line( { 3.5f, 18.5f }, { 20.5f, 18.5f } ),
+			IconShape{ IconOp::Polyline, 6, 0.0f, {
+				{ 3.5f, 12.0f }, { 7.0f, 8.5f }, { 10.0f, 15.5f },
+				{ 13.5f, 9.5f }, { 16.5f, 14.0f }, { 20.5f, 12.0f } } } } },
+
 		{ "system.hud", 4, {
 			// A bar chart standing on a baseline -- SPEC §8.0's second
 			// licensed fill. Solid bars, because the silhouette IS the
@@ -473,7 +484,7 @@ namespace gamescope::ui
 		// =================================================================
 		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3; regrouped to six, I7)
 		// =================================================================
-		// Seven glyphs, one per RailGroup (Display/Motion/Overlay/Input/Misc/
+		// Eight glyphs, one per RailGroup (Display/Motion/Overlay/Input/Audio/Misc/
 		// Settings/Other, in that order -- see the switch in
 		// IconForRailGroup() below, which is what actually binds each entry
 		// to its group rather than array position). Freehand, like every
@@ -577,6 +588,15 @@ namespace gamescope::ui
 				RoundRect( 4.5f, 8.0f, 19.5f, 16.0f, 2.5f ),
 				Bar( 9.5f, 12.0f, 14.5f, 13.8f ) } },
 
+			// AUDIO (2026-10-22): a speaker -- a closed cone-and-box outline with
+			// one open sound-wave arc beside it. The only group glyph that mixes a
+			// closed outline with a separate open stroke at its side.
+			{ "railgroup.audio", 2, {
+				IconShape{ IconOp::Loop, 6, 0.0f, {
+					{ 4.0f, 9.5f }, { 8.5f, 9.5f }, { 13.0f, 5.5f },
+					{ 13.0f, 18.5f }, { 8.5f, 14.5f }, { 4.0f, 14.5f } } },
+				Poly( { 16.5f, 8.5f }, { 18.5f, 12.0f }, { 16.5f, 15.5f } ) } },
+
 			{ "railgroup.misc", 3, {
 				Line( { 5.0f, 12.0f }, { 19.0f, 12.0f } ),
 				Line( { 8.5f, 5.9f },  { 15.5f, 18.1f } ),
@@ -615,9 +635,10 @@ namespace gamescope::ui
 			case RailGroup::Motion:   return &kGroupIcons[ 1 ];
 			case RailGroup::Overlay:  return &kGroupIcons[ 2 ];
 			case RailGroup::Input:    return &kGroupIcons[ 3 ];
-			case RailGroup::Misc:     return &kGroupIcons[ 4 ];
-			case RailGroup::Settings: return &kGroupIcons[ 5 ];
-			case RailGroup::Other:    return &kGroupIcons[ 6 ];
+			case RailGroup::Audio:    return &kGroupIcons[ 4 ];
+			case RailGroup::Misc:     return &kGroupIcons[ 5 ];
+			case RailGroup::Settings: return &kGroupIcons[ 6 ];
+			case RailGroup::Other:    return &kGroupIcons[ 7 ];
 			case RailGroup::Nothing:     return nullptr;
 		}
 		return nullptr;

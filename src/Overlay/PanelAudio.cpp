@@ -597,6 +597,91 @@ namespace gamescope
 			return sz;
 		}
 
+		// ---- the Effects builder ---------------------------------------
+		// audio.effects (2026-10-22): the compressor/limiter ("Dynamics"), which
+		// used to be two groups inside the Mixer. A STATIC area (its rows do not
+		// depend on which streams exist), but it reads the same per-frame snapshot
+		// (s_bCaptureActive) as the Mixer: the Mixer is a dynamic area, and
+		// Registry::SyncDynamicAreas() runs its AudioGeneration() every frame
+		// whichever area is open, so the snapshot is fresh here too.
+		void BuildEffectsArea( ui::Area &a )
+		{
+			a.Group( "Status" );
+			a.Facts( "audio.effects.status", "Status", []{ return DynamicsStatusLine(); } )
+				.Help( "What the effects are doing right now. Effects act on the captured game audio, "
+				       "so Capture game audio (in Mixer) has to be on; with it off the rows below are "
+				       "dimmed and nothing is processed. Read-only." )
+				.Keywords( "effects status dynamics compressor limiter capture" );
+
+			// ---- Dynamics ---------------------------------------------
+			// The compressor/limiter on the captured audio (Audio/Dynamics.h). It
+			// only has something to process while capture is active, so the rows are
+			// dimmed with the reason otherwise; the choice is still saved per profile.
+			a.Group( "Dynamics" );
+
+			a.Choice( "audio.dynamics.preset", "Preset",
+				ui::AnyBind::Of<int>( []{ return DynamicsPresetIndex(); }, []( int n ) { SetDynamicsPreset( n ); } ),
+				kDynamicsPresetOptions, std::size( kDynamicsPresetOptions ) )
+				.Help( "Evens out the game's sound. Even out brings quiet footsteps up next to loud "
+				       "gunfire without pumping. Night squeezes the range hard so nothing is loud "
+				       "enough to wake anyone. Limiter only leaves the sound alone and just stops "
+				       "peaks from clipping. Off leaves the sound untouched. Picking one fills in "
+				       "the Advanced values below; changing any of them switches to Custom. Adds "
+				       "up to 1.5 ms of delay while it is on, and none while it is off. Works on "
+				       "the captured game audio only (Capture game audio, in Mixer)." )
+				.Default( 0 )
+				.Keywords( "dynamics compressor limiter even out night loudness footsteps normalize preset" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Group( "Dynamics: Advanced" );
+
+			a.Slider( "audio.dynamics.threshold_db", "Threshold", DynamicsBind( &config::AudioDynamicsSettings::threshold_db ) )
+				.Help( "How loud a sound has to be before it gets turned down. Sounds quieter than this "
+				       "are left as they are (apart from Make-up gain). Lower catches more of the sound." )
+				.Range( -80.0f, 0.0f ).Step( 1.0f ).Unit( " dB" ).Default( -24.0f )
+				.Keywords( "dynamics threshold compressor level db" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Slider( "audio.dynamics.ratio", "Ratio", DynamicsBind( &config::AudioDynamicsSettings::ratio ) )
+				.Help( "How hard sounds above the Threshold are turned down. At 1 the compressor is off "
+				       "(Threshold, Attack and Release then do nothing) and only the limiter, the "
+				       "Ceiling, acts, as in Limiter only; 3 turns a 9 dB overshoot into 3 dB; 20 is "
+				       "close to a wall." )
+				.Range( 1.0f, 20.0f ).Step( 0.5f ).Unit( ":1" ).Default( 3.0f )
+				.Keywords( "dynamics ratio compressor squeeze" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Slider( "audio.dynamics.attack_ms", "Attack", DynamicsBind( &config::AudioDynamicsSettings::attack_ms ) )
+				.Help( "How fast the sound is turned down once it gets loud. Short catches sharp shots "
+				       "but can sound choppy; long lets the first bang through." )
+				.Range( 1.0f, 100.0f ).Step( 1.0f ).Unit( " ms" ).Default( 10.0f )
+				.Keywords( "dynamics attack compressor speed" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Slider( "audio.dynamics.release_ms", "Release", DynamicsBind( &config::AudioDynamicsSettings::release_ms ) )
+				.Help( "How fast the sound comes back up after a loud moment. Short follows the game "
+				       "closely but can pump; long is smoother but quiet sounds after a shot stay low "
+				       "for longer." )
+				.Range( 10.0f, 1000.0f ).Step( 10.0f ).Unit( " ms" ).Default( 150.0f )
+				.Keywords( "dynamics release compressor recovery pumping" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Slider( "audio.dynamics.makeup_db", "Make-up gain", DynamicsBind( &config::AudioDynamicsSettings::makeup_db ) )
+				.Help( "Turns everything up after the loud parts were turned down, so quiet sounds "
+				       "come out louder. The limiter still keeps the result under the Ceiling." )
+				.Range( -24.0f, 24.0f ).Step( 1.0f ).Unit( " dB" ).Default( 6.0f )
+				.Keywords( "dynamics makeup gain boost louder" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+
+			a.Slider( "audio.dynamics.ceiling_db", "Ceiling", DynamicsBind( &config::AudioDynamicsSettings::ceiling_db ) )
+				.Help( "The loudest level the sound is allowed to reach. Peaks above it are pulled down "
+				       "a hair ahead of time instead of being clipped, which sounds like distortion. "
+				       "-1 dB is a safe default." )
+				.Range( -24.0f, 0.0f ).Step( 0.5f ).Unit( " dB" ).Default( -1.0f )
+				.Keywords( "dynamics ceiling limiter clip peak max level" )
+				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
+		}
+
 		// ---- the builder -----------------------------------------------
 		void BuildAudioArea( ui::Area &a )
 		{
@@ -670,74 +755,6 @@ namespace gamescope
 					"and cannot land on the wrong app. Going above 100% is a real boost that can "
 					"distort the sound, not just extra headroom. The volume is saved per game; mute is not saved." );
 			}
-
-			// ---- Dynamics ---------------------------------------------
-			// The compressor/limiter on the captured audio (Audio/Dynamics.h). It
-			// only has something to process while capture is active, so the rows are
-			// dimmed with the reason otherwise; the choice is still saved per profile.
-			a.Group( "Dynamics" );
-
-			a.Choice( "audio.dynamics.preset", "Preset",
-				ui::AnyBind::Of<int>( []{ return DynamicsPresetIndex(); }, []( int n ) { SetDynamicsPreset( n ); } ),
-				kDynamicsPresetOptions, std::size( kDynamicsPresetOptions ) )
-				.Help( "Evens out the game's sound. Even out brings quiet footsteps up next to loud "
-				       "gunfire without pumping. Night squeezes the range hard so nothing is loud "
-				       "enough to wake anyone. Limiter only leaves the sound alone and just stops "
-				       "peaks from clipping. Off leaves the sound untouched. Picking one fills in "
-				       "the Advanced values below; changing any of them switches to Custom. Adds "
-				       "up to 1.5 ms of delay while it is on, and none while it is off. Works on "
-				       "the captured game audio only (Capture game audio, above)." )
-				.Default( 0 )
-				.Keywords( "dynamics compressor limiter even out night loudness footsteps normalize preset" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Group( "Dynamics: Advanced" );
-
-			a.Slider( "audio.dynamics.threshold_db", "Threshold", DynamicsBind( &config::AudioDynamicsSettings::threshold_db ) )
-				.Help( "How loud a sound has to be before it gets turned down. Sounds quieter than this "
-				       "are left as they are (apart from Make-up gain). Lower catches more of the sound." )
-				.Range( -80.0f, 0.0f ).Step( 1.0f ).Unit( " dB" ).Default( -24.0f )
-				.Keywords( "dynamics threshold compressor level db" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Slider( "audio.dynamics.ratio", "Ratio", DynamicsBind( &config::AudioDynamicsSettings::ratio ) )
-				.Help( "How hard sounds above the Threshold are turned down. At 1 the compressor is off "
-				       "(Threshold, Attack and Release then do nothing) and only the limiter, the "
-				       "Ceiling, acts, as in Limiter only; 3 turns a 9 dB overshoot into 3 dB; 20 is "
-				       "close to a wall." )
-				.Range( 1.0f, 20.0f ).Step( 0.5f ).Unit( ":1" ).Default( 3.0f )
-				.Keywords( "dynamics ratio compressor squeeze" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Slider( "audio.dynamics.attack_ms", "Attack", DynamicsBind( &config::AudioDynamicsSettings::attack_ms ) )
-				.Help( "How fast the sound is turned down once it gets loud. Short catches sharp shots "
-				       "but can sound choppy; long lets the first bang through." )
-				.Range( 1.0f, 100.0f ).Step( 1.0f ).Unit( " ms" ).Default( 10.0f )
-				.Keywords( "dynamics attack compressor speed" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Slider( "audio.dynamics.release_ms", "Release", DynamicsBind( &config::AudioDynamicsSettings::release_ms ) )
-				.Help( "How fast the sound comes back up after a loud moment. Short follows the game "
-				       "closely but can pump; long is smoother but quiet sounds after a shot stay low "
-				       "for longer." )
-				.Range( 10.0f, 1000.0f ).Step( 10.0f ).Unit( " ms" ).Default( 150.0f )
-				.Keywords( "dynamics release compressor recovery pumping" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Slider( "audio.dynamics.makeup_db", "Make-up gain", DynamicsBind( &config::AudioDynamicsSettings::makeup_db ) )
-				.Help( "Turns everything up after the loud parts were turned down, so quiet sounds "
-				       "come out louder. The limiter still keeps the result under the Ceiling." )
-				.Range( -24.0f, 24.0f ).Step( 1.0f ).Unit( " dB" ).Default( 6.0f )
-				.Keywords( "dynamics makeup gain boost louder" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
-
-			a.Slider( "audio.dynamics.ceiling_db", "Ceiling", DynamicsBind( &config::AudioDynamicsSettings::ceiling_db ) )
-				.Help( "The loudest level the sound is allowed to reach. Peaks above it are pulled down "
-				       "a hair ahead of time instead of being clipped, which sounds like distortion. "
-				       "-1 dB is a safe default." )
-				.Range( -24.0f, 0.0f ).Step( 0.5f ).Unit( " dB" ).Default( -1.0f )
-				.Keywords( "dynamics ceiling limiter clip peak max level" )
-				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
 
 			// wpctl is a RUNTIME dependency (DECISIONS.md #22) of everything
 			// below: the stream guessing (the fallback path) and the per-app
@@ -873,9 +890,6 @@ namespace gamescope
 						? Audio::Capture::Route::Describe( Audio::Capture::PlaybackRoute() )
 						: std::string( "nothing (capture is not active)" ) };
 				} )
-				.Live( "dynamics", []{
-					return ui::Fact{ "dynamics", DynamicsStatusLine() };
-				} )
 				.Live( "drives", []{
 					return ui::Fact{ "game volume drives", GameVolumeDrives() };
 				} )
@@ -931,7 +945,7 @@ namespace gamescope
 	void PanelAudio_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "audio.mixer", "Mixer", ui::Section::System );
-		a.Keywords( "audio volume mute mixer pipewire wireplumber wpctl stream per-app" );
+		a.Keywords( "audio volume mute mixer pipewire wireplumber wpctl stream per-app sound" );
 		a.Summary( []{
 			if ( s_bCaptureActive )
 			{
@@ -949,5 +963,12 @@ namespace gamescope
 		// The row set is discovered, not declared -- see the note above
 		// BuildAudioArea and ui::Area::Rebuilds().
 		a.Rebuilds( AudioGeneration, BuildAudioArea );
+
+		// Effects: the compressor/limiter, in the AUDIO rail group right after the
+		// Mixer (Registry.cpp's kRailOrder). Static, see BuildEffectsArea().
+		ui::Area &fx = reg.Add( "audio.effects", "Effects", ui::Section::System );
+		fx.Keywords( "audio effects compressor limiter dynamics even out night loudness footsteps sound" );
+		fx.Summary( []{ return DynamicsStatusLine(); } );
+		BuildEffectsArea( fx );
 	}
 }

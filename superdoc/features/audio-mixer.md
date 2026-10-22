@@ -1,8 +1,10 @@
 # Mixer (`audio.mixer`)
 
 Volume for the game gamescope is hosting, plus per-app volume for everything else
-playing. UI: `src/Overlay/PanelAudio.{h,cpp}` (registers as the `audio.mixer` area, rail
-label "Mixer"). Logic: `src/Audio/Capture.{h,cpp}` (game audio capture, see
+playing. **Volume only** since 2026-10-22: the compressor moved out to its own **Effects**
+area (`audio.effects`, [below](#effects-area-audio-effects-2026-10-22)); both live in the
+**AUDIO** rail group (Mixer, then Effects). UI: `src/Overlay/PanelAudio.{h,cpp}` (registers
+as the `audio.mixer` area, rail label "Mixer"). Logic: `src/Audio/Capture.{h,cpp}` (game audio capture, see
 [audio-capture.md](audio-capture.md)) and `src/Audio/Volume.{h,cpp}` (the wpctl-based
 stream guessing and per-stream volume).
 
@@ -109,11 +111,23 @@ alongside every other action — see
   the legacy pre-E2 panel printed as prose lands here as a live fact instead of dead
   prose.
 
-## Dynamics group (2026-10-21)
+## Effects area (`audio.effects`, 2026-10-22)
 
-A "Dynamics" group in this area, between Game volume and the stream rows — **not a new
-rail area**. `Why (plan D15):` all the game-audio controls live in one place, and the rail
-was already full. It acts on the captured audio (audio-capture.md's "Dynamics"), so its
+The compressor/limiter ("Dynamics"), added 2026-10-21 as two groups *inside* the Mixer
+(plan D15: "all the game-audio controls in one place, and the rail was already full"), is
+now its own rail area, **Effects**, directly below Mixer in the new **AUDIO** group
+(`PanelAudio.cpp`'s `BuildEffectsArea()`, registered by `PanelAudio_RegisterArea()` right
+after the Mixer). `Why:` the user, 2026-10-22: "We should have a seperate audio category.
+1. Mixer (Volume Only) 2. Effects (Compressor Only for now) 3. Visualizer ..." (the
+Visualizer is a later task). The rows, ids (= config keys `audio.dynamics.*`), help,
+live push and `DisabledUnless` are unchanged by the move; only the home changed. The
+area is **static** (no `Rebuilds()`), but reads the same per-frame snapshot
+(`s_bCaptureActive`) as the Mixer: the Mixer is a dynamic area, so
+`Registry::SyncDynamicAreas()` runs its `AudioGeneration()` every frame whichever area is
+open. Its first row is a **Status** fact (`audio.effects.status`) whose help says the
+effects act on the captured game audio, so Capture game audio (in Mixer) has to be on.
+
+It acts on the captured audio (audio-capture.md's "Dynamics"), so its
 rows are dimmed with the reason "Capture game audio is off or not active" unless
 `Capture::Active()`; the choice is still stored per profile.
 
@@ -130,7 +144,8 @@ rows are dimmed with the reason "Capture game audio is off or not active" unless
   stage on, with those values). Slider ranges are narrower than the config clamps (which
   are the processor's own limits) where the full range is unusable by hand.
   Row id = config key, like `audio.capture`.
-- **Diagnostics**: a `dynamics` fact: `off`, `waiting for capture`, or
+- **Status** (`audio.effects.status`, also the area's rail summary; was a `dynamics` fact in
+  the Mixer's Diagnostics until 2026-10-22): `off`, `waiting for capture`, or
   `Even out · adds 1.5 ms · limiter backstop hits 0` (preset, the look-ahead the stage
   adds, and how many samples the limiter's last-resort clamp had to catch, which should
   stay 0).

@@ -23,6 +23,10 @@ The newest version below is the one this build reports.
 - **Capture switch applies at once**: the Mixer's Capture game audio switch now turns
   game audio capture on or off right away instead of only after a restart.
 
+### Info
+- **Audio rail group**: Mixer and the new Effects area (with Dynamics) now have their
+  own AUDIO group in the settings rail.
+
 ## [0.13.0] – 2026-10-21
 
 ### Added
