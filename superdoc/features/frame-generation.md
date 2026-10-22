@@ -193,6 +193,59 @@ which FG cannot substitute per output frame.
 - **Untested on real hardware at the time of writing**: the headless smoke covers 8-bit (unchanged);
   HDR / 10-bit need a real HDR game.
 
+## Motion version 2
+
+(2026-10-22, the library's **`framegen-v2` branch at 273bbad**, not its `main` -- the submodule
+is pinned there for testing; `main` stays untouched until the user judges V2.) The library has a
+second motion algorithm next to the original (V1, unchanged): V2 is an LSFG-like "morph"
+interpolator. It moves the picture along a smoothed motion field and fills gaps with stretched
+content; there is **no per-pixel hold** (no trust ramp -- only the whole-frame scene-cut /
+flick fallbacks show the nearer real frame), so individual frames can look distorted but the
+motion reads better. **Same latency as V1** (a synth reads only the current pair).
+
+- **Rows** (Frame generation area, below Quality): **Motion version** (V1 default / V2,
+  `framegen.motion_version` `v1` / `v2`) and **V2 mode** (Quality default / Performance,
+  `framegen.v2_mode` `quality` / `performance`; dimmed unless the switch is on and Motion
+  version is V2). Per profile, additive (schema stays 5): absent loads the default, an unknown
+  string keeps it. `Settings::v2StaticMask` stays at the library default (on) and is not
+  exposed: it keeps HUD, text and semi-transparent panels / blended crosshairs in place
+  without needing UI protection, in both modes.
+- **Quality vs Performance** (library numbers, RX 7900 XTX, 1080p 2x, ms per real pair, Quality
+  preset's flowScale 2): V1 0.30, V2 Quality 0.24, V2 Performance 0.14. Quality adds a
+  per-pixel edge-aware field and a coverage pass (which frame still shows each spot);
+  Performance is the grid morph only. The V2 mode is independent of the V1 **Quality** row
+  (that one still sets flowScale 2 / 4 and sub-pixel).
+- **Both switch at runtime** through `Interpolator::setSettings()`, no GPU wait. A **mode**
+  switch keeps the estimate (no hitch). A **version** switch drops it: `EnsureReady()` sees the
+  library's `settings().motionVersion` change, clears `bEstimateValid` and the cached outputs, so
+  the next paint records a fresh estimate with the new version (until then the real frame is
+  shown; the library's `recordSynth*` would return false). The first switch to a version builds its
+  pipelines on the spot. The config word `g_uConfig` carries the two choices at bits 28-29 and the
+  applied-config key includes them.
+- **Rgba8 only, plus a subgroup requirement, with V1 as the fallback.** V2 refuses any
+  `Format` but `Rgba8` (HDR, 10-bit, fp16, NV12, P010) and a GPU without compute subgroups
+  (basic / vote / arithmetic / shuffle / clustered, at least 16 lanes). `InitInfo::getProps2` is
+  `g_device.vk.GetPhysicalDeviceProperties2`, which lets the library check the device. `Why a
+  fallback and not "unavailable":` the library's `init()` refuses V2 outright for those
+  contents, which would have killed frame generation for an HDR game just because the profile
+  says V2. So `init()` always starts V1; `ResolveMotion()` then asks
+  `Interpolator::settingsError( want )` (static format rule + device rule) and, if it names a
+  reason, runs V1 instead. The reason is a library string literal: it goes to the log
+  (`Motion version 2 refused, running V1: ...`, once per change) and to
+  `RenderStatus::motionNote`, which the Status line appends while generating (` · V1: <reason>`).
+  A format change re-inits, so an HDR game and an SDR game each get their own answer.
+- **Unused-version memory.** `releaseUnusedMotion()` is deliberately not called: it needs the
+  retire rule (a GPU wait) and there is no natural spot (the ring-shrink wait is rare and
+  unrelated). The unused version's pipelines / buffers stay until teardown (`// ponytail:` in
+  `EnsureReady()`).
+- **UI protection is unchanged**, `Crosshair V2` included (the library says V2 motion works with
+  every `uiProtection` mode and with `recordSynthBlur`, so motion blur works too). V1 output
+  is byte-identical (the default is V1).
+- Shaders: 13 plain `v2_*` compute shaders in `src/meson.build`'s `framegen_shaders`
+  (`v2_medhist`, `v2_search`, `v2_clean`, `v2_morph`, `v2_repick`, `v2_qfield`, `v2_qown`,
+  `v2_qcov`, `v2_qmorph`, `v2_static`, `v2_enclose`, `v2_morph_s`, `v2_qmorph_s`); Rgba8 only, so
+  no per-format variants.
+
 ## UI protection
 
 The **UI protection** row (`framegen.ui_protection`: Off / **Crosshair** (default) /
@@ -872,6 +925,8 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
+| `framegen.motion_version` | `v1` (default) / `v2` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (Rgba8 content, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22) |
+| `framegen.v2_mode` | `quality` (default) / `performance` | the row "V2 mode": V2's Quality / Performance; ignored while V1; additive, absent loads `quality` |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
@@ -901,7 +956,7 @@ and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shel
 overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Artifact safety (Off / Low / Default / High), Static HUD
+rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2), V2 mode (Quality / Performance), Artifact safety (Off / Low / Default / High), Static HUD
 protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
@@ -926,6 +981,7 @@ sliders would invite settings nobody has looked at.
   effective multiplier follows: `60->280 · 8× (×4.6) · +13 ms`;
 - the FG / UI GPU times are **not** on the line any more (`Facts` rows have no details pane);
   they remain in the `framegen` debug log and `RenderStatus::lastPairGpuMs` / `lastUiMs`;
+- while generating with V2 wanted but refused, ` · V1: <the library's reason>` is appended (see [Motion version 2](#motion-version-2));
 - otherwise the reason (renderer's first, then pacing's), `Off`, or `Waiting for frames`.
 
 It writes `->` and 1/2 in help text because the overlay font atlas is Latin-1 only (no
@@ -1017,7 +1073,7 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 The library has no root `meson.build`, and Meson's sandbox forbids handing files under
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
-nested subproject`), so `subproject()` is impossible. Its 23 shaders (11 for the interpolation, 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
+nested subproject`), so `subproject()` is impossible. Its 36 shaders (11 for the interpolation, 13 for Motion version 2 (plain, Rgba8 only), 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
 `blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
 test-only `gpu/blendbench.comp` is not built), plus 12 colour-shader variants each for `rgb10` and `f16` (`ui_v2_update` and `ui_v2_lumafill` are per-format) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's

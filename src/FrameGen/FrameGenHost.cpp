@@ -59,7 +59,9 @@ namespace fghost
 				| ( uint32_t( EffectiveCapAtRefresh( c.pauseAtRefresh, eMode ) ? 1 : 0 ) << 23 )
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
-				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 );
+				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
+				| ( uint32_t( c.motion ) << 28 )
+				| ( uint32_t( c.v2Mode ) << 29 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -106,6 +108,8 @@ namespace fghost
 			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
 			c.ui = UiProt( ( u >> 24 ) & 0x3u );
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
+			c.motion = Motion( ( u >> 28 ) & 0x1u );
+			c.v2Mode = V2Mode( ( u >> 29 ) & 0x1u );
 			return c;
 		}
 
@@ -203,6 +207,7 @@ namespace fghost
 
 		std::atomic<uint8_t> g_eReason{ uint8_t( Unavailable::Ok ) };
 		std::atomic<const char *> g_pszFormatTag{ "" };   // string literals only (PlanTag)
+		std::atomic<const char *> g_pszMotionNote{ "" };  // the library's reason V2 is refused (string literals), else ""
 		std::atomic<float> g_flLastPairGpuMs{ -1.0f };
 		std::atomic<float> g_flLastEstimateMs{ -1.0f };
 		std::atomic<float> g_flLastSynthMs{ -1.0f };
@@ -456,6 +461,24 @@ namespace fghost
 			// The deep UI-protection history follows the pacer's depth (SyncUiHistory);
 			// a preset change must not reset it to the default.
 			s.uiHistory = nUiHistory;
+			// Motion version: a request; ResolveMotion() drops V2 to V1 where the library refuses it.
+			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2 : framegen::MotionVersion::V1;
+			s.v2Mode = c.v2Mode == V2Mode::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
+			return s;
+		}
+
+		// V2 only where the library takes it (Rgba8 content, a GPU with the subgroup
+		// operations): else V1, so frame generation never dies for want of V2, and the
+		// library's reason goes to the Status line. Needs a live interpolator (the
+		// device check). Logged when the reason changes.
+		framegen::Settings ResolveMotion( const Host_t &H, framegen::Settings s )
+		{
+			const char *pszWhy = s.motionVersion == framegen::MotionVersion::V2 ? H.interp.settingsError( s ) : nullptr;
+			if ( pszWhy )
+				s.motionVersion = framegen::MotionVersion::V1;
+			const char *pszOld = g_pszMotionNote.exchange( pszWhy ? pszWhy : "", std::memory_order_relaxed );
+			if ( pszWhy && pszOld != pszWhy )
+				fg_log.warnf( "frame generation: Motion version 2 refused, running V1: %s", pszWhy );
 			return s;
 		}
 
@@ -526,6 +549,7 @@ namespace fghost
 			g_flLastSynthMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastUiMs.store( -1.0f, std::memory_order_relaxed );
 			g_pszFormatTag.store( "", std::memory_order_relaxed );
+			g_pszMotionNote.store( "", std::memory_order_relaxed );
 			H.bHaveColorspace = false;
 			H.ulUiFedId = 0;   // the library's counters went with the Interpolator
 			H.uTrackedRun = 0;
@@ -610,7 +634,7 @@ namespace fghost
 				Teardown( H );
 			}
 
-			const framegen::Settings want = ToLibrarySettings( c, b, H.nUiHist );
+			framegen::Settings want = ToLibrarySettings( c, b, H.nUiHist );
 
 			// Only the library's own presets (quality, safety, HUD protection, UI
 			// protection, and the blur's sample count and weights) matter to what is
@@ -618,7 +642,7 @@ namespace fghost
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
 				| ( uint64_t( c.uiBoxTenths ) << 48 );
 
 			if ( !H.bLive )
@@ -636,8 +660,14 @@ namespace fghost
 				info.getFormatProps = g_device.vk.GetPhysicalDeviceFormatProperties;
 				info.transfer = plan.eTransfer;
 				info.linearWhiteNits = plan.flLinearWhiteNits;
+				// Lets the library refuse V2 on a GPU without the subgroup operations it needs.
+				info.getProps2 = g_device.vk.GetPhysicalDeviceProperties2;
 				info.pipelineCache = VK_NULL_HANDLE;
+				// Always V1 here: init() refuses V2 outright (Rgba8 only), which would be
+				// "unavailable", not "fall back". V2 is switched on below once it is
+				// known to be accepted (setSettings creates its pipelines, no GPU wait).
 				info.settings = want;
+				info.settings.motionVersion = framegen::MotionVersion::V1;
 
 				H.plan = plan;
 				H.uWidth = w;
@@ -654,6 +684,12 @@ namespace fghost
 				H.bLive = true;
 				g_uGate.fetch_or( kGateLive, std::memory_order_relaxed );
 				H.uAppliedConfig = uLibraryConfig;
+				if ( want.motionVersion == framegen::MotionVersion::V2 )
+				{
+					const framegen::Settings v2 = ResolveMotion( H, want );
+					if ( v2.motionVersion == framegen::MotionVersion::V2 && !H.interp.setSettings( v2 ) )
+						g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
+				}
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
 					w, h, want.flowScale, H.bProfiling ? "on" : "n/a",
@@ -689,6 +725,8 @@ namespace fghost
 
 			if ( uLibraryConfig != H.uAppliedConfig )
 			{
+				want = ResolveMotion( H, want );
+				const framegen::MotionVersion eMotionWas = H.interp.settings().motionVersion;
 				if ( want.flowScale != H.interp.settings().flowScale )
 				{
 					// Structural (Quality <-> Performance): reconfigure() re-creates the
@@ -711,11 +749,26 @@ namespace fghost
 					// Runtime change: every record after this uses the new values; nothing
 					// in flight changes, so no wait. A refusal keeps the old settings; it is
 					// logged once and not retried every frame (the next change retries).
-					if ( !H.interp.setSettings( want ) && !H.bUiSetFailLogged )
+					if ( !H.interp.setSettings( want ) )
 					{
-						H.bUiSetFailLogged = true;
-						fg_log.errorf( "frame generation: the library refused the new settings; keeping the old ones" );
+						if ( want.motionVersion == framegen::MotionVersion::V2 )
+							g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
+						if ( !H.bUiSetFailLogged )
+						{
+							H.bUiSetFailLogged = true;
+							fg_log.errorf( "frame generation: the library refused the new settings; keeping the old ones" );
+						}
 					}
+				}
+				// A V1 <-> V2 switch dropped the library's estimate (its synths now refuse):
+				// forget it so the next paint records a fresh estimate first, and show no
+				// output the other version made. ponytail: releaseUnusedMotion() is never
+				// called -- it needs a GPU wait and there is no natural spot (the ring-shrink
+				// wait is rare); the unused version's pipelines/buffers stay until teardown.
+				if ( H.interp.settings().motionVersion != eMotionWas )
+				{
+					H.bEstimateValid = false;
+					InvalidateOutputs( H );
 				}
 				H.uAppliedConfig = uLibraryConfig;
 			}
@@ -1336,6 +1389,7 @@ namespace fghost
 		}
 		s.costSeq = g_uCostSeq.load( std::memory_order_relaxed );
 		s.formatTag = g_pszFormatTag.load( std::memory_order_relaxed );
+		s.motionNote = g_pszMotionNote.load( std::memory_order_relaxed );
 		return s;
 	}
 

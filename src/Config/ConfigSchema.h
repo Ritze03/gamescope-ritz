@@ -517,6 +517,11 @@ namespace gamescope::config
         // percent of the game's HEIGHT, 0.5..10 (clamped on load). ADDITIVE: absent
         // loads 2.5. The old fixed box was 3% of the frame's AREA (192 px at 1280x960).
         float ui_box_height = 2.5f;
+        // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2",
+        // and V2's mode "quality" | "performance". ADDITIVE: absent loads the defaults;
+        // an unknown string keeps them. V2 is Rgba8-only: other content stays on V1.
+        std::string motion_version = "v1";
+        std::string v2_mode = "quality";
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

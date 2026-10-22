@@ -1,8 +1,8 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Nine per-profile rows -- Frame generation (the on/off switch), Multiplier
-// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Quality, Artifact safety, Static HUD protection,
-// UI protection, Crosshair box size -- plus
+// SHAPE. Twelve per-profile rows -- Frame generation (the on/off switch), Multiplier
+// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Limit to GPU speed, Quality, Motion version, V2 mode,
+// Artifact safety, Static HUD protection, UI protection, Crosshair box size -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
 // inherited/overridden dot and "Reset to inherited" find it -- no `.Key()`
@@ -54,6 +54,7 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
@@ -62,6 +63,7 @@ namespace gamescope
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
+		constexpr const char *kMotionKeys[]  = { "v1", "v2" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		// Indexed by fghost::UiProt, so the index IS the option id above.
@@ -158,6 +160,9 @@ namespace gamescope
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
+			c.motion = IndexOf( f.motion_version, kMotionKeys, 2, 0 ) == 1 ? fghost::Motion::V2 : fghost::Motion::V1;
+			c.v2Mode = IndexOf( f.v2_mode, kQualityKeys, 2, 0 ) == 1   // same two keys as Quality
+				? fghost::V2Mode::Performance : fghost::V2Mode::Quality;
 			return c;
 		}
 
@@ -192,6 +197,12 @@ namespace gamescope
 		{
 			EnsureConfigLoaded();
 			return s_Settings.framegen.enabled;
+		}
+
+		bool V2On()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.enabled && s_Settings.framegen.motion_version == "v2";
 		}
 
 		bool UiOn()
@@ -266,6 +277,12 @@ namespace gamescope
 				{
 					s += " · ";
 					s += rs.formatTag;
+				}
+				// V2 was asked for but the library refused it for this content or GPU: its reason.
+				if ( rs.motionNote && rs.motionNote[ 0 ] )
+				{
+					s += " · V1: ";
+					s += rs.motionNote;
 				}
 				return s;
 			}
@@ -398,6 +415,35 @@ namespace gamescope
 			.Default( 0 )
 			.Keywords( "frame generation quality performance cost gpu motion estimation" )
 			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.motion_version", "Motion version",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kMotionOptions, std::size( kMotionOptions ) )
+			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
+			       "the picture along the motion and stretches it over gaps instead of falling "
+			       "back to the real frame spot by spot, and it is cheaper on the GPU. The delay "
+			       "is the same as V1. It works on normal 8-bit games only; HDR and 10-bit games, "
+			       "and GPUs without the shader features it needs, stay on V1 (the Status line "
+			       "says why). Switching shows real frames for an instant." )
+			.Default( 0 )
+			.Keywords( "frame generation motion version v1 v2 morph interpolation algorithm experimental" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.v2_mode", "V2 mode",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v2_mode, kQualityKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v2_mode = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kQualityOptions, std::size( kQualityOptions ) )
+			.Help( "Only for Motion version V2. Quality also works out a motion value for every "
+			       "pixel and keeps the side of the picture that is still visible at edges; "
+			       "Performance is about 40% cheaper on the GPU (1080p 2x, RX 7900 XTX: V1 0.30, "
+			       "V2 Quality 0.24, V2 Performance 0.14 ms per game frame) but a little less "
+			       "clean around moving edges. Switching does not interrupt the picture." )
+			.Default( 0 )
+			.Keywords( "frame generation v2 mode quality performance morph cost gpu" )
+			.DisabledUnless( V2On, "frame generation is off, or Motion version is not V2" );
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(

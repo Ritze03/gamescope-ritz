@@ -9,7 +9,11 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
-## [0.13.1] – 2026-10-22
+## [0.14.0] – 2026-10-22
+
+### Added
+- **Frame generation V2**: a new Motion version switch picks the new V2 interpolator
+  (Quality or Performance mode); HDR and 10-bit games stay on V1.
 
 ### Fixed
 - **Dynamics applies at once**: changing the Mixer's Dynamics preset or sliders now

@@ -76,6 +76,15 @@ namespace fghost
 	// at bits 24-25, so Off = 0 would be the all-zero word; the DEFAULT is Crosshair.
 	enum class UiProt : uint8_t { Off, Crosshair, WholeScreen, CrosshairV2 };
 
+	// "Motion version": the library's motion algorithm (framegen::MotionVersion).
+	// V2 is the "morph" interpolator (Rgba8 games only; anything else, or a GPU
+	// without the subgroup operations it needs, stays on V1 and RenderStatus::
+	// motionNote says why). V2Mode is its Quality / Performance (framegen::V2Mode).
+	// Both runtime (setSettings, no wait): a Motion switch drops the current
+	// estimate, a mode switch keeps it. Packed at bits 28-29 of the main word.
+	enum class Motion : uint8_t { V1, V2 };
+	enum class V2Mode : uint8_t { Quality, Performance };
+
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
 	constexpr int kUiBoxMinTenths = 5;
@@ -195,6 +204,8 @@ namespace fghost
 		// The crosshair box (Crosshair / CrosshairV2), tenths of a percent of the
 		// game's height; clamped to [kUiBoxMinTenths, kUiBoxMaxTenths] by SetConfig().
 		int uiBoxTenths = kUiBoxDefaultTenths;
+		Motion motion = Motion::V1;
+		V2Mode v2Mode = V2Mode::Quality;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time
@@ -371,6 +382,9 @@ namespace fghost
 		// plain 8-bit, else a short tag ("10-bit", "16-bit float", "HDR"). A string
 		// literal; "" while the renderer is not live.
 		const char *formatTag = "";
+		// Why V2 is wanted but V1 is running: the library's own reason (a string
+		// literal); "" when V2 is not wanted, or is running.
+		const char *motionNote = "";
 		// Increments with every new measurement, so pacing can tell a fresh
 		// reading from the stale one it already acted on.
 		uint32_t costSeq = 0;

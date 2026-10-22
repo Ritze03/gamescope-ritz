@@ -1665,6 +1665,8 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( Settings{}.framegen.hud_protection == "strong" );
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
     REQUIRE( Settings{}.framegen.ui_box_height == 2.5f );
+    REQUIRE( Settings{}.framegen.motion_version == "v1" );
+    REQUIRE( Settings{}.framegen.v2_mode == "quality" );
 
     Settings s{};
     s.framegen.enabled = true;
@@ -1724,6 +1726,39 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
     REQUIRE( IsSettingsKey( "framegen.ui_protection" ) );
     REQUIRE( IsSettingsKey( "framegen.ui_box_height" ) );
+    REQUIRE( IsSettingsKey( "framegen.motion_version" ) );
+    REQUIRE( IsSettingsKey( "framegen.v2_mode" ) );
+}
+
+// Motion version 2 (2026-10-22): additive keys, defaults when absent, round trip, and an
+// unknown string keeps the default.
+TEST_CASE( "framegen: motion_version and v2_mode round-trip, default when absent, invalid keeps the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    Settings l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v1" );
+    REQUIRE( l.framegen.v2_mode == "quality" );
+
+    Settings s{};
+    s.framegen.motion_version = "v2";
+    s.framegen.v2_mode = "performance";
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v2" );
+    REQUIRE( l.framegen.v2_mode == "performance" );
+
+    s.framegen.motion_version = "v3";
+    s.framegen.v2_mode = "turbo";
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v1" );
+    REQUIRE( l.framegen.v2_mode == "quality" );
 }
 
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )

@@ -130,7 +130,10 @@ framegen_shaders = []
 foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfield', 'error', 'resolve', 'fallback', 'lookup',
                 'ui_detect', 'ui_box_update', 'ui_box_mask', 'ui_mask', 'ui_inpaint', 'ui_patch',
                 'ui_v2_update', 'ui_v2_mask', 'ui_v2_lumafill',
-                'blur_lookup', 'blur_error', 'blur_resolve']
+                'blur_lookup', 'blur_error', 'blur_resolve',
+                # Motion version 2 (Rgba8 only, so plain: no per-format variants below).
+                'v2_medhist', 'v2_search', 'v2_clean', 'v2_morph', 'v2_repick', 'v2_qfield', 'v2_qown', 'v2_qcov',
+                'v2_qmorph', 'v2_static', 'v2_enclose', 'v2_morph_s', 'v2_qmorph_s']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
   if framegen_has_depfile
