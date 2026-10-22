@@ -66,12 +66,17 @@ config section `motion_blur` (schema stays 5; additive; absent loads the default
 | `motion_blur.samples` | 2..8 (default 4) | the row "Samples": sub-frames averaged per shown frame; **every whole number 2..8** (the user asked for it explicitly, not just 2/4/8); clamped on load (the library takes up to 16, the UI offers 8) |
 | `motion_blur.amount` | 0..100 (default 50) | the row "Blur amount": the shutter in percent of one interval (`Inputs::blurAmount` = `amount / 100`); 0 is no blur; clamped on load |
 | `motion_blur.relative` | `shown` (default) / `game` | the row "Measured against": **Shown frame** = the shutter is a fraction of one *shown* frame's interval (subtle; stays short as FG shows more frames); **Game frame** = a fraction of one *game* frame's interval (the film look: longer, heavier, needs more samples) = `BlurRelative::ShownFrame` / `GameFrame` |
+| `motion_blur.same_as_framegen` | `true` (default) / `false` | the switch "Use Frame generation's settings": on = the blur follows `framegen.motion_version` / `framegen.quality`; additive, absent loads `true` (2026-10-22) |
+| `motion_blur.motion_version` | `v1` (default) / `v2` | the row "Motion version": the blur's own version, used only while the switch is off (see "The interpolator's version and quality"); additive, an unknown string keeps `v1` |
+| `motion_blur.quality` | `quality` (default) / `performance` | the row "Quality": the blur's own, used only while the switch is off; on V2 it is V2's mode; additive |
 | `motion_blur.weights` | `even` / `gaussian` (default) | the row "Weighting": `BlurWeights::Even` (a box shutter, hard-edged smear like a camera) / `Gaussian` (the ends carry 13.5% of the centre's weight: softer, effectively shorter) |
 
 Rows, in order: **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
-(slider 0..100 %), **Measured against**, **Weighting**, then (group "Interpolation") **Quality**
-and **Motion version**, and **Status**. The blur's own rows are disabled while the switch is
-off; Quality and Motion version are enabled while Motion blur or Frame generation is on. The rail summary reads `off` or `N samples`. The help
+(slider 0..100 %), **Measured against**, **Weighting**, then (group "Interpolation") **Use Frame
+generation's settings** (switch, default on), **Quality** and **Motion version**, and **Status**.
+The other rows are disabled while the Motion blur switch is off; Quality and Motion version are
+also disabled while "Use Frame generation's settings" is on (greyed out, showing Frame
+generation's values). The rail summary reads `off` or `N samples`. The help
 texts are plain ASCII (the overlay font atlas is Latin-1; `->` and no arrows) and carry the
 essentials: it blends in-between frames like a camera shutter, works with or without Frame
 generation, never waits for a future frame so it adds no delay, costs about 0.03 ms per
@@ -79,23 +84,50 @@ sample at 1280x960 and 0.1 ms at 1440p per shown frame, Shown frame is subtle an
 is the film look, UI protection keeps the crosshair sharp inside the blur, and it reduces
 clarity so it is not for competitive play.
 
-**Shared with Frame generation**: the **Quality** and **Motion version** rows are in both
-areas and are the SAME setting (`framegen.quality`, `framegen.motion_version`; the blur's rows
-have ids `motion_blur.quality` / `motion_blur.motion_version` and `Key()` the framegen keys),
-and **UI protection** lives in the Frame generation area; all apply to the blur too, even
-with Frame generation itself off -- they are library settings of the one Interpolator both
-features use. Selecting V2 here takes effect at once (the row writes through the Frame
-generation panel's setter, which pushes to the renderer), and the blur-only renderer uses the
-configured version and quality like frame generation does. The version is V2 (Rgba8 games,
-capable GPU) or falls back to V1, and the Status line below then ends with ` · V1: <reason>`.
-Quality: V1 Performance is the quarter-resolution estimate; V2 Quality / Performance are V2's
-two modes (see [frame-generation.md](frame-generation.md#motion-version-2)). `Why in this area
-too:` the user, *"Make sure that I can also select the v2 for the motion blur"*. `Why the
-rows write through the Frame generation panel's copy of the settings:` the config merge is per
-section, so a second panel holding its own `framegen` section would write a stale one over an
-edit made in the other area (covered by a test in `tests/test_config.cpp`). `Why:` UI protection pastes the real pixels of a still crosshair / HUD *after*
-the average (the library's `ui_patch`), so the crosshair stays exact while the world around
-it is blurred.
+**The interpolator's version and quality** (2026-10-22). Blur and Frame generation run on ONE
+`framegen::Interpolator`, whose Motion version (V1 / V2) and Quality are Frame generation's
+`framegen.motion_version` / `framegen.quality` ([frame-generation.md](frame-generation.md#motion-version-2)).
+This area has the switch **Use Frame generation's settings** (`motion_blur.same_as_framegen`,
+default **on**) and the blur's own **Quality** (`motion_blur.quality`) and **Motion version**
+(`motion_blur.motion_version`) rows:
+
+- Switch **on**: the two rows are greyed out and *display Frame generation's current values*
+  (read from the renderer's live config, `fghost::GetConfig()`, so this panel never keeps a copy
+  of the `framegen` section). The blur runs on Frame generation's pair, also with Frame
+  generation off (`EnsureReady()` reads the packed config whatever the Frame generation switch
+  says).
+- Switch **off**: the blur's own pair is pushed with the blur config (`BlurConfig::useOwnInterp`,
+  `motion`, `quality`, bits 14-16 of the blur word) and, while the blur is on, **replaces**
+  Frame generation's pair for the interpolator (`RecordBaseLayer()` rewrites the quality and
+  motion bits of the packed config before the library-config key is built). Selecting V2 here
+  takes effect at once; a V2 the library refuses (HDR / 10-bit, a GPU without the subgroup
+  operations) falls back to V1 and the Status line below ends with ` · V1: <reason>`.
+- `Why no second interpolator for the blur:` every shown frame IS a blurred synth: one
+  `recordSynthBlur()` per output, whose sub-frames are what the blur averages. One output cannot
+  be V2 for the generated frame and V1 for its blur, so a second instance would only double the
+  motion estimate (~0.15-0.3 ms at 1080p) for nothing. The blur's own choice therefore applies to
+  the whole picture while the blur is on, Frame generation's frames included (Frame generation's
+  own two settings are then not used), at no extra GPU cost. Only in blur-only mode does it
+  differ visibly from "follow Frame generation".
+- The user, asking for it: *"For motion blur also add an option that is like uh use same
+  settings as frame gen and the user can just tick that and then it just reuses the same
+  setting and by default it should be on. It should just disable the other two, like gray them
+  out."* and, on what unticking does: *"It should really just copy over the settings
+  essentially. Like if basically like when I have frame gen on v2 quality, then it should just
+  set v2 and quality for motion blur as well."* And before that, why the version is selectable
+  here at all: *"Make sure that I can also select the v2 for the motion blur"*. They also
+  wanted V1 for the blur next to V2 frame generation (*"When it's turned off, I should be able
+  to use V1 for motion blur, for example."*), which the single-synth design delivers only as
+  "the blur's pair wins while the blur is on".
+- `Why own config keys rather than the framegen ones:` the config merge is per *section*; own
+  keys in the `motion_blur` section keep one writer per section. (The settings audit sets the
+  two rows with the switch turned off first, a `GATES` entry: with it on they show Frame
+  generation's value and a write would not read back.)
+
+The **UI protection** setting lives in the Frame generation area and applies to the blur too,
+even with Frame generation itself off. `Why:` UI protection pastes the real pixels of a still
+crosshair / HUD *after* the average (the library's `ui_patch`), so the crosshair stays exact
+while the world around it is blurred.
 
 **Status line** (always one line): `4 samples · 1.8 ms window` while applied (the window is
 the last output's shutter length in ms of content time, the pacer's `Report::blurWindowMs`;

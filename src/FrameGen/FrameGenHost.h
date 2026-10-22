@@ -138,6 +138,14 @@ namespace fghost
 		int amountPercent = 50;      // the shutter, 0..100
 		BlurRel relative = BlurRel::Shown;
 		BlurWeighting weights = BlurWeighting::Gaussian;
+		// The blur's OWN Motion version and Quality ("Use Frame generation's settings"
+		// off, 2026-10-22). Frame generation and the blur share ONE interpolator, and every
+		// shown frame is a blurred synth of it, so these REPLACE Config::motion / quality
+		// whenever the blur is enabled and useOwnInterp is set (RecordBaseLayer()); a second
+		// interpolator could not help, one output is one recordSynthBlur() call.
+		bool useOwnInterp = false;
+		Motion motion = Motion::V1;
+		Quality quality = Quality::Quality;
 	};
 
 	// Replace the whole blur config. Thread-safe, cheap, any time. Like

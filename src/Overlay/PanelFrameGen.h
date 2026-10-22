@@ -21,10 +21,4 @@ namespace gamescope
 	// ever been opened. (The area also re-pushes itself whenever the config
 	// generation moves, the same way PanelShaders.cpp does.)
 	void PanelFrameGen_ApplyStartupConfig( const config::Settings &config );
-
-	// Adds the Quality and Motion version rows to `a`: this area's own, or (true) the
-	// Motion blur area's copies bound to the same two stored settings through THIS
-	// panel's state, so there is one owner of the `framegen` config section and the
-	// push to the renderer is the same call. See PanelFrameGen.cpp's top comment.
-	void PanelFrameGen_AddMotionRows( ui::Area &a, bool bInBlurArea );
 }

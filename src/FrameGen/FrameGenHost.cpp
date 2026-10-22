@@ -115,10 +115,12 @@ namespace fghost
 
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
-		// (1 = gaussian), 13 enabled. Kept apart from g_uConfig so a blur edit never
+		// (1 = gaussian), 13 enabled, 14 own interpolator settings, 15 own motion version
+		// (1 = V2), 16 own quality (1 = performance). Kept apart from g_uConfig so a blur edit never
 		// reconfigures frame generation and vice versa; a reader that sees one
 		// updated and not the other just gets the previous other half for one frame.
 		constexpr uint32_t kBlurEnabledBit = 1u << 13;
+		constexpr uint32_t kBlurOwnBit = 1u << 14;
 
 		uint32_t PackBlur( const BlurConfig &b )
 		{
@@ -128,7 +130,10 @@ namespace fghost
 				| ( uint32_t( nAmount ) << 4 )
 				| ( uint32_t( b.relative == BlurRel::Game ? 1 : 0 ) << 11 )
 				| ( uint32_t( b.weights == BlurWeighting::Gaussian ? 1 : 0 ) << 12 )
-				| ( b.enabled ? kBlurEnabledBit : 0u );
+				| ( b.enabled ? kBlurEnabledBit : 0u )
+				| ( b.useOwnInterp ? kBlurOwnBit : 0u )
+				| ( uint32_t( b.motion ) << 15 )
+				| ( uint32_t( b.quality ) << 16 );
 		}
 
 		BlurConfig UnpackBlur( uint32_t u )
@@ -139,6 +144,9 @@ namespace fghost
 			b.relative = ( ( u >> 11 ) & 1u ) ? BlurRel::Game : BlurRel::Shown;
 			b.weights = ( ( u >> 12 ) & 1u ) ? BlurWeighting::Gaussian : BlurWeighting::Even;
 			b.enabled = ( u & kBlurEnabledBit ) != 0;
+			b.useOwnInterp = ( u & kBlurOwnBit ) != 0;
+			b.motion = Motion( ( u >> 15 ) & 1u );
+			b.quality = Quality( ( u >> 16 ) & 1u );
 			return b;
 		}
 
@@ -1422,10 +1430,15 @@ namespace fghost
 
 	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace )
 	{
-		const uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
-		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ) );
+		uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
 		const uint32_t uPackedBlur = g_uBlur.load( std::memory_order_relaxed );
 		const BlurConfig blurCfg = UnpackBlur( uPackedBlur );
+		// The blur's own Motion version / Quality replace Frame generation's while the blur
+		// is on (see BlurConfig::useOwnInterp). Done on the packed word so the library-config
+		// key in EnsureReady() sees the effective values too.
+		if ( blurCfg.enabled && blurCfg.useOwnInterp )
+			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 1u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
+		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ) );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// Frame generation, motion blur and the lag spike buffer all off (or never on): release

@@ -12,9 +12,10 @@ The newest version below is the one this build reports.
 ## [0.14.0] – 2026-10-22
 
 ### Added
-- **Frame generation V2**: a Motion version switch, in Frame generation and in Motion
-  blur, picks the new V2 interpolator; one Quality setting serves both versions. HDR
-  and 10-bit games stay on V1.
+- **Frame generation V2**: a Motion version switch picks the new V2 interpolator, and
+  one Quality setting serves both versions. HDR and 10-bit games stay on V1.
+- **Motion blur version**: Motion blur follows Frame generation's Motion version and
+  Quality by default; turn off "Use Frame generation's settings" to give it its own.
 
 ### Fixed
 - **Dynamics applies at once**: changing the Mixer's Dynamics preset or sliders now

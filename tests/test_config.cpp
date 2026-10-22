@@ -2014,6 +2014,9 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( Settings{}.motion_blur.amount == 50 );
     REQUIRE( Settings{}.motion_blur.relative == "shown" );
     REQUIRE( Settings{}.motion_blur.weights == "gaussian" );
+    REQUIRE( Settings{}.motion_blur.same_as_framegen == true );
+    REQUIRE( Settings{}.motion_blur.motion_version == "v1" );
+    REQUIRE( Settings{}.motion_blur.quality == "quality" );
 
     // A profile written before the section existed loads the defaults.
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -2026,6 +2029,9 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.amount == 50 );
     REQUIRE( loaded.motion_blur.relative == "shown" );
     REQUIRE( loaded.motion_blur.weights == "gaussian" );
+    REQUIRE( loaded.motion_blur.same_as_framegen == true );   // absent: follows Frame generation
+    REQUIRE( loaded.motion_blur.motion_version == "v1" );
+    REQUIRE( loaded.motion_blur.quality == "quality" );
 
     Settings s{};
     s.motion_blur.enabled = true;
@@ -2033,6 +2039,9 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     s.motion_blur.amount = 85;
     s.motion_blur.relative = "game";
     s.motion_blur.weights = "even";
+    s.motion_blur.same_as_framegen = false;
+    s.motion_blur.motion_version = "v2";
+    s.motion_blur.quality = "performance";
     REQUIRE( SaveSections( s ) );
 
     loaded = LoadSections();
@@ -2041,6 +2050,9 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.amount == 85 );
     REQUIRE( loaded.motion_blur.relative == "game" );
     REQUIRE( loaded.motion_blur.weights == "even" );
+    REQUIRE( loaded.motion_blur.same_as_framegen == false );
+    REQUIRE( loaded.motion_blur.motion_version == "v2" );
+    REQUIRE( loaded.motion_blur.quality == "performance" );
 
     // The keys the Motion blur area's rows are bound to (the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this).
@@ -2049,6 +2061,9 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( IsSettingsKey( "motion_blur.amount" ) );
     REQUIRE( IsSettingsKey( "motion_blur.relative" ) );
     REQUIRE( IsSettingsKey( "motion_blur.weights" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.same_as_framegen" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.motion_version" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.quality" ) );
 }
 
 TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum string keeps its default", "[config]" )
@@ -2058,7 +2073,8 @@ TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",
-        "motion_blur": { "enabled": true, "samples": 1, "amount": 250, "relative": "wide", "weights": "box" }
+        "motion_blur": { "enabled": true, "samples": 1, "amount": 250, "relative": "wide", "weights": "box",
+                        "motion_version": "v9", "quality": "ultra", "same_as_framegen": false }
     })";
     Settings loaded = LoadSections();
     REQUIRE( loaded.motion_blur.enabled == true );
@@ -2066,6 +2082,9 @@ TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum
     REQUIRE( loaded.motion_blur.amount == 100 );         // above 100 -> 100
     REQUIRE( loaded.motion_blur.relative == "shown" );   // unknown -> default
     REQUIRE( loaded.motion_blur.weights == "gaussian" ); // unknown -> default
+    REQUIRE( loaded.motion_blur.motion_version == "v1" );
+    REQUIRE( loaded.motion_blur.quality == "quality" );
+    REQUIRE( loaded.motion_blur.same_as_framegen == false );
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",
@@ -3688,45 +3707,6 @@ TEST_CASE( "a routed write from one panel never undoes another panel's edit (per
     REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 11 );
     REQUIRE( LoadProfile( "CS2" )->crosshair.line_gap == 6 );
     REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 9 );
-}
-
-// Frame generation and Motion blur share one interpolator, so the Motion blur area edits
-// `framegen.motion_version` / `framegen.quality` THROUGH the Frame generation panel's copy
-// (PanelFrameGen_AddMotionRows), never its own. The routed merge is per section, so this is
-// what keeps a stale `framegen` section in the blur panel's struct from being written back.
-TEST_CASE( "a stale Motion blur panel copy never undoes the shared Motion version / Quality (routed merge)", "[config]" )
-{
-    TempConfigHome home;
-    ScopedSessionAppId scopedAppId( "730" );
-
-    REQUIRE( SaveProfile( General( "A" ), Settings{} ) );
-    REQUIRE( SelectProfile( "A" ) );
-
-    static Settings frameGen;   // the owner of the framegen section
-    static Settings blur;       // the blur panel: reads and writes only motion_blur
-    frameGen = ResolvedSettings();
-    blur = ResolvedSettings();
-
-    // Selected in the Motion blur area: the Frame generation panel's setter does the write.
-    frameGen.framegen.motion_version = "v2";
-    frameGen.framegen.quality = "performance";
-    EnqueueRoutedWrite( frameGen );
-
-    // The blur panel (its framegen section still says v1 / quality) saves a blur edit.
-    blur.motion_blur.samples = 6;
-    EnqueueRoutedWrite( blur );
-    FlushPendingWrites();
-    REQUIRE( LoadProfile( "A" )->framegen.motion_version == "v2" );
-    REQUIRE( LoadProfile( "A" )->framegen.quality == "performance" );
-    REQUIRE( LoadProfile( "A" )->motion_blur.samples == 6 );
-
-    // And the other way round: a Frame generation edit keeps the blur edit.
-    frameGen.framegen.quality = "quality";
-    EnqueueRoutedWrite( frameGen );
-    FlushPendingWrites();
-    REQUIRE( LoadProfile( "A" )->framegen.quality == "quality" );
-    REQUIRE( LoadProfile( "A" )->framegen.motion_version == "v2" );
-    REQUIRE( LoadProfile( "A" )->motion_blur.samples == 6 );
 }
 
 TEST_CASE( "a routed write from a caller that never resolved settings first clobbers sections it never "

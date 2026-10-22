@@ -367,6 +367,13 @@ namespace gamescope::config
                 const std::string sWeights = JGetString( *pBlur, "weights", m.weights );
                 if ( sWeights == "even" || sWeights == "gaussian" )
                     m.weights = sWeights;
+                m.same_as_framegen = JGetBool( *pBlur, "same_as_framegen", m.same_as_framegen );
+                const std::string sMotion = JGetString( *pBlur, "motion_version", m.motion_version );
+                if ( sMotion == "v1" || sMotion == "v2" )
+                    m.motion_version = sMotion;
+                const std::string sQuality = JGetString( *pBlur, "quality", m.quality );
+                if ( sQuality == "quality" || sQuality == "performance" )
+                    m.quality = sQuality;
             }
 
             // Lag spike buffer (2026-10-04). Additive: look-back and max are clamped,
@@ -816,6 +823,9 @@ namespace gamescope::config
             jMotionBlur[ "amount" ] = mb.amount;
             jMotionBlur[ "relative" ] = mb.relative;
             jMotionBlur[ "weights" ] = mb.weights;
+            jMotionBlur[ "same_as_framegen" ] = mb.same_as_framegen;
+            jMotionBlur[ "motion_version" ] = mb.motion_version;
+            jMotionBlur[ "quality" ] = mb.quality;
 
             const auto &lb = s.lag_buffer;
             nlohmann::json jLagBuffer = nlohmann::json::object();

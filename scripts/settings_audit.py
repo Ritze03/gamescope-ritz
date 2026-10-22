@@ -153,6 +153,11 @@ GATES = {
     "display.resolution.width": [("display.resolution.aspect", "Custom")],  # SetCustomWidth() applies only while Custom
     "display.resolution.height": [("display.resolution.aspect", "Custom")],
     "display.refresh.custom": [("display.refresh", "Custom")],             # SetCustomRefreshHz() applies only while Custom
+    # The blur's own Quality / Motion version rows are greyed out (and DISPLAY Frame generation's
+    # values) while "Use Frame generation's settings" is on; a write only reads back with it off.
+    # ("=off": a switch has no option list, so the label is the literal value.)
+    "motion_blur.quality": [("motion_blur.same_as_framegen", "=off")],
+    "motion_blur.motion_version": [("motion_blur.same_as_framegen", "=off")],
 }
 
 # A row whose own write legitimately moves a second key.
@@ -727,6 +732,8 @@ def run_situation(sit_key, inst, cfg, out_dir, only_ids, steps):
         return v if v is not None else ""
 
     def label_value(row_id, label):
+        if label.startswith("="):   # a switch has no option list: "=off" is the literal value
+            return label[1:]
         for v, l in by_id[row_id]["opts"]:
             if l == label:
                 return str(v)

@@ -204,18 +204,22 @@ flick fallbacks show the nearer real frame), so individual frames can look disto
 motion reads better. **Same latency as V1** (a synth reads only the current pair).
 
 - **Rows**: **Motion version** (V1 default / V2, `framegen.motion_version` `v1` / `v2`) and
-  **Quality** (`framegen.quality`, below). Both are shared with the **Motion blur** area, which
-  carries the same two rows (ids `motion_blur.motion_version` / `motion_blur.quality`, bound to
-  the same two keys via `Entry::Key()`; one function, `PanelFrameGen_AddMotionRows()`, adds them
-  to both areas): Frame generation and Motion blur run on ONE `framegen::Interpolator`, so the
-  version and the quality are properties of that one interpolator and each has ONE config key.
-  Both rows are enabled while Frame generation **or** Motion blur is on (the blur switch is read
-  from the renderer's live blur config, since it is the other panel's setting); with Frame
-  generation off the blur still runs the configured version and quality (`EnsureReady()` reads
-  the packed config whatever the Frame generation switch says). Per profile, additive (schema
-  stays 5): absent loads the default, an unknown string keeps it. `Settings::v2StaticMask` stays
-  at the library default (on) and is not exposed: it keeps HUD, text and semi-transparent panels
-  / blended crosshairs in place without needing UI protection, in both modes.
+  **Quality** (`framegen.quality`, below), enabled only while the Frame generation switch is on.
+  Per profile, additive (schema stays 5): absent loads the default, an unknown string keeps it.
+  `Settings::v2StaticMask` stays at the library default (on) and is not exposed: it keeps HUD,
+  text and semi-transparent panels / blended crosshairs in place without needing UI protection,
+  in both modes.
+- **Motion blur uses the same interpolator** ([motion-blur.md](motion-blur.md)):
+  it follows these two settings by default (its "Use Frame generation's settings" switch, on)
+  and runs with them when Frame generation is off. With that switch off and the blur on, the
+  blur's own pair (`motion_blur.motion_version` / `motion_blur.quality`) replaces these two for
+  the whole picture. The merge is host-side, in `RecordBaseLayer()` (it rewrites the quality
+  and motion bits of the packed config word before the library-config key is built, so
+  `EnsureReady()` just sees the effective values). `Why no second interpolator:` every shown
+  frame is one `recordSynthBlur()` call (the blur averages the sub-frames of the very synth
+  that makes the frame), so one output cannot be V2 for the generated frame and V1 for its
+  blur; two instances would only double the motion estimate for nothing. The blur's choice
+  therefore also decides the frames Frame generation makes while the blur is on.
 - **One Quality for both versions** (2026-10-22). `framegen.quality` drives V1's preset
   (Performance = flowScale 4, sub-pixel off) **and** V2's mode (`framegen::V2Mode`; Quality ->
   Quality, Performance -> Performance); the earlier separate `framegen.v2_mode` / "V2 mode" row
@@ -944,7 +948,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
-| `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2), also shown in the Motion blur area. On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
+| `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2). On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
@@ -978,7 +982,7 @@ and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shel
 overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2; both also in the Motion blur area, enabled while Frame generation or Motion blur is on), Artifact safety (Off / Low / Default / High), Static HUD
+rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2), Artifact safety (Off / Low / Default / High), Static HUD
 protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the

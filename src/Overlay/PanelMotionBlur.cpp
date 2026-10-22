@@ -2,23 +2,34 @@
 //
 // SHAPE. Five per-profile rows -- Motion blur (the on/off switch), Samples (2..8),
 // Blur amount (0..100 %), Measured against (Shown frame / Game frame), Weighting
-// (Even / Gaussian) -- plus the two rows SHARED with Frame generation (Quality, Motion
-// version; see below) and one live Status line. Every row's id IS its config key
+// (Even / Gaussian) -- plus the "Use Frame generation's settings" switch with the blur's
+// Quality and Motion version rows (see below) and one live Status line. Every row's id IS its config key
 // (`motion_blur.enabled`, `motion_blur.samples`, ...), which is how the Shell's
 // per-profile inherited/overridden dot and "Reset to inherited" find it.
 // Every edit calls fghost::SetBlurConfig() at once; the renderer and the pacer read
 // it on the next frame (nothing waits).
 //
-// SHARED ROWS (2026-10-22). Blur and Frame generation run on one interpolator, so its
-// Motion version (V1 / V2) and Quality are one setting each, `framegen.motion_version` /
-// `framegen.quality`, and are selectable from both areas. The rows are added by
-// PanelFrameGen_AddMotionRows(), whose bindings read and write PanelFrameGen.cpp's copy
-// of the settings and push to the renderer from there -- this file's `s_Settings` never
-// edits the `framegen` section. `Why:` EnqueueRoutedWrite() merges per SECTION, so a
-// second editor of one section would write its stale copy over the first one's edit.
-// With Frame generation off the renderer still runs the configured version for the blur
-// (EnsureReady() reads the same packed config), and the Status line below appends the
-// library's reason when V2 was refused and V1 runs instead.
+// THE INTERPOLATOR'S VERSION AND QUALITY (2026-10-22). Blur and Frame generation run on
+// ONE interpolator, whose Motion version (V1 / V2) and Quality are Frame generation's
+// `framegen.motion_version` / `framegen.quality`. This area has the "Use Frame generation's
+// settings" switch (`motion_blur.same_as_framegen`, default on) and its own pair of rows
+// (`motion_blur.motion_version` / `motion_blur.quality`). Switch on: the pair is greyed out
+// and DISPLAYS Frame generation's current values (read from the renderer's live config,
+// fghost::GetConfig(), so this panel never holds a copy of the `framegen` section), and the
+// blur follows Frame generation. Switch off: the blur's own pair is pushed with the blur
+// config and REPLACES Frame generation's whenever the blur is on (FrameGenHost.cpp's
+// RecordBaseLayer()). `Why not a second interpolator for the blur:` every shown frame IS a
+// blurred synth (one recordSynthBlur() per output, its sub-frames are what the blur
+// averages), so one output cannot be V2 for the generated frame and V1 for its blur; the
+// blur's choice simply applies to the whole picture while the blur is on, at no extra GPU
+// cost. The user, asking for the switch: "use same settings as frame gen ... and by default
+// it should be on. It should just disable the other two, like gray them out", and what
+// unticking does: "It should really just copy over the settings essentially. Like if
+// basically like when I have frame gen on v2 quality, then it should just set v2 and
+// quality for motion blur as well." Why the version is selectable here at all: "Make sure
+// that I can also select the v2 for the motion blur".
+// With Frame generation off the renderer still runs the configured pair for the blur, and
+// the Status line below appends the library's reason when V2 was refused and V1 runs.
 //
 // `Why this panel is thin:` the user's architecture rule -- "you're basically only
 // building the GUI in this chat and most of the stuff should go into the frame gen
@@ -37,7 +48,6 @@
 
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
-#include "PanelFrameGen.h"
 
 namespace gamescope
 {
@@ -52,6 +62,10 @@ namespace gamescope
 		// falls to the default the schema documents.
 		constexpr ui::Option kRelativeOptions[] = { { 0, "Shown frame" }, { 1, "Game frame" } };
 		constexpr ui::Option kWeightOptions[]   = { { 0, "Even" }, { 1, "Gaussian" } };
+		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" } };
+		constexpr const char *kQualityKeys[] = { "quality", "performance" };
+		constexpr const char *kMotionKeys[]  = { "v1", "v2" };
 		constexpr const char *kRelativeKeys[] = { "shown", "game" };
 		constexpr const char *kWeightKeys[]   = { "even", "gaussian" };
 
@@ -79,6 +93,9 @@ namespace gamescope
 			c.amountPercent = m.amount < 0 ? 0 : ( m.amount > 100 ? 100 : m.amount );
 			c.relative = IndexOf( m.relative, kRelativeKeys, 2, 0 ) == 1 ? fghost::BlurRel::Game : fghost::BlurRel::Shown;
 			c.weights = IndexOf( m.weights, kWeightKeys, 2, 1 ) == 0 ? fghost::BlurWeighting::Even : fghost::BlurWeighting::Gaussian;
+			c.useOwnInterp = !m.same_as_framegen;
+			c.motion = IndexOf( m.motion_version, kMotionKeys, 2, 0 ) == 1 ? fghost::Motion::V2 : fghost::Motion::V1;
+			c.quality = IndexOf( m.quality, kQualityKeys, 2, 0 ) == 1 ? fghost::Quality::Performance : fghost::Quality::Quality;
 			return c;
 		}
 
@@ -113,6 +130,12 @@ namespace gamescope
 		{
 			EnsureConfigLoaded();
 			return s_Settings.motion_blur.enabled;
+		}
+
+		bool OwnInterpUsable()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.motion_blur.enabled && !s_Settings.motion_blur.same_as_framegen;
 		}
 
 		// ---- the Status line ----------------------------------------------------
@@ -251,7 +274,65 @@ namespace gamescope
 
 		a.Group( "Interpolation" );
 
-		PanelFrameGen_AddMotionRows( a, true );
+		a.Switch( "motion_blur.same_as_framegen", "Use Frame generation's settings",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.motion_blur.same_as_framegen; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.motion_blur.same_as_framegen = b; PersistAndPush(); } ) )
+			.Help( "On: the blur uses Frame generation's Motion version and Quality (shown greyed "
+			       "out below). Off: it uses the two below instead. Frame generation and Motion "
+			       "blur make the picture together with one motion estimate, so while Motion blur "
+			       "is on, its own two settings are used for every shown frame, the frames Frame "
+			       "generation makes included; that costs nothing extra." )
+			.Default( true )
+			.Keywords( "motion blur use same settings frame generation follow motion version quality v1 v2" )
+			.DisabledUnless( On, "motion blur is off" );
+
+		a.Choice( "motion_blur.quality", "Quality",
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					return s_Settings.motion_blur.same_as_framegen
+						? int( fghost::GetConfig().quality )
+						: IndexOf( s_Settings.motion_blur.quality, kQualityKeys, 2, 0 );
+				},
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kQualityOptions, std::size( kQualityOptions ) )
+			.Help( "Quality is the default look; Performance is cheaper on the GPU and a little "
+			       "less clean. Motion version V1: Performance estimates motion at a quarter "
+			       "resolution and can miss thin, fast detail (roughly 35-50% cheaper; 1440p 2x: "
+			       "0.50 -> 0.25 ms per game frame, RX 7900 XTX); switching pauses the picture for "
+			       "an instant. Motion version V2: Quality works out a motion value for every pixel "
+			       "and keeps the side of the picture that is still visible at edges, Performance "
+			       "is a simpler warp, a little less clean around moving edges (1080p 2x, RX 7900 "
+			       "XTX: V1 0.30, V2 Quality 0.24, V2 Performance 0.14 ms per game frame); "
+			       "switching does not interrupt the picture. Shown greyed out with Frame "
+			       "generation's value while \"Use Frame generation's settings\" is on." )
+			.Default( 0 )
+			.Keywords( "motion blur quality performance cost gpu motion estimation v2 mode" )
+			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
+
+		a.Choice( "motion_blur.motion_version", "Motion version",
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					return s_Settings.motion_blur.same_as_framegen
+						? int( fghost::GetConfig().motion )
+						: IndexOf( s_Settings.motion_blur.motion_version, kMotionKeys, 2, 0 );
+				},
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kMotionOptions, std::size( kMotionOptions ) )
+			.Help( "V2 is a newer, experimental way of making the in-between frames the blur "
+			       "averages: it bends the picture along the motion and stretches it over gaps "
+			       "instead of falling back to the real frame spot by spot, and it is cheaper on "
+			       "the GPU. It works on normal 8-bit games only; HDR and 10-bit games, and GPUs "
+			       "without the shader features it needs, stay on V1 (the Status line says why). "
+			       "Switching shows real frames for an instant. Shown greyed out with Frame "
+			       "generation's value while \"Use Frame generation's settings\" is on." )
+			.Default( 0 )
+			.Keywords( "motion blur motion version v1 v2 morph interpolation algorithm experimental" )
+			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
 
 		a.Group( "Status" );
 

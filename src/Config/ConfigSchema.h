@@ -542,6 +542,12 @@ namespace gamescope::config
         std::string relative = "shown";
         // Sub-frame weights: "even" (box shutter) | "gaussian" (softer).
         std::string weights = "gaussian";
+        // "Use Frame generation's settings" (2026-10-22): on (default), the blur uses
+        // Frame generation's motion_version / quality; off, it uses its own two below.
+        // ADDITIVE: absent loads on / "v1" / "quality"; an unknown string keeps the default.
+        bool same_as_framegen = true;
+        std::string motion_version = "v1";
+        std::string quality = "quality";
     };
 
     // Game audio capture (2026-10-07, Audio/Capture.{h,cpp}): the per-profile switch for
