@@ -231,6 +231,9 @@ namespace gamescope::config
                 c.hide_animate_back = JGetBool( *pCross, "hide_animate_back", c.hide_animate_back );
                 c.hide_when_cursor_visible = JGetBool( *pCross, "hide_when_cursor_visible", c.hide_when_cursor_visible );
                 c.apply_scaling = JGetBool( *pCross, "apply_scaling", c.apply_scaling );
+                c.scale_from = JGetString( *pCross, "scale_from", c.scale_from ) == "custom" ? "custom" : "game";
+                c.scale_width = std::clamp( JGetInt( *pCross, "scale_width", c.scale_width ), 320, 7680 );
+                c.scale_height = std::clamp( JGetInt( *pCross, "scale_height", c.scale_height ), 200, 4320 );
             }
 
             if ( const nlohmann::json *pZoom = JGetObject( j, "zoom" ) )
@@ -767,6 +770,9 @@ namespace gamescope::config
             jCross[ "hide_animate_back" ] = c.hide_animate_back;
             jCross[ "hide_when_cursor_visible" ] = c.hide_when_cursor_visible;
             jCross[ "apply_scaling" ] = c.apply_scaling;
+            jCross[ "scale_from" ] = c.scale_from;
+            jCross[ "scale_width" ] = c.scale_width;
+            jCross[ "scale_height" ] = c.scale_height;
 
             const auto &z = s.zoom;
             nlohmann::json jZoom = nlohmann::json::object();

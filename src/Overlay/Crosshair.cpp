@@ -278,12 +278,76 @@ namespace gamescope
 			{ 1, "Focus" },
 			{ 2, "Shrink" },
 		};
+
+		// "Scale from" Choice: 0 = the game's own resolution, 1..N =
+		// crosshair::kScaleRefPresets[n - 1], kScaleCustom = any other size
+		// (Reference width/height). Stored as scale_from + scale_width/height;
+		// a custom size equal to a preset simply reads as that preset.
+		constexpr int kScaleCustom = 100;
+		constexpr size_t kNumScalePresets = std::size( crosshair::kScaleRefPresets );
+		// Built once: option labels must outlive the registry.
+		const ui::Option *ScaleFromOptions()
+		{
+			static std::string s_Labels[ kNumScalePresets ];
+			static ui::Option s_Options[ kNumScalePresets + 2 ];
+			if ( !s_Options[0].pszLabel )
+			{
+				s_Options[0] = { 0, "Game resolution" };
+				for ( size_t i = 0; i < kNumScalePresets; i++ )
+				{
+					s_Labels[i] = std::to_string( crosshair::kScaleRefPresets[i].nWidth ) + " x " + std::to_string( crosshair::kScaleRefPresets[i].nHeight );
+					s_Options[i + 1] = { (int)i + 1, s_Labels[i].c_str() };
+				}
+				s_Options[kNumScalePresets + 1] = { kScaleCustom, "Custom" };
+			}
+			return s_Options;
+		}
+		int ScaleFromToInt( const config::CrosshairSettings &c )
+		{
+			if ( c.scale_from != "custom" )
+				return 0;
+			for ( size_t i = 0; i < kNumScalePresets; i++ )
+				if ( crosshair::kScaleRefPresets[i].nWidth == c.scale_width && crosshair::kScaleRefPresets[i].nHeight == c.scale_height )
+					return (int)i + 1;
+			return kScaleCustom;
+		}
+		void ScaleFromSet( config::CrosshairSettings &c, int n )
+		{
+			if ( n == 0 )
+			{
+				c.scale_from = "game";
+			}
+			else if ( n >= 1 && n <= (int)kNumScalePresets )
+			{
+				c.scale_from = "custom";
+				c.scale_width = crosshair::kScaleRefPresets[n - 1].nWidth;
+				c.scale_height = crosshair::kScaleRefPresets[n - 1].nHeight;
+			}
+			else if ( c.scale_from != "custom" )
+			{
+				// Custom, coming from Game resolution: start at the size the
+				// game is at now, when it has one.
+				c.scale_from = "custom";
+				if ( g_uBaseLayerSourceWidth > 0 && g_uBaseLayerSourceHeight > 0 )
+				{
+					c.scale_width = crosshair::ClampScaleRefW( (int)g_uBaseLayerSourceWidth );
+					c.scale_height = crosshair::ClampScaleRefH( (int)g_uBaseLayerSourceHeight );
+				}
+			}
+		}
 	}
 
 	bool Crosshair_IsEnabled()
 	{
 		EnsureConfigLoaded();
 		return s_Settings.crosshair.enabled;
+	}
+
+	crosshair::ScaleRef Crosshair_ScaleReference( uint32_t uGameW, uint32_t uGameH )
+	{
+		EnsureConfigLoaded();
+		const config::CrosshairSettings &c = s_Settings.crosshair;
+		return crosshair::ResolveScaleRef( c.scale_from == "custom", c.scale_width, c.scale_height, uGameW, uGameH );
 	}
 
 	void Crosshair_NotifyRightButton( bool bPressed )
@@ -629,7 +693,7 @@ namespace gamescope
 		// Line, Auto-hide, Dot, Scaling -- an order chosen by hand-simulating
 		// the packer against each group's row count (Crosshair 1, Outline 4,
 		// Line 6, Auto-hide 5 (2026-09-28: "Hide when cursor visible" added
-		// a fifth row), Dot 4, Scaling 1 rows; a Composite colour row
+		// a fifth row), Dot 4, Scaling 5 rows since 2026-10-22 (Apply scaling, Scale from, two steppers, a button); a Composite colour row
 		// counts as 2) so it lands Crosshair/Line/Dot in column 0 and
 		// Outline/Auto-hide/Scaling in column 1, each in the requested
 		// top-to-bottom order. This is fragile to future row-count changes
@@ -841,6 +905,57 @@ namespace gamescope
 			.Default( S{}.apply_scaling )
 			.Keywords( "scaling stretch aspect ratio 4:3 game pixels resolution" )
 			.DisabledUnless( On, kOffReason );
+
+		// Scale from: the resolution Apply scaling treats as 1:1. The default
+		// (the game's own) is the old behaviour; a fixed one keeps the
+		// crosshair looking the same when the game's resolution changes.
+		auto ScaleOn = []{ EnsureConfigLoaded(); return s_Settings.crosshair.enabled && s_Settings.crosshair.apply_scaling; };
+		auto ScaleCustomOn = []{ EnsureConfigLoaded(); return s_Settings.crosshair.enabled && s_Settings.crosshair.apply_scaling && s_Settings.crosshair.scale_from == "custom"; };
+		constexpr const char *kScaleOffReason = "Apply scaling is off";
+		constexpr const char *kScaleNotCustomReason = "turn on Apply scaling and pick a size in Scale from";
+
+		a.Choice( "crosshair.scale_from", "Scale from",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return ScaleFromToInt( s_Settings.crosshair ); },
+				[]( int n ) { EnsureConfigLoaded(); ScaleFromSet( s_Settings.crosshair, n ); PersistAndRepaint(); } ),
+			ScaleFromOptions(), kNumScalePresets + 2 )
+			.Dropdown()
+			.Help( "The resolution the sizes above are measured in. Game resolution follows whatever "
+			       "the game runs at. Pick a fixed one -- the resolution you tuned the crosshair at -- "
+			       "and it keeps looking exactly the same when the game's resolution changes." )
+			.Default( 0 )
+			.Keywords( "scale from reference resolution custom stretched 4:3 1280x960 1440x1080 cs2 fixed" )
+			.DisabledUnless( ScaleOn, kScaleOffReason );
+
+		a.Stepper( "crosshair.scale_width", "Reference width", CROSSHAIR_BIND( int, scale_width ) )
+			.Help( "Width of the resolution to scale from, in pixels." )
+			.Range( (float)crosshair::kScaleRefMinW, (float)crosshair::kScaleRefMaxW ).Step( 1.0f ).Unit( "px" )
+			.Default( S{}.scale_width )
+			.Keywords( "scale from reference width custom pixels" )
+			.DisabledUnless( ScaleCustomOn, kScaleNotCustomReason );
+
+		a.Stepper( "crosshair.scale_height", "Reference height", CROSSHAIR_BIND( int, scale_height ) )
+			.Help( "Height of the resolution to scale from, in pixels." )
+			.Range( (float)crosshair::kScaleRefMinH, (float)crosshair::kScaleRefMaxH ).Step( 1.0f ).Unit( "px" )
+			.Default( S{}.scale_height )
+			.Keywords( "scale from reference height custom pixels" )
+			.DisabledUnless( ScaleCustomOn, kScaleNotCustomReason );
+
+		a.Action( "crosshair.scale_use_game", "Use current game resolution", "use", []
+		{
+			EnsureConfigLoaded();
+			if ( g_uBaseLayerSourceWidth == 0 || g_uBaseLayerSourceHeight == 0 )
+				return;
+			auto &c = s_Settings.crosshair;
+			c.scale_from = "custom";
+			c.scale_width = crosshair::ClampScaleRefW( (int)g_uBaseLayerSourceWidth );
+			c.scale_height = crosshair::ClampScaleRefH( (int)g_uBaseLayerSourceHeight );
+			PersistAndRepaint();
+		} )
+			.Help( "Copies the resolution the game runs at right now into Scale from, so you can "
+			       "tune the crosshair at it and then change the game's resolution." )
+			.Keywords( "scale from use current game resolution copy reference" )
+			.DisabledUnless( ScaleOn, kScaleOffReason );
 
 		#undef CROSSHAIR_BIND
 	}

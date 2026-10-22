@@ -347,6 +347,15 @@ namespace gamescope::config
         // horizontally stretched crosshair, the way a stretched in-game
         // one looks.
         bool apply_scaling = false;
+
+        // What Apply Scaling measures "game pixels" against (2026-10-22): "game" =
+        // the game's own committed resolution (the default, today's behaviour),
+        // "custom" = scale_width x scale_height, so changing the game's resolution
+        // leaves the on-screen crosshair unchanged. ADDITIVE: absent = "game".
+        // Width/height are clamped on load (CrosshairMath.h kScaleRef*).
+        std::string scale_from = "game"; // game | custom
+        int scale_width = 1920;
+        int scale_height = 1080;
     };
 
     // The zoom (2026-09-14, this fork's own addition -- see

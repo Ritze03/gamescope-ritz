@@ -1823,15 +1823,18 @@ namespace gamescope
 				const float flOnScreenH = (float)base.tex->height() / base.scale.y;
 				frame.flCenterX = -base.offset.x + flOnScreenW * 0.5f;
 				frame.flCenterY = -base.offset.y + flOnScreenH * 0.5f;
-				if ( g_uBaseLayerSourceWidth > 0 && g_uBaseLayerSourceHeight > 0 )
+				// The reference is the game's own buffer size, or the
+				// crosshair's "Scale from" size (Crosshair_ScaleReference).
+				const crosshair::ScaleRef ref = Crosshair_ScaleReference( g_uBaseLayerSourceWidth, g_uBaseLayerSourceHeight );
+				if ( ref.uWidth > 0 && ref.uHeight > 0 )
 				{
-					frame.flGamePixelScaleX = flOnScreenW / (float)g_uBaseLayerSourceWidth;
-					frame.flGamePixelScaleY = flOnScreenH / (float)g_uBaseLayerSourceHeight;
+					frame.flGamePixelScaleX = crosshair::RefPixelScale( flOnScreenW, ref.uWidth );
+					frame.flGamePixelScaleY = crosshair::RefPixelScale( flOnScreenH, ref.uHeight );
 					// Apply Scaling's raster path draws at this size and
 					// positions its quad from the centre + this size + the
 					// scale above (crosshair::ScaledQuad).
-					frame.uGameWidth = g_uBaseLayerSourceWidth;
-					frame.uGameHeight = g_uBaseLayerSourceHeight;
+					frame.uGameWidth = ref.uWidth;
+					frame.uGameHeight = ref.uHeight;
 				}
 			}
 		}

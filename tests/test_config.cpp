@@ -1466,6 +1466,9 @@ namespace
         c.hide_animate_back = false;
         c.hide_when_cursor_visible = true;
         c.apply_scaling = true;
+        c.scale_from = "custom";
+        c.scale_width = 1440;
+        c.scale_height = 1080;
         return c;
     }
 
@@ -1492,6 +1495,9 @@ namespace
         REQUIRE( a.hide_animate_back == b.hide_animate_back );
         REQUIRE( a.hide_when_cursor_visible == b.hide_when_cursor_visible );
         REQUIRE( a.apply_scaling == b.apply_scaling );
+        REQUIRE( a.scale_from == b.scale_from );
+        REQUIRE( a.scale_width == b.scale_width );
+        REQUIRE( a.scale_height == b.scale_height );
     }
 }
 
@@ -1547,6 +1553,30 @@ TEST_CASE( "crosshair.hide_when_cursor_visible defaults to off and round-trips i
     loaded = LoadSections();
     REQUIRE( loaded.crosshair.hide_when_cursor_visible == false );
     REQUIRE( loaded.crosshair.hide_on_right_click == true );
+}
+
+// "Scale from" (2026-10-22, superdoc/features/crosshair.md): additive keys, so
+// an older file resolves to the game's own resolution; out-of-range sizes
+// clamp and an unknown scale_from falls back to "game".
+TEST_CASE( "crosshair.scale_from defaults to the game's resolution and clamps on load", "[config]" )
+{
+    REQUIRE( CrosshairSettings{}.scale_from == "game" );
+
+    // The serialiser writes values raw, so out-of-range ones reach the loader.
+    TempConfigHome home;
+    Settings s{};
+    s.crosshair.scale_from = "custom";
+    s.crosshair.scale_width = 99999;
+    s.crosshair.scale_height = 1;
+    REQUIRE( SaveSections( s ) );
+    Settings loaded = LoadSections();
+    REQUIRE( loaded.crosshair.scale_from == "custom" );
+    REQUIRE( loaded.crosshair.scale_width == 7680 );
+    REQUIRE( loaded.crosshair.scale_height == 200 );
+
+    s.crosshair.scale_from = "bogus";
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().crosshair.scale_from == "game" );
 }
 
 // ---------------------------------------------------------------------

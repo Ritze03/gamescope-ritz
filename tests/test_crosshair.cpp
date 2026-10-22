@@ -995,3 +995,69 @@ TEST_CASE( "ResampleToOutput at 2x: a 1 px line is two rows at 75 % and two at 2
 	const Shape s3 = Build( off, gf, {} );
 	REQUIRE( ResampleToOutput( {}, RasterRect( s3 ), 640, 360, fr ).Empty() );
 }
+
+// "Scale from" (2026-10-22): the reference resolution Apply Scaling divides
+// the game's on-screen size by.
+TEST_CASE( "ResolveScaleRef: Game mode is the game's own size, Custom is the clamped custom size", "[crosshair]" )
+{
+	// Game mode (default): byte-identical to the old behaviour -- the game's size, whatever the custom fields hold.
+	const ScaleRef game = ResolveScaleRef( false, 1440, 1080, 1280, 960 );
+	REQUIRE( game.uWidth == 1280 );
+	REQUIRE( game.uHeight == 960 );
+	// No frame committed yet: unknown stays unknown (caller falls back to the pixel path at 1:1).
+	REQUIRE( ResolveScaleRef( false, 1440, 1080, 0, 0 ).uWidth == 0 );
+
+	// Custom: the custom size, even before the game has committed anything.
+	const ScaleRef custom = ResolveScaleRef( true, 1280, 960, 1920, 1080 );
+	REQUIRE( custom.uWidth == 1280 );
+	REQUIRE( custom.uHeight == 960 );
+	REQUIRE( ResolveScaleRef( true, 1280, 960, 0, 0 ).uHeight == 960 );
+
+	// Bounds.
+	REQUIRE( ResolveScaleRef( true, 1, 1, 0, 0 ).uWidth == (uint32_t)kScaleRefMinW );
+	REQUIRE( ResolveScaleRef( true, 1, 1, 0, 0 ).uHeight == (uint32_t)kScaleRefMinH );
+	REQUIRE( ResolveScaleRef( true, 99999, 99999, 0, 0 ).uWidth == (uint32_t)kScaleRefMaxW );
+	REQUIRE( ResolveScaleRef( true, 99999, 99999, 0, 0 ).uHeight == (uint32_t)kScaleRefMaxH );
+}
+
+TEST_CASE( "RefPixelScale: Game mode follows the game's resolution, Custom does not", "[crosshair]" )
+{
+	// 1280x960 stretched to the whole 1920x1080 output.
+	const float onW = 1920.0f, onH = 1080.0f;
+	auto Scale = [&]( bool bCustom, uint32_t gw, uint32_t gh, float *py )
+	{
+		const ScaleRef r = ResolveScaleRef( bCustom, 1280, 960, gw, gh );
+		*py = RefPixelScale( onH, r.uHeight );
+		return RefPixelScale( onW, r.uWidth );
+	};
+	float sy = 0;
+	REQUIRE_THAT( Scale( true, 1280, 960, &sy ), WithinAbs( 1.5, 1e-6 ) );
+	REQUIRE_THAT( sy, WithinAbs( 1.125, 1e-6 ) );
+
+	// The game switches to 1440x1080 (same output stretch): Custom is unchanged ...
+	float sy2 = 0;
+	REQUIRE_THAT( Scale( true, 1440, 1080, &sy2 ), WithinAbs( 1.5, 1e-6 ) );
+	REQUIRE_THAT( sy2, WithinAbs( 1.125, 1e-6 ) );
+	// ... where Game mode follows the new resolution (1920/1440, 1080/1080).
+	float sy3 = 0;
+	REQUIRE_THAT( Scale( false, 1440, 1080, &sy3 ), WithinAbs( 1920.0 / 1440.0, 1e-6 ) );
+	REQUIRE_THAT( sy3, WithinAbs( 1.0, 1e-6 ) );
+
+	// Identity: native resolution, Game mode, scale exactly 1.
+	REQUIRE( RefPixelScale( 1920.0f, 1920 ) == 1.0f );
+	// Unknown reference: 1.
+	REQUIRE( RefPixelScale( 1920.0f, 0 ) == 1.0f );
+}
+
+TEST_CASE( "scale-from presets are inside the bounds and unique", "[crosshair]" )
+{
+	std::set<std::pair<int, int>> seen;
+	for ( const ScaleRefPreset &p : kScaleRefPresets )
+	{
+		REQUIRE( ClampScaleRefW( p.nWidth ) == p.nWidth );
+		REQUIRE( ClampScaleRefH( p.nHeight ) == p.nHeight );
+		REQUIRE( seen.insert( { p.nWidth, p.nHeight } ).second );
+	}
+	REQUIRE( seen.count( { 1280, 960 } ) == 1 );
+	REQUIRE( seen.count( { 1440, 1080 } ) == 1 );
+}

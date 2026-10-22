@@ -24,6 +24,8 @@
 
 #include <cstdint>
 
+#include "CrosshairMath.h"
+
 struct ImDrawList;
 class CVulkanCmdBuffer;
 class CVulkanTexture;
@@ -67,6 +69,11 @@ namespace gamescope
 	// this feature's own config cache; safe from the steamcompmgr thread
 	// and from the settings UI (which draws on that same thread).
 	bool Crosshair_IsEnabled();
+
+	// The size Apply Scaling measures game pixels against: the game's own
+	// committed size (passed in; 0x0 = unknown) unless "Scale from" is set
+	// to a custom size, which wins whether or not the game has committed.
+	crosshair::ScaleRef Crosshair_ScaleReference( uint32_t uGameW, uint32_t uGameH );
 
 	// Draws the crosshair for this frame into `pDrawList` (the HUD's
 	// background draw list). Returns true while the right-click hide

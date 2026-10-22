@@ -880,4 +880,50 @@ namespace gamescope::crosshair
 		}
 		return out;
 	}
+
+	// ------------------------------------------------------------------
+	// Apply Scaling's reference resolution ("Scale from").
+	//
+	// Apply Scaling measures sizes in "game pixels" and stretches them by
+	// (layer 0's on-screen size) / (the reference size). By default the
+	// reference IS the game's committed buffer size (today's behaviour,
+	// byte for byte). With "Scale from" set to a custom size it is that
+	// size instead, so a player who changes the game's resolution keeps
+	// the on-screen crosshair exactly as it was tuned: the numerator
+	// (what the game covers on screen) is the same, the denominator is
+	// pinned. The reference also replaces the game's size as the raster's
+	// frame (GameFrame / ResampleToOutput take it), so both rendering
+	// paths treat a custom reference as a game of exactly that size.
+	// ------------------------------------------------------------------
+	constexpr int kScaleRefMinW = 320, kScaleRefMaxW = 7680;
+	constexpr int kScaleRefMinH = 200, kScaleRefMaxH = 4320;
+
+	inline int ClampScaleRefW( int n ) { return std::clamp( n, kScaleRefMinW, kScaleRefMaxW ); }
+	inline int ClampScaleRefH( int n ) { return std::clamp( n, kScaleRefMinH, kScaleRefMaxH ); }
+
+	struct ScaleRef { uint32_t uWidth = 0, uHeight = 0; };
+
+	// The reference size: the clamped custom size when `bCustom`, else the
+	// game's own (0x0 when unknown -- the caller then has no scale and
+	// falls back to the pixel path at 1:1).
+	inline ScaleRef ResolveScaleRef( bool bCustom, int nCustomW, int nCustomH, uint32_t uGameW, uint32_t uGameH )
+	{
+		if ( bCustom )
+			return { (uint32_t)ClampScaleRefW( nCustomW ), (uint32_t)ClampScaleRefH( nCustomH ) };
+		return { uGameW, uGameH };
+	}
+
+	// Output pixels per reference pixel, one axis. 1 when either is unknown.
+	inline float RefPixelScale( float flOnScreen, uint32_t uRef )
+	{
+		return uRef > 0 ? flOnScreen / (float)uRef : 1.0f;
+	}
+
+	// Common stretched / competitive sizes for the "Scale from" dropdown.
+	struct ScaleRefPreset { int nWidth, nHeight; };
+	inline constexpr ScaleRefPreset kScaleRefPresets[] = {
+		{ 1280, 960 }, { 1440, 1080 }, { 1024, 768 }, { 1280, 1024 }, { 1680, 1050 },
+		{ 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 },
+		{ 3440, 1440 }, { 3840, 2160 },
+	};
 }

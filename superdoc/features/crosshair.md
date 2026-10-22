@@ -68,6 +68,9 @@ dot is off", and so on).
 | | Right | Animate back | `hide_animate_back` | Default **on** (2026-09-06, request #13). Release plays the hide backwards from wherever it was; off restores instantly. See [Auto-hide](#auto-hide-while-holding-right-click). |
 | | Right | Hide when cursor visible | `hide_when_cursor_visible` | Default **off** (2026-09-28). A separate switch from "Hide while holding right-click" above — both may apply at once. See [Hide when cursor visible](#hide-when-cursor-visible). |
 | Scaling | Right | Apply scaling | `apply_scaling` | see [Two rendering paths](#two-rendering-paths) |
+| Scaling | Right | Scale from (dropdown) | `scale_from` + `scale_width`/`scale_height` | see [Scale from](#scale-from-a-fixed-reference-resolution-2026-10-22) |
+| Scaling | Right | Reference width / height (steppers) | `scale_width`, `scale_height` | 320-7680 x 200-4320; enabled once a size is picked |
+| Scaling | Right | Use current game resolution (button) | `scale_from`, `scale_width`, `scale_height` | copies the game's size into Scale from |
 
 Pixel sizes are **ints**, not floats: the whole point of the 1px mode is
 that "1" is exactly one pixel, so a fractional size has no meaning here.
@@ -159,6 +162,56 @@ already be gamescope's pre-emptively upscaled copy
 (`ShouldPreemptivelyUpscale()`) whose size says nothing about the game's.
 `CrosshairFrame::uGameWidth/Height` carries it to the draw; 0 (no base
 plane yet) makes Apply Scaling fall back to the pixel path at scale 1.
+
+### Scale from: a fixed reference resolution (2026-10-22)
+
+Apply Scaling divides layer 0's on-screen size by a **reference
+resolution**. The default, `scale_from = "game"` ("Game resolution"), uses
+the game's own committed size (`g_uBaseLayerSourceWidth/Height`) exactly as
+above — byte-identical to before. `scale_from = "custom"` uses
+`scale_width` x `scale_height` instead: per-axis scale = on-screen size ÷
+reference. Tuned at 1280x960 stretched to 1920x1080 the scale is 1.5 x
+1.125; with reference 1280x960 it stays 1.5 x 1.125 when the game moves to
+1440x1080, so the crosshair looks the same.
+
+- **Rows** (Scaling group, dimmed unless Apply scaling is on): a **Scale
+  from** dropdown — Game resolution, 12 common sizes (1280x960, 1440x1080,
+  1024x768, 1280x1024, 1680x1050, 1280x720, 1600x900, 1920x1080, 1920x1200,
+  2560x1440, 3440x1440, 3840x2160; `crosshair::kScaleRefPresets`), Custom —
+  then **Reference width / height** steppers (typed entry or buttons,
+  clamped 320-7680 x 200-4320) and a **Use current game resolution**
+  button. A preset pick writes `scale_from = "custom"` plus its size; a
+  custom size equal to a preset reads as that preset. Picking Custom from
+  Game resolution seeds the steppers with the game's current size. The
+  steppers are enabled for any non-Game choice (not only literal Custom):
+  editing one off-preset just flips the dropdown to Custom.
+- **Config** (per profile, `crosshair` section, additive, no schema bump):
+  `scale_from` `"game"|"custom"` (default `"game"`, unknown reads as
+  game), `scale_width` / `scale_height` (default 1920 / 1080, clamped on
+  load).
+- **Math** (`CrosshairMath.h`): `ResolveScaleRef()` picks the reference,
+  `RefPixelScale()` divides. `Crosshair_ScaleReference()` (`Crosshair.cpp`)
+  feeds `ResolveCrosshairFrame()`.
+- **Both rendering paths** take the reference as "the game's size": it is
+  `CrosshairFrame::uGameWidth/Height`, so the raster is built in a frame of
+  exactly that size (same parity snapping, same bilinear stretch, no new
+  blur) and the pixel-path fallback uses the same scale. A custom
+  reference therefore renders exactly like a game that really ran at that
+  resolution.
+- **Fallback:** with no base plane there is still no on-screen size, so
+  the 0 rule stays (pixel path at 1:1). What changes: a custom reference
+  no longer needs the game to have committed a frame (its size is not
+  consulted), so it applies as soon as a base plane exists.
+
+*Why:* the user: *"We already have the like scale crosshair thingy which
+works really well but you should add one more thing to it and that's uh
+like drop down or some way of entering custom resolutions that it should be
+scaled from right now it just takes the game's resolution but there should
+be also an option to enter custom resolutions just so the user can switch
+in between resolutions and still have his crosshair look exactly the
+same."* Stored as a string + two ints (not one packed value) so a preset,
+a custom size and "follow the game" are all one inherited/overridable
+profile value each.
 
 ### The identity invariant (2026-09-07 bug fix)
 
