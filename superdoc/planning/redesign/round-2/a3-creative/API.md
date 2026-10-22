@@ -245,29 +245,29 @@ is no modal to build, because there are no modals.
 ### 3.5 An entire new section
 
 ```cpp
-// src/Overlay/UI/Sections/Lsfg.cpp — a whole feature area. Zero UI code.
-void gamescope::ui::RegisterLsfgSection( Registry &reg )
+// src/Overlay/UI/Sections/ExtFg.cpp — a whole feature area. Zero UI code.
+void gamescope::ui::RegisterExtFgSection( Registry &reg )
 {
-    auto &sec = reg.Section( "lsfg", "Frame Gen", Icon::Performance )
-        .Keywords( "lsfg lossless fg interpolation smoothing frame generation" )
-        .AvailableWhen( []{ return lsfg::IsAvailable(); } );
+    auto &sec = reg.Section( "extfg", "Frame Gen", Icon::Performance )
+        .Keywords( "extfg lossless fg interpolation smoothing frame generation" )
+        .AvailableWhen( []{ return extfg::IsAvailable(); } );
 
     sec.Group( "Generation" );
-    sec.Bool( "lsfg.enabled", "Frame Generation", &g_lsfg.bEnabled )
+    sec.Bool( "extfg.enabled", "Frame Generation", &g_extfg.bEnabled )
        .Default( false )
        .Help( "Generates intermediate frames between rendered ones. Adds latency." )
        .Keywords( "enable on off frame generation" );
 
     static constexpr Option kMult[] = { {"2x"}, {"3x"}, {"4x"} };
-    sec.Choice( "lsfg.multiplier", "Multiplier", &g_lsfg.nMultiplier, kMult )
+    sec.Choice( "extfg.multiplier", "Multiplier", &g_extfg.nMultiplier, kMult )
        .Default( 0 )
        .Help( "How many frames are produced per rendered frame." )
        .Keywords( "multiplier 2x 3x 4x how many" )
-       .EnabledWhen( []{ return g_lsfg.bEnabled; }, "Frame Generation is off." );
+       .EnabledWhen( []{ return g_extfg.bEnabled; }, "Frame Generation is off." );
 
     sec.Group( "Diagnostics" );
-    sec.Readout( "lsfg.generated", "Generated frames",
-                 []{ return std::format( "{} / s", lsfg::GeneratedPerSec() ); }, Status::Ok )
+    sec.Readout( "extfg.generated", "Generated frames",
+                 []{ return std::format( "{} / s", extfg::GeneratedPerSec() ); }, Status::Ok )
        .Help( "Live counters from the frame-generation pass." )
        .Keywords( "stats counters generated dropped" );
 }
@@ -275,7 +275,7 @@ void gamescope::ui::RegisterLsfgSection( Registry &reg )
 
 plus **one line** in `Sections.cpp`. The section now has a rail icon, a rail TOC with two
 group rows, a reel, blooms, palette coverage, reset, routing, and `gamescopectl ui set
-lsfg.multiplier 1` — because nobody drew it.
+extfg.multiplier 1` — because nobody drew it.
 
 Compare today: a new panel needs a `PanelId` enumerator, a `Chrome.h` icon, a dock button,
 a `BeginPanelWindow`/`EndPanelWindow` pair, a default size, a tiled position, a tab bar,

@@ -1,45 +1,43 @@
-# LSFG-VK Integration — Planning Scout
+# the external layer Integration — Planning Scout
 
 **Status: PLANNING ONLY.** No code, no prototypes, nothing installed. This document is
 the deliverable.
 
 ## Update 2026-09-27 — project moved, licence changed, feature dropped
 
-A fresh web scout (2026-09-27) found lsfg-vk has moved off GitHub entirely since this
+A fresh web scout (2026-09-27) found the external layer has moved off GitHub entirely since this
 doc's 2026-08-21 research, and the licence terms this whole doc's option (a) recommendation
 was weighed against have changed. **Net effect: option (a) — gamescope as config/launch UI
-only — is unaffected as an architecture (it never touched lsfg-vk's source or license), but
+only — is unaffected as an architecture (it never touched the external layer's source or license), but
 the project decided not to build it this round.**
 
-- **New home:** `github.com/PancakeTAS/lsfg-vk` now carries only a README pointing
+- **New home:** `github.com/PancakeTAS/the external layer` now carries only a README pointing
   elsewhere — the wiki this doc cited (`Quirks wiki`) is gone. The real project lives at
-  **`lsfg-vk.dev`** (docs at `lsfg-vk.dev/docs/`), with its own self-hosted git at
-  `git.lsfg-vk.dev` (an `lsfg-vk-archive` holds the old GitHub history; stable is tagged
-  `v1.0.0`, dev is `v2.0.0-dev`) and prebuilt binaries at `builds.lsfg-vk.dev`. The
+  **`[external project link removed]`** (docs at `[external project link removed]`), with its own self-hosted git at
+  `[external project link removed]` (an `external-layer-archive` holds the old GitHub history; stable is tagged
+  `v1.0.0`, dev is `v2.0.0-dev`) and prebuilt binaries at `[external project link removed]`. The
   Codeberg mirror some forks referenced has also been removed. Source:
-  [lsfg-vk.dev/blog/important-changes-to-lsfg-vk/](https://lsfg-vk.dev/blog/important-changes-to-lsfg-vk/).
-- **Licence changed GPLv3 → CC BY-NC-ND 4.0** (non-commercial, no-derivatives). This
-  **supersedes** every "LSFG-VK is GPLv3" statement in this doc (Section 1's "Licensing/
+  [external project link removed] **Licence changed GPLv3 → CC BY-NC-ND 4.0** (non-commercial, no-derivatives). This
+  **supersedes** every "the external layer is GPLv3" statement in this doc (Section 1's "Licensing/
   distribution" bullet, the Risks section's "License/distribution risk" bullet) — not
   because those statements were wrong when written (they were correct for the
   `8b0da266`/GPLv3-era snapshot), but because the current upstream is a fundamentally
   different licence. Practical consequence for gamescope-ritz: option (a)'s
-  "gamescope never touches lsfg-vk source, just writes its config/env vars" shape was
+  "gamescope never touches the external layer source, just writes its config/env vars" shape was
   already licence-agnostic and remains fine under CC BY-NC-ND 4.0; what closes is the
   sibling doc's escape hatch (a separately-installed component whose source a permissive
   licence made comfortable to depend on) — a **no-derivatives** licence forecloses even
-  wrapping/adapting lsfg-vk code in any form, not just vendoring it. See the parallel
-  update in `lsfg-in-tree-port.md`.
-- **Env vars renamed/expanded**, prefix now `LSFGVK_` (was `LSFG_*` in older forks/docs);
-  source: [lsfg-vk.dev/docs/configuration/environment-variables/](https://lsfg-vk.dev/docs/configuration/environment-variables/).
-  Startup-only: `DISABLE_LSFGVK`, `LSFGVK_CONFIG`, `LSFGVK_PROFILE`. Gated behind
-  `LSFGVK_ENV=1`: `LSFGVK_DLL_PATH`, `LSFGVK_NO_FP16`, `LSFGVK_LOG_LEVEL`,
-  `LSFGVK_LOG_FILE`, `LSFGVK_MULTIPLIER`, `LSFGVK_FLOW_SCALE`, `LSFGVK_PERFORMANCE_MODE`,
-  `LSFGVK_PACING_MODE`, `LSFGVK_OVERRIDE_PRESENT_MODE`,
-  `LSFGVK_PRESERVE_SWAPCHAIN_IMAGE_COUNT`. Section 7's field list (multiplier, flow
+  wrapping/adapting the external layer code in any form, not just vendoring it. See the parallel
+  update in `external-framegen-in-tree-port.md`.
+- **Env vars renamed/expanded**, prefix now `EXTLAYER_` (was `ExtFg_*` in older forks/docs);
+  source: [external project link removed]  Startup-only: `DISABLE_EXTLAYER`, `EXTLAYER_CONFIG`, `EXTLAYER_PROFILE`. Gated behind
+  `EXTLAYER_ENV=1`: `EXTLAYER_DLL_PATH`, `EXTLAYER_NO_FP16`, `EXTLAYER_LOG_LEVEL`,
+  `EXTLAYER_LOG_FILE`, `EXTLAYER_MULTIPLIER`, `EXTLAYER_FLOW_SCALE`, `EXTLAYER_PERFORMANCE_MODE`,
+  `EXTLAYER_PACING_MODE`, `EXTLAYER_OVERRIDE_PRESENT_MODE`,
+  `EXTLAYER_PRESERVE_SWAPCHAIN_IMAGE_COUNT`. Section 7's field list (multiplier, flow
   scale, performance mode, dll path, allow_fp16, gpu, pacing) is still the right shape
   but should be re-read against the current
-  [configuration-options](https://lsfg-vk.dev/docs/configuration/configuration-options/)
+  configuration-options
   page before implementing — it now documents `[global]` (dll, allow_fp16, log_level,
   log_file — none hot-reloadable) and `[[profile]]` (name, active_in, multiplier default
   `2`, flow_scale default `1.0`, performance_mode default `false` — these three
@@ -50,13 +48,13 @@ the project decided not to build it this round.**
   consistent with this doc's `develop`-branch snapshot, not a contradiction.
 - **Gamescope troubleshooting note still current**: with `pacing_mode = vsync` on
   Gamescope/Steam Deck, upstream still says to set `ENABLE_GAMESCOPE_WSI=0`
-  ([basic-troubleshooting-steps](https://lsfg-vk.dev/docs/troubleshooting/basic-troubleshooting-steps/)),
+  (basic-troubleshooting-steps),
   matching Section 4's "layer-ordering hazard" finding below. **New wrinkle**: since
   2026-09-22 this fork ships its own WSI layer under a different enable var,
   `ENABLE_GAMESCOPE_RITZ_WSI` (see `superdoc/meta/TERMINOLOGY.md`'s "WSI layer (FROG)"
   entry) — a game running under gamescope-ritz would need `ENABLE_GAMESCOPE_RITZ_WSI=0`
   or `GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` considered instead of (or alongside) the upstream
-  var, if this workaround is ever needed. Not verified against lsfg-vk itself — flagging
+  var, if this workaround is ever needed. Not verified against the external layer itself — flagging
   as a consideration for whoever revisits this, not a tested fix.
 - **Backend re-check (2026-09-27, this repo's current HEAD `b15fdd6`):**
   `UsesVulkanSwapchain()` is still `true` only for SDL
@@ -74,9 +72,9 @@ the project decided not to build it this round.**
   even the lighter "separately-installed component" escape hatch the sibling doc
   proposed, and (b) the user's own backend (Wayland, nested) has no swapchain for a
   layer to hook regardless of licence, the user said, verbatim: **"Just forget about the
-  lsfg-vk part, then."** No settings page, no layer, no GUI work was built or is
+  the external layer part, then."** No settings page, no layer, no GUI work was built or is
   planned this round. This doc and its sibling remain as reference if the topic comes
-  back — re-verify all URLs and the licence again before acting, since lsfg-vk.dev is a
+  back — re-verify all URLs and the licence again before acting, since [external project link removed] is a
   fast-moving, actively-developed project that already changed both its home and its
   licence once since this doc's original research.
 
@@ -84,39 +82,39 @@ the project decided not to build it this round.**
 
 **Not feasible as literally described ("hook gamescope instead of the game") on four
 of gamescope's five backends — feasible only in the narrow, currently-unsupported SDL
-windowed-nested case, and even there it buys little.** LSFG-VK hooks
+windowed-nested case, and even there it buys little.** the external layer hooks
 `vkCreateSwapchainKHR` / `vkQueuePresentKHR` on a real `VkSwapchainKHR`. Gamescope's
 compositor loop never creates one, except on the SDL backend
 (`src/Backends/SDLBackend.cpp:497-500`) — every other backend (DRM, Wayland, Headless,
 OpenVR) reports `UsesVulkanSwapchain() == false` and presents by DRM atomic KMS commit
 or dmabuf hand-off instead (`src/backend.h:365`; grep-verified per-backend below). DRM
 is gamescope's flagship "embedded mode" backend, so the mechanically simplest and
-highest-value target is exactly the one LSFG-VK cannot attach to.
+highest-value target is exactly the one the external layer cannot attach to.
 
 The workable path is not "hook the compositor" — it's **the cheap, already-proven
-option**: keep LSFG-VK where it already runs today (the game's process, on its real
+option**: keep the external layer where it already runs today (the game's process, on its real
 swapchain), and have gamescope only provide the config UI, env-var plumbing, and
 `Lossless.dll` path field, restarting the game session with the layer enabled. That is
-option (a) in Q5, and it's the only option with real-world precedent — LSFG-VK's own
+option (a) in Q5, and it's the only option with real-world precedent — the external layer's own
 docs already document running underneath gamescope this way, workarounds and all.
 
-## 1. What is LSFG-VK, mechanically?
+## 1. What is the external layer, mechanically?
 
-LSFG-VK ([PancakeTAS/lsfg-vk](https://github.com/PancakeTAS/lsfg-vk), GPLv3, checked
+the external layer (PancakeTAS/the external layer, GPLv3, checked
 2026-08-21 at commit `8b0da266`, default branch `develop`) is a Vulkan **device/instance
-layer** (`VK_LAYER_LSFGVK_frame_generation`) split into a thin layer shim
-(`lsfg-vk-layer/`) and a backend (`lsfg-vk-backend/`) that runs the actual frame-gen
+layer** (`VK_LAYER_external_framegen`) split into a thin layer shim
+(`external-layer-layer/`) and a backend (`external-layer-backend/`) that runs the actual frame-gen
 model.
 
-- **Hooked entry points** (`lsfg-vk-layer/src/entrypoint.cpp:470-475`, negotiated via
+- **Hooked entry points** (`external-layer-layer/src/entrypoint.cpp:470-475`, negotiated via
   the standard `vk_layer.h` `pfnGetPhysicalDeviceProcAddr`/layer-chaining protocol —
   structurally the same pattern gamescope's own WSI layer uses via vkroots):
   `vkCreateInstance`, `vkCreateDevice`, `vkCreateSwapchainKHR`, `vkQueuePresentKHR`,
   `vkDestroySwapchainKHR`. That's the whole hook surface — it does nothing to a game
   that never calls these five functions on a real swapchain.
 - **What it needs from the swapchain:** `layer::Root::createSwapchainContext()` /
-  `layer::Swapchain` (`lsfg-vk-layer/src/instance.hpp`,
-  `lsfg-vk-layer/src/swapchain.hpp`) is keyed on a live `VkSwapchainKHR` handle and
+  `layer::Swapchain` (`external-layer-layer/src/instance.hpp`,
+  `external-layer-layer/src/swapchain.hpp`) is keyed on a live `VkSwapchainKHR` handle and
   stores its images, format, colorspace, extent and present mode. `present()`
   intercepts a real `vkQueuePresentKHR(queue, swapchain, imageIdx, ...)` call, runs the
   frame-gen model against the acquired swapchain images, and presents the extra
@@ -126,40 +124,40 @@ model.
 - **Queue:** no explicit graphics-queue requirement was found in the backend source;
   it does image blits/compute dispatches and syncs via `VK_KHR_timeline_semaphore` +
   `VK_KHR_external_semaphore(_fd)`/`VK_KHR_external_memory(_fd)`, which it force-adds
-  in `lsfg-vk-layer/src/instance.cpp:90-121`. It rides whichever queue the swapchain's
+  in `external-layer-layer/src/instance.cpp:90-121`. It rides whichever queue the swapchain's
   present call uses — a graphics-capable present queue in the normal case, since that's
   what `vkQueuePresentKHR` requires by the Vulkan spec.
-- **`Lossless.dll`:** never executed as a Windows binary. `lsfg-vk-backend/src/extraction/
+- **`Lossless.dll`:** never executed as a Windows binary. `external-layer-backend/src/extraction/
   dll_reader.cpp` + `shader_registry.cpp` **parse the DLL as a data file** and extract
   the embedded frame-gen model shaders out of it directly on Linux — the DLL is a
   shader/model blob container, not code that runs. Users must own a legitimate
-  Lossless Scaling license (Steam, ~$7) and point LSFG-VK at their own copy
-  (`docs/Configuration.md`: global `dll` option / `LSFGVK_DLL_PATH` env var).
-- **Licensing/distribution:** LSFG-VK itself is GPLv3
+  Lossless Scaling license (Steam, ~$7) and point the external layer at their own copy
+  (`docs/Configuration.md`: global `dll` option / `EXTLAYER_DLL_PATH` env var).
+- **Licensing/distribution:** the external layer itself is GPLv3
   (`LICENSE.md`) *(superseded 2026-09-27 — see the Update section above: current
   upstream is CC BY-NC-ND 4.0, not GPLv3)*. `Lossless.dll` is proprietary, third-party,
   Steam-distributed —
   **gamescope-ritz must never bundle, download, or embed it**, must only accept a
   user-supplied filesystem path, and any UI copy should say so explicitly (mirrors
-  LSFG-VK's own README: "make sure you have Lossless Scaling downloaded on Steam"
+  the external layer's own README: "make sure you have Lossless Scaling downloaded on Steam"
   before installing).
 
-Sources: [README](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/README.md),
-[docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/docs/Configuration.md),
-[docs/Troubleshooting.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/docs/Troubleshooting.md),
-[lsfg-vk-layer/src/entrypoint.cpp](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/lsfg-vk-layer/src/entrypoint.cpp),
-[lsfg-vk-layer/src/instance.cpp](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/lsfg-vk-layer/src/instance.cpp),
-[lsfg-vk-layer/src/instance.hpp](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/lsfg-vk-layer/src/instance.hpp),
-[lsfg-vk-layer/src/swapchain.hpp](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/lsfg-vk-layer/src/swapchain.hpp),
-[lsfg-vk-layer/VkLayer_LSFGVK_frame_generation.json.in](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/lsfg-vk-layer/VkLayer_LSFGVK_frame_generation.json.in),
-[LICENSE.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/LICENSE.md),
+Sources: README,
+docs/Configuration.md,
+docs/Troubleshooting.md,
+external-layer-layer/src/entrypoint.cpp,
+external-layer-layer/src/instance.cpp,
+external-layer-layer/src/instance.hpp,
+external-layer-layer/src/swapchain.hpp,
+external-layer-layer/VkLayer_external_framegen.json.in,
+LICENSE.md,
 [Lossless Scaling on Steam](https://store.steampowered.com/app/993090/Lossless_Scaling/).
 
 ## 2. Can it be loaded into gamescope's process at all?
 
-Mechanically yes — `VK_INSTANCE_LAYERS=VK_LAYER_LSFGVK_frame_generation` (or the layer
-manifest's implicit `GLOBAL` activation, gated only by `DISABLE_LSFGVK`;
-`lsfg-vk-layer/VkLayer_LSFGVK_frame_generation.json.in`) would insert it into
+Mechanically yes — `VK_INSTANCE_LAYERS=VK_LAYER_external_framegen` (or the layer
+manifest's implicit `GLOBAL` activation, gated only by `DISABLE_EXTLAYER`;
+`external-layer-layer/VkLayer_external_framegen.json.in`) would insert it into
 gamescope's own Vulkan instance/device the same way any layer attaches to any Vulkan
 app. **But whether it does anything productive there depends entirely on whether
 gamescope creates a `VkSwapchainKHR` gamescope itself presents through — and on four of
@@ -176,12 +174,12 @@ five backends it does not:**
 The pure-virtual contract is `src/backend.h:365`. DRM presents via
 `drmModeAtomicCommit` directly (`src/Backends/DRMBackend.cpp:2245 CDRMConnector::Present`,
 `:4111`) — literal atomic KMS scanout, no swapchain object exists to hook. Wayland
-backend hands dmabufs straight to the host compositor. So: **LSFG-VK's entry-point set
+backend hands dmabufs straight to the host compositor. So: **the external layer's entry-point set
 (`vkCreateSwapchainKHR`/`vkQueuePresentKHR`) is simply never called by gamescope's own
 compositing code on DRM, Wayland, Headless, or OpenVR** — the layer would attach, sit
 idle, and do nothing, because gamescope never triggers its hooks. Only the SDL backend
 (nested-in-a-desktop-window mode) creates and presents through a real swapchain, so
-that is the only backend where "load LSFG-VK into gamescope's process" is even
+that is the only backend where "load the external layer into gamescope's process" is even
 mechanically possible — and SDL is the least-used, least-relevant-to-Steam-Deck/
 handheld backend in this project.
 
@@ -190,8 +188,8 @@ Gamescope's own compositing is also async-compute, not a graphics render loop
 `src/rendervulkan.cpp:355-393`, falls back to a combined graphics+compute "general"
 queue only when no compute-only family exists or a real surface needs present support)
 — this reinforces rather than causes the blocker: even where a swapchain exists (SDL),
-gamescope's dispatch model has no "render, then hand to LSFG-VK's present hook, then
-LSFG-VK generates and presents extra frames" render loop shape to intercept, because
+gamescope's dispatch model has no "render, then hand to the external layer's present hook, then
+the external layer generates and presents extra frames" render loop shape to intercept, because
 gamescope's own present call is a single `Present()` per real frame, not a
 frame-generation-aware loop.
 
@@ -229,52 +227,52 @@ environment) and is a no-op passthrough for anything that isn't a Vulkan app act
 running inside a gamescope session
 (`isRunningUnderGamescope()`, `layer/VkLayer_FROG_gamescope_wsi.cpp:105`) — including
 gamescope's own child compositor use of Vulkan, explicitly filtered by
-`isAppInfoGamescope` (`:98`). LSFG-VK's manifest, by contrast, is `type: GLOBAL` with
-only a `disable_environment` gate (`DISABLE_LSFGVK`,
-`VkLayer_LSFGVK_frame_generation.json.in`) — it is implicit-active-by-default for
+`isAppInfoGamescope` (`:98`). the external layer's manifest, by contrast, is `type: GLOBAL` with
+only a `disable_environment` gate (`DISABLE_EXTLAYER`,
+`VkLayer_external_framegen.json.in`) — it is implicit-active-by-default for
 *every* Vulkan process on the system unless disabled, and its own `active_in`
 profile-matching (by executable name) decides per-process whether it actually does
 anything. **This is already a real, documented interaction today, not a hypothetical:**
-LSFG-VK's own Quirks/Troubleshooting pages tell Steam Deck / gamescope users to pass
+the external layer's own Quirks/Troubleshooting pages tell Steam Deck / gamescope users to pass
 `ENABLE_GAMESCOPE_WSI=0 %command%` (disabling gamescope's WSI bypass in the *game's*
-process) because gamescope's compositor "does not respect the V-Sync setting" LSFG-VK's
+process) because gamescope's compositor "does not respect the V-Sync setting" the external layer's
 `pacing_mode = none` depends on, causing frame skipping — i.e. gamescope's compositor
-being in the presentation path (even without LSFG-VK loaded into gamescope itself)
-already interferes with LSFG-VK's pacing model. If a user enables LSFG-VK system-wide
-(implicit layer, no `DISABLE_LSFGVK`) while also running gamescope, LSFG-VK's hooks
+being in the presentation path (even without the external layer loaded into gamescope itself)
+already interferes with the external layer's pacing model. If a user enables the external layer system-wide
+(implicit layer, no `DISABLE_EXTLAYER`) while also running gamescope, the external layer's hooks
 land in **both** the game's process (where it can work, on a real swapchain, subject to
 the above) **and** gamescope's own process (where, per Q2, it attaches but finds no
 swapchain to act on except under SDL) — no crash expected, but wasted attach overhead
 and profile-matching confusion in the non-SDL case, plus the documented WSI-bypass
 pacing conflict in the case where it does something.
 
-Sources: [Quirks wiki](https://github.com/PancakeTAS/lsfg-vk/wiki/Quirks),
-[docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/docs/Configuration.md)
+Sources: Quirks wiki,
+docs/Configuration.md
 ("Pacing Modes" section), `superdoc/features/vk-wsi-layer.md`.
 
 ## 5. Realistic integration options, ranked
 
 **(a) Env-var launch integration — gamescope UI/config only, no engine changes.**
 Gamescope's General settings gains the `Lossless.dll` path, enable toggle, multiplier,
-etc.; on apply, gamescope writes/updates LSFG-VK's own `~/.config/lsfg-vk/conf.toml`
-(or sets `LSFGVK_*` env vars for the child game process) and the *game* launches with
+etc.; on apply, gamescope writes/updates the external layer's own `~/.config/external-layer/conf.toml`
+(or sets `EXTLAYER_*` env vars for the child game process) and the *game* launches with
 `ENABLE_GAMESCOPE_WSI` set appropriately per the Quirks-page guidance, and restarts the
 session if config changed while running. **Effort: low** (a settings panel + a TOML
 writer + documented env-var plumbing, no gamescope engine touched).
 **Invasiveness: none** — zero changes to `rendervulkan.cpp`/`steamcompmgr.cpp`.
-**Likelihood of working: high**, because this is exactly the LSFG-VK-under-gamescope
+**Likelihood of working: high**, because this is exactly the the external layer-under-gamescope
 setup its own docs already describe workarounds for — it's proven, if fiddly, to work
-today by hand. **What it breaks:** nothing in gamescope; inherits all of LSFG-VK's
+today by hand. **What it breaks:** nothing in gamescope; inherits all of the external layer's
 existing per-game compatibility caveats (Vulkan-only, 64-bit only, VRR conflicts,
 tearing-control conflicts) unchanged. **This does not "hook gamescope instead of the
-game"** — it's LSFG-VK exactly where it runs today, with gamescope only as the
+game"** — it's the external layer exactly where it runs today, with gamescope only as the
 configuration surface. Given Q1-Q4's findings, **this is the only option with a real
 chance of working across all backends, and should be the actual first (and possibly
 only) version.**
 
 **(b) Gamescope explicitly enables the layer at its own instance creation.**
 Only possible where `UsesVulkanSwapchain()` is true — SDL backend alone (Q2). Even
-there it buys nothing over (a): the game would still need its own path to LSFG-VK for
+there it buys nothing over (a): the game would still need its own path to the external layer for
 DRM/Wayland/Headless/OpenVR sessions anyway, so gamescope would end up shipping and
 maintaining two different attach paths for one feature. **Effort: medium**
 (instance-creation-time layer enablement, config plumbing into gamescope's own Vulkan
@@ -282,16 +280,16 @@ device setup in `rendervulkan.cpp`). **Invasiveness: medium** (touches gamescope
 Vulkan bring-up). **Likelihood of working: only on SDL**, i.e., not the backend anyone
 running gamescope in "real" (DRM/embedded) mode cares about. **What it breaks:**
 gamescope's own composite dispatch assumes a single present per vblank (Q3) — even on
-SDL, LSFG-VK's extra presents would fight `CVBlankTimer`'s pacing assumptions.
+SDL, the external layer's extra presents would fight `CVBlankTimer`'s pacing assumptions.
 **Not recommended.**
 
 **(c) Deep in-tree integration — call frame-gen directly in the composite path.**
 Reimplement (or link) the frame-gen model invocation inside `vulkan_composite()` or the
 `paint_all()`/`CVBlankTimer` loop itself, producing interpolated frames as new
-`FrameInfo_t` composites on gamescope's own schedule, independent of LSFG-VK's
+`FrameInfo_t` composites on gamescope's own schedule, independent of the external layer's
 swapchain-hook architecture entirely. **Effort: very high** — this is not "integrate
-LSFG-VK," it's "build a bespoke frame-generation pipeline inside gamescope, informed by
-LSFG-VK's shader-extraction technique," touching the vblank timer, the render loop,
+the external layer," it's "build a bespoke frame-generation pipeline inside gamescope, informed by
+the external layer's shader-extraction technique," touching the vblank timer, the render loop,
 DRM atomic-commit timing, and every backend's present path (Q3). **Invasiveness:
 maximal.** **Likelihood of working: unknown/research-grade** — no evidence anywhere
 that a compute-only, KMS-atomic-commit compositor has been made to run this kind of
@@ -305,7 +303,7 @@ insufficient and there's appetite for a multi-month R&D effort.**
 
 The user's stated rationale is **compatibility** — hooking the compositor instead of
 each game so per-game Vulkan-layer-injection quirks don't matter. That rationale
-does not survive the mechanics: **LSFG-VK's compatibility problems are not primarily
+does not survive the mechanics: **the external layer's compatibility problems are not primarily
 about which process it's injected into — they're about swapchain/present-mode
 semantics** (needs a real `VkSwapchainKHR`, fights VRR, fights tearing-control, needs a
 Vulkan game in the first place, doesn't work with OpenGL without Zink). Moving the
@@ -320,7 +318,7 @@ and `:2473-2476` (`paint_window(pFocus->overlayWindow, ...)`, `zpos = g_zposOver
 `:2230-2236`). A frame generator running after this composite step would interpolate
 motion *into* overlay/notification pixels that never actually moved between real
 frames — a visible smearing/ghosting artifact on exactly the UI elements a user is
-least likely to tolerate looking wrong. Per-game (in-process) LSFG-VK never sees this,
+least likely to tolerate looking wrong. Per-game (in-process) the external layer never sees this,
 because it hooks before any compositor overlay exists. **Net assessment: the
 compatibility argument for hooking gamescope instead of the game does not hold up —
 the actual attach point (a real swapchain) is the same requirement either way, and
@@ -331,12 +329,12 @@ avoids.**
 
 Grounded in `docs/Configuration.md`'s actual global/profile schema (not invented):
 
-- **`Lossless.dll` path** (global `dll` option / `LSFGVK_DLL_PATH`) — file picker,
+- **`Lossless.dll` path** (global `dll` option / `EXTLAYER_DLL_PATH`) — file picker,
   explicit "not bundled, point at your own Steam-purchased copy" copy in the UI.
 - **Enable/disable** — per-profile activation is really "is this game's executable
   name in `active_in`"; a simple per-session toggle in gamescope maps to writing/
-  removing a profile entry (or setting `DISABLE_LSFGVK`).
-- **Multiplier** (`multiplier`, default `2`) — LSFG-VK's real range is not fixed at
+  removing a profile entry (or setting `DISABLE_EXTLAYER`).
+- **Multiplier** (`multiplier`, default `2`) — the external layer's real range is not fixed at
   2/3/4x by the code; it's an integer multiplier limited in practice by the driver's
   max swapchain image count (`docs/Troubleshooting.md`/community docs note e.g.
   multiplier 4 alone can consume most of an 8-image swapchain budget) — the UI should
@@ -356,7 +354,7 @@ Grounded in `docs/Configuration.md`'s actual global/profile schema (not invented
   so the schema doesn't need to change when upstream adds more modes, but don't imply
   choice exists yet.
 
-Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da266/docs/Configuration.md).
+Source: docs/Configuration.md.
 
 ## Risks
 
@@ -364,7 +362,7 @@ Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da
   is foreclosed on DRM/Wayland/Headless/OpenVR by `UsesVulkanSwapchain() == false`
   (Q2). Any UI built around "gamescope intercepts frame-gen" language will describe a
   capability that doesn't exist on the backend most users run.
-- **Upstream churn:** LSFG-VK is pre-1.0-feeling and actively developed (v2.0 in
+- **Upstream churn:** the external layer is pre-1.0-feeling and actively developed (v2.0 in
   progress per its own README banner as of the commit checked); config schema
   (`conf.toml` keys, env var names) may change before any gamescope integration ships.
   Treat the Q7 field list as a snapshot, not a stable contract.
@@ -372,12 +370,12 @@ Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da
   `Lossless.dll` (even "for convenience") would violate its proprietary licensing and
   must be avoided; the UI must only ever accept a user-supplied local path. *(The
   GPLv3-specific framing this bullet originally had is superseded — see the Update
-  2026-09-27 section: lsfg-vk itself is CC BY-NC-ND 4.0 now, which raises the stakes
-  further since it forecloses any adaptation of lsfg-vk's own code, not just the
+  2026-09-27 section: the external layer itself is CC BY-NC-ND 4.0 now, which raises the stakes
+  further since it forecloses any adaptation of the external layer's own code, not just the
   `Lossless.dll` distribution question this bullet was already about.)*
 - **Latency risk:** frame generation adds a frame of delay by construction (Q3);
   gamescope is used heavily for latency-sensitive gaming (Steam Deck, VR via OpenVR
-  backend). Even the low-risk option (a) inherits this from LSFG-VK itself — it is not
+  backend). Even the low-risk option (a) inherits this from the external layer itself — it is not
   gamescope-specific, but it is a real user-facing regression to flag in any UI.
 - **Support-burden risk:** option (a) still means gamescope's UI is now responsible for
   correctly wiring a fast-moving third-party project's env vars/config file, with the
@@ -388,24 +386,24 @@ Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da
 
 1. **Given Q2/Q6, "hook gamescope instead of the game" is not achievable on the DRM
    backend and does not actually improve compatibility over per-game injection — is
-   option (a) (gamescope as config/launch UI only, LSFG-VK still runs in the game's
+   option (a) (gamescope as config/launch UI only, the external layer still runs in the game's
    process) an acceptable reframing of the goal, or does the feature only matter if it
    genuinely runs inside gamescope's own process?**
-2. Is the **SDL (nested) backend** — the only backend where loading LSFG-VK into
+2. Is the **SDL (nested) backend** — the only backend where loading the external layer into
    gamescope's own process is even mechanically possible — a use case worth building
    option (b) for, given it's not the primary Steam Deck/embedded-mode target?
-3. Should the General settings UI ship now with only what LSFG-VK v2.0 actually
+3. Should the General settings UI ship now with only what the external layer v2.0 actually
    supports today (Q7), knowing the schema will likely need a follow-up pass as
-   upstream evolves — or wait for LSFG-VK to stabilize past its README's own "upcoming
+   upstream evolves — or wait for the external layer to stabilize past its README's own "upcoming
    2.0" caveat first?
 4. Is a per-game `Lossless.dll` license/ownership disclaimer in the UI (confirming the
    user owns Lossless Scaling on Steam) sufficient, or does legal/distribution policy
    need a firmer gate (e.g. refusing to enable the feature until the configured path is
    verified to actually contain a plausible `Lossless.dll`)?
 5. Given the documented `ENABLE_GAMESCOPE_WSI=0` conflict between gamescope's own WSI
-   bypass layer and LSFG-VK's pacing model (Q4) — should enabling LSFG-VK for a game
+   bypass layer and the external layer's pacing model (Q4) — should enabling the external layer for a game
    automatically force-disable gamescope's WSI bypass for that game, trading away the
-   XWayland-bypass latency win to make LSFG-VK's pacing work?
+   XWayland-bypass latency win to make the external layer's pacing work?
 6. Is any appetite at all for option (c) (true in-tree frame generation), given it's
    R&D-grade and unproven even in principle for a compute-only, KMS-atomic-commit
    compositor — or should this scout's finding ("not worth pursuing now") close that
@@ -413,5 +411,5 @@ Source: [docs/Configuration.md](https://github.com/PancakeTAS/lsfg-vk/blob/8b0da
 
 ---
 *Checked 2026-08-21 against gamescope-ritz `master` (commit `fcc1341` and earlier) and
-LSFG-VK `develop` (commit `8b0da266`). LSFG-VK moves fast — re-verify swapchain/queue
+the external layer `develop` (commit `8b0da266`). the external layer moves fast — re-verify swapchain/queue
 assumptions against its current source before implementing option (a) or (b).*

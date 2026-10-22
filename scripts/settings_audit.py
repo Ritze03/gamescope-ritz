@@ -277,7 +277,6 @@ class Instance:
             env.pop(k, None)
         env["XDG_RUNTIME_DIR"] = self.rundir
         env["XDG_CONFIG_HOME"] = self.cfg.root
-        env["DISABLE_LSFG"] = "1"
         if self.sway_socket:
             env["WAYLAND_DISPLAY"] = self.sway_socket
         env.update(extra)

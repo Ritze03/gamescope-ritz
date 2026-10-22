@@ -15,11 +15,11 @@ Status tags: `DECIDED` (settled by the user) or `ASSUMED — overridable`
 
 ## Scope
 
-### 1. LSFG-VK integration is out of scope for this roadmap
+### 1. the external layer integration is out of scope for this roadmap
 **Status:** DECIDED
 
-**Why:** Two independent, both-real reasons. (a) Licensing: LSFG-VK
-([PancakeTAS/lsfg-vk](https://github.com/PancakeTAS/lsfg-vk)) is GPLv3;
+**Why:** Two independent, both-real reasons. (a) Licensing: the external layer
+(PancakeTAS/the external layer) is GPLv3;
 gamescope-ritz is BSD-2-Clause, and vendoring GPLv3 code would relicense the
 whole binary. (b) Technical: gamescope's presentation loop issues exactly one
 composite+present per vblank interval — `gamescope::CVBlankTimer`
@@ -30,11 +30,11 @@ presents per real frame, and there is no multi-present mechanism to hook into.
 This is multi-week unsolved R&D, unsolved upstream too.
 
 **Consequences:** The `Lossless.dll` path setting drops out of General
-settings for now. Both LSFG planning files (`lsfg-vk-integration.md`,
-`lsfg-in-tree-port.md`) stay on disk as preserved research for a future
+settings for now. Both ExtFg planning files (`external-framegen-layer-integration.md`,
+`external-framegen-in-tree-port.md`) stay on disk as preserved research for a future
 revisit — not deleted, not acted on.
 
-**Source:** `superdoc/planning/lsfg-vk-integration.md`;
+**Source:** `superdoc/planning/external-framegen-layer-integration.md`;
 `src/vblankmanager.hpp:27`, `src/steamcompmgr.cpp:2564`, `src/backend.h:205`.
 
 ---
@@ -297,8 +297,8 @@ code.
 texture, incremented one way or another each real frame, read back the
 following frame and displayed as a brightness ramp. Launched via
 `--reshade-effect` against `vkcube` (renamed to a binary name outside
-`lsfg-vk`'s per-game profile list — `vkcube`'s own default profile crashes
-the process even with `DISABLE_LSFGVK=1` set on the parent, since gamescope's
+the external layer's per-game profile list — `vkcube`'s own default profile crashes
+the process even with `DISABLE_EXTLAYER=1` set on the parent, since gamescope's
 child-spawn passes env through but the profile still matches on `exe` name).
 Screenshots taken via `gamescopectl screenshot` at timed intervals with a
 temporary `HOME`/`XDG_CONFIG_HOME`, decoded with Pillow.
@@ -395,7 +395,7 @@ used.
 played by a real `mpv` client through the full pipeline — Wayland → Xwayland
 → gamescope base layer → ReShade's 3-pass technique → FSR upscale →
 composite — at `-W 1920 -H 1080 -w 1280 -h 960 -S stretch --filter fsr
---sharpness 5`, `DISABLE_LSFG=1`, a temporary `XDG_CONFIG_HOME` pre-seeded
+--sharpness 5`, `DISABLE_EXTLAYER=1`, a temporary `XDG_CONFIG_HOME` pre-seeded
 with `adaptive_brightness.enabled`. This is a materially different (and
 more honest) test than the branch's own vkcube-plus-synthetic-pulse: real
 decode timing, real scene-cut jumps, real upscale/compositing in the loop.

@@ -81,7 +81,7 @@ Those are the only two titles with gamescope enabled at all. Both have the Steam
 disabled by the user's own config.
 
 **Second, weaker objection.** Because the overlay renders inside the game's own frames,
-it goes through `lsfg-vk` frame generation with the game — the same reason this fork
+it goes through the external layer frame generation with the game — the same reason this fork
 grew its own compositor-drawn crosshair (see `../features/crosshair.md`). Chat text
 being interpolated is less harmful than a smeared crosshair, but it is the same defect.
 

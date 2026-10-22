@@ -408,7 +408,7 @@ border `#36BDDD @ 70%`), then offset/meta lines Mono 10 @ 30%. Footer meta: "sam
   horizontal).
 - **`mix-blend-mode` additive/screen HUD text** — needs a blend-state `ImDrawCallback`;
   defer unless the backdrop "additive" mode ships.
-- **Mockup-only features** (Shaders A/B strip, LSFG panel, PipeWire audio panel contents,
+- **Mockup-only features** (Shaders A/B strip, ExtFg panel, PipeWire audio panel contents,
   adaptive brightness): styling harvested above; the panels themselves follow our feature
   set (DECISIONS §1, §14, §22–23).
 

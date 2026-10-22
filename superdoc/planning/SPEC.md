@@ -672,8 +672,8 @@ running, before trusting this order in production.
     "fade_ms": null                     // TBD: motion timing not specified by the design guide, see Feature 1
   }
   // No "audio" block: volume is a live control surface only, never persisted here
-  // (see Feature 5). No "general"/lossless_dll_path block: was LSFG-VK-only, and
-  // LSFG-VK is cut from this roadmap (see Deferred).
+  // (see Feature 5). No "general"/lossless_dll_path block: was the external layer-only, and
+  // the external layer is cut from this roadmap (see Deferred).
 }
 ```
 
@@ -968,7 +968,7 @@ is phrased as a concrete `vkcube` run.
   them, proving the passes compose rather than conflict.
   **Additional acceptance, real content (2026-08-22):** a real `mpv` client
   playing a genuinely time-varying (looping dark/bright) video through the full
-  pipeline (`--filter fsr --sharpness 5`, `DISABLE_LSFG=1`) showed the on/off
+  pipeline (`--filter fsr --sharpness 5`, `DISABLE_EXTLAYER=1`) showed the on/off
   luminance range compress roughly 3× (1.43× down to ~1.1× between dark- and
   bright-scene means) with the effect enabled, measured via `gamescopectl
   screenshot 3` (full composition, so it actually includes ReShade's output)
@@ -1051,10 +1051,10 @@ noted for each:
 
 ## Deferred
 
-- **LSFG-VK** — cut from this roadmap (decision). The research is preserved in
-  [`lsfg-vk-integration.md`](./lsfg-vk-integration.md) (why hooking gamescope's own
+- **the external layer** — cut from this roadmap (decision). The research is preserved in
+  [`external-framegen-layer-integration.md`](./external-framegen-layer-integration.md) (why hooking gamescope's own
   swapchain doesn't work on 4 of 5 backends) and
-  [`lsfg-in-tree-port.md`](./lsfg-in-tree-port.md) (the GPLv3-vs-BSD-2-Clause
+  [`external-framegen-in-tree-port.md`](./external-framegen-in-tree-port.md) (the GPLv3-vs-BSD-2-Clause
   licensing gate that forecloses a literal in-tree port, plus the more favorable
   "separate optional GPLv3 component talking dma-buf-fd + timeline-semaphore"
   alternative that document develops) — read either if this feature is revisited.

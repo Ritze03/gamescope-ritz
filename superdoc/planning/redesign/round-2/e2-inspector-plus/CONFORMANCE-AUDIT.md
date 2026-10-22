@@ -22,7 +22,7 @@ This is an audit. Nothing was fixed.
 lane geometry was measured with `getBoundingClientRect()`, not by eye.
 
 **Build:** `./build/src/gamescope -W 1920 -H 1080 -w 1280 -h 960 -S stretch --adaptive-sync
---immediate-flips --expose-wayland --filter fsr --sharpness 5 -f -- vkcube`, `DISABLE_LSFG=1`,
+--immediate-flips --expose-wayland --filter fsr --sharpness 5 -f -- vkcube`, `DISABLE_EXTLAYER=1`,
 throwaway `XDG_CONFIG_HOME`, the whole session inside `scripts/with-gamescope-lock.sh --timeout
 120`. Driven exclusively through `overlay_e2_select` / `overlay_e2_key` / `overlay_e2_host` /
 `overlay_e2_palette` over `gamescopectl` — no `ydotool`, no pointer injection.

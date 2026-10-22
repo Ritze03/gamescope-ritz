@@ -1,57 +1,57 @@
-# LSFG-VK In-Tree Port — Planning Scout
+# the external layer In-Tree Port — Planning Scout
 
 **Status: PLANNING ONLY.** No code, no prototypes, nothing installed, nothing cloned.
 This document is the deliverable. It re-examines the question answered in the sibling
-doc [`lsfg-vk-integration.md`](lsfg-vk-integration.md) under a **different framing**:
-not "load LSFG-VK as a Vulkan layer into gamescope's process" (foreclosed there — no
-swapchain to hook on DRM/Wayland/Headless/OpenVR), but "port LSFG-VK's *frame-generation
+doc [`external-framegen-layer-integration.md`](external-framegen-layer-integration.md) under a **different framing**:
+not "load the external layer as a Vulkan layer into gamescope's process" (foreclosed there — no
+swapchain to hook on DRM/Wayland/Headless/OpenVR), but "port the external layer's *frame-generation
 functionality itself* into gamescope, discarding the layer machinery entirely." Do not
 re-litigate the layer-hooking conclusion; it stands.
 
 ## Update 2026-09-27 — licence change closes the "separate GPLv3 component" escape hatch
 
-A fresh web scout (2026-09-27; see `lsfg-vk-integration.md`'s own Update section for the
-full findings and URLs — not re-quoted here) found lsfg-vk moved off GitHub to
-`lsfg-vk.dev` and, critically for this doc specifically, **relicensed from GPLv3 to
+A fresh web scout (2026-09-27; see `external-framegen-layer-integration.md`'s own Update section for the
+full findings and URLs — not re-quoted here) found the external layer moved off GitHub to
+`[external project link removed]` and, critically for this doc specifically, **relicensed from GPLv3 to
 CC BY-NC-ND 4.0 (non-commercial, no derivatives).**
 
 - **This doc's Licence gate section is superseded, not just refined.** Everything below
   it was written to route *around* a GPLv3 "if you vendor it, you must relicense your
-  whole binary" problem, by proposing "run `lsfg-vk-backend` as a separate,
+  whole binary" problem, by proposing "run `external-layer-backend` as a separate,
   optionally-installed **GPLv3** component the user builds themselves, and talk to it
   over dma-buf fds — this keeps gamescope-ritz's own source 100% BSD-2-Clause." That
   proposal assumed a copyleft-but-permissive-to-depend-on-at-arm's-length licence.
   **CC BY-NC-ND 4.0 is a no-derivatives licence** — it doesn't merely require the
   *combined* binary to relicense (GPLv3's concern), it restricts making or distributing
-  **any adapted/derivative version of lsfg-vk's own code at all**, which is a strictly
+  **any adapted/derivative version of the external layer's own code at all**, which is a strictly
   harder bar than the GPLv3 case this doc analyzed. Whether a small IPC/dlopen client
-  gamescope-ritz writes *against* an unmodified, separately-installed lsfg-vk binary
-  counts as a "derivative work" of lsfg-vk is a real legal question this scout cannot
-  resolve — but the clean "vendor `lsfg-vk-backend`'s source into a separate component
+  gamescope-ritz writes *against* an unmodified, separately-installed the external layer binary
+  counts as a "derivative work" of the external layer is a real legal question this scout cannot
+  resolve — but the clean "vendor `external-layer-backend`'s source into a separate component
   we build" reading this doc's escape hatch relied on (Section headed "There is one
   architecturally-clean way...", which explicitly says "a small subprocess... that the
-  user builds/installs themselves") is foreclosed outright: building lsfg-vk source at
+  user builds/installs themselves") is foreclosed outright: building the external layer source at
   all, in any component, is what CC BY-NC-ND 4.0's no-derivatives term restricts.
 - **The rest of this doc's technical findings (Sections 1-4: the backend/layer split,
   the dma-buf/fd API shape, gamescope's already-enabled Vulkan feature match, the
   presentation-cadence/VRR problem) are not licence-dependent and are unaffected** — they
   describe what the algorithm needs mechanically, which the licence change doesn't
-  touch. They remain useful if lsfg-vk ever changes licence terms again or if the
+  touch. They remain useful if the external layer ever changes licence terms again or if the
   project revisits building an equivalent frame-gen pipeline from scratch (not derived
-  from lsfg-vk's code) — a "**reimplement the idea, not the code**" path this doc never
+  from the external layer's code) — a "**reimplement the idea, not the code**" path this doc never
   separately scoped, since Section 6's recommendation to just ship option (a) made it
   moot at the time.
-- **Env var / config schema note:** lsfg-vk's env vars are now `LSFGVK_*`-prefixed
-  (`LSFGVK_ENV=1` gate for most of them) and config lives in
-  `~/.config/lsfg-vk/conf.toml` — see `lsfg-vk-integration.md`'s Update section for the
+- **Env var / config schema note:** the external layer's env vars are now `EXTLAYER_*`-prefixed
+  (`EXTLAYER_ENV=1` gate for most of them) and config lives in
+  `~/.config/external-layer/conf.toml` — see `external-framegen-layer-integration.md`'s Update section for the
   full current list; this doc's own Section 5/Milestone plan never depended on specific
   var names so nothing else here needs correcting for that.
-- **Decision: dropped for this round.** The user asked for an lsfg-vk settings page
+- **Decision: dropped for this round.** The user asked for an the external layer settings page
   running "on GameScope instead of the game." After being told the licence now
   forecloses even this doc's own separate-component escape hatch, and that the user's
-  actual backend (Wayland, nested — see `lsfg-vk-integration.md`'s Update section) has
+  actual backend (Wayland, nested — see `external-framegen-layer-integration.md`'s Update section) has
   no swapchain to attach anything to regardless, the user said, verbatim: **"Just forget
-  about the lsfg-vk part, then."** Milestone 0 (the cheap `lsfg-vk-cli debug` quality
+  about the the external layer part, then."** Milestone 0 (the cheap `external-layer-cli debug` quality
   check this doc recommended as the first step) was never run. This doc stands as
   reference only; re-verify the licence and the backend/API shape again before reviving
   this topic.
@@ -59,33 +59,33 @@ CC BY-NC-ND 4.0 (non-commercial, no derivatives).**
 ## Verdict
 
 **Feasible-with-caveats.** The single reason this isn't a clean "yes": **the licence
-forecloses a literal in-tree port (vendoring LSFG-VK's GPLv3 source into gamescope-ritz's
+forecloses a literal in-tree port (vendoring the external layer's GPLv3 source into gamescope-ritz's
 own BSD-2-Clause binary) unless gamescope-ritz accepts relicensing that binary to
 GPLv3.** That is a project-policy decision, not an engineering one — see the Licence
 gate below. Set that aside, though, and the technical picture is **much more favorable
 than the sibling doc's brief dismissal of "option (c)" suggested**: as of the current
-`develop` branch, LSFG-VK's own maintainer has already done most of the decoupling work
+`develop` branch, the external layer's own maintainer has already done most of the decoupling work
 the user is proposing — the frame-generation engine was refactored out of the
-Vulkan-layer into a standalone library (`lsfg-vk-backend` + `lsfg-vk-common`) driven
+Vulkan-layer into a standalone library (`external-layer-backend` + `external-layer-common`) driven
 entirely by **dma-buf file descriptors and a timeline semaphore**, with zero swapchain
-dependency, and it is already proven to run outside any Vulkan layer by LSFG-VK's own
-`lsfg-vk-cli debug` tool. Every Vulkan extension/feature that engine requires is already
+dependency, and it is already proven to run outside any Vulkan layer by the external layer's own
+`external-layer-cli debug` tool. Every Vulkan extension/feature that engine requires is already
 enabled by gamescope's own `CVulkanDevice`. **The remaining hard problem is not the
 algorithm or the license mechanics in isolation — it's presentation cadence**: making
 gamescope's vblank-paced, single-present-per-interval loop show extra frames at the
-right times without wrecking latency or fighting VRR, a problem LSFG-VK's own mature
+right times without wrecking latency or fighting VRR, a problem the external layer's own mature
 in-process implementation still hasn't fully solved either.
 
 ## Licence gate
 
-*(Superseded 2026-09-27 — see the Update section above. Upstream lsfg-vk has since
+*(Superseded 2026-09-27 — see the Update section above. Upstream the external layer has since
 relicensed to CC BY-NC-ND 4.0; every "GPLv3" statement below reflects the licence at the
 `develop`-branch snapshot this section was checked against and is no longer current.
 The escape-hatch this section proposes — a separately-built GPLv3 component — is
 foreclosed by a no-derivatives licence, which is a stricter bar than the GPLv3
 relicensing problem this section was written to route around.)*
 
-**LSFG-VK is GPLv3** (`LICENSE.md`, full GPLv3 text; every source file carries
+**the external layer is GPLv3** (`LICENSE.md`, full GPLv3 text; every source file carries
 `SPDX-License-Identifier: GPL-3.0-or-later`; GitHub's own detection reports
 `GPL-3.0`). **gamescope-ritz is BSD-2-Clause** (`/home/mo/GitHubProjects/gamescope-ritz/LICENSE`,
 confirmed: "BSD 2-Clause License, Copyright (c) 2013-2022 Valve Corporation..."; a
@@ -93,27 +93,27 @@ bundled OpenColorIO LUT file carries BSD-3-Clause, immaterial here).
 
 - **BSD → GPL is a one-way street.** BSD-2-Clause is permissive and GPL-compatible in
   the sense that BSD code may be folded into a GPLv3 work — but not the reverse. If
-  LSFG-VK's GPLv3 source is copied into gamescope-ritz's own translation units and
+  the external layer's GPLv3 source is copied into gamescope-ritz's own translation units and
   compiled into the same binary (a literal "clone the repo and implement its
   functionality into gamescope" as the user described), the result is a **combined
   work**, and GPLv3 requires the *entire* combined work, as distributed, to comply with
   GPLv3 — source availability, no additional restrictions, etc. Concretely: **shipping
-  a gamescope-ritz binary containing vendored LSFG-VK source means gamescope-ritz itself
+  a gamescope-ritz binary containing vendored the external layer source means gamescope-ritz itself
   must be redistributed under GPLv3 terms**, not BSD-2-Clause. That is a real
   relicensing decision affecting the whole project, not a footnote.
 - **This is a policy call the maintainers must make, not something this scout can
   resolve.** Per this task's own instruction, a licence that forces relicensing means:
   say so plainly, and do not recommend the literal in-tree/statically-linked port.
-  **This document does not recommend vendoring LSFG-VK source into gamescope-ritz's
+  **This document does not recommend vendoring the external layer source into gamescope-ritz's
   binary.**
 - **There is one architecturally-clean way to get the practical outcome the user wants
-  without relicensing**, and it happens to line up naturally with how LSFG-VK's own
-  code is now built: run `lsfg-vk-backend` as a **separate, optionally-installed GPLv3
+  without relicensing**, and it happens to line up naturally with how the external layer's own
+  code is now built: run `external-layer-backend` as a **separate, optionally-installed GPLv3
   component** — a small subprocess or a `dlopen()`-loaded shared object that the *user*
   builds/installs themselves (gamescope-ritz never bundles, links, or distributes it,
   exactly as it never bundles `Lossless.dll` today) — and have gamescope talk to it
   purely over the dma-buf-fd + timeline-semaphore protocol its own CLI tool already
-  demonstrates (`lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp`, see Q2/Q3 below).
+  demonstrates (`external-layer-backend/include/external-layer-backend/extlayer.hpp`, see Q2/Q3 below).
   This keeps gamescope-ritz's own source and binary 100% BSD-2-Clause; the GPLv3 code
   never enters its build. Whether "talks to an optional external process the user
   installs" satisfies what the user meant by "implement its functionality into
@@ -122,52 +122,52 @@ bundled OpenColorIO LUT file carries BSD-3-Clause, immaterial here).
   found that clears the licence gate while still landing inside gamescope's own
   composite loop rather than the game's process.
 - **`Lossless.dll` re-confirmed:** still never executed as Windows code.
-  `lsfg-vk-backend/src/extraction/dll_reader.cpp` and `shader_registry.cpp` parse it as
+  `external-layer-backend/src/extraction/dll_reader.cpp` and `shader_registry.cpp` parse it as
   a data container and extract embedded shaders at runtime. It remains a proprietary,
   Steam-distributed blob (`store.steampowered.com/app/993090/Lossless_Scaling/`) that
   the *user* must own and point at by path — gamescope-ritz must never download, cache,
   or bundle it, under any of the architectures discussed here.
 
-Sources: [LICENSE.md](https://github.com/PancakeTAS/lsfg-vk/blob/develop/LICENSE.md)
+Sources: LICENSE.md
 (checked 2026-08-21, `develop` branch), GitHub repo metadata (`gh api
-repos/PancakeTAS/lsfg-vk`, `license.spdx_id: GPL-3.0`, checked 2026-08-21),
+repos/PancakeTAS/the external layer`, `license.spdx_id: GPL-3.0`, checked 2026-08-21),
 `/home/mo/GitHubProjects/gamescope-ritz/LICENSE` (read directly, checked 2026-08-21).
 
 ## 1. Separating layer plumbing from the algorithm
 
-**LSFG-VK has already done this split itself**, and it's more thorough than the sibling
+**the external layer has already done this split itself**, and it's more thorough than the sibling
 doc's snapshot of the old layer-only architecture found. Current `develop`-branch
-repository layout (`gh api repos/PancakeTAS/lsfg-vk/git/trees/develop?recursive=1`,
+repository layout (`gh api repos/PancakeTAS/the external layer/git/trees/develop?recursive=1`,
 checked 2026-08-21):
 
 | Module | Size (source) | What it is |
 |---|---|---|
-| `lsfg-vk-layer/` | ~44 KB (`entrypoint.cpp`, `instance.cpp/hpp`, `swapchain.cpp/hpp`) | **Pure Vulkan-layer boilerplate.** Entry-point interception (`vkCreateInstance`/`vkCreateDevice`/`vkCreateSwapchainKHR`/`vkQueuePresentKHR`/`vkDestroySwapchainKHR`), layer manifest, per-app profile matching. Nothing here does frame generation. |
-| `lsfg-vk-backend/` | ~93 KB (`lsfgvk.cpp`, `extraction/dll_reader.cpp` + `shader_registry.cpp`, `shaderchains/*.cpp` — `alpha0/1`, `beta0/1`, `gamma0/1`, `delta0/1`, `generate`, `mipmaps` — `helpers/managed_shader.cpp`) | **The actual algorithm.** DLL shader extraction, the motion-estimation/warping/interpolation compute-shader chain, dispatch orchestration. Public API: `lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp`. |
-| `lsfg-vk-common/` | ~116 KB, excl. a 486 KB vendored `toml.hpp` | Generic Vulkan RAII wrappers (buffer/image/command_buffer/descriptor_set/fence/semaphore/shader/timeline_semaphore) + TOML config parsing. Reusable infrastructure the backend depends on; not layer-specific, but also not something a gamescope port needs verbatim — gamescope's own `CVulkanDevice`/`CVulkanTexture` (`src/rendervulkan.cpp`) already cover the same ground and a port would more naturally adapt the backend to gamescope's existing wrappers than import this module's ~80 KB of `.cpp`. |
-| `lsfg-vk-cli/` | ~23 KB | Standalone CLI (`validate`/`benchmark`/`debug` subcommands) that calls `lsfg-vk-backend` **directly, with no Vulkan layer involved at all.** |
-| `lsfg-vk-ui/` | Qt/QML | Config UI. Not relevant to a port (gamescope has its own config UI). |
+| `external-layer-layer/` | ~44 KB (`entrypoint.cpp`, `instance.cpp/hpp`, `swapchain.cpp/hpp`) | **Pure Vulkan-layer boilerplate.** Entry-point interception (`vkCreateInstance`/`vkCreateDevice`/`vkCreateSwapchainKHR`/`vkQueuePresentKHR`/`vkDestroySwapchainKHR`), layer manifest, per-app profile matching. Nothing here does frame generation. |
+| `external-layer-backend/` | ~93 KB (`extlayer.cpp`, `extraction/dll_reader.cpp` + `shader_registry.cpp`, `shaderchains/*.cpp` — `alpha0/1`, `beta0/1`, `gamma0/1`, `delta0/1`, `generate`, `mipmaps` — `helpers/managed_shader.cpp`) | **The actual algorithm.** DLL shader extraction, the motion-estimation/warping/interpolation compute-shader chain, dispatch orchestration. Public API: `external-layer-backend/include/external-layer-backend/extlayer.hpp`. |
+| `external-layer-common/` | ~116 KB, excl. a 486 KB vendored `toml.hpp` | Generic Vulkan RAII wrappers (buffer/image/command_buffer/descriptor_set/fence/semaphore/shader/timeline_semaphore) + TOML config parsing. Reusable infrastructure the backend depends on; not layer-specific, but also not something a gamescope port needs verbatim — gamescope's own `CVulkanDevice`/`CVulkanTexture` (`src/rendervulkan.cpp`) already cover the same ground and a port would more naturally adapt the backend to gamescope's existing wrappers than import this module's ~80 KB of `.cpp`. |
+| `external-layer-cli/` | ~23 KB | Standalone CLI (`validate`/`benchmark`/`debug` subcommands) that calls `external-layer-backend` **directly, with no Vulkan layer involved at all.** |
+| `external-layer-ui/` | Qt/QML | Config UI. Not relevant to a port (gamescope has its own config UI). |
 
-**Rough proportion: the actual frame-gen algorithm (`lsfg-vk-backend`) is roughly
+**Rough proportion: the actual frame-gen algorithm (`external-layer-backend`) is roughly
 2x the size of the layer glue it depends on, and — critically — is already consumed
-completely independently of that glue** by `lsfg-vk-cli`. This is the crux finding:
+completely independently of that glue** by `external-layer-cli`. This is the crux finding:
 the user's premise ("if the algorithm is a clean compute pipeline behind a thin layer
 wrapper, the port is plausible") is **empirically true of the current codebase, not
-hypothetical** — LSFG-VK's own maintainer already ships a swapchain-free consumer of the
+hypothetical** — the external layer's own maintainer already ships a swapchain-free consumer of the
 exact same backend a gamescope port would use.
 
-Sources: [repo tree, `develop`](https://github.com/PancakeTAS/lsfg-vk/tree/develop)
-(checked 2026-08-21), [`lsfg-vk-cli/src/main.cpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-cli/src/main.cpp),
-[`lsfg-vk-cli/src/tools/debug.cpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-cli/src/tools/debug.cpp),
-[`lsfg-vk-cli/src/tools/benchmark.cpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-cli/src/tools/benchmark.cpp).
+Sources: repo tree, `develop`
+(checked 2026-08-21), `external-layer-cli/src/main.cpp`,
+`external-layer-cli/src/tools/debug.cpp`,
+`external-layer-cli/src/tools/benchmark.cpp`.
 
 ## 2. What the algorithm needs as input/output
 
-From the public API (`lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp`, checked
+From the public API (`external-layer-backend/include/external-layer-backend/extlayer.hpp`, checked
 2026-08-21) and its two working consumers (`benchmark.cpp`, `debug.cpp`):
 
 - **`Instance(devicePicker, shaderDllPath, allowLowPrecision)`** — constructs its
-  **own private `VkInstance`/`VkDevice`** internally (see `lsfg-vk-common/src/vulkan/vulkan.cpp`),
+  **own private `VkInstance`/`VkDevice`** internally (see `external-layer-common/src/vulkan/vulkan.cpp`),
   it does not take an externally-supplied device. A gamescope integration would run this
   as a second, independent Vulkan device inside (or beside) gamescope's process, not a
   literal function call into `CVulkanDevice`.
@@ -184,19 +184,19 @@ From the public API (`lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp`, check
 - **Sync protocol:** application signals the timeline semaphore by 1 when a new source
   frame is ready; the library signals it back once per generated frame. This is a
   producer/consumer handoff over one shared semaphore, not a bespoke IPC layer.
-- **Vulkan requirements** (`lsfg-vk-common/src/vulkan/vulkan.cpp`, `createLogicalDevice`/`checkFP16`):
+- **Vulkan requirements** (`external-layer-common/src/vulkan/vulkan.cpp`, `createLogicalDevice`/`checkFP16`):
   API version 1.2, device extensions `VK_KHR_EXTERNAL_MEMORY_FD`,
   `VK_KHR_EXTERNAL_SEMAPHORE_FD`, `VK_KHR_TIMELINE_SEMAPHORE`; `VkPhysicalDeviceVulkan12Features.timelineSemaphore = true`
   (required); `.shaderFloat16` (optional, gated by `allow_fp16`). No subgroup-op
   extension is requested at device-creation time. Resolution/multiplier: no hard
   resolution constraint found; `flow` is documented (`docs/Configuration.md`) as a
   0.25–1.0 scale factor, `multiplier` an integer ≥ 2 limited in practice by driver
-  swapchain/descriptor-pool budgets (`lsfg-vk-backend/src/helpers/limits.cpp` sizes its
+  swapchain/descriptor-pool budgets (`external-layer-backend/src/helpers/limits.cpp` sizes its
   descriptor pool proportionally to the multiplier).
 - **Match against gamescope's `CVulkanDevice` (`src/rendervulkan.cpp`, grep-verified
   2026-08-21):**
 
-  | LSFG-VK needs | gamescope already has |
+  | the external layer needs | gamescope already has |
   |---|---|
   | Vulkan 1.2+ | `src/rendervulkan.cpp:351` requires ≥1.2; gamescope's own instance targets `VK_API_VERSION_1_3` (`:3535`) |
   | `VK_KHR_EXTERNAL_MEMORY_FD` | enabled, `src/rendervulkan.cpp:575` |
@@ -205,16 +205,16 @@ From the public API (`lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp`, check
   | `shaderFloat16` (optional) | already probed/tracked as `m_bSupportsFp16`, `src/rendervulkan.cpp:517-526` |
   | dma-buf-backed image import/export | gamescope's entire buffer-sharing model is dma-buf based: `VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME` enabled (`:576`), `CVulkanTexture::BInit(...wlr_dmabuf_attributes*...)` imports (`:2026`), `GetMemoryFdKHR` exports a texture as a dma-buf fd (`:2422`), `vulkan_create_texture_from_dmabuf` (`:3584`) round-trips it |
 
-  **Every Vulkan feature/extension LSFG-VK's backend requires is already enabled in
+  **Every Vulkan feature/extension the external layer's backend requires is already enabled in
   gamescope's own device setup, with no additions needed.** This is an unusually clean
   match — better than a generic "yes, Vulkan 1.2 GPUs mostly support this" answer;
   gamescope enables these specific bits today, for its own dma-buf compositing, for
   reasons independent of frame generation.
 
-Sources: [`lsfgvk.hpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-backend/include/lsfg-vk-backend/lsfgvk.hpp),
-[`vulkan.cpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-common/src/vulkan/vulkan.cpp),
-[`limits.cpp`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/lsfg-vk-backend/src/helpers/limits.cpp),
-[`docs/Configuration.md`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/docs/Configuration.md)
+Sources: `extlayer.hpp`,
+`vulkan.cpp`,
+`limits.cpp`,
+`docs/Configuration.md`
 (all checked 2026-08-21); gamescope citations grep-verified against this repo,
 2026-08-21.
 
@@ -281,12 +281,12 @@ This is the part that deserves the same "say so plainly" treatment as the licenc
   fixed effective refresh rate of `real_fps × multiplier` within VRR's supported range —
   which fights the entire point of VRR (matching cadence to whatever the game actually
   produces) — or (b) forcing fixed-rate presentation while frame-gen is active, which is
-  exactly the workaround LSFG-VK's own docs already recommend today
+  exactly the workaround the external layer's own docs already recommend today
   (`ENABLE_GAMESCOPE_WSI=0`, "pacing_mode = none forces V-Sync", noted in the sibling
-  doc's Q4). **LSFG-VK's own upstream pacing model is admittedly primitive** —
+  doc's Q4). **the external layer's own upstream pacing model is admittedly primitive** —
   `docs/Configuration.md`'s Pacing Modes section states plainly "there are no other
   pacing modes yet" — so building correct multi-present-per-interval, VRR-aware pacing
-  *inside* gamescope's loop is not a case of "reuse LSFG-VK's solved pacing logic," it is
+  *inside* gamescope's loop is not a case of "reuse the external layer's solved pacing logic," it is
   **new engineering gamescope would have to invent, that doesn't exist anywhere in the
   ecosystem yet, in-process or in-compositor.**
 - **The FPS limiter (`g_nSteamCompMgrTargetFPS`, `src/steamcompmgr.cpp:960`, gating
@@ -297,23 +297,23 @@ This is the part that deserves the same "say so plainly" treatment as the licenc
 
 **This — not the algorithm, not (given the separate-process architecture) the licence —
 is where the genuine, unresolved engineering risk concentrates.** It is real, it is
-non-trivial, and there is no existing reference implementation (upstream LSFG-VK
+non-trivial, and there is no existing reference implementation (upstream the external layer
 included) that has solved it well. Say this as clearly as the licence gate: **if the
 project isn't prepared to design new vblank/VRR/FPS-limiter-aware scheduling, the
 "algorithm fits" finding above does not by itself make this shippable.**
 
 Sources: grep-verified against this repo, 2026-08-21;
-[`docs/Configuration.md`](https://github.com/PancakeTAS/lsfg-vk/blob/develop/docs/Configuration.md)
-Pacing Modes section, checked 2026-08-21; sibling doc `lsfg-vk-integration.md` Q3/Q4
+`docs/Configuration.md`
+Pacing Modes section, checked 2026-08-21; sibling doc `external-framegen-layer-integration.md` Q3/Q4
 (cadence and pacing-conflict findings reused, not re-derived).
 
 ## 5. Effort estimate and staged path
 
 **Cheap kill-test — and upstream has essentially already run it for you.**
-`lsfg-vk-cli debug <folder-of-frames>` (`lsfg-vk-cli/src/tools/debug.cpp`) already
+`external-layer-cli debug <folder-of-frames>` (`external-layer-cli/src/tools/debug.cpp`) already
 dispatches the real shader chain on a sequence of static images completely offline —
 own Vulkan instance, dma-buf-fd-imported images, no Vulkan layer, no swapchain, no
-pacing. **Milestone 0, effort: an afternoon:** build `lsfg-vk-cli` standalone (per its
+pacing. **Milestone 0, effort: an afternoon:** build `external-layer-cli` standalone (per its
 own `docs/Building-From-Source.md`, entirely outside gamescope-ritz's tree — this
 doesn't touch or link against gamescope), feed it two screenshots of an actual
 gamescope-composited frame pair, and inspect the interpolated output for quality and
@@ -326,9 +326,9 @@ anything else in this plan.**
   build/binary.** A throwaway harness (not merged, not shipped) that uses gamescope's
   *existing* dma-buf export path (the same `GetMemoryFdKHR` machinery that already
   backs Pipewire capture, `src/rendervulkan.cpp:2422`) to grab two real composited
-  frames, hands their fds to a locally-built `lsfg-vk-backend` via `openContext`, and
+  frames, hands their fds to a locally-built `external-layer-backend` via `openContext`, and
   confirms the fd/format/semaphore contract actually round-trips with gamescope's real
-  textures (not just LSFG-VK's own synthetic DDS test images). Still zero pacing
+  textures (not just the external layer's own synthetic DDS test images). Still zero pacing
   changes, zero linkage into gamescope-ritz's own binary.
 - **Milestone 2 (1-2 weeks): wire it into `paint_all()` without changing presentation.**
   Call the backend once per composite, on the composited-but-pre-overlay image, generate
@@ -358,11 +358,11 @@ characterization of option (c), but now scoped to one specific hard problem
 
 ## 6. Compare against the fallback (option (a))
 
-The sibling doc's option (a) — gamescope as config/launch UI only, LSFG-VK stays in the
+The sibling doc's option (a) — gamescope as config/launch UI only, the external layer stays in the
 game's own process on its own real swapchain — remains the **lower-risk, faster-to-ship**
-choice: no licence entanglement (gamescope-ritz code never touches LSFG-VK source), no
+choice: no licence entanglement (gamescope-ritz code never touches the external layer source), no
 pacing rearchitecture (the game's own present loop paces itself, same as it does for
-every other Vulkan game today), and it's the configuration LSFG-VK's own docs already
+every other Vulkan game today), and it's the configuration the external layer's own docs already
 describe workarounds for. This scout's findings **raise, but don't erase, the gap**
 between the two options: the in-tree port is now a well-scoped, evidence-backed
 engineering project rather than a research-grade unknown, but it still costs real weeks
@@ -386,12 +386,12 @@ above confirms the model's output quality is worth the Milestone 3 investment.
   separate-process/dlopen architecture is used instead — and that architecture choice
   must be made deliberately, not discovered mid-implementation.
 - **Pacing risk (Q5):** the hardest unsolved problem in this whole proposal, with no
-  existing reference solution anywhere, including in LSFG-VK's own mature in-process
+  existing reference solution anywhere, including in the external layer's own mature in-process
   implementation. Treat Milestone 3 as the one step that could still kill the project
   outright.
 - **Upstream churn:** `develop`'s current backend/common/layer split is itself fairly
-  recent (a "v2" restructuring per the sibling doc's note on LSFG-VK's README banner);
-  the fd-based `lsfgvk.hpp` API is a moving target and should be re-verified immediately
+  recent (a "v2" restructuring per the sibling doc's note on the external layer's README banner);
+  the fd-based `extlayer.hpp` API is a moving target and should be re-verified immediately
   before any real implementation work, not assumed stable from this snapshot.
 - **Overlay/UI ghosting (Q3):** unresolved by the algorithm itself — requires the
   overlay composite step to move to *after* frame generation in the pipeline, a
@@ -400,7 +400,7 @@ above confirms the model's output quality is worth the Milestone 3 investment.
   construction, independent of how well pacing is engineered — a real user-facing cost
   on latency-sensitive targets (Steam Deck, OpenVR) that no amount of implementation
   quality removes.
-- **Dual-GPU / GPU-selection:** LSFG-VK's `Instance` picks its own physical device via a
+- **Dual-GPU / GPU-selection:** the external layer's `Instance` picks its own physical device via a
   caller-supplied `DevicePicker`; it must be steered to match whichever GPU gamescope
   itself is compositing on (dual-GPU setups are explicitly unsupported upstream, per the
   sibling doc's Q7 finding — unchanged here).
@@ -417,11 +417,11 @@ above confirms the model's output quality is worth the Milestone 3 investment.
    GPLv3 if the separate-process path is rejected as insufficiently "in-tree"? This is
    the one question that, answered "no," ends the literal in-tree port regardless of
    how favorable the technical findings above are.
-3. Given Q5's finding that pacing is genuinely unsolved even in LSFG-VK's own mature
+3. Given Q5's finding that pacing is genuinely unsolved even in the external layer's own mature
    in-process form — is there appetite for the multi-week-to-month scheduling R&D in
    Milestone 3, or should this effort stop at Milestone 0/1 (a quality/feasibility
    check) and revert to shipping option (a)?
-4. Should Milestone 0 (the offline quality check using `lsfg-vk-cli debug` on real
+4. Should Milestone 0 (the offline quality check using `external-layer-cli debug` on real
    gamescope screenshots) happen before this scout's findings are acted on at all, given
    it's nearly free and would directly inform whether Milestones 1-3 are worth
    scheduling?
@@ -432,7 +432,7 @@ above confirms the model's output quality is worth the Milestone 3 investment.
 
 ---
 *Checked 2026-08-21 against gamescope-ritz `master` (commit `fcc1341` and earlier) and
-LSFG-VK `develop` branch (tree listing and file contents fetched live via GitHub API,
+the external layer `develop` branch (tree listing and file contents fetched live via GitHub API,
 2026-08-21 — no specific pinned commit hash was available from this fetch method; treat
-line-number citations as approximate if LSFG-VK moves before this is acted on, and
+line-number citations as approximate if the external layer moves before this is acted on, and
 re-fetch before implementation).*

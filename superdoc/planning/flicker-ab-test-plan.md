@@ -1,7 +1,7 @@
 # Flicker A/B test plan
 
 > **RESOLVED — 2026-08-21.** The flicker this plan was chasing is an **SDL-backend
-> bug**, confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend
+> bug**, confirmed on real hardware: `DISABLE_EXTLAYER=1 ./build/src/gamescope --backend
 > sdl -f -- vkcube` flickers badly; the identical binary with **no `--backend` flag**
 > (which auto-selects Wayland — see `auto_select_backend()` in `src/main.cpp`) is
 > completely clean. The user's packaged upstream 3.16.24 also flickers under SDL, so
@@ -29,7 +29,7 @@ exactly upstream `ValveSoftware/gamescope` HEAD).
 All variants below (except the `upstream` control) are **one binary** —
 `build/src/gamescope` — flipped by environment variable, so you never rebuild between
 tests. Run each with `scripts/flicker-ab-test.sh`; it handles fullscreen, VRR,
-`DISABLE_LSFG=1`, a throwaway config directory, and clean teardown for you.
+`DISABLE_EXTLAYER=1`, a throwaway config directory, and clean teardown for you.
 
 ## One-time setup (do this once, ~3 minutes)
 

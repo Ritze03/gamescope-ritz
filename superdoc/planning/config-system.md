@@ -117,7 +117,7 @@ Three options considered:
 1. **Config writes *through* ConVars exclusively** (config system is just a
    load-JSON-then-`SetValue()`-every-ConVar-it-knows-about layer, no independent state).
    Rejected as the sole mechanism: many settings the user wants
-   (FPS-display font size/backdrop, ReShade per-effect parameter sets, LSFG-VK settings,
+   (FPS-display font size/backdrop, ReShade per-effect parameter sets, the external layer settings,
    the `Lossless.dll` path) have **no existing ConVar** — they're new state, not
    overrides of something that already exists. Also, not every gamescope-tunable value
    the config touches is even a `ConVar` today: filter/scaler/sharpness are **plain
@@ -133,7 +133,7 @@ Three options considered:
 3. **Hybrid, recommended: config seeds/writes ConVars where a matching ConVar already
    exists (VRR, HDR, tearing — confirmed in sibling doc §A5), and owns independent
    struct state for everything else (ReShade effect+parameter sets, FPS-display
-   styling, LSFG-VK, General/`Lossless.dll` path, and gamescope options that are
+   styling, the external layer, General/`Lossless.dll` path, and gamescope options that are
    currently plain globals like filter/scaler/sharpness).** Concretely: on config
    load/profile-apply, for each setting that maps to a real `ConVar<T>`, call
    `cv.SetValue(json_value)` (cheap, already how `gamescope_private.execute` does it);
@@ -142,7 +142,7 @@ Three options considered:
    already-serialized, already-tested live-write path (§A2/A3), rather than reaching
    into `g_wanted*` directly from a new thread; for everything with no existing
    backing variable, the config system's own struct *is* the source of truth and the
-   consuming code (ReShade pipeline setup, FPS overlay draw, LSFG-VK init) reads it
+   consuming code (ReShade pipeline setup, FPS overlay draw, the external layer init) reads it
    directly. This avoids inventing a second "ConVar-like" system for values gamescope
    already exposes at runtime, avoids fighting the plain-global path the sibling scout
    found for filter/sharpness, and keeps genuinely-new settings out of the ConVar
@@ -163,7 +163,7 @@ exhaustive — other scouts own the authoritative parameter lists):**
 | ReShade effect selection + uniform values | **No ConVar** — driven by `reshade_effect_manager_set_effect()`/`_set_uniform_variable()` free functions (`src/reshade_effect_manager.hpp:110`) via the `gamescope_reshade` Wayland protocol, not a ConVar | `superdoc/features/reshade-effects.md` |
 | FPS-display styling (font size, backdrop, blending) | **No existing state at all** — this UI doesn't exist yet | new, sibling doc §B5 |
 | Audio volume | **Not found in this scout's pass** — not grep-verified, likely belongs to another scout's scope (mangoapp/audio not covered by scripting-convars.md or control-ipc.md) | TBD-from-sibling-scouts |
-| LSFG-VK settings | **Not found in this repo at all** — no `LSFG`/`lossless` symbol under `src/` in this pass | TBD-from-sibling-scouts; likely entirely new state, no ConVar to map to |
+| the external layer settings | **Not found in this repo at all** — no `ExtFg`/`lossless` symbol under `src/` in this pass | TBD-from-sibling-scouts; likely entirely new state, no ConVar to map to |
 | `Lossless.dll` path (General) | **New** — no existing config/settings storage for arbitrary file paths found | new |
 
 ## 4. JSON handling — what's available
@@ -256,7 +256,7 @@ immediately before `paint_all()` — this is the load-bearing fact for config th
 
 Schema version field included. Every numeric range/default the roadmap needs
 (ReShade per-effect parameter ranges, FPS-display exact values, audio volume curve,
-LSFG-VK parameters) is **not this scout's to invent** — marked `TBD-from-sibling-scout`
+the external layer parameters) is **not this scout's to invent** — marked `TBD-from-sibling-scout`
 below. FPS-display fields are taken directly from the sibling scout's own proposal
 (`runtime-knobs-and-fps.md` §B5, itself marked as "proposals ... not verified", so
 still provisional there too) since that's the one place a concrete shape already
@@ -269,7 +269,7 @@ exists; everything else is structural only.
   "general": {
     "lossless_dll_path": "",     // string, absolute path. TBD-from-sibling-scout: validation rules (must exist? extension check?)
     // additional General-section fields: TBD — "whatever else proves necessary" per brief,
-    // no candidates found in this scout's source pass beyond the LSFG-VK dependency.
+    // no candidates found in this scout's source pass beyond the the external layer dependency.
   },
   "gamescope": {
     "filter": "LINEAR",          // enum: LINEAR | NEAREST | FSR | NIS | PIXEL — src/main.hpp:35-42
@@ -301,8 +301,8 @@ exists; everything else is structural only.
       // since reshade_effect_manager_set_uniform_variable() takes an arbitrary name.
     }
   },
-  "lsfg_vk": {
-    // TBD-from-sibling-scout entirely. Grep-verified: no LSFG symbol found anywhere
+  "external_layer": {
+    // TBD-from-sibling-scout entirely. Grep-verified: no ExtFg symbol found anywhere
     // under src/ in this pass. Structure is a placeholder pending that scout's findings.
     "enabled": false
   },
@@ -320,13 +320,13 @@ exists; everything else is structural only.
   "name": "FPS",                 // redundant with filename by design — makes a copied/renamed
                                   // file still self-describing, and gives the UI a display name
                                   // independent of filesystem-safe naming (see §7 sanitisation).
-  // Same shape as the settings blocks above (gamescope/fps_display/reshade/lsfg_vk/audio) —
+  // Same shape as the settings blocks above (gamescope/fps_display/reshade/external_layer/audio) —
   // NOT the "general" block, which is process-level (Lossless.dll path etc.), not a
   // per-game/profile concern. A profile is a bundle of the per-game-relevant settings only.
   "gamescope": { /* ... */ },
   "fps_display": { /* ... */ },
   "reshade": { /* ... */ },
-  "lsfg_vk": { /* ... */ },
+  "external_layer": { /* ... */ },
   "audio": { /* ... */ }
 }
 ```
@@ -340,7 +340,7 @@ exists; everything else is structural only.
   "gamescope": { /* ... */ },
   "fps_display": { /* ... */ },
   "reshade": { /* ... */ },
-  "lsfg_vk": { /* ... */ },
+  "external_layer": { /* ... */ },
   "audio": { /* ... */ }
 }
 ```
@@ -487,13 +487,13 @@ different UI and file format:**
   unsynchronized ConVar-write pattern for the settings that *do* map onto existing
   ConVars.
 - **Large swaths of the schema are placeholders** (ReShade uniform ranges, FPS-display
-  final values, audio volume curve, all of LSFG-VK) pending sibling scouts — the
+  final values, audio volume curve, all of the external layer) pending sibling scouts — the
   structure is sound but the leaf values are explicitly not authoritative yet.
 - **Live-reference profiles (§6, recommended) add a third resolution level** that must
   be re-derived correctly every time the UI needs to show "effective" settings for a
   game — more surface area for a resolution bug (e.g. showing stale profile values
   after a profile edit) than the simpler one-time-copy alternative would have.
-- **No audio subsystem or LSFG-VK code was found in this repo at all** in this scout's
+- **No audio subsystem or the external layer code was found in this repo at all** in this scout's
   pass (`grep`-checked against `scripting-convars.md`/`control-ipc.md` and a targeted
   `src/` search) — the config schema for those sections is close to pure speculation
   structurally, not just parameter-wise, until those scouts report back.
@@ -519,7 +519,7 @@ different UI and file format:**
    Recommended: startup-only for v1, given the ordering findings in §1. (§1/§2)
 5. **What exactly belongs in the General section beyond `Lossless.dll` path?** The brief
    says "whatever else proves necessary" — nothing else surfaced in this scout's source
-   pass; needs the user's own list or a later pass once LSFG-VK/audio scouts report.
+   pass; needs the user's own list or a later pass once the external layer/audio scouts report.
    (§5 schema)
 6. **Should config writes for settings that already have a live external-write path
    (X11 properties for filter/scaler/sharpness, `ConVar::SetValue` for VRR/HDR/tearing)

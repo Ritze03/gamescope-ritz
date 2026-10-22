@@ -14,7 +14,7 @@
 #
 # USAGE
 #   scripts/with-gamescope-lock.sh ./my-test-script.sh
-#   scripts/with-gamescope-lock.sh bash -c 'DISABLE_LSFG=1 ./build/src/gamescope ... & ...'
+#   scripts/with-gamescope-lock.sh bash -c './build/src/gamescope ... & ...'
 #
 #   Hold the lock for the WHOLE session -- launch, drive, screenshot, tear down.
 #   Locking only the launch defeats the point.

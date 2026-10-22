@@ -72,23 +72,23 @@ optimisation-level artifact.
 ## Exact reproduction command
 
 ```
-DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f -- vkcube
+DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -f -- vkcube
 ```
 
-(`DISABLE_LSFG=1` is only needed if a system-wide implicit Vulkan layer like `lsfg-vk`
+(`DISABLE_EXTLAYER=1` is only needed if a system-wide implicit Vulkan layer like the external layer
 is installed — irrelevant to gamescope itself, included here only so the command is
 copy-pasteable as run.) The fuller form used through most of this investigation, for
 reference:
 
 ```
-DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -W 1920 -H 1080 -w 1920 -h 1080 \
+DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -W 1920 -H 1080 -w 1920 -h 1080 \
   -r 280 -O DP-1 -f --adaptive-sync -- vkcube
 ```
 
 **The clean control, same binary:**
 
 ```
-DISABLE_LSFG=1 ./build/src/gamescope -W 1920 -H 1080 -w 1920 -h 1080 \
+DISABLE_EXTLAYER=1 ./build/src/gamescope -W 1920 -H 1080 -w 1920 -h 1080 \
   -r 280 -O DP-1 -f --adaptive-sync -- vkcube
 ```
 

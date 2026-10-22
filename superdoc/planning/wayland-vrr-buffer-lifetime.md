@@ -4,7 +4,7 @@
 > ## SDL-backend bug; the Wayland backend (which every test in this doc correctly used)
 > ## is clean for it.
 >
-> Confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f
+> Confirmed on real hardware: `DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -f
 > -- vkcube` flickers badly; the identical binary with no `--backend` flag (auto-
 > selecting Wayland — `auto_select_backend()` in `src/main.cpp`) is completely clean.
 > The user's packaged upstream 3.16.24 flickers under SDL too. So:
@@ -33,7 +33,7 @@ it. Written so the next agent does not re-run any of this.
 ## Test rig (reproduce these conditions or the results mean nothing)
 
 Host Hyprland, DP-1 1920x1080@280Hz, `vrr = 3`. gamescope nested, `--backend wayland`,
-`-f`, client `vkcube`, `DISABLE_LSFG=1`. Every run verified **read-only** with
+`-f`, client `vkcube`, `DISABLE_EXTLAYER=1`. Every run verified **read-only** with
 `hyprctl clients -j` (gamescope window `fullscreen: 2`) and `hyprctl monitors -j`
 (DP-1 `vrr: true`) *while the run was live* — not before or after, which reports
 `vrr: false` because nothing is fullscreen then.

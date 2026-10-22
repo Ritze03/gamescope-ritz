@@ -27,7 +27,7 @@ std::atomic<uint64_t> g_ulLastAppFrametimeNs{ 0 };
 // UpdateAndGetDisplayFps() computes delta-count / delta-time over its own
 // windows). Counting is the fix for the "999 FPS" bug: steamcompmgr drains
 // every finished commit in one loop, and when two or more land in a batch
-// (lsfg-vk presenting a real and a generated frame back to back guarantees
+// (the external layer presenting a real and a generated frame back to back guarantees
 // this) the LAST Signal() in the batch sees a frametime of ~0 -- 10 000 fps
 // once clamped -- and, reading at most one sample per paint, the HUD only
 // ever saw that last write. A count cannot be fooled by batching: two

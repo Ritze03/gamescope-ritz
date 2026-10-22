@@ -14,7 +14,7 @@ per-axis stretch to match a stretched game. `src/Overlay/Crosshair.{h,cpp}`
 **off**.
 
 > **Why (2026-09-05):** the user runs frame generation externally —
-> `lsfg-vk` as a Vulkan layer inside the game's own process. It
+> the external layer as a Vulkan layer inside the game's own process. It
 > interpolates the game's own frame, so anything drawn *inside* it — above
 > all the in-game crosshair — smears between real frames. A crosshair
 > gamescope draws is composited **after** interpolation, over the finished

@@ -11,7 +11,7 @@ values below are taken directly from it and cross-checked against the rendered m
 
 ## Inventory of the handoff (what was in the zip, one line each)
 
-- `1a` — Hero: three floating windows (Shaders, Gamescope-style panel, LSFG-VK-style panel) + FPS HUD + centered dock, 1920×1080.
+- `1a` — Hero: three floating windows (Shaders, Gamescope-style panel, the external layer-style panel) + FPS HUD + centered dock, 1920×1080.
 - `1b` — Alternate shader panel: dense instrument-row layout.
 - `1c` — Alternate shader panel: staged groups with an A/B compare strip, all sliders exposed.
 - `1d` — FPS HUD: config window plus five backdrop/size treatment samples (none/shadow/solid/blur/additive).
@@ -21,7 +21,7 @@ values below are taken directly from it and cross-checked against the rendered m
 - `2b` — Build spec sheet: tokens, control metrics, window inventory, layout/behaviour notes (primary source below).
 
 Left deliberately unused by us: the mockup's specific panels are named for *its* imagined feature set
-(ReShade-style "Adaptive brightness/Vibrancy/Sharpness", gamescope scaling filter switcher, LSFG-VK
+(ReShade-style "Adaptive brightness/Vibrancy/Sharpness", gamescope scaling filter switcher, the external layer
 frame-gen panel, PipeWire-style audio mixer with L/R meters, a settings/profiles panel it says is
 "not yet designed"). We take the chrome and control styling from these, not the panels or their contents
 — our own feature set decides what windows/controls actually exist.

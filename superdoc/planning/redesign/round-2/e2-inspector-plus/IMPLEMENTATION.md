@@ -1463,7 +1463,7 @@ binding that touches ImGui state is now reachable off the draw thread.
 
 - `nice -n 19 ninja -C build` clean; **67/67** (`overlay_ui` 34 → 45, `overlay_shell` 16 →
   19, `config` 38 → 40).
-- Live session under `scripts/with-gamescope-lock.sh`, `DISABLE_LSFG=1`, no `--backend sdl`,
+- Live session under `scripts/with-gamescope-lock.sh`, `DISABLE_EXTLAYER=1`, no `--backend sdl`,
   no pointer injection — driven entirely by `overlay_e2_*` ConVars and `grim -g` bounded to
   the tracked PID's own window.
 - **Audio names, against real streams from two applications.** A `pw-play` stream with

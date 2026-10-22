@@ -6,7 +6,7 @@
 > deprioritized it in favor of the **resolution-scaling hypothesis** ("the standout
 > difference", tests #1–#3) as the leading suspect. That hypothesis is **wrong** — it
 > is a red herring. The confirmed cause is the **SDL backend itself**, independent of
-> scaling: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f -- vkcube` flickers
+> scaling: `DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -f -- vkcube` flickers
 > badly at 1:1 with no scaling and no extra args at all; the identical binary with no
 > `--backend` flag (auto-selecting Wayland) is completely clean, also at 1:1. The
 > user's packaged upstream 3.16.24 flickers under SDL too. So test #4 below ("backend

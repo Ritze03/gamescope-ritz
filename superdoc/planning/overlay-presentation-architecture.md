@@ -5,7 +5,7 @@
 > ## bug. Read this before relying on that section's "unexplained" framing or the
 > ## stacked-VRR hypothesis.
 >
-> Confirmed on real hardware: `DISABLE_LSFG=1 ./build/src/gamescope --backend sdl -f
+> Confirmed on real hardware: `DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -f
 > -- vkcube` flickers badly; the identical binary with **no `--backend` flag** (auto-
 > selecting Wayland — `auto_select_backend()` in `src/main.cpp`) is completely clean.
 > The user's packaged upstream 3.16.24 flickers under SDL too — matching exactly what

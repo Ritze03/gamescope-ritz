@@ -271,7 +271,7 @@ namespace gamescope::config
     // see superdoc/features/crosshair.md). Drawn by Overlay/Crosshair.cpp
     // into the FPS HUD's own layer (Overlay/FpsDisplay.cpp), centred on
     // the game's on-screen rect, so it composites AFTER anything running
-    // inside the game -- an external frame-generation layer (lsfg-vk)
+    // inside the game -- an external frame-generation layer
     // interpolates the game's own frame and smears whatever is drawn in
     // it, above all the in-game crosshair; this one cannot smear.
     //
