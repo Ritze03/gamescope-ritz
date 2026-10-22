@@ -1,7 +1,7 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
 // SHAPE. Eleven per-profile rows -- Frame generation (the on/off switch), Multiplier
-// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Limit to GPU speed, Quality, Motion version,
+// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Limit to GPU speed, Motion version, Quality,
 // Artifact safety, Static HUD protection, UI protection, Crosshair box size -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
@@ -409,6 +409,23 @@ namespace gamescope
 			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
 			.DisabledUnless( On, "frame generation is off" );
 
+		a.Choice( "framegen.motion_version", "Motion version",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kMotionOptions, std::size( kMotionOptions ) )
+			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
+			       "the picture along the motion and stretches it over gaps instead of falling "
+			       "back to the real frame spot by spot, and it is cheaper on the GPU. The delay "
+			       "is the same as V1. It works in every game format, HDR and 10-bit included; "
+			       "a GPU without the shader features it needs stays on V1 (the Status line "
+			       "says why). Switching shows real frames for an instant. Motion blur follows "
+			       "this and Quality unless you turn off its \"Use Frame generation's settings\" "
+			       "switch; then, while Motion blur is on, its own two settings are used instead." )
+			.Default( 0 )
+			.Keywords( "frame generation motion version v1 v2 morph interpolation algorithm experimental" )
+			.DisabledUnless( On, "frame generation is off" );
+
 		a.Choice( "framegen.quality", "Quality",
 			ui::AnyBind::Of<int>(
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
@@ -425,23 +442,6 @@ namespace gamescope
 			       "switching does not interrupt the picture." )
 			.Default( 0 )
 			.Keywords( "frame generation quality performance cost gpu motion estimation v2 mode" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Choice( "framegen.motion_version", "Motion version",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kMotionOptions, std::size( kMotionOptions ) )
-			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
-			       "the picture along the motion and stretches it over gaps instead of falling "
-			       "back to the real frame spot by spot, and it is cheaper on the GPU. The delay "
-			       "is the same as V1. It works in every game format, HDR and 10-bit included; "
-			       "a GPU without the shader features it needs stays on V1 (the Status line "
-			       "says why). Switching shows real frames for an instant. Motion blur follows "
-			       "this and Quality unless you turn off its \"Use Frame generation's settings\" "
-			       "switch; then, while Motion blur is on, its own two settings are used instead." )
-			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 morph interpolation algorithm experimental" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.safety", "Artifact safety",

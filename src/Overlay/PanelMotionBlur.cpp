@@ -287,6 +287,28 @@ namespace gamescope
 			.Keywords( "motion blur use same settings frame generation follow motion version quality v1 v2" )
 			.DisabledUnless( On, "motion blur is off" );
 
+		a.Choice( "motion_blur.motion_version", "Motion version",
+			ui::AnyBind::Of<int>(
+				[]
+				{
+					EnsureConfigLoaded();
+					return s_Settings.motion_blur.same_as_framegen
+						? int( fghost::GetConfig().motion )
+						: IndexOf( s_Settings.motion_blur.motion_version, kMotionKeys, 2, 0 );
+				},
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kMotionOptions, std::size( kMotionOptions ) )
+			.Help( "V2 is a newer, experimental way of making the in-between frames the blur "
+			       "averages: it bends the picture along the motion and stretches it over gaps "
+			       "instead of falling back to the real frame spot by spot, and it is cheaper on "
+			       "the GPU. It works in every game format, HDR and 10-bit included; a GPU "
+			       "without the shader features it needs stays on V1 (the Status line says why). "
+			       "Switching shows real frames for an instant. Shown greyed out with Frame "
+			       "generation's value while \"Use Frame generation's settings\" is on." )
+			.Default( 0 )
+			.Keywords( "motion blur motion version v1 v2 morph interpolation algorithm experimental" )
+			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
+
 		a.Choice( "motion_blur.quality", "Quality",
 			ui::AnyBind::Of<int>(
 				[]
@@ -310,28 +332,6 @@ namespace gamescope
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )
 			.Keywords( "motion blur quality performance cost gpu motion estimation v2 mode" )
-			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
-
-		a.Choice( "motion_blur.motion_version", "Motion version",
-			ui::AnyBind::Of<int>(
-				[]
-				{
-					EnsureConfigLoaded();
-					return s_Settings.motion_blur.same_as_framegen
-						? int( fghost::GetConfig().motion )
-						: IndexOf( s_Settings.motion_blur.motion_version, kMotionKeys, 2, 0 );
-				},
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kMotionOptions, std::size( kMotionOptions ) )
-			.Help( "V2 is a newer, experimental way of making the in-between frames the blur "
-			       "averages: it bends the picture along the motion and stretches it over gaps "
-			       "instead of falling back to the real frame spot by spot, and it is cheaper on "
-			       "the GPU. It works in every game format, HDR and 10-bit included; a GPU "
-			       "without the shader features it needs stays on V1 (the Status line says why). "
-			       "Switching shows real frames for an instant. Shown greyed out with Frame "
-			       "generation's value while \"Use Frame generation's settings\" is on." )
-			.Default( 0 )
-			.Keywords( "motion blur motion version v1 v2 morph interpolation algorithm experimental" )
 			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
 
 		a.Group( "Status" );
