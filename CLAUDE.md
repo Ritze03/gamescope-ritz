@@ -38,6 +38,11 @@ Reference docs — plain links, read the one relevant to your task on demand:
   volume of the user's own streams, sinks or devices, and never move the user's own streams.
   `Why:` a 2026-10-07 audio spike played "silence" at full volume and blasted the user; the
   user's own rule: *"1% volume is enough, to see a signal"*.
+- **Banned name in tracked files.** Never write the four-letter abbreviation of Lossless
+  Scaling Frame Generation (any case, also as part of the Vulkan layer's name) in anything
+  synced to GitHub — docs, code comments, commit messages, any tracked file. Describe
+  frame-gen-ritz's Motion version 2 as a "morphing" interpolator. `Why:` the user's explicit
+  rule (2026-10-22).
 
 ## Always in context (force-loaded, mandatory)
 

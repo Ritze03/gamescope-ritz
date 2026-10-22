@@ -197,7 +197,7 @@ which FG cannot substitute per output frame.
 
 (2026-10-22, the library's **`framegen-v2` branch at 273bbad**, not its `main` -- the submodule
 is pinned there for testing; `main` stays untouched until the user judges V2.) The library has a
-second motion algorithm next to the original (V1, unchanged): V2 is an LSFG-like "morph"
+second motion algorithm next to the original (V1, unchanged): V2 is a "morphing"
 interpolator. It moves the picture along a smoothed motion field and fills gaps with stretched
 content; there is **no per-pixel hold** (no trust ramp -- only the whole-frame scene-cut /
 flick fallbacks show the nearer real frame), so individual frames can look distorted but the
