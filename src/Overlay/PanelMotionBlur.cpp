@@ -326,8 +326,8 @@ namespace gamescope
 			.Help( "V2 is a newer, experimental way of making the in-between frames the blur "
 			       "averages: it bends the picture along the motion and stretches it over gaps "
 			       "instead of falling back to the real frame spot by spot, and it is cheaper on "
-			       "the GPU. It works on normal 8-bit games only; HDR and 10-bit games, and GPUs "
-			       "without the shader features it needs, stay on V1 (the Status line says why). "
+			       "the GPU. It works in every game format, HDR and 10-bit included; a GPU "
+			       "without the shader features it needs stays on V1 (the Status line says why). "
 			       "Switching shows real frames for an instant. Shown greyed out with Frame "
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )

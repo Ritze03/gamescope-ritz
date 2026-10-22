@@ -195,7 +195,7 @@ which FG cannot substitute per output frame.
 
 ## Motion version 2
 
-(2026-10-22, the library's **`framegen-v2` branch at 273bbad**, not its `main` -- the submodule
+(2026-10-22, the library's **`framegen-v2` branch at a5a5991**, not its `main` -- the submodule
 is pinned there for testing; `main` stays untouched until the user judges V2.) The library has a
 second motion algorithm next to the original (V1, unchanged): V2 is a "morphing"
 interpolator. It moves the picture along a smoothed motion field and fills gaps with stretched
@@ -247,20 +247,31 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
   frame is shown; the library's `recordSynth*` would return false). The first switch to a version
   builds its pipelines on the spot. The config word `g_uConfig` carries the version at bit 28
   and the applied-config key includes it.
-- **Rgba8 only, plus a subgroup requirement, with V1 as the fallback.** V2 refuses any
-  `Format` but `Rgba8` (HDR, 10-bit, fp16, NV12, P010) and a GPU without compute subgroups
-  (basic / vote / arithmetic / shuffle / clustered, at least 16 lanes). `InitInfo::getProps2` is
-  `g_device.vk.GetPhysicalDeviceProperties2`, which lets the library check the device. `Why a
-  fallback and not "unavailable":` the library's `init()` refuses V2 outright for those
-  contents, which would have killed frame generation for an HDR game just because the profile
+- **Every format V1 runs (since library a5a5991, 2026-10-22), plus a subgroup requirement, with
+  V1 as the fallback.** Until a5a5991 V2 refused any `Format` but `Rgba8`; now it supports Rgba8,
+  Rgb10, RgbaF16 (encoded and linear), and the library's Nv12 / P010, in both modes, with the
+  static mask, motion blur and every UI protection mode. (This build offers Rgba8, Rgb10 and
+  RgbaF16: Nv12 / P010 are deliberately not built, see "HDR and 10-bit games".) What still makes
+  the library refuse V2 is a GPU without compute subgroups (basic / vote / arithmetic / shuffle /
+  clustered, at least 16 lanes), a format whose four V2 synthesis variants are not built in, or a
+  size beyond a V2 buffer limit. `InitInfo::getProps2` is
+  `g_device.vk.GetPhysicalDeviceProperties2`, which lets the library check the device (and read its
+  size limits). `Why a fallback and not "unavailable":` the library's `init()` refuses V2
+  outright on such a device, which would have killed frame generation just because the profile
   says V2. So `init()` always starts V1; `ResolveMotion()` then asks
-  `Interpolator::settingsError( want )` (static format rule + device rule) and, if it names a
-  reason, runs V1 instead. The reason is a library string literal: it goes to the log
+  `Interpolator::settingsError( want )` (format variants + device rule + the held size under V2)
+  and, if it names a reason, runs V1 instead. The reason is a library string literal: it goes to the log
   (`Motion version 2 refused, running V1: ...`, once per change) and to
   `RenderStatus::motionNote`, which the Frame generation Status line appends while generating and
   the Motion blur Status line appends while the blur is applied (` · V1: <reason>`, also with
   Frame generation off).
   A format change re-inits, so an HDR game and an SDR game each get their own answer.
+- **Sizes** (library `Interpolator::sizeError( w, h )`): 16 px up to the device's limits (image
+  dimension, 2^30 pixels, `maxStorageBufferRange`, workgroup count). The host's own gate for the
+  16 px floor stays (`Unavailable::TooSmall`, before any library call); the one place the library's
+  reason text is used is the log line when a resolution change makes `resize()` refuse
+  (`could not resize to WxH: <reason>`). `init()` already logs `initError()`, which carries the
+  same reason.
 - **Unused-version memory.** `releaseUnusedMotion()` is deliberately not called: it needs the
   retire rule (a GPU wait) and there is no natural spot (the ring-shrink wait is rare and
   unrelated). The unused version's pipelines / buffers stay until teardown (`// ponytail:` in
@@ -270,8 +281,13 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
   is byte-identical (the default is V1).
 - Shaders: 13 plain `v2_*` compute shaders in `src/meson.build`'s `framegen_shaders`
   (`v2_medhist`, `v2_search`, `v2_clean`, `v2_morph`, `v2_repick`, `v2_qfield`, `v2_qown`,
-  `v2_qcov`, `v2_qmorph`, `v2_static`, `v2_enclose`, `v2_morph_s`, `v2_qmorph_s`); Rgba8 only, so
-  no per-format variants.
+  `v2_qcov`, `v2_qmorph`, `v2_static`, `v2_enclose`, `v2_morph_s`, `v2_qmorph_s`: the Rgba8 set)
+  and, since a5a5991, four per-format variants each for `rgb10` and `f16` -- `v2_morph`,
+  `v2_morph_s`, `v2_qmorph`, `v2_qmorph_s` (-DFG_FORMAT_<FMT>=1), in the same list as V1's 12
+  colour shaders (16 per format). They are the only V2 passes that read or write colour; the
+  other nine read the luma and are one shader for every format. Without a format's four, the
+  library refuses V2 there with a reason and V1 still works (so a stale incremental build dir
+  shows up as the Status line's ` · V1: ...`; `FrameGenLib.cpp` is the file to touch).
 
 ## UI protection
 
@@ -952,7 +968,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
-| `framegen.motion_version` | `v1` (default) / `v2` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (Rgba8 content, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22) |
+| `framegen.motion_version` | `v1` (default) / `v2` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22) |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
@@ -1099,9 +1115,9 @@ at 1440p; 3 clean copies, 44 MB at 1440p, +15 MB for Whole screen).
 
 The library has no root `meson.build`, and Meson's sandbox forbids handing files under
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
-nested subproject`), so `subproject()` is impossible. Its 36 shaders (11 for the interpolation, 13 for Motion version 2 (plain, Rgba8 only), 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
+nested subproject`), so `subproject()` is impossible. Its 36 shaders (11 for the interpolation, 13 for Motion version 2 (the plain Rgba8 set), 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
 `blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
-test-only `gpu/blendbench.comp` is not built), plus 12 colour-shader variants each for `rgb10` and `f16` (`ui_v2_update` and `ui_v2_lumafill` are per-format) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
+test-only `gpu/blendbench.comp` is not built), plus 16 colour-shader variants each for `rgb10` and `f16` (V1's 12 -- `ui_v2_update` and `ui_v2_lumafill` are per-format -- and V2's four synthesis shaders `v2_morph`, `v2_morph_s`, `v2_qmorph`, `v2_qmorph_s`) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work

@@ -474,9 +474,10 @@ namespace fghost
 			return s;
 		}
 
-		// V2 only where the library takes it (Rgba8 content, a GPU with the subgroup
-		// operations): else V1, so frame generation never dies for want of V2, and the
-		// library's reason goes to the Status line. Needs a live interpolator (the
+		// V2 only where the library takes it (every format whose V2 synthesis shaders are
+		// built in, a GPU with the subgroup operations, a size it can hold under V2): else
+		// V1, so frame generation never dies for want of V2, and the library's reason goes
+		// to the Status line. Needs a live interpolator (the
 		// device check). Logged when the reason changes.
 		framegen::Settings ResolveMotion( const Host_t &H, framegen::Settings s )
 		{
@@ -670,7 +671,8 @@ namespace fghost
 				// Lets the library refuse V2 on a GPU without the subgroup operations it needs.
 				info.getProps2 = g_device.vk.GetPhysicalDeviceProperties2;
 				info.pipelineCache = VK_NULL_HANDLE;
-				// Always V1 here: init() refuses V2 outright (Rgba8 only), which would be
+				// Always V1 here: init() refuses V2 outright where the device lacks the
+				// subgroup operations (or a format's V2 shaders are missing), which would be
 				// "unavailable", not "fall back". V2 is switched on below once it is
 				// known to be accepted (setSettings creates its pipelines, no GPU wait).
 				info.settings = want;
@@ -720,7 +722,9 @@ namespace fghost
 					o.pTex = nullptr;
 				if ( !H.interp.resize( w, h, plan.eRingVk ) || !ResizeRing( H, kRingMin ) )
 				{
-					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u", w, h );
+					const char *pszSize = H.interp.sizeError( w, h );
+					fg_log.errorf( "frame generation unavailable: could not resize to %ux%u: %s", w, h,
+						pszSize ? pszSize : "see the log above" );
 					Teardown( H );
 					H.ulFailedKey = ulKey;
 					return false;

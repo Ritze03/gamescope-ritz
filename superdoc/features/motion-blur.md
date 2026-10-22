@@ -100,8 +100,8 @@ default **on**) and the blur's own **Quality** (`motion_blur.quality`) and **Mot
   `motion`, `quality`, bits 14-16 of the blur word) and, while the blur is on, **replaces**
   Frame generation's pair for the interpolator (`RecordBaseLayer()` rewrites the quality and
   motion bits of the packed config before the library-config key is built). Selecting V2 here
-  takes effect at once; a V2 the library refuses (HDR / 10-bit, a GPU without the subgroup
-  operations) falls back to V1 and the Status line below ends with ` · V1: <reason>`.
+  takes effect at once; a V2 the library refuses (a GPU without the subgroup
+  operations, a size beyond its limits) falls back to V1 and the Status line below ends with ` · V1: <reason>`.
 - `Why no second interpolator for the blur:` every shown frame IS a blurred synth: one
   `recordSynthBlur()` per output, whose sub-frames are what the blur averages. One output cannot
   be V2 for the generated frame and V1 for its blur, so a second instance would only double the

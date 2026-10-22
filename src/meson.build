@@ -131,7 +131,8 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
                 'ui_detect', 'ui_box_update', 'ui_box_mask', 'ui_mask', 'ui_inpaint', 'ui_patch',
                 'ui_v2_update', 'ui_v2_mask', 'ui_v2_lumafill',
                 'blur_lookup', 'blur_error', 'blur_resolve',
-                # Motion version 2 (Rgba8 only, so plain: no per-format variants below).
+                # Motion version 2 (the plain, Rgba8 set; its four synthesis shaders also get per-format
+                # variants below).
                 'v2_medhist', 'v2_search', 'v2_clean', 'v2_morph', 'v2_repick', 'v2_qfield', 'v2_qown', 'v2_qcov',
                 'v2_qmorph', 'v2_static', 'v2_enclose', 'v2_morph_s', 'v2_qmorph_s']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
@@ -162,7 +163,10 @@ endforeach
 # two plane views and write one back, and the only layer-0 YCbCr surfaces are video
 # players (superdoc/features/frame-generation.md, "HDR and 10-bit games").
 framegen_colour_shaders = ['luma', 'error', 'resolve', 'fallback', 'ui_detect', 'ui_box_update', 'ui_inpaint', 'ui_patch',
-                           'ui_v2_update', 'ui_v2_lumafill', 'blur_error', 'blur_resolve']
+                           'ui_v2_update', 'ui_v2_lumafill', 'blur_error', 'blur_resolve',
+                           # Motion version 2's synthesis (both modes, with and without the static-overlay tests):
+                           # the only V2 passes that read or write colour; the rest read the luma above
+                           'v2_morph', 'v2_morph_s', 'v2_qmorph', 'v2_qmorph_s']
 foreach fmt : ['rgb10', 'f16']
   foreach name : framegen_colour_shaders
     fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '-DFG_FORMAT_' + fmt.to_upper() + '=1',

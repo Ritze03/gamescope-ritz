@@ -77,8 +77,8 @@ namespace fghost
 	enum class UiProt : uint8_t { Off, Crosshair, WholeScreen, CrosshairV2 };
 
 	// "Motion version": the library's motion algorithm (framegen::MotionVersion).
-	// V2 is the "morph" interpolator (Rgba8 games only; anything else, or a GPU
-	// without the subgroup operations it needs, stays on V1 and RenderStatus::
+	// V2 is the "morph" interpolator (every game format we build; a GPU
+	// without the subgroup operations it needs stays on V1 and RenderStatus::
 	// motionNote says why). One runtime setting (setSettings, no wait): a Motion
 	// switch drops the current estimate. The Quality below serves both versions:
 	// V1's flowScale/sub-pixel preset, and V2's Quality / Performance mode (there is

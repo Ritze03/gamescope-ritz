@@ -15,7 +15,8 @@ The newest version below is the one this build reports.
 - **Crosshair scale reference**: Apply scaling can scale from a resolution you pick
   instead of the game's, so the crosshair looks the same when you change resolution.
 - **Frame generation V2**: a Motion version switch picks the new V2 interpolator, and
-  one Quality setting serves both versions. HDR and 10-bit games stay on V1.
+  one Quality setting serves both versions. It works in every game format, HDR and
+  10-bit included.
 - **Motion blur version**: Motion blur follows Frame generation's Motion version and
   Quality by default; turn off "Use Frame generation's settings" to give it its own.
 
