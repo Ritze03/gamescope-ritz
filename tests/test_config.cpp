@@ -1666,7 +1666,6 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
     REQUIRE( Settings{}.framegen.ui_box_height == 2.5f );
     REQUIRE( Settings{}.framegen.motion_version == "v1" );
-    REQUIRE( Settings{}.framegen.v2_mode == "quality" );
 
     Settings s{};
     s.framegen.enabled = true;
@@ -1727,38 +1726,37 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.ui_protection" ) );
     REQUIRE( IsSettingsKey( "framegen.ui_box_height" ) );
     REQUIRE( IsSettingsKey( "framegen.motion_version" ) );
-    REQUIRE( IsSettingsKey( "framegen.v2_mode" ) );
+    REQUIRE( !IsSettingsKey( "framegen.v2_mode" ) );   // removed 2026-10-22: Quality serves both versions
 }
 
-// Motion version 2 (2026-10-22): additive keys, defaults when absent, round trip, and an
-// unknown string keeps the default.
-TEST_CASE( "framegen: motion_version and v2_mode round-trip, default when absent, invalid keeps the default", "[config]" )
+// Motion version 2 (2026-10-22): an additive key, default when absent, round trip, and an
+// unknown string keeps the default. Quality (below) also serves V2's mode: there is no
+// separate V2 key, and an old `v2_mode` left in a file is ignored.
+TEST_CASE( "framegen: motion_version round-trips, defaults when absent, invalid keeps the default; an old v2_mode is ignored", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",
-        "framegen": { "quality": "performance" }
+        "framegen": { "quality": "performance", "v2_mode": "quality" }
     })";
     Settings l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v1" );
-    REQUIRE( l.framegen.v2_mode == "quality" );
+    REQUIRE( l.framegen.quality == "performance" );
 
     Settings s{};
     s.framegen.motion_version = "v2";
-    s.framegen.v2_mode = "performance";
+    s.framegen.quality = "performance";
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v2" );
-    REQUIRE( l.framegen.v2_mode == "performance" );
+    REQUIRE( l.framegen.quality == "performance" );
 
     s.framegen.motion_version = "v3";
-    s.framegen.v2_mode = "turbo";
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v1" );
-    REQUIRE( l.framegen.v2_mode == "quality" );
 }
 
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )
@@ -3690,6 +3688,45 @@ TEST_CASE( "a routed write from one panel never undoes another panel's edit (per
     REQUIRE( LoadProfile( "CS2" )->gamescope.sharpness == 11 );
     REQUIRE( LoadProfile( "CS2" )->crosshair.line_gap == 6 );
     REQUIRE( LoadProfile( "A" )->gamescope.sharpness == 9 );
+}
+
+// Frame generation and Motion blur share one interpolator, so the Motion blur area edits
+// `framegen.motion_version` / `framegen.quality` THROUGH the Frame generation panel's copy
+// (PanelFrameGen_AddMotionRows), never its own. The routed merge is per section, so this is
+// what keeps a stale `framegen` section in the blur panel's struct from being written back.
+TEST_CASE( "a stale Motion blur panel copy never undoes the shared Motion version / Quality (routed merge)", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "730" );
+
+    REQUIRE( SaveProfile( General( "A" ), Settings{} ) );
+    REQUIRE( SelectProfile( "A" ) );
+
+    static Settings frameGen;   // the owner of the framegen section
+    static Settings blur;       // the blur panel: reads and writes only motion_blur
+    frameGen = ResolvedSettings();
+    blur = ResolvedSettings();
+
+    // Selected in the Motion blur area: the Frame generation panel's setter does the write.
+    frameGen.framegen.motion_version = "v2";
+    frameGen.framegen.quality = "performance";
+    EnqueueRoutedWrite( frameGen );
+
+    // The blur panel (its framegen section still says v1 / quality) saves a blur edit.
+    blur.motion_blur.samples = 6;
+    EnqueueRoutedWrite( blur );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "A" )->framegen.motion_version == "v2" );
+    REQUIRE( LoadProfile( "A" )->framegen.quality == "performance" );
+    REQUIRE( LoadProfile( "A" )->motion_blur.samples == 6 );
+
+    // And the other way round: a Frame generation edit keeps the blur edit.
+    frameGen.framegen.quality = "quality";
+    EnqueueRoutedWrite( frameGen );
+    FlushPendingWrites();
+    REQUIRE( LoadProfile( "A" )->framegen.quality == "quality" );
+    REQUIRE( LoadProfile( "A" )->framegen.motion_version == "v2" );
+    REQUIRE( LoadProfile( "A" )->motion_blur.samples == 6 );
 }
 
 TEST_CASE( "a routed write from a caller that never resolved settings first clobbers sections it never "

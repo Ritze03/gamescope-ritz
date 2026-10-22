@@ -69,8 +69,9 @@ config section `motion_blur` (schema stays 5; additive; absent loads the default
 | `motion_blur.weights` | `even` / `gaussian` (default) | the row "Weighting": `BlurWeights::Even` (a box shutter, hard-edged smear like a camera) / `Gaussian` (the ends carry 13.5% of the centre's weight: softer, effectively shorter) |
 
 Rows, in order: **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
-(slider 0..100 %), **Measured against**, **Weighting**, **Status**. The other rows are
-disabled while the switch is off. The rail summary reads `off` or `N samples`. The help
+(slider 0..100 %), **Measured against**, **Weighting**, then (group "Interpolation") **Quality**
+and **Motion version**, and **Status**. The blur's own rows are disabled while the switch is
+off; Quality and Motion version are enabled while Motion blur or Frame generation is on. The rail summary reads `off` or `N samples`. The help
 texts are plain ASCII (the overlay font atlas is Latin-1; `->` and no arrows) and carry the
 essentials: it blends in-between frames like a camera shutter, works with or without Frame
 generation, never waits for a future frame so it adds no delay, costs about 0.03 ms per
@@ -78,16 +79,27 @@ sample at 1280x960 and 0.1 ms at 1440p per shown frame, Shown frame is subtle an
 is the film look, UI protection keeps the crosshair sharp inside the blur, and it reduces
 clarity so it is not for competitive play.
 
-**Shared with Frame generation** (nothing to set here): the **Quality** preset (flow scale)
-and **UI protection** live in the Frame generation area and apply to the blur too, even with
-Frame generation itself off -- they are library settings of the one Interpolator both
-features use. `Why:` UI protection pastes the real pixels of a still crosshair / HUD *after*
+**Shared with Frame generation**: the **Quality** and **Motion version** rows are in both
+areas and are the SAME setting (`framegen.quality`, `framegen.motion_version`; the blur's rows
+have ids `motion_blur.quality` / `motion_blur.motion_version` and `Key()` the framegen keys),
+and **UI protection** lives in the Frame generation area; all apply to the blur too, even
+with Frame generation itself off -- they are library settings of the one Interpolator both
+features use. Selecting V2 here takes effect at once (the row writes through the Frame
+generation panel's setter, which pushes to the renderer), and the blur-only renderer uses the
+configured version and quality like frame generation does. The version is V2 (Rgba8 games,
+capable GPU) or falls back to V1, and the Status line below then ends with ` · V1: <reason>`.
+Quality: V1 Performance is the quarter-resolution estimate; V2 Quality / Performance are V2's
+two modes (see [frame-generation.md](frame-generation.md#motion-version-2)). `Why in this area
+too:` the user, *"Make sure that I can also select the v2 for the motion blur"*. `Why the
+rows write through the Frame generation panel's copy of the settings:` the config merge is per
+section, so a second panel holding its own `framegen` section would write a stale one over an
+edit made in the other area (covered by a test in `tests/test_config.cpp`). `Why:` UI protection pastes the real pixels of a still crosshair / HUD *after*
 the average (the library's `ui_patch`), so the crosshair stays exact while the world around
 it is blurred.
 
 **Status line** (always one line): `4 samples · 1.8 ms window` while applied (the window is
-the last output's shutter length in ms of content time, the pacer's `Report::blurWindowMs`);
-`Off`; `Blur amount is 0: no blur`; otherwise the reason (the renderer's first -- YCbCr, an
+the last output's shutter length in ms of content time, the pacer's `Report::blurWindowMs`;
+` · V1: <reason>` is appended when Motion version V2 was asked for and refused); `Off`; `Blur amount is 0: no blur`; otherwise the reason (the renderer's first -- YCbCr, an
 unsupported pixel format, ... -- then pacing's: warming up, a frame gap, the GPU too slow); `Waiting for
 frames` before the first publish. Pacing's reason `Off` (what it reports for a blur-only
 plan with frame generation off) is deliberately not shown as a reason.

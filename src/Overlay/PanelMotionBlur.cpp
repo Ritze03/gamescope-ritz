@@ -2,11 +2,23 @@
 //
 // SHAPE. Five per-profile rows -- Motion blur (the on/off switch), Samples (2..8),
 // Blur amount (0..100 %), Measured against (Shown frame / Game frame), Weighting
-// (Even / Gaussian) -- plus one live Status line. Every row's id IS its config key
+// (Even / Gaussian) -- plus the two rows SHARED with Frame generation (Quality, Motion
+// version; see below) and one live Status line. Every row's id IS its config key
 // (`motion_blur.enabled`, `motion_blur.samples`, ...), which is how the Shell's
 // per-profile inherited/overridden dot and "Reset to inherited" find it.
 // Every edit calls fghost::SetBlurConfig() at once; the renderer and the pacer read
 // it on the next frame (nothing waits).
+//
+// SHARED ROWS (2026-10-22). Blur and Frame generation run on one interpolator, so its
+// Motion version (V1 / V2) and Quality are one setting each, `framegen.motion_version` /
+// `framegen.quality`, and are selectable from both areas. The rows are added by
+// PanelFrameGen_AddMotionRows(), whose bindings read and write PanelFrameGen.cpp's copy
+// of the settings and push to the renderer from there -- this file's `s_Settings` never
+// edits the `framegen` section. `Why:` EnqueueRoutedWrite() merges per SECTION, so a
+// second editor of one section would write its stale copy over the first one's edit.
+// With Frame generation off the renderer still runs the configured version for the blur
+// (EnsureReady() reads the same packed config), and the Status line below appends the
+// library's reason when V2 was refused and V1 runs instead.
 //
 // `Why this panel is thin:` the user's architecture rule -- "you're basically only
 // building the GUI in this chat and most of the stuff should go into the frame gen
@@ -25,6 +37,7 @@
 
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
+#include "PanelFrameGen.h"
 
 namespace gamescope
 {
@@ -105,7 +118,8 @@ namespace gamescope
 		// ---- the Status line ----------------------------------------------------
 		// One compact line, always. Pure over its inputs.
 		//   Off                    -> "Off"
-		//   applied                -> "4 samples · 1.8 ms window"
+		//   applied                -> "4 samples · 1.8 ms window" (+ " · V1: <reason>" when
+//                             Motion version V2 was refused and V1 runs)
 		//   otherwise the reason   -> the renderer's (HDR, 10-bit, YCbCr, ...) when it
 		//                             refuses, else pacing's (GPU too slow, warming up,
 		//                             a frame gap, ...), else a note that amount 0 is
@@ -121,6 +135,14 @@ namespace gamescope
 			{
 				char sz[ 96 ];
 				std::snprintf( sz, sizeof( sz ), "%d samples · %.1f ms window", ps.blurSamples, ps.blurWindowMs );
+				// V2 was asked for but the library refused it for this content or GPU.
+				if ( rs.motionNote && rs.motionNote[ 0 ] )
+				{
+					std::string s = sz;
+					s += " · V1: ";
+					s += rs.motionNote;
+					return s;
+				}
 				return sz;
 			}
 
@@ -227,6 +249,10 @@ namespace gamescope
 			.Keywords( "motion blur weighting weights even gaussian soft box shutter" )
 			.DisabledUnless( On, "motion blur is off" );
 
+		a.Group( "Interpolation" );
+
+		PanelFrameGen_AddMotionRows( a, true );
+
 		a.Group( "Status" );
 
 		a.Facts( "motion_blur.status", "Status", []
@@ -236,9 +262,10 @@ namespace gamescope
 		} )
 			.Help( "What the blur is doing right now: the number of samples and the length of "
 			       "the shutter window in milliseconds, or why it is not applied (HDR or 10-bit "
-			       "content, a GPU too slow to keep up, waiting for frames). The Quality preset "
-			       "and UI protection in Frame generation apply to the blur too, even with "
-			       "Frame generation itself off." )
+			       "content, a GPU too slow to keep up, waiting for frames). The Quality preset, "
+			       "Motion version and UI protection apply to the blur too, even with Frame "
+			       "generation itself off; when V2 is not possible for this game or GPU, the "
+			       "line ends with \" · V1:\" and the reason." )
 			.Keywords( "motion blur status samples window reason" );
 	}
 }

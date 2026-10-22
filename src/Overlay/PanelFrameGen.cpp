@@ -1,7 +1,7 @@
 // The "Frame generation" settings area -- see PanelFrameGen.h.
 //
-// SHAPE. Twelve per-profile rows -- Frame generation (the on/off switch), Multiplier
-// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Limit to GPU speed, Quality, Motion version, V2 mode,
+// SHAPE. Eleven per-profile rows -- Frame generation (the on/off switch), Multiplier
+// (2x..8x / Target fps), Target fps, Priority, Pause at refresh rate, Limit to GPU speed, Quality, Motion version,
 // Artifact safety, Static HUD protection, UI protection, Crosshair box size -- plus
 // one live Status line. Every row's id IS its config key (`framegen.mode`,
 // `framegen.target_fps`, ...), which is how the Shell's per-profile
@@ -13,7 +13,21 @@
 // framegen in general, and then below that should just be the multiplier. It
 // shouldn't be combined into one."
 // Every edit calls fghost::SetConfig() at once; the renderer applies the
-// presets live (a Quality change costs it one GPU wait, which is its business).
+// presets live (a V1 Quality change costs it one GPU wait, which is its business;
+// on V2 it is free, see FrameGenHost.cpp's EnsureReady()).
+//
+// QUALITY AND MOTION VERSION ARE SHARED with the Motion blur area (2026-10-22): Frame
+// generation and Motion blur run on ONE interpolator, so the version and the quality are
+// properties of that one interpolator and have ONE config key each. PanelMotionBlur.cpp
+// adds the same two rows through PanelFrameGen_AddMotionRows() below, whose getters and
+// setters go through THIS file's copy of the settings -- never the blur panel's. `Why:`
+// the config merge (EnqueueRoutedWrite) is per SECTION: a second panel holding its own
+// copy of `framegen` would write a stale one back over an edit made here (and show it).
+// `Why one Quality for both versions:` the user, on seeing Quality / Performance twice
+// (V1's Quality, V2's "V2 mode"): "Right now we have quality with the options quality and
+// performance and v2 mode with quality and performance. This could realistically be a
+// single selector for just quality and performance, and just pass it the same way for v1
+// and v2 since both of them have the same options."
 //
 // `Why only these:` the library's expert knobs (searchPenalty and the
 // rest) are deliberately not exposed -- only the defaults were visually
@@ -161,8 +175,6 @@ namespace gamescope
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			c.motion = IndexOf( f.motion_version, kMotionKeys, 2, 0 ) == 1 ? fghost::Motion::V2 : fghost::Motion::V1;
-			c.v2Mode = IndexOf( f.v2_mode, kQualityKeys, 2, 0 ) == 1   // same two keys as Quality
-				? fghost::V2Mode::Performance : fghost::V2Mode::Quality;
 			return c;
 		}
 
@@ -199,10 +211,12 @@ namespace gamescope
 			return s_Settings.framegen.enabled;
 		}
 
-		bool V2On()
+		// The Quality / Motion version rows work for Frame generation OR Motion blur
+		// (one interpolator). The blur switch lives in the OTHER panel's copy, so ask the
+		// renderer's live config (that panel pushes every edit).
+		bool FgOrBlurOn()
 		{
-			EnsureConfigLoaded();
-			return s_Settings.framegen.enabled && s_Settings.framegen.motion_version == "v2";
+			return On() || fghost::GetBlurConfig().enabled;
 		}
 
 		bool UiOn()
@@ -305,6 +319,57 @@ namespace gamescope
 		PushToRenderer( config.framegen );
 	}
 
+	// The Quality and Motion version rows, for this area (bInBlurArea == false) and for the
+	// Motion blur area. Same labels, help and keys; the blur area's row ids differ (the
+	// registry's ids are unique) and carry the framegen key via Key(), so the inherited /
+	// overridden marker and Reset to inherited follow the one stored setting.
+	void PanelFrameGen_AddMotionRows( ui::Area &a, bool bInBlurArea )
+	{
+		const char *pszQualityId = bInBlurArea ? "motion_blur.quality" : "framegen.quality";
+		const char *pszMotionId = bInBlurArea ? "motion_blur.motion_version" : "framegen.motion_version";
+		const std::string sShared = bInBlurArea
+			? " Shared with Frame generation: changing it here changes it there too." : "";
+		const char *pszOff = "frame generation and motion blur are both off";
+
+		ui::Entry &q = a.Choice( pszQualityId, "Quality",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kQualityOptions, std::size( kQualityOptions ) );
+		q.Help( ( "Quality is the default look; Performance is cheaper on the GPU and a little less clean. "
+		          "Motion version V1: Performance estimates motion at a quarter resolution and can "
+		          "miss thin, fast detail (roughly 35-50% cheaper; 1440p 2x: 0.50 -> 0.25 ms per game "
+		          "frame, RX 7900 XTX); switching pauses the picture for an instant. Motion version "
+		          "V2: Quality works out a motion value for every pixel and keeps the side of the "
+		          "picture that is still visible at edges, Performance is a simpler warp, a little "
+		          "less clean around moving edges (1080p 2x, RX 7900 XTX: V1 0.30, V2 Quality 0.24, "
+		          "V2 Performance 0.14 ms per game frame); switching does not interrupt the picture. "
+		          "It applies to Frame generation and to Motion blur." + sShared ).c_str() )
+			.Default( 0 )
+			.Keywords( "frame generation motion blur quality performance cost gpu motion estimation v2 mode" )
+			.DisabledUnless( FgOrBlurOn, pszOff );
+		if ( bInBlurArea )
+			q.Key( "framegen.quality" );
+
+		ui::Entry &m = a.Choice( pszMotionId, "Motion version",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kMotionOptions, std::size( kMotionOptions ) );
+		m.Help( ( "V2 is a newer, experimental way of making the in-between frames: it bends "
+		          "the picture along the motion and stretches it over gaps instead of falling "
+		          "back to the real frame spot by spot, and it is cheaper on the GPU. The delay "
+		          "is the same as V1. It works on normal 8-bit games only; HDR and 10-bit games, "
+		          "and GPUs without the shader features it needs, stay on V1 (the Status line "
+		          "says why). It applies to Frame generation and to Motion blur, also on its own. "
+		          "Switching shows real frames for an instant." + sShared ).c_str() )
+			.Default( 0 )
+			.Keywords( "frame generation motion blur motion version v1 v2 morph interpolation algorithm experimental" )
+			.DisabledUnless( FgOrBlurOn, pszOff );
+		if ( bInBlurArea )
+			m.Key( "framegen.motion_version" );
+	}
+
 	void PanelFrameGen_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.framegen", "Frame generation", ui::Section::Display );
@@ -403,47 +468,7 @@ namespace gamescope
 			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
 			.DisabledUnless( On, "frame generation is off" );
 
-		a.Choice( "framegen.quality", "Quality",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kQualityOptions, std::size( kQualityOptions ) )
-			.Help( "Performance is roughly 35-50% cheaper on the GPU (1440p 2x: 0.50 -> 0.25 ms per "
-			       "game frame; 4x: 0.71 -> 0.46 ms, RX 7900 XTX) but estimates motion at a quarter "
-			       "resolution and can miss thin, fast detail. Quality is the default look. "
-			       "Switching pauses the picture for an instant." )
-			.Default( 0 )
-			.Keywords( "frame generation quality performance cost gpu motion estimation" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Choice( "framegen.motion_version", "Motion version",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kMotionOptions, std::size( kMotionOptions ) )
-			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
-			       "the picture along the motion and stretches it over gaps instead of falling "
-			       "back to the real frame spot by spot, and it is cheaper on the GPU. The delay "
-			       "is the same as V1. It works on normal 8-bit games only; HDR and 10-bit games, "
-			       "and GPUs without the shader features it needs, stay on V1 (the Status line "
-			       "says why). Switching shows real frames for an instant." )
-			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 morph interpolation algorithm experimental" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Choice( "framegen.v2_mode", "V2 mode",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v2_mode, kQualityKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v2_mode = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kQualityOptions, std::size( kQualityOptions ) )
-			.Help( "Only for Motion version V2. Quality also works out a motion value for every "
-			       "pixel and keeps the side of the picture that is still visible at edges; "
-			       "Performance is about 40% cheaper on the GPU (1080p 2x, RX 7900 XTX: V1 0.30, "
-			       "V2 Quality 0.24, V2 Performance 0.14 ms per game frame) but a little less "
-			       "clean around moving edges. Switching does not interrupt the picture." )
-			.Default( 0 )
-			.Keywords( "frame generation v2 mode quality performance morph cost gpu" )
-			.DisabledUnless( V2On, "frame generation is off, or Motion version is not V2" );
+		PanelFrameGen_AddMotionRows( a, false );
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(

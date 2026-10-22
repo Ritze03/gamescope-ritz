@@ -37,7 +37,7 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed. The crosshair box size is
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28 motion version. The crosshair box size is
 		// its own word, g_uUiBox.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
@@ -60,8 +60,7 @@ namespace fghost
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
-				| ( uint32_t( c.motion ) << 28 )
-				| ( uint32_t( c.v2Mode ) << 29 );
+				| ( uint32_t( c.motion ) << 28 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -109,7 +108,6 @@ namespace fghost
 			c.ui = UiProt( ( u >> 24 ) & 0x3u );
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
 			c.motion = Motion( ( u >> 28 ) & 0x1u );
-			c.v2Mode = V2Mode( ( u >> 29 ) & 0x1u );
 			return c;
 		}
 
@@ -463,7 +461,8 @@ namespace fghost
 			s.uiHistory = nUiHistory;
 			// Motion version: a request; ResolveMotion() drops V2 to V1 where the library refuses it.
 			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2 : framegen::MotionVersion::V1;
-			s.v2Mode = c.v2Mode == V2Mode::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
+			// The one Quality setting also picks V2's mode (V1 ignores it).
+			s.v2Mode = c.quality == Quality::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
 			return s;
 		}
 
@@ -642,7 +641,7 @@ namespace fghost
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x1u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
 				| ( uint64_t( c.uiBoxTenths ) << 48 );
 
 			if ( !H.bLive )
@@ -683,13 +682,11 @@ namespace fghost
 
 				H.bLive = true;
 				g_uGate.fetch_or( kGateLive, std::memory_order_relaxed );
-				H.uAppliedConfig = uLibraryConfig;
-				if ( want.motionVersion == framegen::MotionVersion::V2 )
-				{
-					const framegen::Settings v2 = ResolveMotion( H, want );
-					if ( v2.motionVersion == framegen::MotionVersion::V2 && !H.interp.setSettings( v2 ) )
-						g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
-				}
+				// ponytail: V2 is not switched on here but by the change block below (it
+				// needs V2's own flowScale, see there), so the applied key is left
+				// unequal to the wanted one and the code falls through.
+				const bool bWantV2 = want.motionVersion == framegen::MotionVersion::V2;
+				H.uAppliedConfig = bWantV2 ? ~uLibraryConfig : uLibraryConfig;
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
 					w, h, want.flowScale, H.bProfiling ? "on" : "n/a",
@@ -697,7 +694,8 @@ namespace fghost
 						: plan.eFormat == framegen::Format::RgbaF16
 							? ( plan.eTransfer == framegen::Transfer::Linear ? "fp16 linear (scRGB)" : "fp16 encoded" ) : "8-bit",
 					ColorspaceIsHDR( H.eColorspace ) ? ", HDR layer" : "" );
-				return true;
+				if ( !bWantV2 )
+					return true;
 			}
 
 			if ( w != H.uWidth || h != H.uHeight )
@@ -726,6 +724,18 @@ namespace fghost
 			if ( uLibraryConfig != H.uAppliedConfig )
 			{
 				want = ResolveMotion( H, want );
+				// V2 always estimates at the library's own flowScale 2 / sub-pixel (its
+				// measured numbers), so the one Quality setting is only V2's mode there:
+				// a Quality change while V2 runs is a plain setSettings() (no GPU wait, no
+				// lost estimate). V1's quality (flowScale 4 + no sub-pixel for Performance)
+				// is applied when the version goes back to V1 -- which drops the estimate
+				// anyway, so its reconfigure() wait costs nothing extra; the same goes
+				// for a V1 (Performance) -> V2 switch.
+				if ( want.motionVersion == framegen::MotionVersion::V2 )
+				{
+					want.flowScale = 2;
+					want.subpixel = true;
+				}
 				const framegen::MotionVersion eMotionWas = H.interp.settings().motionVersion;
 				if ( want.flowScale != H.interp.settings().flowScale )
 				{

@@ -203,25 +203,46 @@ content; there is **no per-pixel hold** (no trust ramp -- only the whole-frame s
 flick fallbacks show the nearer real frame), so individual frames can look distorted but the
 motion reads better. **Same latency as V1** (a synth reads only the current pair).
 
-- **Rows** (Frame generation area, below Quality): **Motion version** (V1 default / V2,
-  `framegen.motion_version` `v1` / `v2`) and **V2 mode** (Quality default / Performance,
-  `framegen.v2_mode` `quality` / `performance`; dimmed unless the switch is on and Motion
-  version is V2). Per profile, additive (schema stays 5): absent loads the default, an unknown
-  string keeps it. `Settings::v2StaticMask` stays at the library default (on) and is not
-  exposed: it keeps HUD, text and semi-transparent panels / blended crosshairs in place
-  without needing UI protection, in both modes.
-- **Quality vs Performance** (library numbers, RX 7900 XTX, 1080p 2x, ms per real pair, Quality
-  preset's flowScale 2): V1 0.30, V2 Quality 0.24, V2 Performance 0.14. Quality adds a
-  per-pixel edge-aware field and a coverage pass (which frame still shows each spot);
-  Performance is the grid morph only. The V2 mode is independent of the V1 **Quality** row
-  (that one still sets flowScale 2 / 4 and sub-pixel).
-- **Both switch at runtime** through `Interpolator::setSettings()`, no GPU wait. A **mode**
-  switch keeps the estimate (no hitch). A **version** switch drops it: `EnsureReady()` sees the
-  library's `settings().motionVersion` change, clears `bEstimateValid` and the cached outputs, so
-  the next paint records a fresh estimate with the new version (until then the real frame is
-  shown; the library's `recordSynth*` would return false). The first switch to a version builds its
-  pipelines on the spot. The config word `g_uConfig` carries the two choices at bits 28-29 and the
-  applied-config key includes them.
+- **Rows**: **Motion version** (V1 default / V2, `framegen.motion_version` `v1` / `v2`) and
+  **Quality** (`framegen.quality`, below). Both are shared with the **Motion blur** area, which
+  carries the same two rows (ids `motion_blur.motion_version` / `motion_blur.quality`, bound to
+  the same two keys via `Entry::Key()`; one function, `PanelFrameGen_AddMotionRows()`, adds them
+  to both areas): Frame generation and Motion blur run on ONE `framegen::Interpolator`, so the
+  version and the quality are properties of that one interpolator and each has ONE config key.
+  Both rows are enabled while Frame generation **or** Motion blur is on (the blur switch is read
+  from the renderer's live blur config, since it is the other panel's setting); with Frame
+  generation off the blur still runs the configured version and quality (`EnsureReady()` reads
+  the packed config whatever the Frame generation switch says). Per profile, additive (schema
+  stays 5): absent loads the default, an unknown string keeps it. `Settings::v2StaticMask` stays
+  at the library default (on) and is not exposed: it keeps HUD, text and semi-transparent panels
+  / blended crosshairs in place without needing UI protection, in both modes.
+- **One Quality for both versions** (2026-10-22). `framegen.quality` drives V1's preset
+  (Performance = flowScale 4, sub-pixel off) **and** V2's mode (`framegen::V2Mode`; Quality ->
+  Quality, Performance -> Performance); the earlier separate `framegen.v2_mode` / "V2 mode" row
+  is gone (never released: no migration, an old key left in a profile file is ignored on load).
+  `Why:` the user, seeing two identical selectors: *"Right now we have quality with the options
+  quality and performance and v2 mode with quality and performance. This could realistically be
+  a single selector for just quality and performance, and just pass it the same way for v1 and
+  v2 since both of them have the same options."* Library numbers (RX 7900 XTX, 1080p 2x, ms per
+  real pair): V1 0.30, V2 Quality 0.24, V2 Performance 0.14. V2 Quality adds a per-pixel
+  edge-aware field and a coverage pass (which frame still shows each spot); Performance is the
+  grid morph only.
+- **No hitch on a Quality change while V2 runs.** A V1 quality change is `reconfigure()` (a GPU
+  wait; the estimate is dropped), a V2 mode change is a plain `setSettings()` that keeps the
+  estimate. So while V2 runs, `EnsureReady()` ignores V1's quality: V2 always estimates at the
+  library's own flowScale 2 / sub-pixel (the settings its numbers are measured at), and the
+  Quality row is only V2's mode, free. V1's flowScale 4 is applied when the version goes back
+  to V1, and a V1 Performance -> V2 switch applies flowScale 2; both are version switches, which
+  drop the estimate anyway, so the one `reconfigure()` wait costs nothing extra. At start V2 is
+  not switched on in `init()` but by the same change block on the first frame
+  (`uAppliedConfig` left unequal on purpose), so the pinning is in one place.
+- **Version switches at runtime** through `Interpolator::setSettings()` (or `reconfigure()` when
+  the flowScale has to change, above). A **version** switch drops the estimate: `EnsureReady()`
+  sees the library's `settings().motionVersion` change, clears `bEstimateValid` and the cached
+  outputs, so the next paint records a fresh estimate with the new version (until then the real
+  frame is shown; the library's `recordSynth*` would return false). The first switch to a version
+  builds its pipelines on the spot. The config word `g_uConfig` carries the version at bit 28
+  and the applied-config key includes it.
 - **Rgba8 only, plus a subgroup requirement, with V1 as the fallback.** V2 refuses any
   `Format` but `Rgba8` (HDR, 10-bit, fp16, NV12, P010) and a GPU without compute subgroups
   (basic / vote / arithmetic / shuffle / clustered, at least 16 lanes). `InitInfo::getProps2` is
@@ -232,7 +253,9 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
   `Interpolator::settingsError( want )` (static format rule + device rule) and, if it names a
   reason, runs V1 instead. The reason is a library string literal: it goes to the log
   (`Motion version 2 refused, running V1: ...`, once per change) and to
-  `RenderStatus::motionNote`, which the Status line appends while generating (` · V1: <reason>`).
+  `RenderStatus::motionNote`, which the Frame generation Status line appends while generating and
+  the Motion blur Status line appends while the blur is applied (` · V1: <reason>`, also with
+  Frame generation off).
   A format change re-inits, so an HDR game and an SDR game each get their own answer.
 - **Unused-version memory.** `releaseUnusedMotion()` is deliberately not called: it needs the
   retire rule (a GPU wait) and there is no natural spot (the ring-shrink wait is rare and
@@ -921,12 +944,11 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
-| `framegen.quality` | `quality` / `performance` | Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
+| `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2), also shown in the Motion blur area. On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` (default) / `low` / `default` / `high` | trust ramp (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30 |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
 | `framegen.motion_version` | `v1` (default) / `v2` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (Rgba8 content, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22) |
-| `framegen.v2_mode` | `quality` (default) / `performance` | the row "V2 mode": V2's Quality / Performance; ignored while V1; additive, absent loads `quality` |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
@@ -956,7 +978,7 @@ and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shel
 overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2), V2 mode (Quality / Performance), Artifact safety (Off / Low / Default / High), Static HUD
+rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2; both also in the Motion blur area, enabled while Frame generation or Motion blur is on), Artifact safety (Off / Low / Default / High), Static HUD
 protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
@@ -981,7 +1003,7 @@ sliders would invite settings nobody has looked at.
   effective multiplier follows: `60->280 · 8× (×4.6) · +13 ms`;
 - the FG / UI GPU times are **not** on the line any more (`Facts` rows have no details pane);
   they remain in the `framegen` debug log and `RenderStatus::lastPairGpuMs` / `lastUiMs`;
-- while generating with V2 wanted but refused, ` · V1: <the library's reason>` is appended (see [Motion version 2](#motion-version-2));
+- while generating with V2 wanted but refused, ` · V1: <the library's reason>` is appended (see [Motion version 2](#motion-version-2); the Motion blur Status line does the same for the blur);
 - otherwise the reason (renderer's first, then pacing's), `Off`, or `Waiting for frames`.
 
 It writes `->` and 1/2 in help text because the overlay font atlas is Latin-1 only (no

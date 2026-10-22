@@ -79,11 +79,12 @@ namespace fghost
 	// "Motion version": the library's motion algorithm (framegen::MotionVersion).
 	// V2 is the "morph" interpolator (Rgba8 games only; anything else, or a GPU
 	// without the subgroup operations it needs, stays on V1 and RenderStatus::
-	// motionNote says why). V2Mode is its Quality / Performance (framegen::V2Mode).
-	// Both runtime (setSettings, no wait): a Motion switch drops the current
-	// estimate, a mode switch keeps it. Packed at bits 28-29 of the main word.
+	// motionNote says why). One runtime setting (setSettings, no wait): a Motion
+	// switch drops the current estimate. The Quality below serves both versions:
+	// V1's flowScale/sub-pixel preset, and V2's Quality / Performance mode (there is
+	// no separate V2 setting). Packed at bit 28 of the main word. Applies to Motion
+	// blur too, with Frame generation off.
 	enum class Motion : uint8_t { V1, V2 };
-	enum class V2Mode : uint8_t { Quality, Performance };
 
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
@@ -205,7 +206,6 @@ namespace fghost
 		// game's height; clamped to [kUiBoxMinTenths, kUiBoxMaxTenths] by SetConfig().
 		int uiBoxTenths = kUiBoxDefaultTenths;
 		Motion motion = Motion::V1;
-		V2Mode v2Mode = V2Mode::Quality;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

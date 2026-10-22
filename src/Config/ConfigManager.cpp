@@ -351,9 +351,6 @@ namespace gamescope::config
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
                 if ( sMotion == "v1" || sMotion == "v2" )
                     f.motion_version = sMotion;
-                const std::string sV2Mode = JGetString( *pFrameGen, "v2_mode", f.v2_mode );
-                if ( sV2Mode == "quality" || sV2Mode == "performance" )
-                    f.v2_mode = sV2Mode;
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -811,7 +808,6 @@ namespace gamescope::config
             // Rounded to the slider's 0.1 step through a double, so 2.7f is stored as 2.7, not 2.7000000476...
             jFrameGen[ "ui_box_height" ] = std::round( double( fg.ui_box_height ) * 10.0 ) / 10.0;
             jFrameGen[ "motion_version" ] = fg.motion_version;
-            jFrameGen[ "v2_mode" ] = fg.v2_mode;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
