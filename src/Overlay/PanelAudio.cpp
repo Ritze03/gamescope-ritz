@@ -527,13 +527,13 @@ namespace gamescope
 
 		// ---- Dynamics rows ---------------------------------------------
 		// audio.dynamics.* (per profile, default off), applied to the capture node
-		// by main.cpp's ritz_apply_config_live() -> Capture::SetDynamics() like
-		// audio.capture. The Preset row and the six Advanced sliders edit the same
+		// by the setters below calling Capture::SetDynamics() directly (and at startup
+		// and on a profile switch by main.cpp's ritz_apply_config_live()). The Preset row and the six Advanced sliders edit the same
 		// AudioDynamicsSettings: picking a named preset loads its values into the
 		// sliders; moving a slider makes the preset "custom" and keeps the values.
 		constexpr ui::Option kDynamicsPresetOptions[] = {
 			{ 0, "Off" }, { 1, "Even out" }, { 2, "Night" }, { 3, "Limiter only" }, { 4, "Custom" } };
-		constexpr const char *kDynamicsPresetKeys[] = { "off", "even_out", "night", "limiter_only", "custom" };
+		constexpr const auto &kDynamicsPresetKeys = kAudioDynamicsPresetKeys;
 		constexpr Audio::Dynamics::Preset kDynamicsPresets[] = {
 			Audio::Dynamics::Preset::Off, Audio::Dynamics::Preset::EvenOut,
 			Audio::Dynamics::Preset::Night, Audio::Dynamics::Preset::LimiterOnly };
@@ -550,25 +550,19 @@ namespace gamescope
 
 		void SetDynamicsPreset( int n )
 		{
+			// Config first (EnsureConfigLoaded() may reload a pre-edit snapshot),
+			// live second, persist last -- the order PanelDisplay.cpp's ApplyEdit()
+			// enforces. Applied here, not left to ritz_apply_config_live(): a
+			// routed write does not bump the config generation, so that hook never
+			// runs for it (see AudioDynamicsPickPreset() in PanelAudio.h).
 			EnsureConfigLoaded();
-			n = std::clamp( n, 0, 4 );
-			auto &d = s_CachedSettings.audio.dynamics;
-			d.preset = kDynamicsPresetKeys[ n ];
-			if ( n >= 1 && n <= 3 )
-			{
-				const Audio::Dynamics::Params p = Audio::Dynamics::PresetParams( kDynamicsPresets[ n ] );
-				d.threshold_db = p.flThresholdDb;
-				d.ratio = p.flRatio;
-				d.attack_ms = p.flAttackMs;
-				d.release_ms = p.flReleaseMs;
-				d.makeup_db = p.flMakeupDb;
-				d.ceiling_db = p.flCeilingDb;
-			}
+			AudioDynamicsPickPreset( s_CachedSettings.audio.dynamics, n,
+				[]( const Audio::Dynamics::Params &p ) { Audio::Capture::SetDynamics( p ); } );
 			QueueSave();
 		}
 
-		// One Advanced slider's bind: reads the stored value, writes it and flips
-		// the preset to Custom.
+		// One Advanced slider's bind: reads the stored value, writes it, flips
+		// the preset to Custom and applies it to the capture node.
 		ui::AnyBind DynamicsBind( float config::AudioDynamicsSettings::*pMember )
 		{
 			return ui::AnyBind::Of<float>(
@@ -576,9 +570,8 @@ namespace gamescope
 				[ pMember ]( float f )
 				{
 					EnsureConfigLoaded();
-					auto &d = s_CachedSettings.audio.dynamics;
-					d.*pMember = f;
-					d.preset = "custom";
+					AudioDynamicsSetValue( s_CachedSettings.audio.dynamics, pMember, f,
+						[]( const Audio::Dynamics::Params &p ) { Audio::Capture::SetDynamics( p ); } );
 					QueueSave();
 				} );
 		}
@@ -611,7 +604,8 @@ namespace gamescope
 
 			// ---- game audio capture -------------------------------------
 			// The switch is audio.capture (per profile, default on), applied live
-			// by main.cpp's ritz_apply_config_live() -> Capture::SetWanted(); the
+			// by the setter below calling Capture::SetWanted() (and at startup and on a
+			// profile switch by main.cpp's ritz_apply_config_live()); the
 			// row id is the config key itself. While capture is Active the Game
 			// volume row acts on the capture sink (no guessing); it needs no
 			// wpctl, so it is drawn whatever the wpctl state below is.
@@ -624,6 +618,10 @@ namespace gamescope
 					{
 						EnsureConfigLoaded();
 						s_CachedSettings.audio.capture = b;
+						// Live second, persist last. Applied here because a routed
+						// write does not bump the config generation, so
+						// ritz_apply_config_live() would not run for it.
+						Audio::Capture::SetWanted( b );
 						QueueSave();
 					} ) )
 				.Help( "Plays the game's audio into a private output of its own first, so the Game "
@@ -703,8 +701,10 @@ namespace gamescope
 				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );
 
 			a.Slider( "audio.dynamics.ratio", "Ratio", DynamicsBind( &config::AudioDynamicsSettings::ratio ) )
-				.Help( "How hard sounds above the Threshold are turned down. 1 does nothing; 3 turns a "
-				       "9 dB overshoot into 3 dB; 20 is close to a wall." )
+				.Help( "How hard sounds above the Threshold are turned down. At 1 the compressor is off "
+				       "(Threshold, Attack and Release then do nothing) and only the limiter, the "
+				       "Ceiling, acts, as in Limiter only; 3 turns a 9 dB overshoot into 3 dB; 20 is "
+				       "close to a wall." )
 				.Range( 1.0f, 20.0f ).Step( 0.5f ).Unit( ":1" ).Default( 3.0f )
 				.Keywords( "dynamics ratio compressor squeeze" )
 				.DisabledUnless( CaptureOn, "Capture game audio is off or not active" );

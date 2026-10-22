@@ -114,6 +114,54 @@ namespace gamescope
 		return p;
 	}
 
+	// The Dynamics group's two edits, as header-inline functions so a test can drive
+	// them without the panel's translation unit (ImGui, Registry, ConfigManager).
+	// Each writes the stored settings and then hands the resulting processor params
+	// to `fnLive`, which the panel points at Audio::Capture::SetDynamics().
+	//
+	// `Why:` the rows used to only save. A routed write (config::EnqueueRoutedWrite)
+	// does not bump the config generation, and main.cpp's ritz_apply_config_live()
+	// -- the only other caller of Capture::SetDynamics() -- runs only at startup and
+	// on a generation bump (profile select/create/copy/delete), so a preset picked
+	// in-session did nothing until the next restart or profile switch. Taking the
+	// live call as a parameter makes "an edit also applies" part of the edit rather
+	// than something each setter must remember (the Game volume row does the same
+	// by calling Capture::SetVolume() directly).
+	//
+	// Preset index: 0 Off, 1 Even out, 2 Night, 3 Limiter only, 4 Custom.
+	inline constexpr const char *kAudioDynamicsPresetKeys[] = { "off", "even_out", "night", "limiter_only", "custom" };
+
+	template <typename TLive>
+	inline void AudioDynamicsPickPreset( config::AudioDynamicsSettings &d, int n, TLive &&fnLive )
+	{
+		constexpr Audio::Dynamics::Preset kPresets[] = {
+			Audio::Dynamics::Preset::Off, Audio::Dynamics::Preset::EvenOut,
+			Audio::Dynamics::Preset::Night, Audio::Dynamics::Preset::LimiterOnly };
+		n = n < 0 ? 0 : ( n > 4 ? 4 : n );
+		d.preset = kAudioDynamicsPresetKeys[ n ];
+		if ( n >= 1 && n <= 3 )
+		{
+			const Audio::Dynamics::Params p = Audio::Dynamics::PresetParams( kPresets[ n ] );
+			d.threshold_db = p.flThresholdDb;
+			d.ratio = p.flRatio;
+			d.attack_ms = p.flAttackMs;
+			d.release_ms = p.flReleaseMs;
+			d.makeup_db = p.flMakeupDb;
+			d.ceiling_db = p.flCeilingDb;
+		}
+		fnLive( AudioDynamicsParams( d ) );
+	}
+
+	// One Advanced slider: stores the value and flips the preset to Custom.
+	template <typename TLive>
+	inline void AudioDynamicsSetValue( config::AudioDynamicsSettings &d, float config::AudioDynamicsSettings::*pMember,
+	                                   float f, TLive &&fnLive )
+	{
+		d.*pMember = f;
+		d.preset = "custom";
+		fnLive( AudioDynamicsParams( d ) );
+	}
+
 	// P3 part B: the E2 registration for `audio.mixer`.
 	//
 	// This is the first DYNAMIC area in the product -- its row set is one

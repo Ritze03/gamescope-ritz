@@ -270,8 +270,9 @@ without libpipewire, every function is a no-op and `StatusText()` says so.
 
 `audio.capture` — per profile, default **on** (`config::AudioSettings`, JSON
 `"audio": { "capture": true }`). Additive, no schema bump: a profile without the object
-reads as on. Read at startup and pushed live by `ritz_apply_config_live()` →
-`Capture::SetWanted()`. The Mixer's "Capture game audio" switch row is `audio.capture`
+reads as on. Read at startup and on a profile switch by `ritz_apply_config_live()` →
+`Capture::SetWanted()`, and pushed live by the Mixer switch's own setter (a routed write
+does not bump the config generation, so the hook does not run for it; fixed 2026-10-22). The Mixer's "Capture game audio" switch row is `audio.capture`
 (see audio-mixer.md).
 
 `audio.dynamics.*` — per profile, default preset **off** (`config::AudioDynamicsSettings`,
@@ -280,7 +281,16 @@ JSON `"audio": { "dynamics": { "preset", "threshold_db", "ratio", "attack_ms",
 load to the ranges `Dynamics.cpp` enforces (−80..0 dB, 1..20, 0.1..500 ms, 1..5000 ms,
 ±24 dB, −24..0 dB). `AudioDynamicsParams()` (`PanelAudio.h`) turns it into the
 `Dynamics::Params`: a named preset runs the library's own values, `custom` runs the six
-stored ones. Pushed by `ritz_apply_config_live()` → `Capture::SetDynamics()`.
+stored ones. Applied at startup and on a profile
+switch by `ritz_apply_config_live()` → `Capture::SetDynamics()`, and on every in-session
+edit by the Mixer rows themselves: `AudioDynamicsPickPreset()` / `AudioDynamicsSetValue()`
+(`PanelAudio.h`) write the stored settings and call `SetDynamics()` through a callback.
+`Why:` a routed write does not bump the config generation, so the live-apply hook never
+runs for it; until 2026-10-22 the rows only saved and a preset did nothing until a restart
+or profile switch (the user's "the compressor doesn't work in CS2"). The callback is what
+`tests/test_audio_dynamics.cpp` drives. At ratio 1 the compressor is off and only the
+limiter (ceiling) acts, so Threshold/Attack/Release do nothing there (the Ratio help says
+so); "Limiter only" loads ratio 1.
 
 ## Known limits (`ponytail:`)
 

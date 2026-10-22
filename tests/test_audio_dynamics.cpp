@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Audio/Dynamics.h"
+#include "Overlay/PanelAudio.h"
 
 // The compressor + look-ahead limiter (src/Audio/Dynamics.h), driven offline on
 // synthetic signals. Pure DSP: no PipeWire, nothing is played.
@@ -577,4 +578,54 @@ TEST_CASE( "Dynamics: make-up gain glides instead of stepping", "[audio_dynamics
 	// 0.05 -> 0.2 over ~10 ms (480 frames); a step would be 0.15.
 	REQUIRE( flMaxStep < 0.005 );
 	REQUIRE( std::fabs( planes[0][20000] - 0.05f * 3.98107f ) < 0.002f );
+}
+
+// The Mixer's Dynamics rows (PanelAudio.cpp) must apply live, not only save: a routed
+// write does not bump the config generation, so ritz_apply_config_live() never ran for
+// them and a preset picked in-session did nothing until a restart or profile switch
+// (2026-10-22, reported on CS2). The panel's setters call these two edits with
+// Capture::SetDynamics() as the live callback; here the callback is recorded instead.
+TEST_CASE( "Dynamics panel: picking a preset applies it live", "[audio_dynamics]" )
+{
+	gamescope::config::AudioDynamicsSettings d;   // preset "off", the defaults
+	std::vector<Params> vLive;
+	auto fnLive = [&]( const Params &p ) { vLive.push_back( p ); };
+
+	gamescope::AudioDynamicsPickPreset( d, 2, fnLive );   // Night
+	REQUIRE( d.preset == "night" );
+	REQUIRE( vLive.size() == 1 );
+	REQUIRE( vLive.back().bEnabled );
+	REQUIRE( vLive.back().flRatio == PresetParams( Preset::Night ).flRatio );
+	REQUIRE( vLive.back().flThresholdDb == PresetParams( Preset::Night ).flThresholdDb );
+	REQUIRE( d.ratio == vLive.back().flRatio );           // the sliders were loaded with it
+
+	gamescope::AudioDynamicsPickPreset( d, 3, fnLive );   // Limiter only
+	REQUIRE( vLive.size() == 2 );
+	REQUIRE( vLive.back().bEnabled );
+	REQUIRE( vLive.back().flRatio == 1.0f );
+
+	gamescope::AudioDynamicsPickPreset( d, 0, fnLive );   // Off
+	REQUIRE( vLive.size() == 3 );
+	REQUIRE( !vLive.back().bEnabled );
+
+	gamescope::AudioDynamicsPickPreset( d, 99, fnLive );  // out of range clamps to Custom
+	REQUIRE( d.preset == "custom" );
+	REQUIRE( vLive.size() == 4 );
+	REQUIRE( vLive.back().bEnabled );
+}
+
+TEST_CASE( "Dynamics panel: moving a slider applies it live and makes the preset Custom", "[audio_dynamics]" )
+{
+	gamescope::config::AudioDynamicsSettings d;
+	std::vector<Params> vLive;
+	auto fnLive = [&]( const Params &p ) { vLive.push_back( p ); };
+
+	gamescope::AudioDynamicsPickPreset( d, 1, fnLive );   // Even out
+	gamescope::AudioDynamicsSetValue( d, &gamescope::config::AudioDynamicsSettings::threshold_db, -60.0f, fnLive );
+
+	REQUIRE( d.preset == "custom" );
+	REQUIRE( vLive.size() == 2 );
+	REQUIRE( vLive.back().bEnabled );
+	REQUIRE( vLive.back().flThresholdDb == -60.0f );
+	REQUIRE( vLive.back().flRatio == PresetParams( Preset::EvenOut ).flRatio );   // the rest kept
 }

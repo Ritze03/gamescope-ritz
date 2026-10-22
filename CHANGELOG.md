@@ -9,6 +9,14 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.13.1] – 2026-10-22
+
+### Fixed
+- **Dynamics applies at once**: changing the Mixer's Dynamics preset or sliders now
+  takes effect immediately instead of only after a restart or profile switch.
+- **Capture switch applies at once**: the Mixer's Capture game audio switch now turns
+  game audio capture on or off right away instead of only after a restart.
+
 ## [0.13.0] – 2026-10-21
 
 ### Added

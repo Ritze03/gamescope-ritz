@@ -58,9 +58,11 @@ alongside every other action — see
 
 - **`audio.capture`** ("Capture game audio", a `Switch`, default on) — the per-profile
   config key itself (`config::AudioSettings::capture`, JSON `audio.capture`), declared in
-  the "Game audio" group at the top. Writing it goes through `EnqueueRoutedWrite()`; the
-  live apply hook (`ritz_apply_config_live()` → `Capture::SetWanted()`) creates or
-  destroys the sink on the spot. Its help says where the audio goes: wherever it was
+  the "Game audio" group at the top. The setter calls `Capture::SetWanted()` itself, then
+  `EnqueueRoutedWrite()`, so the sink is created or destroyed on the spot. `Why:` a routed
+  write does not bump the config generation, so the live-apply hook (`ritz_apply_config_live()`,
+  which also calls `SetWanted()`) never runs for it; until 2026-10-22 the switch therefore
+  only saved and took effect at the next restart or profile switch. Its help says where the audio goes: wherever it was
   headed before capture (e.g. EasyEffects when it processes all outputs), otherwise the
   default output (audio-capture.md's "The original route"; this replaced the first cut's
   "bypasses EasyEffects", plan D8, on the user's request). Diagnostics has a "capture
