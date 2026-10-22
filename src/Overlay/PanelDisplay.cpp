@@ -63,6 +63,7 @@
 #include "convar.h"
 #include "Config/ConfigManager.h"
 #include "Config/AppId.h"
+#include "Config/NestedDefault.h"
 #include "LaunchOptions.h"
 #include "Fonts.h"
 #include "Widgets.h"
@@ -97,6 +98,9 @@
 // extern for the same two ConVars for the same reason, this follows that
 // existing precedent rather than adding new header plumbing.
 extern gamescope::ConVar<bool> cv_adaptive_sync;
+// The screen the nested window sits on (main.cpp; 0 = unknown). What "Native" means.
+extern uint32_t g_nScreenWidth;
+extern uint32_t g_nScreenHeight;
 extern gamescope::ConVar<bool> cv_hdr_enabled;
 
 // The per-frame application commit clock (src/commit.cpp), for
@@ -976,7 +980,7 @@ namespace gamescope
 	// -- this single entry is NOT the same thing as the removed "Custom"
 	// list entry above: it is the whole (disabled) option set for the
 	// Native/Custom aspects, never one choice among several real sizes.
-	static const ui::Option kSizeOptionsNative[] = { { kSizeCustom, "Window size" } };
+	static const ui::Option kSizeOptionsNative[] = { { kSizeCustom, "Screen size" } };
 	static const ui::Option kSizeOptionsCustom[] = { { kSizeCustom, "Custom" } };
 
 	// The user's last picks, or -1 before any. Needed because the live
@@ -1120,7 +1124,8 @@ namespace gamescope
 		// pure and unit-tested -- this function's own job is just the
 		// "trust an explicit pick while it is still live" half above, which
 		// needs the real globals.
-		return ClassifyAspect( g_nNestedWidth, g_nNestedHeight, (int)g_nOutputWidth, (int)g_nOutputHeight );
+		const auto native = gamescope::config::NativeNestedSize( g_nScreenWidth, g_nScreenHeight, g_nOutputWidth, g_nOutputHeight );
+		return ClassifyAspect( g_nNestedWidth, g_nNestedHeight, (int)native.uWidth, (int)native.uHeight );
 	}
 
 	// The one Resolution row's option set: the live aspect's list, or the
@@ -1231,7 +1236,7 @@ namespace gamescope
 	// pick that changed nothing left the row showing a list that did not
 	// describe the picture on screen; landing on the nearest size keeps the
 	// two rows and the screen telling the same story. Native and Custom keep
-	// their old behaviour (Native applies the window size, Custom seeds the
+	// their old behaviour (Native applies the screen size, Custom seeds the
 	// steppers from the live mode and re-applies it, a no-op on screen).
 	static void SetAspectChoice( int nChoice )
 	{
@@ -1246,10 +1251,14 @@ namespace gamescope
 		s_nSizeChoice   = -1;
 		if ( nChoice == kAspectNative )
 		{
-			// "Native" is the window size AT THE MOMENT OF THE PICK. It does
-			// not track later host resizes -- nothing in gamescope does with
-			// one Xwayland (only the multi-Xwayland Steam path re-modes).
-			ApplyNestedMode( (int)g_nOutputWidth, (int)g_nOutputHeight, g_nNestedRefresh );
+			// "Native" is the SCREEN's resolution (the window's size where the
+			// backend cannot tell: DRM already is the screen), AT THE MOMENT
+			// OF THE PICK. It does not track later host changes -- nothing in
+			// gamescope does with one Xwayland (only the multi-Xwayland Steam
+			// path re-modes). Persisted as 0, which startup resolves the same
+			// way (Config/NestedDefault.h), so the round trip agrees.
+			const auto native = gamescope::config::NativeNestedSize( g_nScreenWidth, g_nScreenHeight, g_nOutputWidth, g_nOutputHeight );
+			ApplyNestedMode( (int)native.uWidth, (int)native.uHeight, g_nNestedRefresh );
 		}
 		else
 		{
@@ -1497,7 +1506,7 @@ namespace gamescope
 			kAspectOptions, std::size( kAspectOptions ) )
 			.Help( "Pick the shape first; the Resolution list below then offers common sizes for "
 			       "it, and switching shape jumps straight to the closest size to the one you are "
-			       "on. Native uses the window's size; Custom lets you type any size." )
+			       "on. Native uses your screen's resolution; Custom lets you type any size." )
 			.Default( kAspectNative )
 			.Keywords( "resolution aspect ratio shape native custom 16:9 4:3 16:10 21:9 widescreen "
 			           "ultrawide" );

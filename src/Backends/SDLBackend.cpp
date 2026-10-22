@@ -44,6 +44,8 @@ extern bool steamMode;
 extern bool g_bFirstFrame;
 extern int g_nPreferredOutputWidth;
 extern int g_nPreferredOutputHeight;
+extern uint32_t g_nScreenWidth;
+extern uint32_t g_nScreenHeight;
 
 namespace gamescope
 {
@@ -776,6 +778,19 @@ namespace gamescope
 		#endif
 			g_nOutputWidth = width;
 			g_nOutputHeight = height;
+
+			// The screen the window opened on, in pixels, for the game's
+			// default (nested) size. The desktop mode is in points on a
+			// HiDPI host, so scale it by the window's own pixels/points ratio.
+			int nDisplay = SDL_GetWindowDisplayIndex( m_Connector.GetSDLWindow() );
+			SDL_DisplayMode mode;
+			if ( nDisplay < 0 )
+				nDisplay = g_nNestedDisplayIndex;
+			if ( g_nOutputWidthPts > 0 && g_nOutputHeightPts > 0 && SDL_GetDesktopDisplayMode( nDisplay, &mode ) == 0 && mode.w > 0 && mode.h > 0 )
+			{
+				g_nScreenWidth  = (uint32_t)( (uint64_t)mode.w * g_nOutputWidth  / g_nOutputWidthPts );
+				g_nScreenHeight = (uint32_t)( (uint64_t)mode.h * g_nOutputHeight / g_nOutputHeightPts );
+			}
 		}
 
 		if ( g_bForceRelativeMouse )

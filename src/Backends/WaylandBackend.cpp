@@ -51,6 +51,8 @@
 
 extern int g_nPreferredOutputWidth;
 extern int g_nPreferredOutputHeight;
+extern uint32_t g_nScreenWidth;
+extern uint32_t g_nScreenHeight;
 extern bool g_bForceHDR10OutputDebug;
 extern bool g_bBorderlessOutputWindow;
 extern gamescope::ConVar<bool> cv_adaptive_sync;
@@ -421,6 +423,11 @@ namespace gamescope
     {
         int32_t nRefresh = 60;
         int32_t nScale = 1;
+        // The output's current mode (WL_OUTPUT_MODE_CURRENT) in physical pixels,
+        // before its transform; 0 until the compositor has said.
+        int32_t nWidth = 0;
+        int32_t nHeight = 0;
+        int32_t nTransform = 0;
     };
 
 
@@ -2416,7 +2423,23 @@ namespace gamescope
 		wl_region_add( m_pFullRegion, 0, 0, INT32_MAX, INT32_MAX );
 
         // Grab stuff from any extra bindings/listeners we set up, eg. format/modifiers.
+        // (This round trip also delivers each wl_output's current mode.)
         wl_display_roundtrip( m_pDisplay );
+
+        // The screen's resolution, for the game's default (nested) size. The
+        // window has no output yet (wl_surface.enter needs a mapped surface),
+        // so only an unambiguous single output is used; with several, leave it
+        // unknown rather than guess the wrong monitor.
+        if ( m_pOutputs.size() == 1 )
+        {
+            const WaylandOutputInfo &output = m_pOutputs.begin()->second;
+            if ( output.nWidth > 0 && output.nHeight > 0 )
+            {
+                const bool bRotated = output.nTransform & 1; // 90/270, flipped or not
+                g_nScreenWidth  = bRotated ? output.nHeight : output.nWidth;
+                g_nScreenHeight = bRotated ? output.nWidth : output.nHeight;
+            }
+        }
 
         wl_registry_destroy( pRegistry );
         pRegistry = nullptr;
@@ -3184,10 +3207,16 @@ namespace gamescope
 
     void CWaylandBackend::Wayland_Output_Geometry( wl_output *pOutput, int32_t nX, int32_t nY, int32_t nPhysicalWidth, int32_t nPhysicalHeight, int32_t nSubpixel, const char *pMake, const char *pModel, int32_t nTransform )
     {
+        m_pOutputs[ pOutput ].nTransform = nTransform;
     }
     void CWaylandBackend::Wayland_Output_Mode( wl_output *pOutput, uint32_t uFlags, int32_t nWidth, int32_t nHeight, int32_t nRefresh )
     {
         m_pOutputs[ pOutput ].nRefresh = nRefresh;
+        if ( uFlags & WL_OUTPUT_MODE_CURRENT )
+        {
+            m_pOutputs[ pOutput ].nWidth = nWidth;
+            m_pOutputs[ pOutput ].nHeight = nHeight;
+        }
     }
     void CWaylandBackend::Wayland_Output_Done( wl_output *pOutput )
     {

@@ -23,6 +23,7 @@
 
 #include "Overlay/ResolutionPresets.h"
 #include "Config/ConfigManager.h"
+#include "Config/NestedDefault.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -256,4 +257,28 @@ TEST_CASE( "FormatLiveLine reads \"nested W x H@Hz . output W x H@Hz\"", "[resol
 	// given.
 	REQUIRE( FormatLiveLine( 1280, 720, 60, 1280, 720, 60 )
 		== "nested 1280x720@60 \xC2\xB7 output 1280x720@60" );
+}
+
+TEST_CASE( "Default game resolution is the screen's, not the window's first size", "[resolution]" )
+{
+	using namespace gamescope::config;
+	// Nested, no -W/-H: the window popped up 1280x720 on a 1920x1080 screen.
+	auto def = DefaultNestedSize( false, 1920, 1080, 1280, 720 );
+	REQUIRE( def.uWidth == 1920 );
+	REQUIRE( def.uHeight == 1080 );
+	// -W/-H given: an explicit window size is what the game follows (upstream).
+	def = DefaultNestedSize( true, 1920, 1080, 1280, 720 );
+	REQUIRE( def.uWidth == 1280 );
+	REQUIRE( def.uHeight == 720 );
+	// Screen unknown (DRM, headless, several Wayland outputs): the output size.
+	def = DefaultNestedSize( false, 0, 0, 1280, 720 );
+	REQUIRE( def.uWidth == 1280 );
+	REQUIRE( def.uHeight == 720 );
+	// A half-known screen is unknown.
+	def = NativeNestedSize( 1920, 0, 1280, 720 );
+	REQUIRE( def.uWidth == 1280 );
+	// "Native" in the Resolution area is the same answer.
+	def = NativeNestedSize( 2560, 1440, 1280, 720 );
+	REQUIRE( def.uWidth == 2560 );
+	REQUIRE( def.uHeight == 1440 );
 }

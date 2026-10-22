@@ -21,6 +21,8 @@ The newest version below is the one this build reports.
   Quality by default; turn off "Use Frame generation's settings" to give it its own.
 
 ### Fixed
+- **Game resolution defaults to the screen's**: with no resolution set, a game starts
+  at your monitor's resolution instead of the window's first size.
 - **Dynamics applies at once**: changing the Mixer's Dynamics preset or sliders now
   takes effect immediately instead of only after a restart or profile switch.
 - **Capture switch applies at once**: the Mixer's Capture game audio switch now turns

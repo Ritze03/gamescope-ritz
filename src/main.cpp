@@ -37,6 +37,7 @@
 #include "Utils/Defer.h"
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
+#include "Config/NestedDefault.h"
 #include "Audio/Capture.h"
 #include "LaunchOptions.h"
 #include "Overlay/Notifications.h"
@@ -323,6 +324,11 @@ int g_nNestedDisplayIndex = 0;
 
 uint32_t g_nOutputWidth = 0;
 uint32_t g_nOutputHeight = 0;
+// The screen the nested window sits on, in pixels (0 = unknown: DRM, headless,
+// OpenVR, or a host that did not say). Written once by the SDL/Wayland backend
+// during Init(); see Config/NestedDefault.h.
+uint32_t g_nScreenWidth = 0;
+uint32_t g_nScreenHeight = 0;
 int g_nOutputRefresh = 0;
 bool g_bOutputHDREnabled = false;
 
@@ -1517,8 +1523,12 @@ int main(int argc, char **argv)
 			fprintf( stderr, "Cannot specify -w without -h\n" );
 			return 1;
 		}
-		g_nNestedWidth = g_nOutputWidth;
-		g_nNestedHeight = g_nOutputHeight;
+		// No -w/-h and no saved size: the game gets the screen's resolution,
+		// not the window's first pop-up size (unless -W/-H asked for one).
+		const gamescope::config::NestedSize def = gamescope::config::DefaultNestedSize(
+			g_nPreferredOutputHeight != 0, g_nScreenWidth, g_nScreenHeight, g_nOutputWidth, g_nOutputHeight );
+		g_nNestedWidth = def.uWidth;
+		g_nNestedHeight = def.uHeight;
 	}
 	if ( g_nNestedWidth == 0 )
 		g_nNestedWidth = g_nNestedHeight * 16 / 9;

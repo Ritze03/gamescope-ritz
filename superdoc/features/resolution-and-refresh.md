@@ -63,6 +63,48 @@ path does — a 0 Hz mode would be invalid.
 With `--xwayland-count > 1` only servers `#1..` get the new mode; `#0` is Steam's and the
 per-frame output-changed block keeps it at the output size.
 
+### Default game resolution (2026-10-22)
+
+With no resolution given, the game starts at the **screen's** resolution. Precedence, first
+that applies wins: `-w/-h` on the command line, then a saved `gamescope.nested_width/height`
+(the session profile's, inherited or its own; applied by `apply_ritz_config_to_startup_state()`
+before getopt), then — new — the **screen** (`g_nScreenWidth/Height`), then the output
+window's size (today's old default, now only the last resort). The last two steps are the
+pure `DefaultNestedSize()` in `src/Config/NestedDefault.h` (`tests/test_resolution.cpp`),
+called from the `g_nNestedHeight == 0` fallback in `main.cpp`.
+
+*Where the screen size comes from.* The nested backends write `g_nScreenWidth/Height` (0 =
+unknown) during `Init()`, i.e. before that fallback and long before `LaunchNestedChildren`
+starts the game, so Xwayland's RandR size is right from the first frame:
+
+- **Wayland**: `CWaylandBackend::Init()` reads the `wl_output`'s *current* mode (the round trip
+  after binding delivers it), swapping width/height for a rotated transform. The window has no
+  output yet at that point (`wl_surface.enter` needs a mapped surface), so only an
+  **unambiguous single output** is used; with several outputs it stays 0 and the old output-size
+  default applies rather than guessing the wrong monitor.
+- **SDL**: `SDL_GetDesktopDisplayMode()` of the window's display, scaled by the window's
+  pixels/points ratio (the mode is in points on a HiDPI host).
+- **DRM / headless / OpenVR**: stay 0; the output size *is* the screen there.
+
+An explicit `-W/-H` keeps the old rule (the game follows the window size you asked for); the
+screen default is only for an unspecified window.
+
+*Why:* the user, 2026-10-22: *"By default the resolution for a new game should always be the
+screen resolution and not what the window first pops up or anything close to it, just the
+normal screen resolution."* In nested mode with no `-W/-H` the output size at that moment is
+the host's first pop-up size (upstream's 1280x720) before `-f` makes it fullscreen — a number
+that says nothing about the monitor.
+
+*"Native" means the same thing.* The Aspect row's Native pick applies the screen size (the
+output size where the screen is unknown) via `NativeNestedSize()`, and a live size equal to it
+classifies as Native. It persists as `0`, which startup resolves to the screen again, so the
+round trip agrees. Before this, Native meant the window's size.
+
+*New games and profiles.* `nested_width/height` are per-profile keys. A never-seen game starts
+on `last_general` and inherits whatever it saved, so a general profile that once had a
+non-Native size picked will still give that size to a new game; only a profile on Native (0)
+gets the screen default. Not changed here.
+
 ### Window size — removed from the UI (2026-09-06)
 
 `INestedHints::RequestOutputSize(w, h)` (`src/backend.h`, default no-op) is still implemented
@@ -253,7 +295,7 @@ thread reads it while the steamcompmgr thread writes it.
 
 | id | kind | notes |
 |---|---|---|
-| `display.resolution.aspect` | Choice | Native (window size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — picking a shape applies the closest size in it, see [One size row](#one-size-row-and-a-shape-that-applies) |
+| `display.resolution.aspect` | Choice | Native (screen size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — picking a shape applies the closest size in it, see [One size row](#one-size-row-and-a-shape-that-applies) |
 | `display.resolution.size` | Choice, `Dropdown()` | **One** row; its option list is the selected aspect's real sizes, served live by `Entry::OptionsFrom()` — **no Custom entry** (item 3, below). Native/Custom have no list, so it shows their one true entry and is disabled |
 | `display.refresh` | Choice | Follow host, 60, 90, 120, 144, 165, 240, Custom |
 | `display.refresh.custom` | Stepper | 24–500 Hz, `DisabledUnless` Custom |
