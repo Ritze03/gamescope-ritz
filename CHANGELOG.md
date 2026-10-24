@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.11.3] – 2026-10-23
+
+### Fixed
+- **Building without SDL2**: installing or updating on a system without the SDL2
+  development package no longer fails at the final link step.
+
 ## [0.11.2] – 2026-10-06
 
 ### Fixed
