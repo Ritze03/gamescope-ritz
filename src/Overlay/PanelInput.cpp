@@ -228,7 +228,9 @@ namespace gamescope
 					// SetKeyboardGrabbed() is itself a no-op if the host
 					// compositor never advertised
 					// zwp_keyboard_shortcuts_inhibit_manager_v1.
+#if HAVE_SDL2
 					SDLBackend_SetKeyboardGrabbed( b );
+#endif
 					WaylandBackend_SetKeyboardGrabbed( b );
 					QueueSave();
 				} ) )
