@@ -1,8 +1,19 @@
-glm-*
-glm
-packagecache
-stb
-nlohmann_json
-Catch2-*
-.wraplock
-/imgui
+# Meson writes into this directory during a build: downloaded fallback subprojects (glm-*, v4l-utils/,
+# packagecache/ ...), redirect .wrap files for nested subprojects promoted from wlroots
+# (libdisplay-info.wrap, libliftoff.wrap, v4l-utils.wrap ...) and .wraplock.
+# Ignore everything, then un-ignore what is tracked. A new tracked file here needs a "!" line below.
+# ritz-get treats a clone with untracked files as modified and skips updates (SPEC R6).
+/*
+!/.gitignore
+!/catch2.wrap
+!/glm.wrap
+!/imgui.wrap
+!/nlohmann_json.wrap
+!/stb.wrap
+!/packagefiles
+!/FrameGen
+!/libdisplay-info
+!/libliftoff
+!/openvr
+!/vkroots
+!/wlroots

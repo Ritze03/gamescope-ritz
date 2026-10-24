@@ -65,7 +65,7 @@ check_tools() {
 	need_pc luajit pacman:luajit dnf:luajit-devel apt:libluajit-5.1-dev
 	need_pc libinput pacman:libinput dnf:libinput-devel apt:libinput-dev
 	# the libdisplay-info submodule fallback needs hwdata's pkg-config file at configure time
-	pkg-config --exists libdisplay-info 2>/dev/null || need_pc hwdata pacman:hwdata dnf:hwdata apt:hwdata
+	pkg-config --exists libdisplay-info 2>/dev/null || need_pc hwdata pacman:hwdata dnf:hwdata-devel apt:hwdata
 	if have pkg-config; then
 		# the loader's pkg-config file does not bring the headers along on every distro
 		if pkg-config --exists vulkan 2>/dev/null; then
@@ -87,7 +87,7 @@ check_tools() {
 				need_pc xcb-ewmh pacman:xcb-util-wm dnf:xcb-util-wm-devel apt:libxcb-ewmh-dev
 				need_pc xcb-icccm pacman:xcb-util-wm dnf:xcb-util-wm-devel apt:libxcb-icccm4-dev
 			else
-				miss wlroots-0.20 "pacman:wlroots0.20 dnf:wlroots-devel apt:libwlroots-dev"
+				miss wlroots-0.20 "pacman:wlroots0.20 dnf:wlroots-devel apt:libwlroots-0.20-dev"
 			fi
 		fi
 		# OpenVR: a system copy, or meson builds the checked-out submodule with cmake
