@@ -1,6 +1,6 @@
 // Compositor-drawn crosshair -- see superdoc/features/crosshair.md.
 //
-// Why it exists: the user runs frame generation externally (lsfg-vk, a
+// Why it exists: the user runs frame generation externally (an external
 // Vulkan layer inside the game's own process). That interpolates the
 // game's frame, so anything drawn INSIDE the game -- above all its own
 // crosshair -- smears between real frames. A crosshair gamescope draws is

@@ -1088,7 +1088,7 @@ const LOG = [
  ['16:04:14.220','pipewire','','Matched sink-input 61 -> pid 40118 ("vkcube")'],
  ['16:04:15.008','backend','','VRR window 48-165 Hz, present mode: immediate'],
  ['16:04:16.441','vulkan','w','Swapchain out of date, rebuilding (1920x1080)'],
- ['16:04:17.980','lsfg','e','DISABLE_LSFG=1 in environment — frame generation not loaded'],
+ ['16:04:17.980','extfg','e','DISABLE_EXTLAYER=1 in environment — frame generation not loaded'],
  ['16:04:18.114','overlay','','Console opened (CTRL+SHIFT+O), game input paused'],
  ['16:04:21.560','config','','Queued write: gamescope.sharpness 2 -> 8 (app 1245620.json)'],
  ['16:04:22.900','steamcompmgr','','Repaint: 1 base + 1 overlay layer, blur radius 24'],
@@ -1102,8 +1102,8 @@ const DECODE = {
    'presented late. A handful of these at startup is normal — mode-setting and the first allocations are '+
    'expensive. A steady stream of them during play means the display pipeline, not the game, is the bottleneck: '+
    'check for a second overlay plane being rejected and falling back to composition.'],
- 'lsfg':['Frame generation was disabled by the environment',
-   'DISABLE_LSFG=1 was set in gamescope\'s environment, so the Lossless Scaling frame-generation layer was '+
+ 'extfg':['Frame generation was disabled by the environment',
+   'DISABLE_EXTLAYER=1 was set in gamescope\'s environment, so the Lossless Scaling frame-generation layer was '+
    'never loaded. This is a deliberate opt-out, not a failure — nothing is broken, and the Frame Limiter '+
    'screen will show frame generation as unavailable.'],
  'vulkan':['Swapchain recreated','The output size changed under the client, so the driver invalidated the '+

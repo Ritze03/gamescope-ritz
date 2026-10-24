@@ -269,27 +269,27 @@ rows as *"the Scope is becoming a dumping ground"*.
 ### 3.7 A whole new area
 
 ```cpp
-// src/Overlay/UI/Areas/Lsfg.cpp  -- an entire new category. No UI code.
-void gamescope::ui::RegisterLsfgArea( Registry &reg )
+// src/Overlay/UI/Areas/ExtFg.cpp  -- an entire new category. No UI code.
+void gamescope::ui::RegisterExtFgArea( Registry &reg )
 {
-    auto &area = reg.Area( "lsfg", "Frame Generation", Icon::Performance )
+    auto &area = reg.Area( "extfg", "Frame Generation", Icon::Performance )
         .Section( "DISPLAY" )
-        .Keywords( "lsfg lossless fg interpolation smoothing frame gen" )
-        .AvailableWhen( []{ return lsfg::IsAvailable(); } )
-        .Badge( []{ return lsfg::IsEnabled() ? std::format("{}x", lsfg::Multiplier())
+        .Keywords( "extfg lossless fg interpolation smoothing frame gen" )
+        .AvailableWhen( []{ return extfg::IsAvailable(); } )
+        .Badge( []{ return extfg::IsEnabled() ? std::format("{}x", extfg::Multiplier())
                                              : std::string("off"); } );
 
     area.Group( "Generation" );
-    area.Switch( "lsfg.enabled", "Enable", &g_lsfg.bEnabled )
+    area.Switch( "extfg.enabled", "Enable", &g_extfg.bEnabled )
         .Default( false )
         .Help( "Generates intermediate frames between rendered ones. Adds latency." )
         .Keywords( "enable on off frame generation" )
         .Probe( Probe::Trace( TraceSource::Frametime ) );
 
     static constexpr Option kMult[] = { {"2","2x"},{"3","3x"},{"4","4x"} };
-    area.Selector( "lsfg.multiplier", "Multiplier", &g_lsfg.nMultiplier, kMult )
+    area.Selector( "extfg.multiplier", "Multiplier", &g_extfg.nMultiplier, kMult )
         .Default( 0 )
-        .EnabledWhen( []{ return g_lsfg.bEnabled; }, "frame generation is off" )
+        .EnabledWhen( []{ return g_extfg.bEnabled; }, "frame generation is off" )
         .Help( "How many frames are produced per rendered frame." )
         .Keywords( "multiplier 2x 3x 4x how many" );
 }

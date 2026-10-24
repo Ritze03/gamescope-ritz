@@ -314,7 +314,7 @@ namespace gamescope
 	//
 	// Why counting replaced the per-commit frametime (g_ulLastAppFrametimeNs)
 	// as the rate source: steamcompmgr drains every finished commit in one
-	// loop, and when two or more are drained together (lsfg-vk presenting a
+	// loop, and when two or more are drained together (the external layer presenting a
 	// real frame and a generated one back to back guarantees it) the last
 	// Signal() of the batch measures ~0 ms -- clamped to 0.1 ms, that is
 	// 10 000 fps -- and this file, reading at most one sample per paint,

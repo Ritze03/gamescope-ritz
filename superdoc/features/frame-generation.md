@@ -28,7 +28,7 @@ Code map:
 | Settings area | `src/Overlay/PanelFrameGen.{h,cpp}` |
 | Tests | `tests/test_config.cpp` (the `framegen` and `motion_blur` keys); `tests/test_framegen_pacing.cpp` (lag buffer off = 0 ms through the library's `Pacer`); pacing itself is tested in the library |
 
-Not to be confused with `lsfg-vk` (an external Vulkan layer): nothing in this tree uses
+Not to be confused with an external frame-generation Vulkan layer: nothing in this tree uses
 it. FG here runs inside the compositor.
 
 ## What it does, and where it runs in the frame

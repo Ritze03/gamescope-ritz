@@ -293,7 +293,7 @@ namespace gamescope
 		ui::Area &a = reg.Add( "image.framegen", "Frame generation", ui::Section::Display );
 
 		a.Keywords( "frame generation framegen interpolation fluid motion smooth fps multiplier "
-		            "target priority latency smoothness optical flow lsfg fsr3 fmf frames" );
+		            "target priority latency smoothness optical flow fsr3 fmf frames" );
 		a.Summary( []
 		{
 			EnsureConfigLoaded();

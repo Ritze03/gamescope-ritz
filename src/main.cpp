@@ -677,7 +677,9 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	if ( !Given( Opt::GrabKeyboard ) )
 	{
 		g_bGrabbed = config.gamescope.force_grab_keyboard;
+#if HAVE_SDL2
 		gamescope::SDLBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
+#endif
 		gamescope::WaylandBackend_SetKeyboardGrabbed( config.gamescope.force_grab_keyboard );
 	}
 	if ( !Given( Opt::ForceWindowsFullscreen ) )

@@ -3,7 +3,7 @@
 > ## 2026-08-21 — RESOLVED. Both premises below (83-commit bisection AND the
 > ## optimisation-confound theory) are superseded. READ THIS FIRST.
 >
-> The flicker is an **SDL-backend bug**, confirmed on real hardware: `DISABLE_LSFG=1
+> The flicker is an **SDL-backend bug**, confirmed on real hardware: `DISABLE_EXTLAYER=1
 > ./build/src/gamescope --backend sdl -f -- vkcube` flickers badly; the identical
 > binary with **no `--backend` flag** (auto-selects Wayland — see
 > `auto_select_backend()` in `src/main.cpp`) is completely clean. The user's packaged

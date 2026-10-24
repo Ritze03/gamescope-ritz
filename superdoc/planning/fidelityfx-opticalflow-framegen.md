@@ -4,8 +4,8 @@
 build changes. This document is the deliverable. It answers the user's question —
 *"explore the ability of adding FSR FidelityFX SDK OpticalFlow for frame gen"* — for a
 compositor that only ever sees a game's **final colour frame** (no motion vectors, no
-depth). It builds on the two sibling scouts, [`lsfg-vk-integration.md`](lsfg-vk-integration.md)
-and [`lsfg-in-tree-port.md`](lsfg-in-tree-port.md): gamescope's constraints (one
+depth). It builds on the two sibling scouts, [`external-framegen-layer-integration.md`](external-framegen-layer-integration.md)
+and [`external-framegen-in-tree-port.md`](external-framegen-in-tree-port.md): gamescope's constraints (one
 composite + one present per vblank, VRR conflict, overlay ghosting, licence gate) are
 cited from there and **extended**, not re-derived. Where this scout's findings correct
 a sibling's, it says so explicitly (§5.1).
@@ -39,7 +39,7 @@ Two further findings sharpen that:
   effects are now deprecated". A gamescope port would vendor deprecated code AMD is not
   developing further.
 - **The good news is real but secondary.** The SDK is MIT (compatible with this fork's
-  BSD-2-Clause — the licence gate that blocks the LSFG port does *not* apply here), and
+  BSD-2-Clause — the licence gate that blocks the ExtFg port does *not* apply here), and
   its Vulkan shaders are **GLSL compiled with glslang**, the same compiler gamescope's
   `meson.build` already drives — no DXC, no HLSL, no prebuilt blobs needed. That makes
   option (a) the *best-licensed* and *best-build-fit* path; it does not make it the
@@ -49,14 +49,14 @@ Two further findings sharpen that:
 at a fixed refresh rate with the game limited to `refresh / 2`, 2× frame generation is
 *one composite + one present per vblank, alternating real and generated* — exactly the
 loop gamescope already runs. The "multiple presents per refresh interval" rearchitecture
-that `lsfg-in-tree-port.md` §4 named as the hardest unsolved problem is only needed if
+that `external-framegen-in-tree-port.md` §4 named as the hardest unsolved problem is only needed if
 the target rate exceeds the display's refresh; pinning the target *to* the refresh
 removes it. Added input latency is **one refresh interval (half a game frame) plus the
 interpolation compute**, not "at least one game frame". This applies equally to options
 (a) and (b); it lowers the pacing risk for both but does not touch (a)'s core
 algorithmic blocker.
 
-**Recommendation:** do not pursue (a). Keep (c) — external `lsfg-vk` under gamescope —
+**Recommendation:** do not pursue (a). Keep (c) — external the external layer under gamescope —
 as the shipped answer, and if in-compositor frame generation is ever wanted, the
 purpose-built optical-flow-only model in (b) is the higher-quality algorithm despite its
 licence problem. The one thing worth doing with the FidelityFX SDK is the cheap offline
@@ -72,7 +72,7 @@ sake.
 | Distribution model since 2.0.0 | "Starting with AMD FidelityFX SDK 2.0.0 the effects, previously combined in `amd_fidelityfx_dx12.dll`, are split into multiple DLLs based on effect type." PDBs are provided; the ML effects are DLL-only. "All SDK version 1 effects are now deprecated". | [version_2_0_0.md](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/blob/main/Kits/FidelityFX/docs/whats-new/version_2_0_0.md) |
 | Vulkan in 2.x | README known issues: "Vulkan is currently not supported in SDK". | [README](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) |
 | Last full-source OF/FI + Vulkan | **v1.1.4** (2025-05-08, FSR 3.1.4): `sdk/src/components/{opticalflow,frameinterpolation}/`, `sdk/src/backends/vk/`, GLSL wrappers under `sdk/src/backends/vk/shaders/{opticalflow,frameinterpolation}/`. This is the only version a gamescope port could use. | [v1.1.4 tree](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/v1.1.4) (listed via `gh api git/trees`, 2026-09-05) |
-| Licence | **MIT.** "Copyright (C) 2024 Advanced Micro Devices, Inc." … "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software." The only obligation is retaining that notice. BSD-2-Clause + MIT in one binary is routine; **no relicensing question arises**, unlike `lsfg-in-tree-port.md`'s GPLv3 gate. | [LICENSE.txt @ v1.1.4](https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v1.1.4/LICENSE.txt) |
+| Licence | **MIT.** "Copyright (C) 2024 Advanced Micro Devices, Inc." … "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software." The only obligation is retaining that notice. BSD-2-Clause + MIT in one binary is routine; **no relicensing question arises**, unlike `external-framegen-in-tree-port.md`'s GPLv3 gate. | [LICENSE.txt @ v1.1.4](https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v1.1.4/LICENSE.txt) |
 | Official build platform | Windows only: "Visual Studio 2019", "Windows 10 SDK 10.0.18362.0", "CMake 3.17 - 3.30", "Vulkan SDK 1.3.239"; `GenerateSolution.bat`. No Linux mention anywhere in the docs. | [building-samples.md](https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v1.1.3/docs/getting-started/building-samples.md) |
 | Linux, upstream's position | Open since 2024 with no AMD response: [#28 "Can Support Linux?"](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/28), [#85 "Any plans for Linux/Mac ports for FSR3?"](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/85), [#105 "Linux integration: MSVC-only functions used"](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/105) (the X4: Foundations team reports compiling `sdk/` on Linux after wrapping `_countof`, `wcscpy_s`, `sprintf_s`), [#194 "No Vulkan, Linux, or RHI compatibility"](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/194) (2026-08). | GitHub issues, read 2026-09-05 |
 
@@ -196,7 +196,7 @@ would answer. It is also why §5.6 expects AFMF-1-class artifacts at best.
   colour alone. It lives in the Windows Adrenalin driver (release notes are filed under
   `RN-RAD-WIN-*`), supports RX 6000/7000 and 700M/800M iGPUs, "any OpenGL, Vulkan,
   DirectX 11, and 12 title", and is **not open source and not available on Linux** —
-  which is the whole reason `lsfg-vk` exists. AFMF 1 handled hard cases by **fallback**:
+  which is the whole reason the external layer exists. AFMF 1 handled hard cases by **fallback**:
   "AFMF frame generation is temporarily disabled in high-motion scenes to ensure the
   best interpolated image quality"; AFMF 2 added a "Search Mode" (Auto/Standard/High)
   that reduces fallback at high resolutions. The SDK's Optical Flow is "based on" AFMF;
@@ -355,7 +355,7 @@ margin) and the same class of cost AMD quotes in shipped games (Forspoken 4K/790
 because the upscaler more than pays for FG, which a compositor-side scheme cannot
 replicate).
 
-**Correction to `lsfg-in-tree-port.md` §4 and `lsfg-vk-integration.md` §3:** both say
+**Correction to `external-framegen-in-tree-port.md` §4 and `external-framegen-layer-integration.md` §3:** both say
 interpolation "adds at least one real frame's worth of latency". At a fixed refresh with
 2× generation the delay is one *refresh* interval, i.e. **half** a real frame — the
 sibling docs counted in the wrong unit. The qualitative point stands: it is a direct
@@ -368,7 +368,7 @@ either option removes it.
 the vblank. If the FG target rate **equals the display refresh** and the game is limited
 to **refresh / multiplier**, then every vblank presents exactly one image — real or
 generated, alternating — and the loop keeps its shape: one composite, one `Present()`,
-one atomic commit per vblank. `lsfg-in-tree-port.md` §4's "make the vblank-timer loop
+one atomic commit per vblank. `external-framegen-in-tree-port.md` §4's "make the vblank-timer loop
 fire multiple composite+present cycles inside one refresh interval" is only required if
 the target exceeds the refresh (e.g. 3× a 60 fps game on a 120 Hz panel). Pinning the
 target to the refresh avoids it entirely, and gamescope already has the knob: the
@@ -388,7 +388,7 @@ Per backend:
 - **DRM with VRR** (`FlipType::VRR`, `:9846`; `cv_adaptive_sync`, `:302`): the commit
   cadence follows the game, so there is no "between" slot to fill; and the VRR path
   refuses to paint while a present is in flight (`:9909–9912`). **Disable FG under VRR**
-  or force fixed refresh while FG is on — the same conclusion as `lsfg-in-tree-port.md`
+  or force fixed refresh while FG is on — the same conclusion as `external-framegen-in-tree-port.md`
   §4 and AMD's swapchain doc ("frame rate must fall within the variable refresh window;
   otherwise tearing occurs").
 - **Tearing** (`FlipType::Async`, `cv_tearing_enabled`, `:462`): incompatible by
@@ -429,7 +429,7 @@ in a private copy of the `FrameInfo_t` (`SubstituteLayer0(g_output.effectsOutput
 
 - **input:** layer 0 of the *previous* base commit and of the current one (gamescope
   must retain one extra layer-0 texture — `g_HeldCommits[]` already holds commits; a
-  second held reference is cheap, cf. `lsfg-in-tree-port.md` §3);
+  second held reference is cheap, cf. `external-framegen-in-tree-port.md` §3);
 - **OF + FI run at layer-0 (render) resolution**, `displaySize == renderSize`, which
   FSR 3.1 explicitly allows ("or at native resolution") and which is cheaper than
   display resolution when FSR/NIS upscaling is on;
@@ -509,7 +509,7 @@ declared correctly. No blocker here.
   artifact class the compositor position solves *better* than a Vulkan layer in the
   game's process.
 
-**Decision, 2026-09-05:** the user chose to keep running **external LSFG** (`lsfg-vk` as a
+**Decision, 2026-09-05:** the user chose to keep running **external ExtFg** (the external layer as a
 layer in the game's process) rather than pursue any in-compositor option here. The one
 piece of the in-game HUD that suffers most under it — the crosshair — is instead drawn by
 gamescope itself, after interpolation, in the HUD's layer: see
@@ -528,7 +528,7 @@ and line numbers above); [frame-interpolation-swap-chain.md @ v1.1.4](https://ra
 
 ## 6. The three options compared
 
-| | **(a) FidelityFX OF + FI, OF-only** | **(b) `lsfg-vk` in-tree port** ([`lsfg-in-tree-port.md`](lsfg-in-tree-port.md)) | **(c) Do nothing / `lsfg-vk` as a layer under gamescope** ([`lsfg-vk-integration.md`](lsfg-vk-integration.md) option (a)) |
+| | **(a) FidelityFX OF + FI, OF-only** | **(b) the external layer in-tree port** ([`external-framegen-in-tree-port.md`](external-framegen-in-tree-port.md)) | **(c) Do nothing / the external layer as a layer under gamescope** ([`external-framegen-layer-integration.md`](external-framegen-layer-integration.md) option (a)) |
 |---|---|---|---|
 | Licence | **MIT — clean.** Notice retention only. | **GPLv3 — forces relicensing** of the binary, or a separate-process/dlopen architecture. Plus the user must own `Lossless.dll` (Steam, ~$7). | None. |
 | Algorithm fit for "colour only" | **Poor by design.** FI wants depth + MVs; OF-only requires modifying AMD's shaders/host code; no reference, no measurements. | **Purpose-built.** The model derives motion from two colour frames; that is its entire product. | Same algorithm as (b), in the game's process. |
@@ -584,7 +584,7 @@ Outside this tree, no gamescope code touched, a few days:
 If the output is not clearly usable at step 3, stop; nothing in §5 becomes worth doing.
 If it is, the next milestone is the §5.3 pre-pass integration *without presenting* (log
 or dump the generated frame), then the §5.2 FG mode. Mirror
-`lsfg-in-tree-port.md` §5's staging; resolve vendoring-vs-reimplementing (§4.2) before
+`external-framegen-in-tree-port.md` §5's staging; resolve vendoring-vs-reimplementing (§4.2) before
 the second milestone.
 
 ## 9. What we could not establish
@@ -605,7 +605,7 @@ the second milestone.
 - **What the user wants FG for** — a 120 Hz+ desktop panel (where §5.2 works) or the
   laptop (where it does not) — and whether the *in-game* HUD artifacts that every
   colour-only method shares are acceptable to them, which is the same open question
-  `lsfg-in-tree-port.md` §"Open questions" 4 already asks.
+  `external-framegen-in-tree-port.md` §"Open questions" 4 already asks.
 
 ---
 *Checked 2026-09-05 against gamescope-ritz `feature/overlay-e2` (HEAD `1b6eb6f`) and

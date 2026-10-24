@@ -9,7 +9,7 @@ slider-shaped — it was measured from the compiled overlay, not the mockup.
 
 **Method.** Built `./build/src/gamescope`, launched nested (`-W 1920 -H 1080 -w 1280 -h 960
 -S stretch --adaptive-sync --immediate-flips --expose-wayland --filter fsr --sharpness 5
--f -- vkcube`, `DISABLE_LSFG=1`, throwaway `XDG_CONFIG_HOME` preset with Vibrancy enabled so
+-f -- vkcube`, `DISABLE_EXTLAYER=1`, throwaway `XDG_CONFIG_HOME` preset with Vibrancy enabled so
 its slider renders in the *active* accent-gradient state, not the dimmed disabled one),
 screenshotted the SHADERS panel with `grim -g` bounded to the window (never
 `gamescopectl screenshot` — see `documentation.md`'s tooling notes), and pixel-sampled the

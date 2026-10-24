@@ -266,35 +266,35 @@ declare that it is not. See SPEC.md section 3.4.
 ### 4.7 Adding a whole new area
 
 ```cpp
-// src/Overlay/UI/Areas/Lsfg.cpp  -- an entire new area. No UI code.
+// src/Overlay/UI/Areas/ExtFg.cpp  -- an entire new area. No UI code.
 #include "UI/Registry.h"
 
-void gamescope::ui::RegisterLsfgArea( Registry &reg )
+void gamescope::ui::RegisterExtFgArea( Registry &reg )
 {
-    auto &area = reg.Area( "lsfg", "Frame Generation", Icon::Performance )
-        .Keywords( "lsfg lossless fg interpolation smoothing frame gen" )
-        .AvailableWhen( []{ return lsfg::IsAvailable(); } )
-        .Summary( []{ return lsfg::IsEnabled()
-                        ? std::format( "{}x - {} fps out", lsfg::Multiplier(), lsfg::OutFps() )
+    auto &area = reg.Area( "extfg", "Frame Generation", Icon::Performance )
+        .Keywords( "extfg lossless fg interpolation smoothing frame gen" )
+        .AvailableWhen( []{ return extfg::IsAvailable(); } )
+        .Summary( []{ return extfg::IsEnabled()
+                        ? std::format( "{}x - {} fps out", extfg::Multiplier(), extfg::OutFps() )
                         : std::string( "off" ); } );
 
     area.Group( "Generation" );
-    area.Toggle( "lsfg.enabled", "Enable", &g_lsfg.bEnabled )
+    area.Toggle( "extfg.enabled", "Enable", &g_extfg.bEnabled )
         .Default( false )
         .Help( "Generates intermediate frames between rendered ones. Adds latency." )
         .Keywords( "enable on off frame generation" );
 
     static constexpr Option kMult[] = { {"2","2x"}, {"3","3x"}, {"4","4x"} };
-    area.Choice( "lsfg.multiplier", "Multiplier", &g_lsfg.nMultiplier, kMult )
+    area.Choice( "extfg.multiplier", "Multiplier", &g_extfg.nMultiplier, kMult )
         .Default( 0 )
-        .EnabledWhen( []{ return g_lsfg.bEnabled; }, "frame generation is off" )
+        .EnabledWhen( []{ return g_extfg.bEnabled; }, "frame generation is off" )
         .Help( "How many frames are produced per rendered frame." )
         .Keywords( "multiplier 2x 3x 4x how many" );
 
     area.Group( "Diagnostics" );
-    area.Pane( "lsfg.stats", "Generation stats",
-               []{ return std::format( "{} generated / s", lsfg::GeneratedPerSec() ); },
-               &DrawLsfgStats )
+    area.Pane( "extfg.stats", "Generation stats",
+               []{ return std::format( "{} generated / s", extfg::GeneratedPerSec() ); },
+               &DrawExtFgStats )
         .Help( "Live counters from the frame-generation pass." )
         .Keywords( "stats counters diagnostics generated dropped" );
 }
@@ -311,12 +311,12 @@ void gamescope::ui::RegisterAll( Registry &reg )
     RegisterMonitorArea ( reg );
     RegisterProfilesArea( reg );
     RegisterLogArea     ( reg );
-    RegisterLsfgArea    ( reg );   // <- the whole integration
+    RegisterExtFgArea    ( reg );   // <- the whole integration
 }
 ```
 
 The new area now appears on Home with a live summary, is scopable with `↹`, is searchable
-(`lsfg`, `frame gen`, `interpolation`, `2x`), works on a pad with the same five verbs, and looks
+(`extfg`, `frame gen`, `interpolation`, `2x`), works on a pad with the same five verbs, and looks
 exactly like every other area — because nobody drew it.
 
 ---

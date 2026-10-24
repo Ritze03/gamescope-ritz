@@ -114,7 +114,7 @@ commit (the same `m_bMangoNudge` gate that feeds mangoapp), and
 > (`g_ulLastAppFrametimeNs`, `now − last`), of which the HUD consumed at
 > most one new sample per paint, clamped to `[0.1, 2000] ms`. steamcompmgr
 > drains every finished commit in one loop, and when two or more land in a
-> batch — `lsfg-vk` presenting a real frame and a generated one back to
+> batch — the external layer presenting a real frame and a generated one back to
 > back guarantees it, and any game briefly out-running the compositor can
 > do it — the *last* `Signal()` in the batch measures `≈ 0 ms`, clamped to
 > 0.1 ms, i.e. 10 000 fps. Because the HUD only ever saw that last write,
@@ -127,7 +127,7 @@ commit (the same `m_bMangoNudge` gate that feeds mangoapp), and
 > it only reacts to that pattern under frame generation, where the
 > frametime is already not the game's own.
 
-**Inherent limit to tell the user:** with `lsfg-vk` at ×2 the counter shows
+**Inherent limit to tell the user:** with the external layer at ×2 the counter shows
 the **generated** rate. The compositor only sees post-frame-gen presents —
 the same thing MangoHud shows when loaded after the layer — so the
 pre-frame-gen rate is not observable from here.
