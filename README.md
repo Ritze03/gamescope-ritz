@@ -102,24 +102,26 @@ examples, its full option reference, and its Reshade/keyboard-shortcut docs) is 
 verbatim in [`README.upstream.md`](README.upstream.md) rather than deleted.
 
 It installs as its own binary, `gamescope-ritz`, side by side with a distro-packaged
-`gamescope` — it never touches `/usr/bin/gamescope`.
+`gamescope` — it never touches `/usr/bin/gamescope`. It is linked as
+`/usr/local/bin/gamescope-ritz`.
 
 ## Quick start
 
 > **First time on this machine?** Install the build dependencies first —
 > see **[Dependencies](#dependencies)** for copy-paste commands for Arch and Fedora.
-> `./install.sh` checks them before it builds and names anything missing, so you can
-> also just run it and let it tell you.
+> `ritz-get` (or `./install.sh`) checks them before it builds and names anything
+> missing, so you can also just run it and let it tell you.
 
 ```sh
-# 1. Get the code
-git clone https://github.com/Ritze03/gamescope-ritz.git
+# 1. Get the code (ritz-get does this for you; by hand, with its submodules)
+git clone --recurse-submodules https://github.com/Ritze03/gamescope-ritz.git
 cd gamescope-ritz
 
-# 2. Install it (Linux only) — builds a release binary first if none exists
-#    yet (a few minutes the first time), then asks whether to symlink or
-#    copy the result to /usr/bin/gamescope-ritz
-./install.sh --install
+# 2. Install it (Linux only) — builds a release binary (a few minutes the first
+#    time), links it as ~/.local/bin/gamescope-ritz and, with your password
+#    once, as /usr/local/bin/gamescope-ritz
+ritz-get install gamescope-ritz             # the main way
+RITZ_GET_SUDO=sudo ./install.sh --install   # without ritz-get
 
 # 3. Run a game through it
 gamescope-ritz -- %command%          # inside Steam's launch options
@@ -130,32 +132,27 @@ gamescope-ritz -- vkcube             # or any game/binary, tried by hand
 #    same searchable settings, alone over the game, no shell behind it.
 ```
 
-Non-interactively (no prompts, symlink mode — a later `./install.sh --update`
-then needs no root at all, since it just rebuilds and the installed name is
-already pointing at the fresh binary):
+To use the Ritz launcher extension, copy it by hand (it is never installed for you). From your
+clone (with ritz-get: `~/.local/share/ritz-get/src/gamescope-ritz`):
+`cp extensions/gamescope-ritz.json ~/.config/ritz/extensions/ritze__gamescope_ritz.json`
 
-```sh
-./install.sh --install --link --yes
-```
-
-Running `./install.sh` with no flags detects whatever state you're in
-(installed or not, symlink or copy, wlroots satisfied or not) and offers
-install/update/remove as a menu instead.
+Installing is idempotent: the build tree in `build/` is reused, so running it again only
+rebuilds what changed. The `/usr/local/bin` link is made once and needs your password
+only that first time; later runs need no root.
 
 If a build stops on a missing package, that is the dependency check doing its job —
-it prints the exact install command for your distro. [Dependencies](#dependencies)
-lists the same thing up front.
+it prints the missing items. [Dependencies](#dependencies) lists the same thing up front.
 
 ### Updating
 
 ```sh
-./install.sh --update
+ritz-get update gamescope-ritz   # the main way
+./install.sh --install           # without ritz-get, after your own git pull and
+                                 # git submodule update --init --recursive
 ```
 
-`git pull --ff-only`, rebuild, reinstall in place — a symlink install is live
-the instant the rebuild finishes; a copy install gets the fresh binary copied
-over it. Local changes are only reported, never discarded: the pull itself
-refuses a diverged remote or anything it would have to overwrite.
+The rebuilt binary is live the instant the build finishes, because the installed name is
+a chain of symlinks that ends in the clone's `build/` directory.
 
 ### Picking a profile per launch
 
@@ -187,10 +184,10 @@ warning to rename it.)
 ### Dependencies
 
 `./install.sh` checks every hard dependency **before** it starts building, and names the
-ones you are missing along with the command that installs them — so a missing package
-fails in a second, not several minutes into a compile. You do **not** need to run
-`git submodule update` yourself; `install.sh` initialises missing submodules for you. If you build by hand with meson
-instead, run `git submodule update --init --recursive` first: frame generation's
+ones you are missing — so a missing package fails in a second, not several minutes into
+a compile. `ritz-get` checks the git submodules out for you. If you cloned by hand, use
+`git clone --recurse-submodules` (or run `git submodule update --init --recursive`)
+before `./install.sh` or meson: frame generation's
 [frame-gen-ritz](https://github.com/Ritze03/frame-gen-ritz) library lives in
 `subprojects/FrameGen`.
 
@@ -237,15 +234,15 @@ the list cannot drift out of step with `meson.build` the way a hand-written one 
 #### The Vulkan WSI layer
 
 gamescope-ritz builds and installs its **own** Vulkan layer
-(`VK_LAYER_RITZ_gamescope_wsi`), and `./install.sh` puts it in place alongside the
-binary. It deliberately does *not* share a name with the layer your distro's `gamescope`
-package ships, so the two coexist and neither overrides the other — your packaged
+(`VK_LAYER_RITZ_gamescope_wsi`), and `./install.sh` links it into
+`~/.local/share/vulkan/implicit_layer.d/` (user level, no root). It deliberately does
+*not* share a name with the layer your distro's `gamescope` package ships, so the two coexist and neither overrides the other — your packaged
 gamescope keeps using its own.
 
 `Why it matters:` that layer is loaded into the **game's** process and is one half of a
 protocol whose other half is the compositor. If a game starts and instantly quits with
 `[Gamescope WSI] Failed to get Wayland objects`, it is loading a layer older than the
-gamescope running it. `./install.sh` detects this and says so.
+gamescope running it. Rebuild and reinstall to get a matching pair.
 
 `GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` makes gamescope-ritz use your distro's layer instead
 of its own, should you ever need it.
@@ -339,10 +336,12 @@ Every upstream option still works (see [`README.upstream.md`](README.upstream.md
 ## Removing it
 
 ```sh
-./install.sh --remove
+ritz-get remove gamescope-ritz               # the main way
+RITZ_GET_SUDO=sudo ./install.sh --remove     # without ritz-get
 ```
 
-Never touches `~/.config/gamescope-ritz` — only the binary/symlink it installed. If
-an older install left a `/usr/share/gamescope-ritz` directory behind, it offers to
-clear that too; nothing needs one any more, since the bundled display scripts and the
-licence texts are compiled into the binary.
+Never touches `~/.config/gamescope-ritz` — only the links it made. A copy that an older
+installer left in `/usr/bin/gamescope-ritz` is not touched either, nor are its copies of
+the layer, `/usr/local/share/vulkan/implicit_layer.d/VkLayer_RITZ_gamescope_wsi.x86_64.json`
+and `/usr/local/lib*/libVkLayer_RITZ_gamescope_wsi_x86_64.so`; leave them alone or delete
+them by hand.

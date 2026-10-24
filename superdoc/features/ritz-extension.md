@@ -80,28 +80,20 @@ close the quoted argument and break the launch.
 
 ## Installer integration
 
-`install.sh --install` detects Ritz by the presence of `~/.config/ritz/` and offers
-(prompt, skippable, and `--with-ritz-extension` / `--no-ritz-extension` for
-non-interactive use) to copy `extensions/gamescope-ritz.json` to
-**`~/.config/ritz/extensions/ritze__gamescope_ritz.json`**.
+`install.sh` no longer touches Ritz (2026-10-24, the ritz-get spec: an installer only
+makes symlinks into the clone and never overwrites a user's configuration). It used to
+copy `extensions/gamescope-ritz.json` over
+`~/.config/ritz/extensions/ritze__gamescope_ritz.json`, the user's own module file.
 
-That destination name deliberately does **not** match the source file's own name. Ritz
-names an author's module file `<author>__<name>.json` (lowercased, spaces/hyphens to
-underscores), so the user's real "Gamescope-Ritz" module by "Ritze" already lives at
-`ritze__gamescope_ritz.json`. Installing under the source's own `gamescope-ritz.json`
-name instead would create a **second** module with the same `Author::Name::Version`
-identity sitting next to the first — exactly the duplication this fork is trying not to
-cause. Targeting the same filename makes an install an **in-place overwrite** of that
-one module rather than a second copy, and the prompt says so plainly whenever a file is
-already there. The install offer itself defaults to **accepting** (2026-09-09) — Ritz
-being detected means installing this module is part of a normal working install for
-this user, and `n` still declines it — while the **remove** prompt below keeps
-defaulting to declining, since deleting is the one direction Enter must never take by
-surprise.
+To use this module, copy it there by hand:
 
-`--update` refreshes that file only if it was previously installed and differs from the
-repo's copy. `--remove` offers to delete only that one file — nothing else in
-`~/.config/ritz/extensions/` is ever touched — and, because the destination name is
-shared with the user's own pre-existing module rather than something guaranteed to have
-been installed by this script, the remove prompt defaults to **declining** and says so,
-rather than assuming ownership. See `install.sh`'s own `--help` for the exact flags.
+```sh
+cp extensions/gamescope-ritz.json ~/.config/ritz/extensions/ritze__gamescope_ritz.json
+```
+
+*Why that destination name:* Ritz names an author's module file `<author>__<name>.json`
+(lowercased, spaces/hyphens to underscores), so the user's real "Gamescope-Ritz" module by
+"Ritze" already lives at `ritze__gamescope_ritz.json`. Copying under the source's own
+`gamescope-ritz.json` name would create a **second** module with the same
+`Author::Name::Version` identity next to the first. Copying to the same filename is an
+in-place update of that one module.

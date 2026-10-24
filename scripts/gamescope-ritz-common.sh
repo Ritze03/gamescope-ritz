@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# gamescope-ritz-common.sh — shared helpers for install-gamescope-ritz.sh and
-# update-gamescope-ritz.sh. Not meant to be run directly; sourced by both.
+# gamescope-ritz-common.sh — shared helpers for build-gamescope-ritz.sh and
+# gentle-build.sh. Not meant to be run directly; sourced by both.
 #
 # Everything here exists to serve one non-negotiable rule: this project's
-# install target is /usr/bin/gamescope-ritz, and /usr/bin/gamescope (the
-# user's packaged, known-good gamescope 3.16.24) must NEVER be written to,
+# install target is ~/.local/bin/gamescope-ritz (a symlink install.sh makes), and
+# /usr/bin/gamescope (the user's packaged, known-good gamescope 3.16.24) must NEVER be written to,
 # moved, or removed by these scripts. See gcr_check_target_safety below.
 
 set -euo pipefail
@@ -13,8 +13,8 @@ GCR_BIN_NAME="gamescope-ritz"
 GCR_FORBIDDEN_TARGET="/usr/bin/gamescope"
 GCR_DEFAULT_PREFIX_DIR="/usr/bin"
 # GCR_BUILD_DIR overrides the default build-dir *name* every script in this
-# repo builds into. Defaults to build-release/ — the directory
-# /usr/bin/gamescope-ritz (the user's own launch path) symlinks into, so a
+# repo builds into. Defaults to build-release/ — the directory the user's
+# launch path (~/.local/bin/gamescope-ritz) symlinks into, so a
 # plain build lands where the user actually installs and runs from. `ld`
 # unlinks and recreates its output file rather than writing through the old
 # inode, so a process already running that binary is unaffected by a build
@@ -146,8 +146,8 @@ gcr_pids_running_binary() {
 }
 
 # Informational notice only (originally a hard refusal, added after a build
-# relinked /usr/bin/gamescope-ritz's target nine seconds after the user had
-# already launched a game through it — but that turned out to be an
+# relinked the gamescope-ritz launch link's target nine seconds after the
+# user had already launched a game through it — but that turned out to be an
 # over-correction: `ld` unlinks and recreates its output file rather than
 # writing through the old inode, so a process already running that binary
 # keeps its original inode and is unaffected by the build; it just keeps
@@ -226,8 +226,8 @@ gcr_meson_configure() {
 # fork's own Vulkan WSI layer; set GCR_NINJA_TARGET="" before calling to build
 # everything (needed for tests). Set GCR_NINJA_JOBS to cap parallelism.
 #
-# THE LAYER HAS TO BE IN THE DEFAULT SET. install.sh installs it beside the
-# binary, and the compositor only uses its own layer when that manifest is on
+# THE LAYER HAS TO BE IN THE DEFAULT SET. install.sh links it into the user Vulkan layer
+# folder, and the compositor only uses its own layer when that manifest is on
 # disk -- so a build that skips it silently leaves every game on whatever the
 # distro ships, which is the exact version-skew this fork's own layer exists
 # to avoid. Found the hard way: the manifest is written by configure_file() at
