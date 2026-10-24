@@ -4,9 +4,8 @@
 
 `build-gamescope-ritz.sh` is the single entry point for building — one command
 instead of remembering the meson invocation or rediscovering this repo's
-submodule/test quirks. `install-gamescope-ritz.sh` and
-`update-gamescope-ritz.sh` (below) call the same shared build helpers in
-`gamescope-ritz-common.sh`, so all three stay in sync. That shared helper
+submodule/test quirks. It and `gentle-build.sh` call the same shared build helpers in
+`gamescope-ritz-common.sh`, so they stay in sync. That shared helper
 (`gcr_build`) also runs the actual `ninja` invocation under `nice -n 10` (plus
 `ionice -c3`, idle I/O class, since LTO linking is I/O-heavy too) — niced
 once there rather than at each call site, so it covers every build path
@@ -49,7 +48,7 @@ Options: `--release` (default), `--debug`, `--test`, `--clean`, `--jobs N`,
 ## Gentle test builds for agents (`gentle-build.sh`)
 
 `gentle-build.sh` is what every agent should run for a throwaway "does it compile,
-do the tests pass" build — **not** `build-gamescope-ritz.sh`/`install.sh`, and never a
+do the tests pass" build — **not** `build-gamescope-ritz.sh`/`install.sh` (the latter builds `build/meson`), and never a
 raw `ninja`/`meson compile`. Those build the optimised, LTO'd `build-release/` tree the
 user actually launches games through, at full parallelism; several agents each running
 one of those at once — which is the normal case, one per worktree — was reported as
@@ -324,60 +323,22 @@ Resolution area.
 
 ## Installing and updating gamescope-ritz
 
-**`install.sh` at the repo root** is the single entry point for this: one
-script with `--install` / `--update` / `--remove` (no flag = an interactive
-menu that detects the current state and offers the sensible actions). It
-sources `gamescope-ritz-common.sh` below and reuses its build,
-privilege-escalation, submodule and target-safety helpers rather than
-re-implementing any of them, so it installs to **`/usr/bin/gamescope-ritz`**
-— never `/usr/bin/gamescope`, which it hard-refuses to touch, since that's
-the user's packaged, known-good gamescope.
+**`install.sh` at the repo root** is the only installer (ritz-get spec v1, see
+`superdoc/features/build-and-tooling.md`). `ritz-get` runs `./install.sh --install --yes`
+for every install and update and `./install.sh --remove --yes` to remove; by hand:
 
 ```sh
-./install.sh                       # interactive: detect state, offer a menu
-./install.sh --install             # ask symlink vs copy, build if needed
-./install.sh --install --link --yes
-./install.sh --update              # git pull --ff-only, rebuild, reinstall
-                                    # in place (symlink installs need no copy)
-./install.sh --remove --yes
+RITZ_GET_SUDO=sudo ./install.sh --install   # first time: asks for the password once
+./install.sh --install                      # later runs / updates: no root, only ninja
+RITZ_GET_SUDO=sudo ./install.sh --remove
 ```
 
-Before any build, it checks that **wlroots** is actually usable the way
-this project's meson build asks for it: `pkg-config` for the exact module
-and version constraint read straight out of `src/meson.build`'s
-`wlroots_dep = dependency(...)` call — a package manager saying "installed"
-is not proof pkg-config/meson can see it. On Arch/CachyOS the package is
-**`wlroots0.20`**; if pkg-config can't find it, it also asks `pacman`
-whether the package is installed at all, since "installed but pkg-config
-can't see it" (fix your `PKG_CONFIG_PATH`) and "not installed" (`sudo
-pacman -S wlroots0.20`) are different problems with different fixes. On any
-other distro it names the pkg-config module and version needed and lets you
-find the right package yourself — it doesn't guess distro-specific package
-names it can't verify. If pkg-config can't see a usable system wlroots but
-this repo's vendored fallback (`subprojects/wlroots`, meson's own
-`fallback:` for this dependency) is checked out, that's reported but is
-**not** a failure — meson just builds the vendored copy instead (slower
-first build). The check only hard-fails, before the build starts, when
-neither is available.
-
-`install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` (the
-single-purpose scripts `install.sh` is built on top of) still work exactly
-as before, for anyone with muscle memory or a script pinned to them:
-
-```sh
-scripts/install-gamescope-ritz.sh      # interactive: symlink vs copy, builds
-                                        # a release binary first if none exists
-scripts/update-gamescope-ritz.sh       # git pull --ff-only, rebuild release,
-                                        # refresh the install (copy mode only —
-                                        # a symlink install is live immediately)
-scripts/install-gamescope-ritz.sh --uninstall
-```
-
-All three (`install.sh`, `install-gamescope-ritz.sh`,
-`update-gamescope-ritz.sh`) build into a separate `build-release/` directory
-(`--buildtype=release -Doptimization=3 -Db_lto=true`), leaving a developer's
-`build/` untouched. Writing to `/usr/bin` uses `sudo` only for that one
-step, and the build itself never runs as root.
+It builds into `build/meson` (release, LTO), copies the compositor to
+`build/gamescope-ritz`, and links it as `~/.local/bin/gamescope-ritz` and
+`/usr/local/bin/gamescope-ritz`. It never touches `/usr/bin`. The old
+`install-gamescope-ritz.sh` and `update-gamescope-ritz.sh` were removed; this file's
+`gamescope-ritz-common.sh` stays for `build-gamescope-ritz.sh` and `gentle-build.sh`
+(`build-gamescope-ritz.sh` still builds into `build-release/`).
 
 These are unrelated to the `.lua` scripting system documented below — this
 directory doubles as the home for both this fork's dev/ops scripts and the

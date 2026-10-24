@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# gamescope-ritz-common.sh — shared helpers for install-gamescope-ritz.sh and
-# update-gamescope-ritz.sh. Not meant to be run directly; sourced by both.
+# gamescope-ritz-common.sh — shared helpers for build-gamescope-ritz.sh and
+# gentle-build.sh. Not meant to be run directly; sourced by both.
 #
 # Everything here exists to serve one non-negotiable rule: this project's
 # install target is /usr/bin/gamescope-ritz, and /usr/bin/gamescope (the

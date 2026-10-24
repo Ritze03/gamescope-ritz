@@ -9,6 +9,17 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.2] – 2026-10-24
+
+### Removed
+- **Interactive installer**: `install.sh` no longer has a menu, `--update`, `--link` or
+  `--copy`, and no longer copies the Ritz launcher extension into your Ritz settings.
+
+### Info
+- **Installing with ritz-get**: `ritz-get install gamescope-ritz` (or `./install.sh
+  --install`) builds into `build/` and links `gamescope-ritz` into `~/.local/bin` and
+  `/usr/local/bin`; the Vulkan layer is linked into your user Vulkan layer folder.
+
 ## [0.14.1] – 2026-10-23
 
 ### Fixed

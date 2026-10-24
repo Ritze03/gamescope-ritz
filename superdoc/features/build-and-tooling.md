@@ -18,36 +18,47 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
   the multi-name form needs meson >= 0.60 while this project declares >= 0.58. 0.19 is
   **system-only** — there is no second wrap, and none is worth adding until something
   actually needs to build 0.19 from source.
-  - `install.sh`'s pre-flight check (`gcr_wlroots_candidates` / `gcr_check_wlroots`)
-    scrapes those probes out of `src/meson.build` so it cannot drift from what the build
-    really asks for, and accepts the first module pkg-config satisfies — the same order
-    meson tries. *Why it flattens newlines first:* the scraper used to read line-by-line
-    with `getline`, which broke the moment the 0.19 probe made the first `dependency()`
-    a one-liner — it then reported the module name as `ifnotwlroots_dep.found()`.
-- **`install.sh --force`** forces a full recompile: `gcr_build()` runs `ninja -t clean`
-  after configuring, so everything is rebuilt even when nothing changed. Plumbed as one
-  `export GCR_FORCE_CLEAN=1` after the option parse rather than an argument threaded
-  through every call site, because `gcr_build()` is the single place a build happens and
-  is reached from `--install`, `--update` and the menu alike. *Why `ninja -t clean` and
-  not `rm -rf` the build dir:* it removes exactly what ninja produced (258 files here)
-  and leaves the configure results, fetched subprojects and cached compiler checks
-  alone, so a forced rebuild costs a compile rather than a reconfigure plus re-fetching
-  Catch2 and the wraps. A tree whose *configure* is wrong is a different problem, and
-  `gcr_meson_configure()` already falls back to a wipe for that.
-- **`--update` re-execs itself when the pull changes the installer.** bash has already
-  read `install.sh`, and `scripts/gamescope-ritz-common.sh` is sourced at startup —
-  *before* the `git pull` — so an update that changes either one would otherwise run the
-  **old** code against the **new** tree for the rest of that run. Seen for real: the
-  commit making the WSI layer a default ninja target was pulled by an `--update` that
-  then built with the previous `gcr_build()` and skipped the layer, so the fix looked
-  like it had not worked. `do_update()` compares HEAD before and after the pull and
-  `exec`s itself with the original argv; `GCR_REEXECED` guards against a loop.
+- **Installing is `install.sh` (ritz-get spec v1), nothing else** (2026-10-24). The old
+  interactive installer, `scripts/install-gamescope-ritz.sh` and
+  `scripts/update-gamescope-ritz.sh` are gone; `scripts/gamescope-ritz-common.sh` stays
+  because `gentle-build.sh` and `build-gamescope-ritz.sh` source it. `install.sh --install
+  --yes` is what `ritz-get` runs on every install and update, and it never runs git
+  itself: `ritz-get` has already checked out the clone and its submodules.
+  - **Build.** `meson setup build/meson` (release, `-Doptimization=3 -Db_lto=true`,
+    `-Denable_tests=false`), then `ninja` for `src/gamescope` and the WSI layer. The binary
+    is copied to `build/gamescope-ritz` under a temporary name and `mv`ed into place, so a
+    failed build leaves the old one working. A second run reconfigures (`meson setup
+    --reconfigure`, which re-reads git for the embedded version, see below) and ninja only
+    rebuilds what changed. *Why a copy and not the ninja output:* ninja relinks the output
+    in place, and a build that fails half-way must not touch the binary a game is using.
+    If the clone moved, `build/.srcdir` no longer matches and `build/meson` is rebuilt from
+    scratch, because a meson tree holds absolute paths.
+  - **Links.** `~/.local/bin/gamescope-ritz` and `/usr/local/bin/gamescope-ritz` (through
+    `~/.local/share/ritz-get/links/gamescope-ritz`) point at `build/gamescope-ritz`. The
+    system link is the one root step (first install only, `ROOT_LINK=yes` in the template).
+    Nothing is ever written to `/usr/bin`. A `/usr/bin/gamescope-ritz` left by the old
+    installer is not touched; `install.sh` prints a note that it may be deleted.
+  - **Dependencies.** Every tool and pkg-config module is checked up front and reported as
+    `missing: TOOL (try: pacman:PKG dnf:PKG apt:PKG)` with exit 3. The list is hand-kept in
+    `install.sh`'s `check_tools`; keep it in step with the `dependency()` calls in
+    `meson.build`, `src/meson.build`, `protocol/meson.build` and `layer/meson.build`.
+    wlroots is OK when a system 0.20 or 0.19 exists or `subprojects/wlroots` is checked out
+    (then the libraries that build needs are checked instead); OpenVR likewise, with
+    `cmake` for the submodule build. *Why hand-kept now:* the scraper of the old installer
+    needed bash and a distro-specific hint format, and the spec wants package names for
+    three package managers. The optional libraries (DRM, SDL2, libcap, PipeWire, libeis,
+    libavif) only produce a `note:` when absent.
+  - **setcap is not done.** `CAP_SYS_NICE` would be lost on every rebuild, so `install.sh`
+    only prints the command.
 - **This fork installs its OWN Vulkan WSI layer, under its own name** (2026-09-22).
   `layer/meson.build` builds `libVkLayer_RITZ_gamescope_wsi_<family>.so` with the layer
   name `VK_LAYER_RITZ_gamescope_wsi_<family>`, activated by
   `ENABLE_GAMESCOPE_RITZ_WSI` and suppressed by `DISABLE_GAMESCOPE_RITZ_WSI`. `install.sh`
-  installs it beside the binary (`gcr_install_wsi_layer`), and `--remove` offers to take
-  it away again.
+  links it, user level and without root, into `$XDG_DATA_HOME/vulkan/implicit_layer.d/`
+  (the `.so` and a manifest generated into `build/` whose `library_path` is absolute into
+  the clone), and `--remove` takes the links away again. `install.sh` passes
+  `--prefix=$HOME/.local -Ddatadir=$XDG_DATA_HOME` to meson so that the manifest path baked
+  into the binary (`GAMESCOPE_RITZ_WSI_LAYER_JSON`) is exactly the link it makes.
   - **The bug it fixes.** The layer is loaded into the *game's* process, not gamescope's,
     and the compositor and the layer are two halves of one protocol that must be
     version-matched. Before this, the fork shipped no layer of its own, so games loaded
@@ -83,73 +94,16 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
     hatch:* the layer runs inside the game's process, so a bad one cannot be worked
     around from in there — the only place to turn it off is in the environment, before
     the game starts.
-  - `run_wsi_layer_check()` reports which layer is in play. If ours is installed it says
-    so and stops; otherwise it greps the system layer for the 7-argument signature
-    literal `uuuuuus` that wayland-scanner bakes in, and warns when it is missing. *Why
-    a grep and not a version comparison:* nothing in a `.so` says which gamescope built
-    it, and the signature IS what has to match; `grep -a` rather than `strings(1)` so it
-    needs no binutils.
-  - **Installing the layer is never fatal.** It happens *after* the binary is already
-    in place, so a failure there must not abort the run — `set -e` on a failed `sudo`
-    would leave a working install half-finished and skip everything after it. Seen for
-    real: `./install.sh --update` from a non-TTY shell, where sudo cannot prompt
-    (*"a terminal is required to read the password"*), took down the rest of the update.
-    It now warns, prints the two `sudo install` lines to finish by hand, and continues —
-    the compositor's fallback means the install is still usable without it.
-  - `gcr_remove_wsi_layer()` only ever deletes a manifest whose basename contains
-    `RITZ_gamescope_wsi`, and `--remove` defaults that confirmation to **no** — unlike
-    the binary, these are files in a shared system directory.
-- **The program check is separate from the library check, and both are needed.**
-  `gcr_check_build_tools()` covers `meson`, `cmake`, `ninja`, `pkg-config`, `git` and
-  the glslang shader compiler; the pkg-config gate below covers the `dependency()`
-  calls. *Why both:* a `find_program()` is invisible to a pkg-config scan — a Fedora 44
-  report cleared every library check and then died at `src/meson.build:55` with
-  "Program 'glslang glslangValidator' not found", because the shader compiler is a
-  binary, not a module. Only two external programs are hard-required: `wayland-scanner`
-  (which arrives with its own pkg-config module, so the library gate already covers it)
-  and glslang. The rest of the `find_program()` calls are this repo's own Python
-  scripts. Meson accepts *either* `glslang` or `glslangValidator`, so only the absence
-  of both is a failure.
-  - This one carries a small command→package map (Fedora ships `/usr/bin/ninja` in a
-    package called `ninja-build`). *Why a map is acceptable here but not for the
-    libraries:* five build-tool names that essentially never change, versus twenty-five
-    library names across three distros that would rot — which is why the library list is
-    scraped instead.
-- **`install.sh` gates on the hard dependencies before meson runs**
-  (`gcr_hard_pkgconfig_modules` / `gcr_check_pkgconfig_deps`, 2026-09-22). It scrapes
-  every `dependency('...')` in `meson.build`, `src/meson.build`, `protocol/meson.build`
-  and `layer/meson.build`, drops the ones gated by `required: false` or
-  `required: get_option(...)`, and checks the rest with pkg-config. *Why scraped, not a
-  hardcoded list:* a hand-kept copy drifts from meson.build and then lies — the same
-  reasoning as the wlroots check above.
-  - Three names are excluded by hand: `threads` (a meson builtin), `openvr_api` (a
-    subproject dependency object) and `vkroots` (pinned to the vendored copy by
-    `force_fallback_for`). `wlroots-*` is excluded too, having its own multi-version
-    check.
-  - *Why `required: true` must NOT be treated as optional:* `src/meson.build`'s
-    `libinput` says it out loud, and a filter that drops every line matching "required"
-    silently skips it. `dependency( 'luajit' )`'s space after the paren is the matching
-    trap on the regex side. Both were live gaps in the first cut.
-  - *Why it exists:* without it the failure lands hundreds of lines into `meson setup`.
-    A real report (Fedora 44) died at `protocol/meson.build:7` with
-    "Neither a subproject directory nor a wayland-protocols.wrap file was found" —
-    after a full compiler probe and an openvr cmake configure — which reads like a build
-    bug rather than a missing package.
-  - On Fedora/RHEL the hint is exact, because dnf resolves `pkgconfig(foo)` virtual
-    provides: the module name *is* the package name, so no lookup table is needed.
-    pacman and apt get a file-search command instead. *Why no module→package map:* three
-    distro tables is exactly the kind of thing that rots; the search command answers the
-    same question and stays true on its own.
 - **The embedded version can go stale, and the scripts are what prevent it.**
   `src/meson.build` derives `k_szRitzCommit` / `k_szRitzPatchDate` with `run_command()`
   feeding a `configure_file()`; both run at *configure* time, and meson re-runs configure
   only when a `meson.build` changes — git HEAD moving is invisible to it. Every script
-  here funnels through `gcr_build()`, which always calls `gcr_meson_configure()`
-  (`meson setup --reconfigure`), so a scripted build always re-reads git. A bare
+  here, and `install.sh`, always run `meson setup --reconfigure`, so a scripted build
+  always re-reads git. A bare
   `ninja -C <dir>` in a hand-made build directory does **not**, and silently produces a
   binary reporting an old commit. `gcr_report_version()` prints the embedded version
-  after every scripted build and warns when it disagrees with HEAD, which turns that
-  silent case into a visible one. *Why not fix it in meson:* `vcs_tag()` /
+  after every `gentle-build.sh` build and warns when it disagrees with HEAD, which turns
+  that silent case into a visible one. *Why not fix it in meson:* `vcs_tag()` /
   `build_always_stale` would, but no supported path is affected — see the `ponytail:`
   note on that function for the upgrade path.
 - All boolean/feature options live in `meson_options.txt` (11 options total, read
@@ -180,7 +134,7 @@ build, deploy, and reset Gamescope on a real SteamOS handheld/desktop device ove
 - **Nothing is installed beside the binary** (2026-09-09). There is no
   `meson.add_install_script` any more; `default_extras_install.sh`, which used to copy
   `scripts/`, `looks/` and the font licence into `share/gamescope-ritz`, is deleted, and
-  so are `install.sh`'s `--extras`/`--no-extras` flags and its prompt. **Why:** that
+  so were the old `install.sh`'s `--extras`/`--no-extras` flags and its prompt. **Why:** that
   prompt defaulted to *no*, while `meson.build` baked the same path in as `SCRIPT_DIR`
   and `Script.cpp` loaded it at startup — so taking the default silently produced an
   install with no known-displays database at all, reported only as a `warnf` in a log
