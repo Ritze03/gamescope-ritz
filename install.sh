@@ -64,6 +64,8 @@ check_tools() {
 	need_pc libdecor-0 pacman:libdecor dnf:libdecor-devel apt:libdecor-0-dev
 	need_pc luajit pacman:luajit dnf:luajit-devel apt:libluajit-5.1-dev
 	need_pc libinput pacman:libinput dnf:libinput-devel apt:libinput-dev
+	# the libdisplay-info submodule fallback needs hwdata's pkg-config file at configure time
+	pkg-config --exists libdisplay-info 2>/dev/null || need_pc hwdata pacman:hwdata dnf:hwdata apt:hwdata
 	if have pkg-config; then
 		# the loader's pkg-config file does not bring the headers along on every distro
 		if pkg-config --exists vulkan 2>/dev/null; then
@@ -124,6 +126,7 @@ build() {
 	echo "$dir" > build/.srcdir
 	# the layer's target name carries the CPU family, so ask ninja for it
 	lt=$(ninja -C build/meson -t targets all 2>/dev/null | sed -n 's|^\(layer/lib[A-Za-z0-9_]*gamescope_wsi[A-Za-z0-9_]*\.so\):.*|\1|p' | head -n 1)
+	[ -n "$lt" ] || echo "note: WSI layer target not found, layer not rebuilt"
 	echo "building with ninja"
 	if have nice; then nice -n 10 ninja -C build/meson src/gamescope $lt; else ninja -C build/meson src/gamescope $lt; fi
 	cp build/meson/src/gamescope "build/.$NAME.new"
@@ -154,6 +157,9 @@ install_files() {
 	[ ! -e /usr/bin/gamescope-ritz ] || echo "note: /usr/bin/gamescope-ritz is a leftover of the old installer; you may delete it (/usr/local/bin comes first in PATH)"
 	[ ! -e /usr/local/share/vulkan/implicit_layer.d/VkLayer_RITZ_gamescope_wsi.x86_64.json ] \
 		|| echo "note: /usr/local/share/vulkan/implicit_layer.d/ holds an old copy of the layer manifest; you may delete it"
+	for s in /usr/local/lib*/libVkLayer_RITZ_gamescope_wsi_*.so; do
+		[ ! -e "$s" ] || echo "note: $s is an old copy of the layer library; you may delete it (by hand, as root)"
+	done
 	echo "note: real-time scheduling needs, as root: setcap cap_sys_nice+ep $dir/$TARGET (repeat after every rebuild)"
 }
 

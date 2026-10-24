@@ -132,6 +132,10 @@ gamescope-ritz -- vkcube             # or any game/binary, tried by hand
 #    same searchable settings, alone over the game, no shell behind it.
 ```
 
+To use the Ritz launcher extension, copy it by hand (it is never installed for you). From your
+clone (with ritz-get: `~/.local/share/ritz-get/src/gamescope-ritz`):
+`cp extensions/gamescope-ritz.json ~/.config/ritz/extensions/ritze__gamescope_ritz.json`
+
 Installing is idempotent: the build tree in `build/` is reused, so running it again only
 rebuilds what changed. The `/usr/local/bin` link is made once and needs your password
 only that first time; later runs need no root.
@@ -143,7 +147,8 @@ it prints the missing items. [Dependencies](#dependencies) lists the same thing 
 
 ```sh
 ritz-get update gamescope-ritz   # the main way
-./install.sh --install           # without ritz-get, after your own git pull
+./install.sh --install           # without ritz-get, after your own git pull and
+                                 # git submodule update --init --recursive
 ```
 
 The rebuilt binary is live the instant the build finishes, because the installed name is
@@ -230,8 +235,8 @@ the list cannot drift out of step with `meson.build` the way a hand-written one 
 
 gamescope-ritz builds and installs its **own** Vulkan layer
 (`VK_LAYER_RITZ_gamescope_wsi`), and `./install.sh` links it into
-`~/.local/share/vulkan/implicit_layer.d/` next to the binary's other links. It deliberately does *not* share a name with the layer your distro's `gamescope`
-package ships, so the two coexist and neither overrides the other — your packaged
+`~/.local/share/vulkan/implicit_layer.d/` (user level, no root). It deliberately does
+*not* share a name with the layer your distro's `gamescope` package ships, so the two coexist and neither overrides the other — your packaged
 gamescope keeps using its own.
 
 `Why it matters:` that layer is loaded into the **game's** process and is one half of a
@@ -336,5 +341,7 @@ RITZ_GET_SUDO=sudo ./install.sh --remove     # without ritz-get
 ```
 
 Never touches `~/.config/gamescope-ritz` — only the links it made. A copy that an older
-installer left in `/usr/bin/gamescope-ritz` is not touched either; you may delete it
-yourself.
+installer left in `/usr/bin/gamescope-ritz` is not touched either, nor are its copies of
+the layer, `/usr/local/share/vulkan/implicit_layer.d/VkLayer_RITZ_gamescope_wsi.x86_64.json`
+and `/usr/local/lib*/libVkLayer_RITZ_gamescope_wsi_x86_64.so`; leave them alone or delete
+them by hand.

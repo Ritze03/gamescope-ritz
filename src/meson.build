@@ -540,7 +540,7 @@ changelog_header = custom_target(
 # an ordered table -- the known-displays database and the modegen helpers
 # that DRMBackend looks a panel up in. Compiled in as of 2026-09-09 because
 # it used to be COPIED to $prefix/share/gamescope-ritz/scripts by an install
-# step install.sh prompted for and defaulted to declining, which silently
+# step the old interactive installer prompted for and defaulted to declining, which silently
 # produced installs with no display database. See Script/embed_scripts.py.
 #
 # The directory is an argument (the script walks it in RunFolder's own
