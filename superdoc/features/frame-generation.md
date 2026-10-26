@@ -291,31 +291,49 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
 
 ## Learned motion
 
-(2026-10-26, experimental, **opt-in**, branch `ml-fg-testing`; library pin FrameGen
-`fd5c163`, FGR's local-only `ml-fg-testing` branch -- see `ML-FG-TESTING.md` in the repo
-root for how to build and test it.) The library's `MotionVersion::Learned`: **V1 with its
-motion search replaced by a small learned conv net** (ml-fg's `e2v3` / `e1v3`, a 5-level
-coarse-to-fine net on the flow-resolution luma). It writes what V1's search writes (the
-per-pixel half-vector field and the scene-cut SAD), so V1's synthesis, trust ramp,
-fallbacks, motion blur and UI protection are untouched. Defaults are unchanged: `v1`, `e2v3`,
-full precision.
+(2026-10-26, experimental, **opt-in**, branch `ml-fg-testing`; round 1 pinned FrameGen
+`fd5c163`, round 2 pins `6133a4a`, both FGR's local-only `ml-fg-testing` branch -- see
+`ML-FG-TESTING.md` in the repo root for how to build and test it.) The library's
+`MotionVersion::Learned`: **V1 with its motion search replaced by a small learned conv net**
+(ml-fg's nets, a 5-level coarse-to-fine net on the flow-resolution luma). It writes what V1's
+search writes (the per-pixel half-vector field and the scene-cut SAD), so V1's synthesis,
+trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are unchanged:
+`v1`; once Learned is chosen, net `e2v4`, full precision, zero-motion test on, static guard off.
 
 - **Rows** (Frame generation area): **Motion version** gains a third choice, **Learned**
-  (`framegen.motion_version` = `learned`); **Learned net** (`framegen.learned_net`, `e2v3`
-  default / `e1v3`) and **Learned precision** (`framegen.learned_half`, Full default / Half)
-  sit below it and are greyed out unless Learned is what actually runs
-  (`LearnedRowsUsable()`: Frame generation or Motion blur on, and the effective Motion
-  version `learned`). Additive config, schema stays 5; unknown strings keep the default.
+  (`framegen.motion_version` = `learned`). Below it, four rows, greyed out unless Learned is
+  what actually runs (`LearnedRowsUsable()`: Frame generation or Motion blur on, and the
+  effective Motion version `learned`): **Learned net** (`framegen.learned_net`, in GUI order
+  `e2v4` default / `e1v4` the small cheap net / `e2v3` / `e1v3`, the last two being round 1's
+  nets kept for comparing), **Learned precision** (`framegen.learned_half`, Full default /
+  Half), **Zero-motion test** (`framegen.learned_zero_test`, default on) and **Static guard**
+  (`framegen.learned_static_guard`, default off). Additive config, schema stays 5; unknown
+  strings keep the default. `Why` the guard is a separate opt-in switch: the user wanted it
+  optional (it costs a full-resolution pass per generated frame and, per the library's own
+  measurements, it does not repair a HUD on fast-moving scenery -- the zero test does that).
+- **Round 2 (library `6133a4a`)**: `LearnedNet` grew to `E2v3 = 0, E1v3 = 1, E2v4 = 2,
+  E1v4 = 3` (e2v4 is e2v3 fine-tuned by ml-fg at the same cost, and the new library default;
+  e1v4 likewise for e1v3). `Settings::learnedZeroTest` (default true) is ml-fg's zero-motion
+  test: the vector becomes 0 where keeping the pixel still fits as well as the net's motion;
+  it fixes much of the round-1 static-HUD warp and costs ~0.006 ms per pair and no memory.
+  `Settings::learnedStaticGuard` (default false) is a pass over each finished generated frame
+  that shows the plain time mix `(1 - t) A + t C` where both real frames are locally
+  identical and the motion is small, ~0.05 ms per generated frame at 1080p. Both are runtime
+  (`setSettings()`, no GPU wait, no allocation).
 - **Motion blur accepts it too** (`motion_blur.motion_version` = `learned`). It has **no
   net / precision of its own**: the two rows above are Frame generation's and the blur
   borrows them. `Why:` one interpolator serves both features, and two more rows for a
   3-way experiment was not worth it; the help text says so.
 - **Host plumbing** (`FrameGenHost.{h,cpp}`): `fghost::Motion::Learned`,
-  `fghost::LearnedNet`, `Config::learnedNet` / `learnedHalf`. The packed config word carries
-  motion at bits 28-29, the net at bit 30 and the precision at bit 31 (V1 = all zero, the
-  defaults' packing is unchanged); the blur word's motion is bits 15-16 and its quality moved
-  to bit 17 (in-memory only, nothing persists these words). The library-config key
-  (`uLibraryConfig`) includes all four bits, so a net or precision change reaches
+  `fghost::LearnedNet` (the library's four values), `Config::learnedNet` / `learnedHalf` /
+  `learnedZeroTest` / `learnedStaticGuard`. The main packed config word is full, so motion
+  stays at its bits 28-29 (bits 30-31 are unused again) and the four Learned settings have
+  their own word, `g_uLearned` (net bits 0-1, precision 2, zero test 3, guard 4; like the
+  crosshair box's `g_uUiBox`). `Why` a word of its own and not the blur word's spare bits:
+  they are Frame generation's settings, and the blur word is kept apart so a blur edit never
+  touches Frame generation. The blur word's motion is bits 15-16 and its quality bit 17
+  (in-memory only, nothing persists these words). The library-config key (`uLibraryConfig`)
+  includes the motion bits and the five Learned bits (at bit 56), so a change reaches
   `setSettings()` (runtime, no GPU wait) without a reconfigure.
 - **flowScale 2 is forced** for Learned, exactly as for V2 (`EnsureReady()`): the nets were
   trained at 2 and `settingsError()` refuses anything else. So **Quality's Performance is
@@ -330,35 +348,44 @@ full precision.
   still compiles (it probes them with `__has_include`) and **silently** leaves Learned out;
   the only symptom is that V1 runs. Build checks: see below and `ML-FG-TESTING.md`.
 - **Weights are compiled in** (`ml_weights.h`, generated by the library's
-  `gpu/ml/embed_weights.py` from `gpu/ml/{e2v3,e1v3}/{manifest.json,weights.bin}`; the script
-  also verifies the sha256 and the shapes). No runtime file, nothing extra to install. They
+  `gpu/ml/embed_weights.py` from `gpu/ml/{e2v3,e1v3,e2v4,e1v4}/{manifest.json,weights.bin}`,
+  in that order = the `LearnedNet` values; the script also verifies the sha256 and the
+  shapes). No runtime file, nothing extra to install. They
   reach the GPU through `vkCmdUpdateBuffer` inside the **first Learned estimate's command
   buffer**; the host submits every command buffer `RecordBaseLayer()` records into (`pCmd`
   is submitted unconditionally at the end, with no early return after `Cmd()`), so the upload
-  cannot be dropped. Switching to Learned creates 34 pipelines at once on the render thread
-  (one short hitch).
+  cannot be dropped. Switching to Learned creates 56 pipelines at once on the render thread
+  (one short hitch; 34 in round 1).
 - **Duplicate frames are the library's job.** The net invents motion on identical frames, so
   every `recordEstimate` first runs `ml_dup` / `ml_reduce` (mean |a - c| over pixels and R, G,
   B, threshold 0.6 levels): on a duplicate every net pass exits and the field is zero. It is
   unconditional in the Learned estimate path (`mlEstimate()`); the host does nothing.
   **Caveat:** the test is whole-frame, so a small moving cursor on an otherwise still
   screen counts as a duplicate and its motion is not interpolated.
-- **Cost** (library figures, RX 7900 XTX, 1080p 2x, estimate + synth per real pair): V1 0.29
-  ms, e2v3 1.30 (half 0.98), e1v3 0.51 (half 0.46); 1440p e2v3 2.59 (half 1.62). Memory on
-  top of V1: e2v3 100 MB (half 50) + 11 MB state at 1080p, e1v3 58 MB (half 29). The memory
-  grows to the largest net used and stays until teardown (`releaseUnusedMotion()` is not
-  called, as for V2).
-- **Quality**: the net is on average slightly better than V1 on ml-fg's clips and slightly
-  below V1 on the library's own three; on real footage the PSNR against the real middle
-  frame is within ~0.7 dB of V1. **Known: static HUD text warps** with moving scenery (the net
-  has no zero-motion prior; V1's `hudBonus` does) -- the help text says so. UI protection works
-  as with V1 but Crosshair V2 leaves more pixels around the crosshair with Learned (the library's
+- **Cost** (library figures, RX 7900 XTX, 1080p 2x, estimate + synth per real pair): V1
+  0.30-0.33 ms, e2v4 (and e2v3) 1.44-1.48 (half 1.09-1.13), e1v4 (and e1v3) 0.62 (half
+  0.49-0.51); the zero test adds ~0.005 ms, the static guard ~0.045 ms per generated frame.
+  Round 1's figures were ~10 % lower on a quieter machine; 1440p e2v3 2.59 (half 1.62), not
+  re-measured. Memory on top of V1: e2v4/e2v3 100 MB (half 50) + 11 MB state at 1080p,
+  e1v4/e1v3 58 MB (half 29); the zero test and guard need none. The memory grows to the
+  largest net used and stays until teardown (`releaseUnusedMotion()` is not called, as for
+  V2).
+- **Quality**: with the zero test (the default) e2v4 / e1v4 match V1 on the library's
+  obs2 clip, beat it by ~0.2 dB on battlefield and sit ~2 dB below it on obs1 13100 (the one
+  regression against e2v3 on FGR's clips). **Known: static HUD text** is much better than in
+  round 1 (the net has no zero-motion prior of its own; the zero test supplies one) but not
+  yet as clean as V1: glyph edges on a money counter stay notched. The static guard does not
+  change that where the field around the HUD moves more than ~1 px. UI protection works as
+  with V1 but Crosshair V2 leaves more pixels around the crosshair with Learned (the library's
   known issue (a)).
-- Shaders: six `ml_*` compute shaders in `src/meson.build`'s `framegen_shaders` (`ml_dup`,
-  `ml_reduce`, `ml_pyr`, `ml_match`, `ml_conv`, `ml_out`; `ml_common.glsl` is their include,
-  picked up by the depfile), `ml_dup` also with `rgb10` and `f16` variants (the only Learned
-  pass that reads colour), and the `framegen_ml_weights` custom target for `ml_weights.h`.
-  Touch `FrameGenLib.cpp` when this set changes (stale incremental builds).
+- Shaders: eight `ml_*` compute shaders in `src/meson.build`'s `framegen_shaders` (`ml_dup`,
+  `ml_reduce`, `ml_pyr`, `ml_match`, `ml_conv`, `ml_out`, and since round 2 `ml_zero` and
+  `ml_guard`; `ml_common.glsl` is their include, picked up by the depfile), `ml_dup` and
+  `ml_guard` also with `rgb10` and `f16` variants (the two Learned passes that read colour),
+  and the `framegen_ml_weights` custom target for `ml_weights.h` (four nets). The library
+  probes `ml_conv`, `ml_zero`, `ml_guard` and `ml_weights.h` (plus each format's `ml_dup` /
+  `ml_guard` variants) with `__has_include`: **any one missing and Learned silently
+  disappears**. Touch `FrameGenLib.cpp` when this set changes (stale incremental builds).
 
 ## UI protection
 
@@ -1040,8 +1067,10 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
 | `framegen.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](#learned-motion) (2026-10-26) |
-| `framegen.learned_net` | `e2v3` (default) / `e1v3` | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v3` (2026-10-26) |
+| `framegen.learned_net` | `e2v4` (default) / `e1v4` / `e2v3` / `e1v3` | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v4` (2026-10-26; `e2v4` / `e1v4` and the new default are round 2 -- round 1 defaulted to `e2v3`, and since saving writes every key, a profile saved by a round-1 build keeps its explicit `e2v3`) |
 | `framegen.learned_half` | `false` (default) / `true` | the row "Learned precision" (Full / Half), used only while Learned runs; additive (2026-10-26) |
+| `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
+| `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
@@ -1071,7 +1100,7 @@ and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shel
 overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
 (a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
 into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2 / Learned) with Learned net and Learned precision below it, Artifact safety (Off / Low / Default / High), Static HUD
+rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2 / Learned) with Learned net, Learned precision, Zero-motion test and Static guard below it, Artifact safety (Off / Low / Default / High), Static HUD
 protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
 "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
@@ -1190,7 +1219,7 @@ The library has no root `meson.build`, and Meson's sandbox forbids handing files
 `subprojects/` to the parent project (`Sandbox violation: Tried to grab file ... from a
 nested subproject`), so `subproject()` is impossible. Its 36 shaders (11 for the interpolation, 13 for Motion version 2 (the plain Rgba8 set), 9 for UI protection -- `ui_v2_update`, `ui_v2_mask`, `ui_v2_lumafill` added with Crosshair V2 -- 3 for motion blur --
 `blur_lookup`, `blur_error`, `blur_resolve`, with the include `blur_common.glsl`; the
-test-only `gpu/blendbench.comp` is not built), plus 17 colour-shader variants each for `rgb10` and `f16` (V1's 12 -- `ui_v2_update` and `ui_v2_lumafill` are per-format -- V2's four synthesis shaders `v2_morph`, `v2_morph_s`, `v2_qmorph`, `v2_qmorph_s` and Learned's `ml_dup`; since 2026-10-26 the six `ml_*` shaders are also in the base count, and `ml_weights.h` is generated by a `custom_target()` running the library's `gpu/ml/embed_weights.py`) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
+test-only `gpu/blendbench.comp` is not built), plus 17 colour-shader variants each for `rgb10` and `f16` (V1's 12 -- `ui_v2_update` and `ui_v2_lumafill` are per-format -- V2's four synthesis shaders `v2_morph`, `v2_morph_s`, `v2_qmorph`, `v2_qmorph_s` and Learned's `ml_dup` and `ml_guard`; since 2026-10-26 the eight `ml_*` shaders are also in the base count, and `ml_weights.h` is generated by a `custom_target()` running the library's `gpu/ml/embed_weights.py`) (`-DFG_FORMAT_<FMT>=1`, `<name>_<fmt>_spv`), are compiled with
 `custom_target()` (same glslang flags and `--vn <name>_spv` embedded headers as gamescope's
 own) using absolute paths, and `framegen.cpp` is compiled through the wrapper
 `src/FrameGen/FrameGenLib.cpp`. `Why:` bumping the submodule pulls upstream library work

@@ -37,9 +37,9 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 learned net, 31 learned half
-		// precision. The crosshair box size is
-		// its own word, g_uUiBox.
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30-31 unused. The
+		// crosshair box size is its own word, g_uUiBox, and Learned motion's runtime settings (net,
+		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full).
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
@@ -61,9 +61,20 @@ namespace fghost
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
-				| ( uint32_t( c.motion ) << 28 )
-				| ( uint32_t( c.learnedNet ) << 30 )
-				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 31 );
+				| ( uint32_t( c.motion ) << 28 );
+		}
+
+		// Learned motion's runtime settings, their own word: bits 0-1 net (framegen::LearnedNet
+		// order: e2v3, e1v3, e2v4, e1v4), 2 half precision, 3 zero-motion test, 4 static guard.
+		// Round 1 had the net and precision in bits 30-31 of the main word; round 2 needs two
+		// more bits and the main word is full, so all four moved here (the main word's
+		// defaults still pack to what they did: bits 28-31 are 0 for V1).
+		uint32_t PackLearned( const Config &c )
+		{
+			return ( uint32_t( c.learnedNet ) & 0x3u )
+				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 2 )
+				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 3 )
+				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 4 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -95,7 +106,7 @@ namespace fghost
 		};
 		BoxPending_t g_BoxPending;
 
-		Config Unpack( uint32_t u, uint32_t uBox )
+		Config Unpack( uint32_t u, uint32_t uBox, uint32_t uLearned )
 		{
 			Config c;
 			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
@@ -113,12 +124,15 @@ namespace fghost
 			c.motion = Motion( ( u >> 28 ) & 0x3u );
 			if ( c.motion > Motion::Learned )
 				c.motion = Motion::V1;
-			c.learnedNet = LearnedNet( ( u >> 30 ) & 0x1u );
-			c.learnedHalf = ( ( u >> 31 ) & 1u ) != 0;
+			c.learnedNet = LearnedNet( uLearned & 0x3u );
+			c.learnedHalf = ( ( uLearned >> 2 ) & 1u ) != 0;
+			c.learnedZeroTest = ( ( uLearned >> 3 ) & 1u ) != 0;
+			c.learnedStaticGuard = ( ( uLearned >> 4 ) & 1u ) != 0;
 			return c;
 		}
 
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
+		std::atomic<uint32_t> g_uLearned{ PackLearned( Config{} ) };
 
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
@@ -479,9 +493,18 @@ namespace fghost
 			// Motion version: a request; ResolveMotion() drops V2 / Learned to V1 where the library refuses it.
 			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2
 				: c.motion == Motion::Learned ? framegen::MotionVersion::Learned : framegen::MotionVersion::V1;
-			// Learned's net and activation precision (every other version ignores both).
-			s.learnedNet = c.learnedNet == LearnedNet::E1v3 ? framegen::LearnedNet::E1v3 : framegen::LearnedNet::E2v3;
+			// Learned's net, activation precision, zero-motion test and static guard (every other
+			// version ignores all four). The host enum has the library's values.
+			switch ( c.learnedNet )
+			{
+				case LearnedNet::E2v3: s.learnedNet = framegen::LearnedNet::E2v3; break;
+				case LearnedNet::E1v3: s.learnedNet = framegen::LearnedNet::E1v3; break;
+				case LearnedNet::E2v4: s.learnedNet = framegen::LearnedNet::E2v4; break;
+				case LearnedNet::E1v4: s.learnedNet = framegen::LearnedNet::E1v4; break;
+			}
 			s.learnedHalf = c.learnedHalf;
+			s.learnedZeroTest = c.learnedZeroTest;
+			s.learnedStaticGuard = c.learnedStaticGuard;
 			// The one Quality setting also picks V2's mode (V1 ignores it).
 			s.v2Mode = c.quality == Quality::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
 			return s;
@@ -652,7 +675,7 @@ namespace fghost
 
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
 		// change, apply a changed preset. False = not usable this frame.
-		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const FormatPlan &plan, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur )
+		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const FormatPlan &plan, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur, uint32_t uPackedLearned )
 		{
 			const uint64_t ulKey = FailKey( w, h, c, plan );
 			if ( H.ulFailedKey == ulKey )
@@ -675,8 +698,8 @@ namespace fghost
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0xFu << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
-				| ( uint64_t( c.uiBoxTenths ) << 48 );
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x1Fu ) << 56 );
 
 			if ( !H.bLive )
 			{
@@ -1305,6 +1328,7 @@ namespace fghost
 		const uint32_t uPacked = Pack( cfg );
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
 		g_uUiBox.store( PackBox( cfg ), std::memory_order_relaxed );
+		g_uLearned.store( PackLearned( cfg ), std::memory_order_relaxed );
 		UpdateGate();
 	}
 
@@ -1365,7 +1389,7 @@ namespace fghost
 
 	Config GetConfig()
 	{
-		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ) );
+		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ), g_uLearned.load( std::memory_order_relaxed ) );
 	}
 
 	bool Enabled()
@@ -1471,7 +1495,8 @@ namespace fghost
 		// key in EnsureReady() sees the effective values too.
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
 			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 0x3u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
-		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ) );
+		const uint32_t uPackedLearned = g_uLearned.load( std::memory_order_relaxed );
+		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// Frame generation, motion blur and the lag spike buffer all off (or never on): release
@@ -1556,7 +1581,7 @@ namespace fghost
 		H.bHaveColorspace = true;
 		H.eColorspace = eColorspace;
 
-		if ( !EnsureReady( H, uWidth, uHeight, plan, cfg, uPackedConfig, blurCfg, uPackedBlur ) )
+		if ( !EnsureReady( H, uWidth, uHeight, plan, cfg, uPackedConfig, blurCfg, uPackedBlur, uPackedLearned ) )
 		{
 			// A 10-bit / fp16 game that cannot start says why in terms of the format,
 			// not the generic "could not start": the cause is almost always the format.

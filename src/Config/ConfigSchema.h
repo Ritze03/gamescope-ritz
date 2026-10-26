@@ -533,12 +533,19 @@ namespace gamescope::config
         std::string motion_version = "v1";
         // Learned motion (2026-10-26, experimental): "learned" is a third motion_version.
         // It needs the library's flowScale 2, so `quality` = "performance" is ignored while
-        // it runs. `learned_net` ("e2v3" | "e1v3", the cheaper one) and `learned_half`
-        // (activations stored as half) only matter then. ADDITIVE: absent loads "e2v3" /
-        // false; an unknown string keeps the default. Motion blur's own motion_version =
-        // "learned" borrows these two (no copy of its own).
-        std::string learned_net = "e2v3";
+        // it runs. `learned_net` ("e2v4" default | "e1v4" the small, cheap one | "e2v3" |
+        // "e1v3": the two round-1 nets) and `learned_half` (activations stored as half) only
+        // matter then, and so do `learned_zero_test` (default on: fixes most of the warped
+        // static HUD, ~0.006 ms at 1080p) and `learned_static_guard` (default off: ~0.05 ms
+        // per generated frame at 1080p). ADDITIVE: absent loads the defaults; an unknown
+        // string keeps the default. Round 1 defaulted `learned_net` to "e2v3", and the
+        // serializer writes every key, so a profile saved by a round-1 build carries
+        // "e2v3" explicitly and keeps it (no migration). Motion blur's own motion_version =
+        // "learned" borrows these four (no copy of its own).
+        std::string learned_net = "e2v4";
         bool learned_half = false;
+        bool learned_zero_test = true;
+        bool learned_static_guard = false;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

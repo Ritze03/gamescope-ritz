@@ -147,16 +147,20 @@ The frame-generation library is a git submodule, `subprojects/FrameGen`
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
 **Learned motion build (2026-10-26, branch `ml-fg-testing` only).** That branch pins the
-submodule at FGR `fd5c163`, a commit that exists **only in the local frame-gen-ritz repo**
-(its local `ml-fg-testing` branch), not on GitHub: a fresh clone must first run
-`git -C subprojects/FrameGen fetch <path to the frame-gen-ritz checkout> ml-fg-testing`, then
-`git submodule update --init subprojects/FrameGen`. The build adds the six `ml_*.comp` shaders
-(`ml_dup` also as `rgb10` / `f16` variants) and a `framegen_ml_weights` `custom_target()`
-that runs the library's `gpu/ml/embed_weights.py` (via `python3 -I`, paths as plain strings
-because of the sandbox) to produce `ml_weights.h` in the build dir. Both the `ml_*_spv.h`
-headers and `ml_weights.h` must exist or the library, which probes them with `__has_include`,
-**compiles without error and silently refuses Learned** (`kMlNotBuilt`; the host then runs V1
-and the Status line says why). See `frame-generation.md`'s "Learned motion".
+submodule at FGR `6133a4a` (round 1: `fd5c163`), a commit that exists **only in the local
+frame-gen-ritz repo** (its local `ml-fg-testing` branch), not on GitHub: a fresh clone must
+first run `git -C subprojects/FrameGen fetch <path to the frame-gen-ritz checkout>
+ml-fg-testing`, then `git submodule update --init subprojects/FrameGen`. The build adds the
+eight `ml_*.comp` shaders (`ml_dup` and `ml_guard` also as `rgb10` / `f16` variants) and a
+`framegen_ml_weights` `custom_target()` that runs the library's `gpu/ml/embed_weights.py`
+(via `python3 -I`, paths as plain strings because of the sandbox) over **all four nets in
+`LearnedNet` order** (`e2v3, e1v3, e2v4, e1v4`) to produce `ml_weights.h` in the build dir.
+The `ml_*_spv.h` headers (`ml_conv`, `ml_zero`, `ml_guard`) and `ml_weights.h` must all exist
+or the library, which probes them with `__has_include`, **compiles without error and silently
+refuses Learned** (`kMlNotBuilt`; the host then runs V1 and the Status line says why): after
+touching the list, check that `build-agent/src/` holds `ml_zero_spv.h`, `ml_guard_spv.h`,
+`ml_guard_rgb10_spv.h`, `ml_guard_f16_spv.h` and an `ml_weights.h` with four nets. See
+`frame-generation.md`'s "Learned motion".
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
 (`Sandbox violation: Tried to grab file ... from a nested subproject`), and FrameGen has

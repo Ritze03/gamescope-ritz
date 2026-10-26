@@ -305,8 +305,8 @@ namespace gamescope
 			       "without the shader features it needs stays on V1 (the Status line says why). "
 			       "Learned is an experimental neural-network estimator (several times V1's GPU "
 			       "time, always at Quality's resolution; see Frame generation's Motion version "
-			       "help); its net and precision are Frame generation's Learned net and Learned "
-			       "precision rows, this area has none of its own. "
+			       "help); its net, precision, zero-motion test and static guard are Frame generation's "
+			       "Learned rows, this area has none of its own. "
 			       "Switching shows real frames for an instant. Shown greyed out with Frame "
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )

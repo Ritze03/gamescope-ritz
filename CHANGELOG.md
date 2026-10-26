@@ -14,7 +14,9 @@ The newest version below is the one this build reports.
 ### Added
 - **Learned motion (experimental)**: Frame generation and Motion blur can find motion
   with a small neural network instead of V1's search, under Motion version > Learned,
-  with a choice of network and precision.
+  with a choice of network (e2v4, or the cheaper e1v4) and precision, a zero-motion
+  test that keeps still HUD text from warping (on by default) and an optional static
+  guard.
 
 ## [0.14.2] – 2026-10-24
 

@@ -355,9 +355,11 @@ namespace gamescope::config
                 if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
                     f.motion_version = sMotion;
                 const std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
-                if ( sLearnedNet == "e2v3" || sLearnedNet == "e1v3" )
+                if ( sLearnedNet == "e2v4" || sLearnedNet == "e1v4" || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" )
                     f.learned_net = sLearnedNet;
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
+                f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );
+                f.learned_static_guard = JGetBool( *pFrameGen, "learned_static_guard", f.learned_static_guard );
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -827,6 +829,8 @@ namespace gamescope::config
             jFrameGen[ "motion_version" ] = fg.motion_version;
             jFrameGen[ "learned_net" ] = fg.learned_net;
             jFrameGen[ "learned_half" ] = fg.learned_half;
+            jFrameGen[ "learned_zero_test" ] = fg.learned_zero_test;
+            jFrameGen[ "learned_static_guard" ] = fg.learned_static_guard;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
