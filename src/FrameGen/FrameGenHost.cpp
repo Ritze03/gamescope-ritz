@@ -37,7 +37,8 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28 motion version. The crosshair box size is
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 learned net, 31 learned half
+		// precision. The crosshair box size is
 		// its own word, g_uUiBox.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
@@ -60,7 +61,9 @@ namespace fghost
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
-				| ( uint32_t( c.motion ) << 28 );
+				| ( uint32_t( c.motion ) << 28 )
+				| ( uint32_t( c.learnedNet ) << 30 )
+				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 31 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -107,7 +110,11 @@ namespace fghost
 			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
 			c.ui = UiProt( ( u >> 24 ) & 0x3u );
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
-			c.motion = Motion( ( u >> 28 ) & 0x1u );
+			c.motion = Motion( ( u >> 28 ) & 0x3u );
+			if ( c.motion > Motion::Learned )
+				c.motion = Motion::V1;
+			c.learnedNet = LearnedNet( ( u >> 30 ) & 0x1u );
+			c.learnedHalf = ( ( u >> 31 ) & 1u ) != 0;
 			return c;
 		}
 
@@ -115,8 +122,8 @@ namespace fghost
 
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
-		// (1 = gaussian), 13 enabled, 14 own interpolator settings, 15 own motion version
-		// (1 = V2), 16 own quality (1 = performance). Kept apart from g_uConfig so a blur edit never
+		// (1 = gaussian), 13 enabled, 14 own interpolator settings, 15-16 own motion version
+		// (1 = V2, 2 = Learned), 17 own quality (1 = performance). Kept apart from g_uConfig so a blur edit never
 		// reconfigures frame generation and vice versa; a reader that sees one
 		// updated and not the other just gets the previous other half for one frame.
 		constexpr uint32_t kBlurEnabledBit = 1u << 13;
@@ -133,7 +140,7 @@ namespace fghost
 				| ( b.enabled ? kBlurEnabledBit : 0u )
 				| ( b.useOwnInterp ? kBlurOwnBit : 0u )
 				| ( uint32_t( b.motion ) << 15 )
-				| ( uint32_t( b.quality ) << 16 );
+				| ( uint32_t( b.quality ) << 17 );
 		}
 
 		BlurConfig UnpackBlur( uint32_t u )
@@ -145,8 +152,10 @@ namespace fghost
 			b.weights = ( ( u >> 12 ) & 1u ) ? BlurWeighting::Gaussian : BlurWeighting::Even;
 			b.enabled = ( u & kBlurEnabledBit ) != 0;
 			b.useOwnInterp = ( u & kBlurOwnBit ) != 0;
-			b.motion = Motion( ( u >> 15 ) & 1u );
-			b.quality = Quality( ( u >> 16 ) & 1u );
+			b.motion = Motion( ( u >> 15 ) & 0x3u );
+			if ( b.motion > Motion::Learned )
+				b.motion = Motion::V1;
+			b.quality = Quality( ( u >> 17 ) & 1u );
 			return b;
 		}
 
@@ -467,26 +476,42 @@ namespace fghost
 			// The deep UI-protection history follows the pacer's depth (SyncUiHistory);
 			// a preset change must not reset it to the default.
 			s.uiHistory = nUiHistory;
-			// Motion version: a request; ResolveMotion() drops V2 to V1 where the library refuses it.
-			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2 : framegen::MotionVersion::V1;
+			// Motion version: a request; ResolveMotion() drops V2 / Learned to V1 where the library refuses it.
+			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2
+				: c.motion == Motion::Learned ? framegen::MotionVersion::Learned : framegen::MotionVersion::V1;
+			// Learned's net and activation precision (every other version ignores both).
+			s.learnedNet = c.learnedNet == LearnedNet::E1v3 ? framegen::LearnedNet::E1v3 : framegen::LearnedNet::E2v3;
+			s.learnedHalf = c.learnedHalf;
 			// The one Quality setting also picks V2's mode (V1 ignores it).
 			s.v2Mode = c.quality == Quality::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
 			return s;
 		}
 
-		// V2 only where the library takes it (every format whose V2 synthesis shaders are
-		// built in, a GPU with the subgroup operations, a size it can hold under V2): else
-		// V1, so frame generation never dies for want of V2, and the library's reason goes
-		// to the Status line. Needs a live interpolator (the
-		// device check). Logged when the reason changes.
+		// V2 / Learned only where the library takes them (V2: every format whose V2 synthesis
+		// shaders are built in, a GPU with the subgroup operations, a size it can hold under V2;
+		// Learned: the ml shaders and weights built into the library, flowScale 2): else V1, so
+		// frame generation never dies for want of them, and the library's reason goes to the
+		// Status line. Needs a live interpolator (the device check). Logged when the reason
+		// changes. Learned is checked with flowScale 2 (ToLibrarySettings may carry 4 from the
+		// Quality row's Performance; EnsureReady() forces 2 for Learned right after, so the
+		// check must judge the value that will actually be applied).
 		framegen::Settings ResolveMotion( const Host_t &H, framegen::Settings s )
 		{
-			const char *pszWhy = s.motionVersion == framegen::MotionVersion::V2 ? H.interp.settingsError( s ) : nullptr;
+			const bool bLearned = s.motionVersion == framegen::MotionVersion::Learned;
+			const char *pszWhy = nullptr;
+			if ( s.motionVersion != framegen::MotionVersion::V1 )
+			{
+				framegen::Settings sCheck = s;
+				if ( bLearned )
+					sCheck.flowScale = 2;
+				pszWhy = H.interp.settingsError( sCheck );
+			}
+			const char *pszName = bLearned ? "Learned motion" : "Motion version 2";
 			if ( pszWhy )
 				s.motionVersion = framegen::MotionVersion::V1;
 			const char *pszOld = g_pszMotionNote.exchange( pszWhy ? pszWhy : "", std::memory_order_relaxed );
 			if ( pszWhy && pszOld != pszWhy )
-				fg_log.warnf( "frame generation: Motion version 2 refused, running V1: %s", pszWhy );
+				fg_log.warnf( "frame generation: %s refused, running V1: %s", pszName, pszWhy );
 			return s;
 		}
 
@@ -650,7 +675,7 @@ namespace fghost
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x1u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0xFu << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
 				| ( uint64_t( c.uiBoxTenths ) << 48 );
 
 			if ( !H.bLive )
@@ -671,9 +696,9 @@ namespace fghost
 				// Lets the library refuse V2 on a GPU without the subgroup operations it needs.
 				info.getProps2 = g_device.vk.GetPhysicalDeviceProperties2;
 				info.pipelineCache = VK_NULL_HANDLE;
-				// Always V1 here: init() refuses V2 outright where the device lacks the
+				// Always V1 here: init() refuses V2 / Learned outright where the device lacks the
 				// subgroup operations (or a format's V2 shaders are missing), which would be
-				// "unavailable", not "fall back". V2 is switched on below once it is
+				// "unavailable", not "fall back". V2 / Learned is switched on below once it is
 				// known to be accepted (setSettings creates its pipelines, no GPU wait).
 				info.settings = want;
 				info.settings.motionVersion = framegen::MotionVersion::V1;
@@ -692,10 +717,10 @@ namespace fghost
 
 				H.bLive = true;
 				g_uGate.fetch_or( kGateLive, std::memory_order_relaxed );
-				// ponytail: V2 is not switched on here but by the change block below (it
-				// needs V2's own flowScale, see there), so the applied key is left
+				// ponytail: V2 / Learned is not switched on here but by the change block below (it
+				// needs its own flowScale, see there), so the applied key is left
 				// unequal to the wanted one and the code falls through.
-				const bool bWantV2 = want.motionVersion == framegen::MotionVersion::V2;
+				const bool bWantV2 = want.motionVersion != framegen::MotionVersion::V1;
 				H.uAppliedConfig = bWantV2 ? ~uLibraryConfig : uLibraryConfig;
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
@@ -743,7 +768,9 @@ namespace fghost
 				// is applied when the version goes back to V1 -- which drops the estimate
 				// anyway, so its reconfigure() wait costs nothing extra; the same goes
 				// for a V1 (Performance) -> V2 switch.
-				if ( want.motionVersion == framegen::MotionVersion::V2 )
+				// Learned the same, for another reason: its nets were trained at flowScale 2 and the
+				// library refuses any other (the Quality row's Performance is ignored while it runs).
+				if ( want.motionVersion != framegen::MotionVersion::V1 )
 				{
 					want.flowScale = 2;
 					want.subpixel = true;
@@ -775,6 +802,8 @@ namespace fghost
 					{
 						if ( want.motionVersion == framegen::MotionVersion::V2 )
 							g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
+						else if ( want.motionVersion == framegen::MotionVersion::Learned )
+							g_pszMotionNote.store( "the library could not create Learned motion (its pipelines or buffers)", std::memory_order_relaxed );
 						if ( !H.bUiSetFailLogged )
 						{
 							H.bUiSetFailLogged = true;
@@ -1441,7 +1470,7 @@ namespace fghost
 		// is on (see BlurConfig::useOwnInterp). Done on the packed word so the library-config
 		// key in EnsureReady() sees the effective values too.
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
-			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 1u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
+			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 0x3u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
 		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ) );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 

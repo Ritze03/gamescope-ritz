@@ -1789,6 +1789,45 @@ TEST_CASE( "framegen: motion_version round-trips, defaults when absent, invalid 
     REQUIRE( l.framegen.motion_version == "v1" );
 }
 
+// Learned motion (2026-10-26): a third motion_version plus two additive keys.
+TEST_CASE( "framegen: learned motion, net and precision round-trip, default when absent, invalid keeps the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.framegen.learned_net == "e2v3" );
+    REQUIRE( Settings{}.framegen.learned_half == false );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    Settings l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v1" );
+    REQUIRE( l.framegen.learned_net == "e2v3" );
+    REQUIRE( l.framegen.learned_half == false );
+
+    Settings s{};
+    s.framegen.motion_version = "learned";
+    s.framegen.learned_net = "e1v3";
+    s.framegen.learned_half = true;
+    s.motion_blur.motion_version = "learned";
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "learned" );
+    REQUIRE( l.framegen.learned_net == "e1v3" );
+    REQUIRE( l.framegen.learned_half == true );
+    REQUIRE( l.motion_blur.motion_version == "learned" );
+
+    s.framegen.learned_net = "e9v9";
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.learned_net == "e2v3" );
+
+    REQUIRE( IsSettingsKey( "framegen.learned_net" ) );
+    REQUIRE( IsSettingsKey( "framegen.learned_half" ) );
+}
+
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )
 {
     TempConfigHome home;

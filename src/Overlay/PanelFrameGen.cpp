@@ -68,7 +68,9 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" } };
+		constexpr ui::Option kLearnedNetOptions[] = { { 0, "e2v3" }, { 1, "e1v3 (cheaper)" } };
+		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
@@ -77,7 +79,8 @@ namespace gamescope
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		constexpr const char *kMotionKeys[]  = { "v1", "v2" };
+		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned" };
+		constexpr const char *kLearnedNetKeys[] = { "e2v3", "e1v3" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		// Indexed by fghost::UiProt, so the index IS the option id above.
@@ -174,7 +177,9 @@ namespace gamescope
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
-			c.motion = IndexOf( f.motion_version, kMotionKeys, 2, 0 ) == 1 ? fghost::Motion::V2 : fghost::Motion::V1;
+			c.motion = (fghost::Motion)IndexOf( f.motion_version, kMotionKeys, 3, 0 );   // the index IS the enum value
+			c.learnedNet = IndexOf( f.learned_net, kLearnedNetKeys, 2, 0 ) == 1 ? fghost::LearnedNet::E1v3 : fghost::LearnedNet::E2v3;
+			c.learnedHalf = f.learned_half;
 			return c;
 		}
 
@@ -209,6 +214,20 @@ namespace gamescope
 		{
 			EnsureConfigLoaded();
 			return s_Settings.framegen.enabled;
+		}
+
+		// Learned net / precision rows: they matter only while Learned motion is what the
+		// interpolator actually runs. That is Frame generation's Motion version, or Motion blur's
+		// own one while the blur is on and "Use Frame generation's settings" is off (the blur
+		// then borrows these two rows -- the net and precision are Frame generation's only), and
+		// something has to be switched on (Frame generation or Motion blur).
+		bool LearnedRowsUsable()
+		{
+			EnsureConfigLoaded();
+			const config::Settings &st = s_Settings;
+			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
+			const std::string &sEffective = bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version;
+			return ( st.framegen.enabled || st.motion_blur.enabled ) && sEffective == "learned";
 		}
 
 		bool UiOn()
@@ -411,8 +430,8 @@ namespace gamescope
 
 		a.Choice( "framegen.motion_version", "Motion version",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 3, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kMotionOptions, std::size( kMotionOptions ) )
 			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
 			       "the picture along the motion and stretches it over gaps instead of falling "
@@ -421,10 +440,45 @@ namespace gamescope
 			       "a GPU without the shader features it needs stays on V1 (the Status line "
 			       "says why). Switching shows real frames for an instant. Motion blur follows "
 			       "this and Quality unless you turn off its \"Use Frame generation's settings\" "
-			       "switch; then, while Motion blur is on, its own two settings are used instead." )
+			       "switch; then, while Motion blur is on, its own two settings are used instead. "
+			       "Learned is an experimental, opt-in estimator: a small neural network finds the "
+			       "motion instead of V1's search, then V1 makes the picture. It costs several "
+			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.3 ms with e2v3, 0.5 ms "
+			       "with e1v3, V1 0.3 ms) and always works at Quality's resolution, so the Quality "
+			       "row's Performance is ignored. Static HUD text over moving scenery can get "
+			       "warped with the scenery. Two identical frames are left alone. If it cannot run "
+			       "the Status line says why and V1 runs." )
 			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 morph interpolation algorithm experimental" )
+			.Keywords( "frame generation motion version v1 v2 learned neural network ml net morph interpolation algorithm experimental" )
 			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.learned_net", "Learned net",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kLearnedNetOptions, std::size( kLearnedNetOptions ) )
+			.Help( "Which trained network Learned motion uses (experimental). e2v3 is the better "
+			       "one: on average a little better than V1, much better on hard footage, about 1.3 ms "
+			       "of GPU time at 1080p 2x. e1v3 is about 3.4 times cheaper (about 0.5 ms) and "
+			       "roughly on par with V1. Motion blur's Learned borrows this and the precision "
+			       "row below: it has no copy of its own. Only used while Motion version is "
+			       "Learned." )
+			.Default( 0 )
+			.Keywords( "frame generation learned net network e2v3 e1v3 neural ml weights experimental" )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
+
+		a.Choice( "framegen.learned_half", "Learned precision",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_half ? 1 : 0; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_half = n == 1; PersistAndPush(); } ),
+			kLearnedPrecOptions, std::size( kLearnedPrecOptions ) )
+			.Help( "How Learned motion stores its working data. Full is the exact version. Half "
+			       "uses half the memory and about a quarter less GPU time (e2v3, 1080p: about "
+			       "1.0 ms instead of 1.3) for a tiny, hardly visible difference. Only used while "
+			       "Motion version is Learned." )
+			.Default( 0 )
+			.Keywords( "frame generation learned precision half full fp16 fp32 float memory experimental" )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
 
 		a.Choice( "framegen.quality", "Quality",
 			ui::AnyBind::Of<int>(

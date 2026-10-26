@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.3] – 2026-10-26
+
+### Added
+- **Learned motion (experimental)**: Frame generation and Motion blur can find motion
+  with a small neural network instead of V1's search, under Motion version > Learned,
+  with a choice of network and precision.
+
 ## [0.14.2] – 2026-10-24
 
 ### Removed

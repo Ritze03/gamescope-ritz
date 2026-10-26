@@ -146,6 +146,18 @@ The frame-generation library is a git submodule, `subprojects/FrameGen`
 (github.com/Ritze03/frame-gen-ritz, MIT), pinned at FrameGen main `db569d0` (UI protection, motion blur (PR #2), the pacing planner (PR #3), the lag-spike buffer (PR #4), video timestamps (PR #5), video/HDR formats (PR #6) and the pacing fixes (PR #7: idle real-rate ticks set `Decision::skip`, depth/buffer held until the interval is known; gamescope already honours `d.skip`, no code change); gamescope uses PR #4 and, since 2026-10-04, the Rgb10 and RgbaF16 formats of PR #6, not NV12 / P010 or `OnFrame`) **A fresh checkout or worktree
 needs `git submodule update --init subprojects/FrameGen`** before it will build.
 
+**Learned motion build (2026-10-26, branch `ml-fg-testing` only).** That branch pins the
+submodule at FGR `fd5c163`, a commit that exists **only in the local frame-gen-ritz repo**
+(its local `ml-fg-testing` branch), not on GitHub: a fresh clone must first run
+`git -C subprojects/FrameGen fetch <path to the frame-gen-ritz checkout> ml-fg-testing`, then
+`git submodule update --init subprojects/FrameGen`. The build adds the six `ml_*.comp` shaders
+(`ml_dup` also as `rgb10` / `f16` variants) and a `framegen_ml_weights` `custom_target()`
+that runs the library's `gpu/ml/embed_weights.py` (via `python3 -I`, paths as plain strings
+because of the sandbox) to produce `ml_weights.h` in the build dir. Both the `ml_*_spv.h`
+headers and `ml_weights.h` must exist or the library, which probes them with `__has_include`,
+**compiles without error and silently refuses Learned** (`kMlNotBuilt`; the host then runs V1
+and the Status line says why). See `frame-generation.md`'s "Learned motion".
+
 Meson's sandbox forbids handing files under `subprojects/` to the parent project
 (`Sandbox violation: Tried to grab file ... from a nested subproject`), and FrameGen has
 no root `meson.build`, so `subproject()` is impossible. Instead its 20 shaders (the

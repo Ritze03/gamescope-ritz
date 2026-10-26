@@ -526,11 +526,19 @@ namespace gamescope::config
         // percent of the game's HEIGHT, 0.5..10 (clamped on load). ADDITIVE: absent
         // loads 2.5. The old fixed box was 3% of the frame's AREA (192 px at 1280x960).
         float ui_box_height = 2.5f;
-        // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2".
+        // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2" | "learned" (2026-10-26).
         // ADDITIVE: absent loads "v1"; an unknown string keeps it. V2 is Rgba8-only:
         // other content stays on V1. Shared by Frame generation and Motion blur (one
         // interpolator), as is `quality` above, which on V2 picks its mode.
         std::string motion_version = "v1";
+        // Learned motion (2026-10-26, experimental): "learned" is a third motion_version.
+        // It needs the library's flowScale 2, so `quality` = "performance" is ignored while
+        // it runs. `learned_net` ("e2v3" | "e1v3", the cheaper one) and `learned_half`
+        // (activations stored as half) only matter then. ADDITIVE: absent loads "e2v3" /
+        // false; an unknown string keeps the default. Motion blur's own motion_version =
+        // "learned" borrows these two (no copy of its own).
+        std::string learned_net = "e2v3";
+        bool learned_half = false;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see
@@ -554,6 +562,7 @@ namespace gamescope::config
         // "Use Frame generation's settings" (2026-10-22): on (default), the blur uses
         // Frame generation's motion_version / quality; off, it uses its own two below.
         // ADDITIVE: absent loads on / "v1" / "quality"; an unknown string keeps the default.
+        // motion_version may be "learned" too (net and precision come from framegen.learned_*).
         bool same_as_framegen = true;
         std::string motion_version = "v1";
         std::string quality = "quality";

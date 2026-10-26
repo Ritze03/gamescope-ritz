@@ -82,9 +82,18 @@ namespace fghost
 	// motionNote says why). One runtime setting (setSettings, no wait): a Motion
 	// switch drops the current estimate. The Quality below serves both versions:
 	// V1's flowScale/sub-pixel preset, and V2's Quality / Performance mode (there is
-	// no separate V2 setting). Packed at bit 28 of the main word. Applies to Motion
+	// no separate V2 setting). Packed at bits 28-29 of the main word. Applies to Motion
 	// blur too, with Frame generation off.
-	enum class Motion : uint8_t { V1, V2 };
+	// Learned (2026-10-26, experimental, opt-in): V1 with its motion search replaced by a
+	// small learned conv net (the library's MotionVersion::Learned). Needs flowScale 2, so the
+	// Quality row's Performance is ignored while it runs; a refused Learned runs V1 and
+	// RenderStatus::motionNote says why. The net and its precision are Config::learnedNet /
+	// learnedHalf (Motion blur's own Motion version borrows them).
+	enum class Motion : uint8_t { V1, V2, Learned };
+
+	// Learned's weights (framegen::LearnedNet): E2v3 = the default (width 24), E1v3 = 3.4x
+	// cheaper, about as good as V1. Packed at bit 30 of the main word. Runtime.
+	enum class LearnedNet : uint8_t { E2v3, E1v3 };
 
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
@@ -214,6 +223,10 @@ namespace fghost
 		// game's height; clamped to [kUiBoxMinTenths, kUiBoxMaxTenths] by SetConfig().
 		int uiBoxTenths = kUiBoxDefaultTenths;
 		Motion motion = Motion::V1;
+		// Motion::Learned only (every other version ignores both): which net, and whether its
+		// activations are stored as half (cheaper, tiny quality cost) instead of float32.
+		LearnedNet learnedNet = LearnedNet::E2v3;
+		bool learnedHalf = false;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

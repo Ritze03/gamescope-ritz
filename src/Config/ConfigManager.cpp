@@ -352,8 +352,12 @@ namespace gamescope::config
                     f.ui_protection = sUi;
                 f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 10.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
                     f.motion_version = sMotion;
+                const std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
+                if ( sLearnedNet == "e2v3" || sLearnedNet == "e1v3" )
+                    f.learned_net = sLearnedNet;
+                f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -372,7 +376,7 @@ namespace gamescope::config
                     m.weights = sWeights;
                 m.same_as_framegen = JGetBool( *pBlur, "same_as_framegen", m.same_as_framegen );
                 const std::string sMotion = JGetString( *pBlur, "motion_version", m.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
                     m.motion_version = sMotion;
                 const std::string sQuality = JGetString( *pBlur, "quality", m.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
@@ -821,6 +825,8 @@ namespace gamescope::config
             // Rounded to the slider's 0.1 step through a double, so 2.7f is stored as 2.7, not 2.7000000476...
             jFrameGen[ "ui_box_height" ] = std::round( double( fg.ui_box_height ) * 10.0 ) / 10.0;
             jFrameGen[ "motion_version" ] = fg.motion_version;
+            jFrameGen[ "learned_net" ] = fg.learned_net;
+            jFrameGen[ "learned_half" ] = fg.learned_half;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
