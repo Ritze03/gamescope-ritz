@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.4] – 2026-10-27
+
+### Added
+- **Learned motion nets e2v5 and e1v5**: Learned net now defaults to the retrained
+  e2v5, with the retrained cheaper e1v5 as the small choice; profiles that already
+  picked a net keep it.
+
 ## [0.14.3] – 2026-10-26
 
 ### Added

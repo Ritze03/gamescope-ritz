@@ -7,7 +7,59 @@ nothing changes (V1 output is byte-identical per the library's own checks).
 
 Round 1 pinned FGR `fd5c163` (nets `e2v3` / `e1v3`). **Round 2 pins FGR `6133a4a`**: new
 nets `e2v4` (the new default) and `e1v4` (the small, cheap one), ml-fg's zero-motion test
-(on by default) and its static guard (off by default). See "Round 2" below.
+(on by default) and its static guard (off by default). See "Round 2" below. **Round 3 pins FGR
+`4bae33a`**: nets `e2v5` (the new default) and `e1v5` (the new small net), see "Round 3".
+
+## Round 3 (FGR `4bae33a`)
+
+Pins FGR `4bae33a` (`5e20923`'s round-3 content plus a webgl README line; still local-only, FGR's
+`ml-fg-testing` branch). No shader changed, so the host change is the net list and one packed
+field.
+
+- **Nets**: `e2v5` is the new default (e2v4 fine-tuned further by ml-fg on more varied footage:
+  same architecture, size and cost), `e1v5` is the new small net (e1v4 likewise; about 2.4x
+  cheaper than e2v5 at 1080p). e2v4, e1v4, e2v3 and e1v3 stay selectable, output unchanged.
+  Order in the overlay's "Learned net" row: e2v5 (default), e1v5 (small, cheaper), e2v4
+  (round 2), e1v4 (round 2, small), e2v3 (round 1), e1v3 (round 1, small).
+- **How to select**: overlay, Frame generation > Learned net (Motion version = Learned), or
+  profile JSON `"framegen": { "motion_version": "learned", "learned_net": "e1v5" }`. Valid
+  values: `e2v5` (default), `e1v5`, `e2v4`, `e1v4`, `e2v3`, `e1v3`; an unknown string keeps
+  the default.
+- **Profiles saved earlier keep their pinned net, no migration**: the serializer writes every
+  key, so a profile saved by a round-1 build holds `"e2v3"` and one saved by a round-2 build
+  holds `"e2v4"`; both stay on that net. Only a profile with no `learned_net` key (never saved
+  with Learned) gets e2v5. To move to e2v5 pick it once in the row. Tests:
+  `framegen: a profile saved with round 1's learned_net keeps it, ...` and a new
+  `framegen: a profile saved with round 2's learned_net keeps it`.
+- **Bit layout** (`g_uLearned` in `FrameGenHost.cpp`): six nets do not fit two bits, so the net
+  field is now **bits 0-2**, half precision **bit 3**, zero-motion test **bit 4**, static guard
+  **bit 5** (round 2: 0-1 / 2 / 3 / 4). The library-config key (`uLibraryConfig`) takes six
+  bits at bit 56 (mask `0x3F`, was `0x1F`), so the top used bit is 61. `Unpack()` maps an
+  out-of-range net value to E2v5. `fghost::LearnedNet` is `E2v3=0, E1v3=1, E2v4=2, E1v4=3,
+  E2v5=4, E1v5=5`, mapped one to one onto `framegen::LearnedNet`. The main packed word is
+  untouched.
+- **Build**: `src/meson.build`'s weights loop is `e2v3, e1v3, e2v4, e1v4, e2v5, e1v5` (the
+  `LearnedNet` order); `FrameGenLib.cpp`'s comment was touched to force the recompile. 76
+  pipelines are created when Learned is first used (56 in round 2).
+- **FGR's measured quality** (14 clips, 2x, zero test on): e2v5 31.23 dB (+0.31 over V1's
+  `final`, +0.04 over e2v4), e1v5 31.05 dB (+0.12 over `final`, +0.06 over e1v4). Real
+  footage at 1080p 2x, PSNR vs the real middle frame (dB): obs2 5000: V1 27.14, e2v5 27.11,
+  e1v5 27.19; battlefield 2000: V1 36.09, e2v5 36.20, e1v5 36.66; obs1 13100: V1 34.80, e2v4
+  32.98, e2v5 34.00, e1v5 32.09. Cost is equal to e2v4 / e1v4 (library figures: e2v5 1.35-1.66
+  ms, e1v5 0.53-0.54 ms at 1080p, V1 0.30-0.46).
+- **Checks run** (this branch):
+  - `scripts/gentle-build.sh --test` (build-agent/): build OK, **All tests passed (19446791
+    assertions in 683 test cases)** (round 2: 19446784 / 682). The learned config case now
+    round-trips all six nets; one new case covers round 2's explicit e2v4 / e1v4.
+  - `build-agent/src/ml_weights.h` holds `kMlWeights_e2v3`, `_e1v3`, `_e2v4`, `_e1v4`, `_e2v5`
+    and `_e1v5` (5.2 MB).
+  - Runtime, the round-2 rig (private headless sway, nested gamescope `-r 120`, vkcube held at
+    30 fps by MangoHud, the other installed Vulkan frame layer disabled with its own env var, throwaway `XDG_CONFIG_HOME`, audio capture off,
+    fixed 2x, 25 s each): `learned` + **e2v5** and `learned` + **e1v5** both logged "frame
+    generation ready: 500x500, flowScale 2", generated at 2.00-2.05x (60 fps from 30), with no
+    refusal in the log and no ` · V1:` note. Estimate times differ as expected for 500x500
+    (e2v5 ~0.45-0.75 ms, e1v5 ~0.27 ms; the GPU was shared). Not exercised: a live net switch
+    from the overlay, a real game, HDR / 10-bit content, any visual comparison.
 
 ## Round 2 (FGR `6133a4a`)
 
