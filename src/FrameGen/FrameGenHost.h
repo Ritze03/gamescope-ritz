@@ -92,11 +92,12 @@ namespace fghost
 	// borrows them).
 	enum class Motion : uint8_t { V1, V2, Learned };
 
-	// Learned's weights, with the values of framegen::LearnedNet (round 2 of Learned, 2026-10-26):
-	// E2v4 = the default (width 24, e2v3 fine-tuned), E1v4 = the small net (width 12, about 2.4x
-	// cheaper, the fallback when E2v4 costs too much), E2v3 / E1v3 = round 1's nets. Packed in
-	// the Learned word (bits 0-1), not the main one. Runtime.
-	enum class LearnedNet : uint8_t { E2v3 = 0, E1v3 = 1, E2v4 = 2, E1v4 = 3 };
+	// Learned's weights, with the values of framegen::LearnedNet (round 3 of Learned, 2026-10-27):
+	// E2v5 = the default (width 24, e2v4 fine-tuned further), E1v5 = the small net (width 12, about
+	// 2.4x cheaper, the fallback when E2v5 costs too much), E2v4 / E1v4 = round 2's nets, E2v3 /
+	// E1v3 = round 1's. Old values keep their numbers. Packed in the Learned word (bits 0-2),
+	// not the main one. Runtime.
+	enum class LearnedNet : uint8_t { E2v3 = 0, E1v3 = 1, E2v4 = 2, E1v4 = 3, E2v5 = 4, E1v5 = 5 };
 
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
@@ -232,7 +233,7 @@ namespace fghost
 		// net's motion; fixes most of the warped static HUD, ~0.006 ms at 1080p) and ml-fg's
 		// static guard (off: a full-res pass per generated frame, ~0.05 ms at 1080p, that shows
 		// the plain time mix where both frames are locally identical and the motion is small).
-		LearnedNet learnedNet = LearnedNet::E2v4;
+		LearnedNet learnedNet = LearnedNet::E2v5;
 		bool learnedHalf = false;
 		bool learnedZeroTest = true;
 		bool learnedStaticGuard = false;

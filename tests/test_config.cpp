@@ -1796,7 +1796,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
 
-    REQUIRE( Settings{}.framegen.learned_net == "e2v4" );
+    REQUIRE( Settings{}.framegen.learned_net == "e2v5" );
     REQUIRE( Settings{}.framegen.learned_half == false );
     REQUIRE( Settings{}.framegen.learned_zero_test == true );
     REQUIRE( Settings{}.framegen.learned_static_guard == false );
@@ -1807,13 +1807,13 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     })";
     Settings l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v1" );
-    REQUIRE( l.framegen.learned_net == "e2v4" );
+    REQUIRE( l.framegen.learned_net == "e2v5" );
     REQUIRE( l.framegen.learned_half == false );
     REQUIRE( l.framegen.learned_zero_test == true );
     REQUIRE( l.framegen.learned_static_guard == false );
 
     // Every net name round-trips.
-    for ( const char *pszNet : { "e2v4", "e1v4", "e2v3", "e1v3" } )
+    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3" } )
     {
         Settings n{};
         n.framegen.learned_net = pszNet;
@@ -1823,7 +1823,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
 
     Settings s{};
     s.framegen.motion_version = "learned";
-    s.framegen.learned_net = "e1v4";
+    s.framegen.learned_net = "e1v5";
     s.framegen.learned_half = true;
     s.framegen.learned_zero_test = false;
     s.framegen.learned_static_guard = true;
@@ -1831,7 +1831,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
     REQUIRE( l.framegen.motion_version == "learned" );
-    REQUIRE( l.framegen.learned_net == "e1v4" );
+    REQUIRE( l.framegen.learned_net == "e1v5" );
     REQUIRE( l.framegen.learned_half == true );
     REQUIRE( l.framegen.learned_zero_test == false );
     REQUIRE( l.framegen.learned_static_guard == true );
@@ -1840,7 +1840,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     s.framegen.learned_net = "e9v9";
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
-    REQUIRE( l.framegen.learned_net == "e2v4" );
+    REQUIRE( l.framegen.learned_net == "e2v5" );
 
     REQUIRE( IsSettingsKey( "framegen.learned_net" ) );
     REQUIRE( IsSettingsKey( "framegen.learned_half" ) );
@@ -1849,7 +1849,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
 }
 
 // A profile saved by a round-1 build carries its explicit "e2v3" (the serializer writes every
-// key) and keeps it: the new e2v4 default only applies where the key is absent. No migration.
+// key) and keeps it: the e2v5 default only applies where the key is absent. No migration.
 TEST_CASE( "framegen: a profile saved with round 1's learned_net keeps it, the new keys default", "[config]" )
 {
     TempConfigHome home;
@@ -1863,6 +1863,19 @@ TEST_CASE( "framegen: a profile saved with round 1's learned_net keeps it, the n
     REQUIRE( l.framegen.learned_net == "e2v3" );
     REQUIRE( l.framegen.learned_zero_test == true );
     REQUIRE( l.framegen.learned_static_guard == false );
+}
+
+// Likewise for round 2's explicit "e2v4" and "e1v4": round 3's e2v5 default does not replace them.
+TEST_CASE( "framegen: a profile saved with round 2's learned_net keeps it", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    for ( const char *pszNet : { "e2v4", "e1v4" } )
+    {
+        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
+            "\"framegen\": { \"motion_version\": \"learned\", \"learned_net\": \"" << pszNet << "\" } }";
+        REQUIRE( LoadSections().framegen.learned_net == pszNet );
+    }
 }
 
 TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum string keeps its default on load", "[config]" )

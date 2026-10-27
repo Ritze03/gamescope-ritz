@@ -64,17 +64,18 @@ namespace fghost
 				| ( uint32_t( c.motion ) << 28 );
 		}
 
-		// Learned motion's runtime settings, their own word: bits 0-1 net (framegen::LearnedNet
-		// order: e2v3, e1v3, e2v4, e1v4), 2 half precision, 3 zero-motion test, 4 static guard.
+		// Learned motion's runtime settings, their own word: bits 0-2 net (framegen::LearnedNet
+		// order: e2v3, e1v3, e2v4, e1v4, e2v5, e1v5; six values, so three bits since round 3),
+		// 3 half precision, 4 zero-motion test, 5 static guard.
 		// Round 1 had the net and precision in bits 30-31 of the main word; round 2 needs two
 		// more bits and the main word is full, so all four moved here (the main word's
 		// defaults still pack to what they did: bits 28-31 are 0 for V1).
 		uint32_t PackLearned( const Config &c )
 		{
-			return ( uint32_t( c.learnedNet ) & 0x3u )
-				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 2 )
-				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 3 )
-				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 4 );
+			return ( uint32_t( c.learnedNet ) & 0x7u )
+				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 3 )
+				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 4 )
+				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 5 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -124,10 +125,14 @@ namespace fghost
 			c.motion = Motion( ( u >> 28 ) & 0x3u );
 			if ( c.motion > Motion::Learned )
 				c.motion = Motion::V1;
-			c.learnedNet = LearnedNet( uLearned & 0x3u );
-			c.learnedHalf = ( ( uLearned >> 2 ) & 1u ) != 0;
-			c.learnedZeroTest = ( ( uLearned >> 3 ) & 1u ) != 0;
-			c.learnedStaticGuard = ( ( uLearned >> 4 ) & 1u ) != 0;
+			{
+				// An out-of-range value (cannot happen from PackLearned) falls back to the default.
+				const uint32_t uNet = uLearned & 0x7u;
+				c.learnedNet = uNet <= uint32_t( LearnedNet::E1v5 ) ? LearnedNet( uNet ) : LearnedNet::E2v5;
+			}
+			c.learnedHalf = ( ( uLearned >> 3 ) & 1u ) != 0;
+			c.learnedZeroTest = ( ( uLearned >> 4 ) & 1u ) != 0;
+			c.learnedStaticGuard = ( ( uLearned >> 5 ) & 1u ) != 0;
 			return c;
 		}
 
@@ -501,6 +506,8 @@ namespace fghost
 				case LearnedNet::E1v3: s.learnedNet = framegen::LearnedNet::E1v3; break;
 				case LearnedNet::E2v4: s.learnedNet = framegen::LearnedNet::E2v4; break;
 				case LearnedNet::E1v4: s.learnedNet = framegen::LearnedNet::E1v4; break;
+				case LearnedNet::E2v5: s.learnedNet = framegen::LearnedNet::E2v5; break;
+				case LearnedNet::E1v5: s.learnedNet = framegen::LearnedNet::E1v5; break;
 			}
 			s.learnedHalf = c.learnedHalf;
 			s.learnedZeroTest = c.learnedZeroTest;
@@ -699,7 +706,7 @@ namespace fghost
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
 			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
-				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x1Fu ) << 56 );
+				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x3Fu ) << 56 );
 
 			if ( !H.bLive )
 			{

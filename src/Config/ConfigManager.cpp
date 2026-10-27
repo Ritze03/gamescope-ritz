@@ -355,7 +355,8 @@ namespace gamescope::config
                 if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
                     f.motion_version = sMotion;
                 const std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
-                if ( sLearnedNet == "e2v4" || sLearnedNet == "e1v4" || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" )
+                if ( sLearnedNet == "e2v5" || sLearnedNet == "e1v5" || sLearnedNet == "e2v4" || sLearnedNet == "e1v4"
+                    || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" )
                     f.learned_net = sLearnedNet;
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
                 f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );
