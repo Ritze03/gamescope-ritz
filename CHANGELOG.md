@@ -12,12 +12,14 @@ The newest version below is the one this build reports.
 ## [0.14.5] – 2026-10-28
 
 ### Added
-- **Learned net: Colour and Features (test)**: two opt-in test networks for Learned
-  motion, a colour one and a learned-features one; e2v5 stays the default.
+- **Learned nets g2v2, g2v3, m2v2, m2v3**: four more opt-in networks for Learned motion
+  (colour and learned-features, trained on games or all-round); e2v5 stays the default.
 - **Artifact safety: Very low**: a fifth level with the latest, smoothest trust ramp;
   it rarely shows the real frame instead, but ghosts more where motion is wrong.
 
 ### Info
+- **Saved test nets**: a profile that saved Colour or Features (test) now loads g2v2 or
+  g2v3.
 - **Artifact safety default**: new profiles start on Default instead of Off; saved
   profiles keep their setting.
 

@@ -354,10 +354,15 @@ namespace gamescope::config
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
                 if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
                     f.motion_version = sMotion;
-                const std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
+                std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
+                // Round 4's test stand-ins became the real nets (round 4b); a saved choice follows.
+                if ( sLearnedNet == "c2smoke" )
+                    sLearnedNet = "g2v2";
+                else if ( sLearnedNet == "c2feat" )
+                    sLearnedNet = "g2v3";
                 if ( sLearnedNet == "e2v5" || sLearnedNet == "e1v5" || sLearnedNet == "e2v4" || sLearnedNet == "e1v4"
-                    || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" || sLearnedNet == "c2smoke"
-                    || sLearnedNet == "c2feat" )
+                    || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" || sLearnedNet == "g2v2"
+                    || sLearnedNet == "g2v3" || sLearnedNet == "m2v2" || sLearnedNet == "m2v3" )
                     f.learned_net = sLearnedNet;
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
                 f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );

@@ -18,7 +18,7 @@ nets `e2v4` (the new default) and `e1v4` (the small, cheap one), ml-fg's zero-mo
 ## Round 4 (FGR `9e9e604`, branch `round4`)
 
 Pins FGR `9e9e604` (local-only). Two **architecture variants**, opt-in; defaults unchanged
-(e2v5, V1). They are **stand-ins**: ml-fg's 600-step smoke nets with the real nets' shapes,
+(e2v5, V1). They were **stand-ins**: ml-fg's 600-step smoke nets with the real nets' shapes,
 there so the host can be tested before the real ones (`g2v2` colour, `g2v3` features) exist;
 keys and labels change when those are re-vendored.
 
@@ -285,3 +285,19 @@ notched glyph edges, and the guard does not fix a HUD on fast-moving scenery. St
 - Quality's Performance is ignored while Learned runs (the nets need flowScale 2).
 
 Not tested here: a real game, NV12 / P010 (not built into this fork anyway).
+
+## Round 4b (FGR `981c844`, branch `round4b`)
+
+Replaces round 4's stand-ins with the four real nets; defaults unchanged (e2v5, V1).
+
+- **What to select**: Frame generation > Motion version = Learned > Learned net =
+  "g2v2 Colour (games)", "g2v3 Features (games)", "m2v2 Colour (allround)" or "m2v3 Features
+  (allround)"; or profile JSON `"learned_net": "g2v2"` etc. The g* nets are trained on games,
+  the m* nets are allrounders. FGR's spot check has m2v3 best even on game clips.
+- **Migration**: a saved `"c2smoke"` loads as `g2v2`, `"c2feat"` as `g2v3`.
+- **Cost** (1080p 2x, Vulkan, fp32 / half): g2v2 and m2v2 1.74 / 1.25 ms, g2v3 and m2v3
+  1.89 / 1.40 (e2v5 1.31 / 1.02).
+- **Verification (FGR, RX 7900 XTX)**: mltest 84 cases, 0 failed; synthcheck 657/657. The
+  features-variant tolerance is 0.25 px in the library.
+- **Host**: the Learned word's net field is now 4 bits (see `frame-generation.md`);
+  `ml_weights.h` holds ten nets.

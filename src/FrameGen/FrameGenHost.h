@@ -97,11 +97,11 @@ namespace fghost
 	// Learned's weights, with the values of framegen::LearnedNet (round 3 of Learned, 2026-10-27):
 	// E2v5 = the default (width 24, e2v4 fine-tuned further), E1v5 = the small net (width 12, about
 	// 2.4x cheaper, the fallback when E2v5 costs too much), E2v4 / E1v4 = round 2's nets, E2v3 /
-	// E1v3 = round 1's, C2Smoke / C2Feat = round 4's test stand-ins for the colour and learned-features
-	// variants (replaced by the real nets later). Old values keep their numbers. Packed in the Learned word (bits 0-2),
+	// E1v3 = round 1's, G2v2 / G2v3 = round 4b's colour and learned-features nets trained on games, M2v2 / M2v3 =
+	// the same two as allrounders. Old values keep their numbers. Packed in the Learned word (bits 0-3),
 	// not the main one. Runtime.
 	enum class LearnedNet : uint8_t { E2v3 = 0, E1v3 = 1, E2v4 = 2, E1v4 = 3, E2v5 = 4, E1v5 = 5,
-	                                   C2Smoke = 6, C2Feat = 7 };
+	                                   G2v2 = 6, G2v3 = 7, M2v2 = 8, M2v3 = 9 };
 
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).

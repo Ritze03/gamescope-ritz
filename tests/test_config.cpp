@@ -1793,6 +1793,25 @@ TEST_CASE( "framegen: motion_version round-trips, defaults when absent, invalid 
     REQUIRE( l.framegen.motion_version == "v1" );
 }
 
+// Round 4b: round 4's stand-in net names load as the real nets that replaced them.
+TEST_CASE( "framegen: a saved c2smoke / c2feat loads as g2v2 / g2v3", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "learned_net": "c2smoke" }
+    })";
+    REQUIRE( LoadSections().framegen.learned_net == "g2v2" );
+
+    std::ofstream( ProfilePath( "U" ) ) << R"({
+        "schema_version": 5, "name": "U", "kind": "general",
+        "framegen": { "learned_net": "c2feat" }
+    })";
+    REQUIRE( LoadProfile( "U" ).value_or( Settings{} ).framegen.learned_net == "g2v3" );
+}
+
 // Learned motion (2026-10-26): a third motion_version plus four additive keys (round 2: four nets,
 // the zero-motion test and the static guard).
 TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-trip, default when absent, invalid keeps the default", "[config]" )
@@ -1817,7 +1836,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     REQUIRE( l.framegen.learned_static_guard == false );
 
     // Every net name round-trips.
-    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "c2smoke", "c2feat" } )
+    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" } )
     {
         Settings n{};
         n.framegen.learned_net = pszNet;

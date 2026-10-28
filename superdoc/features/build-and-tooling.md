@@ -153,13 +153,13 @@ first run `git -C subprojects/FrameGen fetch <path to the frame-gen-ritz checkou
 ml-fg-testing`, then `git submodule update --init subprojects/FrameGen`. The build adds the
 ten `ml_*.comp` shaders (round 4 added `ml_planes` and `ml_feat`; `ml_dup`, `ml_guard` and `ml_planes` also as `rgb10` / `f16` variants) and a
 `framegen_ml_weights` `custom_target()` that runs the library's `gpu/ml/embed_weights.py`
-(via `python3 -I`, paths as plain strings because of the sandbox) over **all eight nets in
-`LearnedNet` order** (`e2v3, e1v3, e2v4, e1v4, e2v5, e1v5, c2smoke, c2feat`) to produce `ml_weights.h` in the build dir.
+(via `python3 -I`, paths as plain strings because of the sandbox) over **all ten nets in
+`LearnedNet` order** (`e2v3, e1v3, e2v4, e1v4, e2v5, e1v5, g2v2, g2v3, m2v2, m2v3`) to produce `ml_weights.h` in the build dir.
 The `ml_*_spv.h` headers (`ml_conv`, `ml_zero`, `ml_guard`) and `ml_weights.h` must all exist
 or the library, which probes them with `__has_include`, **compiles without error and silently
 refuses Learned** (`kMlNotBuilt`; the host then runs V1 and the Status line says why): after
 touching the list, check that `build-agent/src/` holds `ml_zero_spv.h`, `ml_guard_spv.h`,
-`ml_guard_rgb10_spv.h`, `ml_guard_f16_spv.h` and an `ml_weights.h` with eight nets (`kMlWeights_e2v3` ... `kMlWeights_c2feat`), plus `ml_planes_spv.h`, `ml_feat_spv.h`, `ml_planes_rgb10_spv.h`, `ml_planes_f16_spv.h`. See
+`ml_guard_rgb10_spv.h`, `ml_guard_f16_spv.h` and an `ml_weights.h` with ten nets (`kMlWeights_e2v3` ... `kMlWeights_m2v3`), plus `ml_planes_spv.h`, `ml_feat_spv.h`, `ml_planes_rgb10_spv.h`, `ml_planes_f16_spv.h`. See
 `frame-generation.md`'s "Learned motion".
 
 Meson's sandbox forbids handing files under `subprojects/` to the parent project

@@ -340,7 +340,7 @@ trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are
   `fghost::LearnedNet` (the library's six values), `Config::learnedNet` / `learnedHalf` /
   `learnedZeroTest` / `learnedStaticGuard`. The main packed config word is full, so motion
   stays at its bits 28-29 (bits 30-31 are unused again) and the four Learned settings have
-  their own word, `g_uLearned` (net bits 0-2, precision 3, zero test 4, guard 5; like the
+  their own word, `g_uLearned` (net bits 0-3, precision 4, zero test 5, guard 6 since round 4b; like the
   crosshair box's `g_uUiBox`). `Why` a word of its own and not the blur word's spare bits:
   they are Frame generation's settings, and the blur word is kept apart so a blur edit never
   touches Frame generation. The blur word's motion is bits 15-16 and its quality bit 17
@@ -399,23 +399,37 @@ trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are
   `ml_guard` variants) with `__has_include`: **any one missing and Learned silently
   disappears**. Touch `FrameGenLib.cpp` when this set changes (stale incremental builds).
 
-### Learned round 4: Colour (test) and Features (test)
+### Learned round 4 and 4b: colour and features nets
 
-(2026-10-28, FrameGen `9e9e604`, library's local-only `ml-fg-testing`.) Two **architecture
-variants** of the estimator, opt-in in the Learned net row after the luma nets: **Colour
-(test)** = key `c2smoke` (`LearnedNet::C2Smoke = 6`; the first conv also sees two
-chroma-mismatch and nine chroma-cost channels, 25 inputs; needs `ml_planes`) and **Features
-(test)** = key `c2feat` (`C2Feat = 7`; a small shared conv extractor on RGB, four feature
-maps matched like the luma, 27 inputs; needs `ml_feat`). Not a weight swap: the first conv's
-input contract changes. The default stays `e2v5` and Motion version stays V1. Cost at 1080p
-2x on Vulkan: e2v5 1.32 ms fp32 / 1.03 half, colour 1.77 / 1.26, features 1.93 / 1.41. The
-zero test, static guard, half precision and duplicate skip work per net as before.
-**Known limitation:** Crosshair V2's fill patches the luma only, not the chroma / RGB planes
-these variants also read.
-`Why:` these are stand-ins (ml-fg's 600-step smoke nets with the real nets' shapes) so the
-host plumbing can be tested before the real nets finish training; the library will name the
-real ones `g2v2` (colour) and `g2v3` (features), and the keys / labels here (`c2smoke`,
-"Colour (test)", `c2feat`, "Features (test)") change then.
+(2026-10-28, FrameGen `981c844`, library's local-only `ml-fg-testing`.) Two **architecture
+variants** of the estimator, opt-in in the Learned net row after the luma nets. The **colour**
+variant (25 inputs: the first conv also sees two chroma-mismatch and nine chroma-cost
+channels; needs `ml_planes`) and the **learned-features** variant (27 inputs: a small shared
+conv extractor on RGB, four feature maps matched like the luma; needs `ml_feat`). Not a
+weight swap: the first conv's input contract changes. Round 4 shipped them as 600-step
+stand-ins (`c2smoke`, `c2feat`); **round 4b replaced the stand-ins with the four real nets**:
+
+| key | `LearnedNet` | GUI label | kind |
+|---|---|---|---|
+| `g2v2` | `G2v2 = 6` | g2v2 Colour (games) | colour, trained on games |
+| `g2v3` | `G2v3 = 7` | g2v3 Features (games) | learned features, games |
+| `m2v2` | `M2v2 = 8` | m2v2 Colour (allround) | colour, allrounder |
+| `m2v3` | `M2v3 = 9` | m2v3 Features (allround) | features, allrounder |
+
+The default stays `e2v5` and Motion version stays V1. Cost at 1080p 2x on Vulkan (fp32 /
+half): e2v5 1.31 / 1.02 ms, g2v2 and m2v2 1.74 / 1.25, g2v3 and m2v3 1.89 / 1.40. The library's
+spot check has m2v3 best even on game clips. The zero test, static guard, half precision and
+duplicate skip work per net as before. **Known limitation:** Crosshair V2's fill patches the
+luma only, not the chroma / RGB planes these variants also read.
+**Migration:** a saved `"c2smoke"` / `"c2feat"` loads as `g2v2` / `g2v3` (a plain rename in
+the `learned_net` parse in `ConfigManager.cpp`; the next save writes the new name, no schema
+bump). `Why:` the stand-ins were never meant to outlive the real nets, and a profile that
+saved one should keep the same variant (colour / features) instead of falling to e2v5.
+**Four-bit net field:** ten nets do not fit the old three bits (eight values), so the Learned
+word `g_uLearned` is now net bits 0-3, precision 4, zero test 5, static guard 6 (mask `0x7F`
+in `uLibraryConfig` at bits 56-62; the box tenths at 48-55 are untouched). `Why:` that mask is
+the live-change key for `setSettings()`: a bit left out would make switching to that net live
+silently do nothing (round 3 hit this class of bug).
 
 ## UI protection
 
@@ -1097,7 +1111,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
 | `framegen.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](#learned-motion) (2026-10-26) |
-| `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` / `c2smoke` / `c2feat` (round 4) | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
+| `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` / `g2v2` / `g2v3` / `m2v2` / `m2v3` (round 4b) | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
 | `framegen.learned_half` | `false` (default) / `true` | the row "Learned precision" (Full / Half), used only while Learned runs; additive (2026-10-26) |
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |

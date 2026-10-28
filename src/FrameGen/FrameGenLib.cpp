@@ -15,6 +15,6 @@
 // synthesis shaders (v2_morph, v2_morph_s, v2_qmorph, v2_qmorph_s) and MotionVersion::Learned's duplicate test and static guard
 // (ml_dup, ml_guard, ml_planes). MotionVersion::Learned itself needs the ten ml_* shaders (ml_zero and ml_guard since round 2,
 // ml_planes and ml_feat since round 4) plus
-// the generated ml_weights.h holding all eight nets (src/meson.build; e2v5 and e1v5 added in round 3, c2smoke and c2feat in round 4); with any missing the library compiles but refuses
+// the generated ml_weights.h holding all ten nets (src/meson.build; e2v5 and e1v5 added in round 3, g2v2 g2v3 m2v2 m2v3 in round 4b); with any missing the library compiles but refuses
 // Learned at init().
 #include "../../subprojects/FrameGen/gpu/framegen.cpp"

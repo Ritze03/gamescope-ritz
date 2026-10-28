@@ -535,7 +535,7 @@ namespace gamescope::config
         // Learned motion (2026-10-26, experimental): "learned" is a third motion_version.
         // It needs the library's flowScale 2, so `quality` = "performance" is ignored while
         // it runs. `learned_net` ("e2v5" default | "e1v5" the small, cheap one | "e2v4" |
-        // "e1v4": round 2's two | "e2v3" | "e1v3": round 1's two | "c2smoke" | "c2feat": round 4's test colour / features nets) and `learned_half` (activations stored as half) only
+        // "e1v4": round 2's two | "e2v3" | "e1v3": round 1's two | "g2v2" | "g2v3" | "m2v2" | "m2v3": round 4b's colour / features nets, games and allround; a saved "c2smoke" / "c2feat" loads as g2v2 / g2v3) and `learned_half` (activations stored as half) only
         // matter then, and so do `learned_zero_test` (default on: fixes most of the warped
         // static HUD, ~0.006 ms at 1080p) and `learned_static_guard` (default off: ~0.05 ms
         // per generated frame at 1080p). ADDITIVE: absent loads the defaults; an unknown
