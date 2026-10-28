@@ -10,6 +10,9 @@ nets `e2v4` (the new default) and `e1v4` (the small, cheap one), ml-fg's zero-mo
 (on by default) and its static guard (off by default). See "Round 2" below. **Round 3 pins FGR
 `4bae33a`**: nets `e2v5` (the new default) and `e1v5` (the new small net), see "Round 3".
 
+> Note (2026-10-28): the **Very low** Artifact safety level, trust ramp (40,68), is the measured best ramp
+> for Learned (e2v5 + zero test, x2: +0.28 dB on game clips, +0.30 dB on video clips, ~0 whole-frame fallbacks).
+
 ## Round 3 (FGR `4bae33a`)
 
 Pins FGR `4bae33a` (`5e20923`'s round-3 content plus a webgl README line; still local-only, FGR's

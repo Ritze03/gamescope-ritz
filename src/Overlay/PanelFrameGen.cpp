@@ -74,7 +74,7 @@ namespace gamescope
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
 			{ 4, "e2v3 (round 1)" }, { 5, "e1v3 (round 1, small)" } };
 		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
-		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
+		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 4, "Very low" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
 		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
@@ -87,7 +87,7 @@ namespace gamescope
 		constexpr fghost::LearnedNet kLearnedNets[] = {
 			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
 			fghost::LearnedNet::E1v4, fghost::LearnedNet::E2v3, fghost::LearnedNet::E1v3 };
-		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off" };
+		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		// Indexed by fghost::UiProt, so the index IS the option id above.
 		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen", "crosshair_v2" };
@@ -179,7 +179,7 @@ namespace gamescope
 			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
-			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 4, 3 );
+			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 5, 3 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
@@ -536,12 +536,13 @@ namespace gamescope
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 4, 3 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 5, 3 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 4 ) ]; PersistAndPush(); } ),
 			kSafetyOptions, std::size( kSafetyOptions ) )
 			.Help( "Decides when a pixel the motion estimate got wrong falls back to the real frame. "
 			       "Each level sets the mismatch range (0-255 levels) between fully interpolated and "
-			       "fully real: High 8-28, Default 12-40, Low 16-56. All three also show the real "
+			       "fully real: High 8-28, Default 12-40, Low 16-56, Very low 40-68 (smoothest ramp, ghosts "
+			       "more where the motion is wrong). All four also show the real "
 			       "frame when more than 15% of the picture is untrusted or on a scene cut. Off "
 			       "never falls back: smoothest, but expect smearing on fast flicks and blended "
 			       "scene cuts." )

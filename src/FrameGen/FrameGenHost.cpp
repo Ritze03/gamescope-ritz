@@ -37,7 +37,7 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30-31 unused. The
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 safety's third bit (VeryLow = 4 needs it; bits 6-7 hold the low two), 31 unused. The
 		// crosshair box size is its own word, g_uUiBox, and Learned motion's runtime settings (net,
 		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full).
 		constexpr int kMinTargetFps = 30;
@@ -52,7 +52,7 @@ namespace fghost
 			const int nTarget = c.targetFps <= 0 ? 0 : std::min( std::max( c.targetFps, kMinTargetFps ), kMaxTargetFps );
 			return uint32_t( nMult )
 				| ( uint32_t( c.quality ) << 4 )
-				| ( uint32_t( c.safety ) << 6 )
+				| ( ( uint32_t( c.safety ) & 0x3u ) << 6 )
 				| ( uint32_t( c.hud ) << 8 )
 				| ( uint32_t( eMode ) << 10 )
 				| ( uint32_t( c.priority ) << 12 )
@@ -61,7 +61,8 @@ namespace fghost
 				| ( uint32_t( c.ui ) << 24 )
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
-				| ( uint32_t( c.motion ) << 28 );
+				| ( uint32_t( c.motion ) << 28 )
+				| ( ( ( uint32_t( c.safety ) >> 2 ) & 1u ) << 30 );
 		}
 
 		// Learned motion's runtime settings, their own word: bits 0-2 net (framegen::LearnedNet
@@ -113,7 +114,7 @@ namespace fghost
 			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
 			c.multiplier = int( u & 0xFu );
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
-			c.safety = Safety( ( u >> 6 ) & 0x3u );
+			c.safety = Safety( ( ( u >> 6 ) & 0x3u ) | ( ( ( u >> 30 ) & 1u ) << 2 ) );
 			c.hud = HudProtect( ( u >> 8 ) & 0x3u );
 			c.enabled = ( ( u >> 26 ) & 1u ) != 0;
 			c.mode = Mode( ( u >> 10 ) & 0x3u );
@@ -460,6 +461,7 @@ namespace fghost
 				case Safety::Low:     s.trustLow = 16.0f; s.trustHigh = 56.0f; break;
 				case Safety::Default: s.trustLow = 12.0f; s.trustHigh = 40.0f; break;
 				case Safety::High:    s.trustLow = 8.0f;  s.trustHigh = 28.0f; break;
+				case Safety::VeryLow: s.trustLow = 40.0f; s.trustHigh = 68.0f; break;
 				case Safety::Off:
 					s.trustLow = 254.0f; s.trustHigh = 255.0f;
 					s.globalFallback = 1.0f;
@@ -700,12 +702,12 @@ namespace fghost
 			framegen::Settings want = ToLibrarySettings( c, b, H.nUiHist );
 
 			// Only the library's own presets (quality, safety, HUD protection, UI
-			// protection, and the blur's sample count and weights) matter to what is
+			// protection (safety spans bits 6-7 and 30), and the blur's sample count and weights) matter to what is
 			// already applied; mode, priority, target and the blur's amount / relative
 			// are pacing's business and never reconfigure it. The blur sample count is
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
-			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
+			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) | ( 0x1u << 30 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
 				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x3Fu ) << 56 );
 
 			if ( !H.bLive )

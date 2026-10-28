@@ -60,8 +60,10 @@ namespace fghost
 	// frame. Off (last, so the packed values of the others stay put) disables every
 	// fallback the library has: trust ramp (254,255), globalFallback 1.0 and
 	// sceneCutSad 255 -- never the real frame, even on fast flicks and scene cuts.
+	// VeryLow (appended after Off, value 4) = (40,68): a later, smoother ramp that
+	// holds the real frame far less often but ghosts more where motion is wrong.
 	// Runtime (setSettings, no wait).
-	enum class Safety : uint8_t { Low, Default, High, Off };
+	enum class Safety : uint8_t { Low, Default, High, Off, VeryLow };
 
 	// "Static HUD protection": the zero-vector bonus. Off = 0, Normal = 1,
 	// Strong = 2.5. Runtime.

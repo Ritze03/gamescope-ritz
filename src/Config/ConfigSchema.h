@@ -512,7 +512,7 @@ namespace gamescope::config
         bool gpu_limit = false;
         // "quality" | "performance"
         std::string quality = "quality";
-        // Artifact safety: "off" | "low" | "default" | "high" ("off" added 2026-10-04:
+        // Artifact safety: "off" | "very_low" | "low" | "default" | "high" ("off" added 2026-10-04:
         // never falls back to the real frame)
         std::string safety = "off";
         // Static HUD protection: "off" | "normal" | "strong"

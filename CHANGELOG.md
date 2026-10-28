@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.5] – 2026-10-28
+
+### Added
+- **Artifact safety: Very low**: a fifth level with the latest, smoothest trust ramp;
+  it rarely shows the real frame instead, but ghosts more where motion is wrong.
+
 ## [0.14.4] – 2026-10-27
 
 ### Added

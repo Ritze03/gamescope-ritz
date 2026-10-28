@@ -1722,6 +1722,10 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( loaded.framegen.hud_protection == "strong" );
     REQUIRE( loaded.framegen.ui_protection == "whole_screen" );
 
+    s.framegen.safety = "very_low";
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().framegen.safety == "very_low" );
+
     // "off" must survive a round trip too (it is not the default).
     s.framegen.ui_protection = "off";
     REQUIRE( SaveSections( s ) );

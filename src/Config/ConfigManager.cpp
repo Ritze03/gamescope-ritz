@@ -342,7 +342,7 @@ namespace gamescope::config
                 if ( sQuality == "quality" || sQuality == "performance" )
                     f.quality = sQuality;
                 const std::string sSafety = JGetString( *pFrameGen, "safety", f.safety );
-                if ( sSafety == "low" || sSafety == "default" || sSafety == "high" || sSafety == "off" )
+                if ( sSafety == "low" || sSafety == "default" || sSafety == "high" || sSafety == "off" || sSafety == "very_low" )
                     f.safety = sSafety;
                 const std::string sHud = JGetString( *pFrameGen, "hud_protection", f.hud_protection );
                 if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
