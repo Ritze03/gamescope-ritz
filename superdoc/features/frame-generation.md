@@ -394,10 +394,28 @@ trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are
   `ml_reduce`, `ml_pyr`, `ml_match`, `ml_conv`, `ml_out`, and since round 2 `ml_zero` and
   `ml_guard`; `ml_common.glsl` is their include, picked up by the depfile), `ml_dup` and
   `ml_guard` also with `rgb10` and `f16` variants (the two Learned passes that read colour),
-  and the `framegen_ml_weights` custom target for `ml_weights.h` (six nets). The library
+  `ml_planes` (round 4, also with `rgb10` / `f16` variants) and `ml_feat` (round 4), and the `framegen_ml_weights` custom target for `ml_weights.h` (eight nets). The library
   probes `ml_conv`, `ml_zero`, `ml_guard` and `ml_weights.h` (plus each format's `ml_dup` /
   `ml_guard` variants) with `__has_include`: **any one missing and Learned silently
   disappears**. Touch `FrameGenLib.cpp` when this set changes (stale incremental builds).
+
+### Learned round 4: Colour (test) and Features (test)
+
+(2026-10-28, FrameGen `9e9e604`, library's local-only `ml-fg-testing`.) Two **architecture
+variants** of the estimator, opt-in in the Learned net row after the luma nets: **Colour
+(test)** = key `c2smoke` (`LearnedNet::C2Smoke = 6`; the first conv also sees two
+chroma-mismatch and nine chroma-cost channels, 25 inputs; needs `ml_planes`) and **Features
+(test)** = key `c2feat` (`C2Feat = 7`; a small shared conv extractor on RGB, four feature
+maps matched like the luma, 27 inputs; needs `ml_feat`). Not a weight swap: the first conv's
+input contract changes. The default stays `e2v5` and Motion version stays V1. Cost at 1080p
+2x on Vulkan: e2v5 1.32 ms fp32 / 1.03 half, colour 1.77 / 1.26, features 1.93 / 1.41. The
+zero test, static guard, half precision and duplicate skip work per net as before.
+**Known limitation:** Crosshair V2's fill patches the luma only, not the chroma / RGB planes
+these variants also read.
+`Why:` these are stand-ins (ml-fg's 600-step smoke nets with the real nets' shapes) so the
+host plumbing can be tested before the real nets finish training; the library will name the
+real ones `g2v2` (colour) and `g2v3` (features), and the keys / labels here (`c2smoke`,
+"Colour (test)", `c2feat`, "Features (test)") change then.
 
 ## UI protection
 
@@ -1079,7 +1097,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5: a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
 | `framegen.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the library's [Motion version 2](#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](#learned-motion) (2026-10-26) |
-| `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
+| `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` / `c2smoke` / `c2feat` (round 4) | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
 | `framegen.learned_half` | `false` (default) / `true` | the row "Learned precision" (Full / Half), used only while Learned runs; additive (2026-10-26) |
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |

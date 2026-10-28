@@ -15,6 +15,22 @@ nets `e2v4` (the new default) and `e1v4` (the small, cheap one), ml-fg's zero-mo
 >
 > Note (2026-10-28): the Artifact safety default for new profiles is now **Default** (12,40), was Off; saved profiles keep their value.
 
+## Round 4 (FGR `9e9e604`, branch `round4`)
+
+Pins FGR `9e9e604` (local-only). Two **architecture variants**, opt-in; defaults unchanged
+(e2v5, V1). They are **stand-ins**: ml-fg's 600-step smoke nets with the real nets' shapes,
+there so the host can be tested before the real ones (`g2v2` colour, `g2v3` features) exist;
+keys and labels change when those are re-vendored.
+
+- **What to select**: overlay, Frame generation > Motion version = Learned > Learned net =
+  "Colour (test)" or "Features (test)"; or profile JSON `"learned_net": "c2smoke"` /
+  `"c2feat"`. An unknown string keeps the default.
+- **Cost** (1080p 2x, Vulkan): e2v5 1.32 ms fp32 / 1.03 half, colour 1.77 / 1.26,
+  features 1.93 / 1.41.
+- **Build**: new shaders `ml_planes` (also `rgb10` / `f16`) and `ml_feat`, `ml_weights.h` now
+  holds eight nets. Without them Learned is refused whole (`kMlNotBuilt`).
+- **Known limitation**: Crosshair V2's fill patches luma only, not the chroma / RGB planes.
+
 ## Round 3 (FGR `4bae33a`)
 
 Pins FGR `4bae33a` (`5e20923`'s round-3 content plus a webgl README line; still local-only, FGR's

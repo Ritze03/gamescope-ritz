@@ -66,7 +66,7 @@ namespace fghost
 		}
 
 		// Learned motion's runtime settings, their own word: bits 0-2 net (framegen::LearnedNet
-		// order: e2v3, e1v3, e2v4, e1v4, e2v5, e1v5; six values, so three bits since round 3),
+		// order: e2v3, e1v3, e2v4, e1v4, e2v5, e1v5, c2smoke, c2feat; eight values, three bits),
 		// 3 half precision, 4 zero-motion test, 5 static guard.
 		// Round 1 had the net and precision in bits 30-31 of the main word; round 2 needs two
 		// more bits and the main word is full, so all four moved here (the main word's
@@ -129,7 +129,7 @@ namespace fghost
 			{
 				// An out-of-range value (cannot happen from PackLearned) falls back to the default.
 				const uint32_t uNet = uLearned & 0x7u;
-				c.learnedNet = uNet <= uint32_t( LearnedNet::E1v5 ) ? LearnedNet( uNet ) : LearnedNet::E2v5;
+				c.learnedNet = uNet <= uint32_t( LearnedNet::C2Feat ) ? LearnedNet( uNet ) : LearnedNet::E2v5;
 			}
 			c.learnedHalf = ( ( uLearned >> 3 ) & 1u ) != 0;
 			c.learnedZeroTest = ( ( uLearned >> 4 ) & 1u ) != 0;
@@ -510,6 +510,8 @@ namespace fghost
 				case LearnedNet::E1v4: s.learnedNet = framegen::LearnedNet::E1v4; break;
 				case LearnedNet::E2v5: s.learnedNet = framegen::LearnedNet::E2v5; break;
 				case LearnedNet::E1v5: s.learnedNet = framegen::LearnedNet::E1v5; break;
+				case LearnedNet::C2Smoke: s.learnedNet = framegen::LearnedNet::C2Smoke; break;
+				case LearnedNet::C2Feat: s.learnedNet = framegen::LearnedNet::C2Feat; break;
 			}
 			s.learnedHalf = c.learnedHalf;
 			s.learnedZeroTest = c.learnedZeroTest;

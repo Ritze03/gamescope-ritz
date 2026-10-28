@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.14.5] – 2026-10-28
 
 ### Added
+- **Learned net: Colour and Features (test)**: two opt-in test networks for Learned
+  motion, a colour one and a learned-features one; e2v5 stays the default.
 - **Artifact safety: Very low**: a fifth level with the latest, smoothest trust ramp;
   it rarely shows the real frame instead, but ghosts more where motion is wrong.
 

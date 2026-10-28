@@ -1817,7 +1817,7 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     REQUIRE( l.framegen.learned_static_guard == false );
 
     // Every net name round-trips.
-    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3" } )
+    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "c2smoke", "c2feat" } )
     {
         Settings n{};
         n.framegen.learned_net = pszNet;

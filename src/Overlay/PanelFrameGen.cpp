@@ -72,7 +72,8 @@ namespace gamescope
 		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
 		constexpr ui::Option kLearnedNetOptions[] = {
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
-			{ 4, "e2v3 (round 1)" }, { 5, "e1v3 (round 1, small)" } };
+			{ 4, "e2v3 (round 1)" }, { 5, "e1v3 (round 1, small)" },
+			{ 6, "Colour (test)" }, { 7, "Features (test)" } };
 		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 4, "Very low" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
@@ -83,10 +84,11 @@ namespace gamescope
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned" };
-		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3" };
+		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "c2smoke", "c2feat" };
 		constexpr fghost::LearnedNet kLearnedNets[] = {
 			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
-			fghost::LearnedNet::E1v4, fghost::LearnedNet::E2v3, fghost::LearnedNet::E1v3 };
+			fghost::LearnedNet::E1v4, fghost::LearnedNet::E2v3, fghost::LearnedNet::E1v3,
+			fghost::LearnedNet::C2Smoke, fghost::LearnedNet::C2Feat };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		// Indexed by fghost::UiProt, so the index IS the option id above.
@@ -184,7 +186,7 @@ namespace gamescope
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			c.motion = (fghost::Motion)IndexOf( f.motion_version, kMotionKeys, 3, 0 );   // the index IS the enum value
-			c.learnedNet = kLearnedNets[ IndexOf( f.learned_net, kLearnedNetKeys, 6, 0 ) ];
+			c.learnedNet = kLearnedNets[ IndexOf( f.learned_net, kLearnedNetKeys, 8, 0 ) ];
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
 			c.learnedStaticGuard = f.learned_static_guard;
@@ -463,17 +465,19 @@ namespace gamescope
 
 		a.Choice( "framegen.learned_net", "Learned net",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 6, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 5 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 8, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 7 ) ]; PersistAndPush(); } ),
 			kLearnedNetOptions, std::size( kLearnedNetOptions ) )
 			.Help( "Which trained network Learned motion uses (experimental). e2v5 is the default "
 			       "and the best one: about 1.4 ms of GPU time at 1080p 2x. e1v5 is the small one, "
 			       "about 2.4 times cheaper (about 0.6 ms) and the one to pick when e2v5 costs too "
 			       "much. e2v4 / e1v4 and e2v3 / e1v3 are the earlier versions of the same two nets, kept for "
-			       "comparing. Motion blur's Learned borrows this and the rows below: it has no "
+			       "comparing. Colour (test) and Features (test) are test stand-ins for the colour and "
+			       "learned-features variants (about 1.8 / 1.9 ms at 1080p 2x), replaced by the real "
+			       "nets later. Motion blur's Learned borrows this and the rows below: it has no "
 			       "copy of its own. Only used while Motion version is Learned." )
 			.Default( 0 )
-			.Keywords( "frame generation learned net network e2v5 e1v5 e2v4 e1v4 e2v3 e1v3 small neural ml weights experimental" )
+			.Keywords( "frame generation learned net network e2v5 e1v5 e2v4 e1v4 e2v3 e1v3 colour features c2smoke c2feat small neural ml weights experimental" )
 			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
 
 		a.Choice( "framegen.learned_half", "Learned precision",
