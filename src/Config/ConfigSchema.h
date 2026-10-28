@@ -512,9 +512,10 @@ namespace gamescope::config
         bool gpu_limit = false;
         // "quality" | "performance"
         std::string quality = "quality";
-        // Artifact safety: "off" | "very_low" | "low" | "default" | "high" ("off" added 2026-10-04:
-        // never falls back to the real frame)
-        std::string safety = "off";
+        // Artifact safety: "off" | "very_low" | "low" | "default" | "high". Default "default"
+        // (trust ramp 12,40; 2026-10-28, was "off" since 2026-10-04: off never falls back to
+        // the real frame). A saved profile keeps its stored value; only a missing key loads this.
+        std::string safety = "default";
         // Static HUD protection: "off" | "normal" | "strong"
         std::string hud_protection = "strong";
         // UI protection (the FrameGen library's static-UI protection, 2026-10-04):

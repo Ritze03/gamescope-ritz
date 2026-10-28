@@ -15,6 +15,10 @@ The newest version below is the one this build reports.
 - **Artifact safety: Very low**: a fifth level with the latest, smoothest trust ramp;
   it rarely shows the real frame instead, but ghosts more where motion is wrong.
 
+### Info
+- **Artifact safety default**: new profiles start on Default instead of Off; saved
+  profiles keep their setting.
+
 ## [0.14.4] – 2026-10-27
 
 ### Added

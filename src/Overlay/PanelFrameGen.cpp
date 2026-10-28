@@ -179,7 +179,7 @@ namespace gamescope
 			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
-			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 5, 3 );
+			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 5, 1 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
@@ -536,7 +536,7 @@ namespace gamescope
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 5, 3 ); },
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.safety, kSafetyKeys, 5, 1 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.safety = kSafetyKeys[ ClampIdx( n, 4 ) ]; PersistAndPush(); } ),
 			kSafetyOptions, std::size( kSafetyOptions ) )
 			.Help( "Decides when a pixel the motion estimate got wrong falls back to the real frame. "
@@ -546,7 +546,7 @@ namespace gamescope
 			       "frame when more than 15% of the picture is untrusted or on a scene cut. Off "
 			       "never falls back: smoothest, but expect smearing on fast flicks and blended "
 			       "scene cuts." )
-			.Default( 3 )
+			.Default( 1 )
 			.Keywords( "frame generation artifact safety artefacts ghosting trust fallback" )
 			.DisabledUnless( On, "frame generation is off" );
 

@@ -12,6 +12,8 @@ nets `e2v4` (the new default) and `e1v4` (the small, cheap one), ml-fg's zero-mo
 
 > Note (2026-10-28): the **Very low** Artifact safety level, trust ramp (40,68), is the measured best ramp
 > for Learned (e2v5 + zero test, x2: +0.28 dB on game clips, +0.30 dB on video clips, ~0 whole-frame fallbacks).
+>
+> Note (2026-10-28): the Artifact safety default for new profiles is now **Default** (12,40), was Off; saved profiles keep their value.
 
 ## Round 3 (FGR `4bae33a`)
 

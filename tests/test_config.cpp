@@ -1691,7 +1691,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( Settings{}.framegen.priority == "smoothness" );
     REQUIRE( Settings{}.framegen.pause_at_refresh == true );
     REQUIRE( Settings{}.framegen.quality == "quality" );
-    REQUIRE( Settings{}.framegen.safety == "off" );
+    REQUIRE( Settings{}.framegen.safety == "default" );
     REQUIRE( Settings{}.framegen.hud_protection == "strong" );
     REQUIRE( Settings{}.framegen.ui_protection == "crosshair" );
     REQUIRE( Settings{}.framegen.ui_box_height == 2.5f );
@@ -1893,7 +1893,7 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     s.framegen.priority = "fastest";      // unknown -> stays "smoothness"
     s.framegen.target_fps = 7;            // below 30 -> 30
     s.framegen.quality = "ultra";         // unknown -> stays "quality"
-    s.framegen.safety = "";               // unknown -> stays "off"
+    s.framegen.safety = "";               // unknown -> stays "default"
     s.framegen.hud_protection = "max";    // unknown -> stays "strong"
     s.framegen.ui_protection = "all";     // unknown -> stays "crosshair"
     REQUIRE( SaveSections( s ) );
@@ -1905,7 +1905,7 @@ TEST_CASE( "framegen: a stale multiplier is normalised and an unknown enum strin
     REQUIRE( loaded.framegen.priority == "smoothness" );
     REQUIRE( loaded.framegen.target_fps == 30 );
     REQUIRE( loaded.framegen.quality == "quality" );
-    REQUIRE( loaded.framegen.safety == "off" );
+    REQUIRE( loaded.framegen.safety == "default" );
     REQUIRE( loaded.framegen.hud_protection == "strong" );
     REQUIRE( loaded.framegen.ui_protection == "crosshair" );
 
@@ -1980,7 +1980,7 @@ TEST_CASE( "motion defaults: absent framegen / motion_blur / lag_buffer sections
     REQUIRE( l.framegen.priority == "smoothness" );
     REQUIRE( l.framegen.pause_at_refresh == true );
     REQUIRE( l.framegen.quality == "quality" );
-    REQUIRE( l.framegen.safety == "off" );
+    REQUIRE( l.framegen.safety == "default" );
     REQUIRE( l.framegen.hud_protection == "strong" );
     REQUIRE( l.framegen.ui_protection == "crosshair" );
     REQUIRE( l.framegen.gpu_limit == false );
@@ -2074,6 +2074,8 @@ TEST_CASE( "framegen: a legacy config without pause_at_refresh loads as true; sa
     Settings loaded = LoadSections();
     REQUIRE( loaded.framegen.mode == "fixed" );
     REQUIRE( loaded.framegen.pause_at_refresh == true );
+    // No stored safety key: the 2026-10-28 default ("default"), a saved "off" below keeps its value.
+    REQUIRE( loaded.framegen.safety == "default" );
 
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",

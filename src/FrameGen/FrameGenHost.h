@@ -222,7 +222,7 @@ namespace fghost
 		// real frames through, when generation takes too much of the GPU).
 		bool gpuLimit = false;
 		Quality quality = Quality::Quality;
-		Safety safety = Safety::Off;
+		Safety safety = Safety::Default;
 		HudProtect hud = HudProtect::Strong;
 		UiProt ui = UiProt::Crosshair;
 		// The crosshair box (Crosshair / CrosshairV2), tenths of a percent of the
