@@ -91,6 +91,9 @@ namespace gamescope
 		e.bVibrancy  = r.vibrancy.enabled;
 		e.flVibrancy = r.vibrancy.strength;
 
+		e.bColorBoost  = r.color_boost.enabled;
+		e.flColorBoost = r.color_boost.strength;
+
 		e.bPreSharpen  = r.pre_sharpen.enabled;
 		e.flPreSharpen = r.pre_sharpen.strength.value_or( 0.5f );
 
@@ -225,7 +228,8 @@ namespace gamescope
 	// than only a flag bit. An eighth, the experimental Brightness Map
 	// effect (2026-09-09), briefly held the second spatial slot; it was
 	// removed 2026-09-14 at the user's request -- see
-	// superdoc/features/shader-effects.md's History note.)
+	// superdoc/features/shader-effects.md's History note.) Color Boost
+	// (2026-10-29, 1 param) is another one-switch colour row, after Vibrancy.
 	//
 	// THE SIX BUDGET (now seven), AND WHY ADAPTIVE BRIGHTNESS SITS EXACTLY
 	// ON IT. Saturation has 2 params, Vibrancy 1, Pre-Sharpen 1, Bloom 3
@@ -421,12 +425,13 @@ namespace gamescope
 	void PanelShaders_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "image.shaders", "Shaders", ui::Section::Display );
-		a.Keywords( "shader effect vibrancy saturation sharpen adaptive brightness gamma contrast "
+		a.Keywords( "shader effect vibrancy color boost colour vibrance saturation sharpen adaptive brightness gamma contrast "
 		            "exposure shadow control lift darkness bloom glow local tone" );
 		a.Summary( []{
 			const auto &r = Cfg().reshade;
 			const int n = ( r.saturation.enabled ? 1 : 0 )
 			            + ( r.vibrancy.enabled ? 1 : 0 )
+			            + ( r.color_boost.enabled ? 1 : 0 )
 			            + ( r.pre_sharpen.enabled ? 1 : 0 )
 			            + ( r.bloom.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness.enabled ? 1 : 0 )
@@ -529,6 +534,30 @@ namespace gamescope
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )   // 61 positions; 0.00, the default, is neutral
 				.Default( 0.0f );
+
+		// NEW 2026-10-29: the opposite direction to Vibrancy, directly
+		// after it so the two read together. Muted colours are boosted
+		// greatly, colours already near their strongest are left alone, so
+		// nothing blows out. One param, no skin-tone toggle (YAGNI).
+		a.Switch( "image.shaders.color_boost", "Color Boost",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().reshade.color_boost.enabled; },
+				[]( bool b ) { SetEffectEnabled( &Cfg().reshade.color_boost.enabled, b ); } ) )
+			.Key( "reshade.color_boost.enabled" )
+			.Help( "Makes colours more vibrant: dull, washed-out colours are boosted the most, "
+			       "while colours that are already strong are left alone, so nothing blows out." )
+			.Default( false )
+			.Keywords( "color boost colour vibrance vibrant saturation muted washed out" )
+			.DisabledUnless( EffectsUsable, kSdrOnly )
+			.Param( "strength", "Strength",
+				ui::AnyBind::Of<float>(
+					[]{ return Cfg().reshade.color_boost.strength; },
+					[]( float f ) { SetEffectFloat( &Cfg().reshade.color_boost.strength, f ); } ) )
+				.Key( "reshade.color_boost.strength" )
+				.Help( "How strongly dull colours are boosted. 0 is unchanged." )
+				.Range( 0.0f, 3.0f )
+				.Step( 0.05f )
+				.Default( 1.0f );
 
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",
 			ui::AnyBind::Of<bool>(

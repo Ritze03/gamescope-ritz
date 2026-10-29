@@ -1272,6 +1272,31 @@ TEST_CASE( "a schema-3 profile's vibrancy key renames to saturation on load and 
     REQUIRE( resaved.reshade.vibrancy.strength == 0.0f );
 }
 
+// Color Boost (2026-10-29): additive key, no schema bump. A profile that never
+// mentions it loads as off with the 1.0 default strength; one that sets it
+// round-trips through SaveSections/LoadSections.
+TEST_CASE( "reshade.color_boost defaults off at strength 1.0 and round-trips", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    std::ofstream( ConfigRoot() + "/profiles/T.json" ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "reshade": { "vibrancy": { "enabled": true, "strength": 1.0 } }
+    })";
+    Settings s = LoadSections();
+    REQUIRE( s.reshade.color_boost.enabled == false );
+    REQUIRE( s.reshade.color_boost.strength == 1.0f );
+
+    s.reshade.color_boost.enabled = true;
+    s.reshade.color_boost.strength = 2.35f;
+    REQUIRE( SaveSections( s ) );
+    Settings back = LoadSections();
+    REQUIRE( back.reshade.color_boost.enabled == true );
+    REQUIRE( back.reshade.color_boost.strength == 2.35f );
+    REQUIRE( back.reshade.vibrancy.enabled == true );   // neighbour untouched
+}
+
 // Request #3: neutral (disabled, strength 0.0) is the default, so an
 // existing config that never mentions shadow_lift at all - which is every
 // config on disk today, since the field is brand new - is unaffected.

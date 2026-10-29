@@ -675,6 +675,22 @@ namespace gamescope::config
         float strength = 0.0f;
     };
 
+    // NEW 2026-10-29 (the user: "Add another shader: \"Color Boost\". It should
+    // make all of the colors more vibrant with a gamma (maybe inverted?) curve,
+    // so low saturation stuff gets greatly boosted and already high saturation
+    // stuff doesnt \"blow out\"."). The OPPOSITE direction to Vibrancy above:
+    // muted colours gain most, colours already at the gamut edge gain nothing.
+    // Additive key, no schema bump (Vibrancy's own precedent).
+    struct ReshadeColorBoostSettings
+    {
+        bool enabled = false;
+        // 0.0..3.0, 0.0 neutral (exact identity). Exponent k = 1 + strength of
+        // the inverted gamma curve on the gamut fraction t (effects_common.h's
+        // grade(), EFFECT_COLOR_BOOST block): t' = 1 - (1 - t)^k. The 1.0
+        // default is what a freshly switched-on effect shows (k = 2).
+        float strength = 1.0f;
+    };
+
     // NEW 2026-09-08 (the user: "Add a bloom shader for more casual games").
     // A glow around bright areas -- aimed at looking good rather than at
     // competitive clarity, which is why it ships OFF and why its default
@@ -997,6 +1013,7 @@ namespace gamescope::config
     {
         ReshadeSaturationSettings saturation;
         ReshadeVibrancySettings vibrancy;
+        ReshadeColorBoostSettings color_boost;
         ReshadePreSharpenSettings pre_sharpen;
         ReshadeBloomSettings bloom;
         ReshadeAdaptiveBrightnessSettings adaptive_brightness;

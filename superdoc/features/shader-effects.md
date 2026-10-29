@@ -1,7 +1,7 @@
-# Shaders settings area — Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma, Adaptive Brightness V2
+# Shaders settings area — Saturation, Vibrancy, Color Boost, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma, Adaptive Brightness V2
 
 The overlay's **Shaders** area (`image.shaders`, `src/Overlay/PanelShaders.cpp`) exposes
-eight effects — five independent, plus **Adaptive Brightness**, **Adaptive Gamma** (new
+nine effects — six independent (**Color Boost** new 2026-10-29), plus **Adaptive Brightness**, **Adaptive Gamma** (new
 2026-09-08) and **Adaptive Brightness V2** (new 2026-09-14), which are mutually exclusive
 with EACH OTHER and with nothing else — see
 [Adaptive Brightness V2](#adaptive-brightness-v2-imageshadersadaptive_brightness_v2--new-2026-09-14)
@@ -212,10 +212,11 @@ grades its pixels.
 
 | Field | Meaning |
 | --- | --- |
-| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<8` Bloom (added 2026-09-08 — gates only the composite; the three dispatches that build the glow are simply not recorded when it is clear); `1<<9` was the experimental Brightness Map effect (removed 2026-09-14, left unused rather than reassigned), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
+| `uint u_flags` | bits: `1<<0` Shadow Control, `1<<1` Saturation, `1<<2` Saturation's protect skin, `1<<3` Pre-Sharpen, `1<<4` Adaptive Brightness, `1<<5` Adaptive Brightness's **Dynamic** mode (else Whole image), `1<<6` Vibrancy (added 2026-09-08), `1<<7` Adaptive Gamma (added 2026-09-08), `1<<8` Bloom (added 2026-09-08 — gates only the composite; the three dispatches that build the glow are simply not recorded when it is clear); `1<<9` was the experimental Brightness Map effect (removed 2026-09-14, left unused rather than reassigned; reused by Adaptive Brightness V2), `1<<10` Preview split, `1<<11` Color Boost (added 2026-10-29), `1<<31` reset history (the history texture was created this frame, or the pre-pass is resuming after a frame in which it did not run — see "Resets on resume" below) |
 | `float u_saturation` | 0..3, 1 neutral (renamed from `u_vibrancy` 2026-09-08 — same meaning, see below) |
 | `float u_vibrancy` | 0..3, 0 neutral (added 2026-09-08 — the new effect's own strength; unrelated to the field above despite the name) |
 | `float u_shadowLift` | 0..1, 0 neutral |
+| `float u_colorBoost` | 0..3, 0 neutral (added 2026-10-29; **appended LAST** in both the GLSL block and `EffectsPushData_t`, masked to 0 by the host while the effect is off). The curve exponent is `1 + u_colorBoost` |
 | `uint u_rcasCon` | `floatBitsToUint(con.x)` for RCAS, 0 when sharpen is off |
 | `float u_abTarget, u_abMin, u_abMax, u_abStrength` | Adaptive Brightness's own parameters, straight from config (both modes read all of them — see the Dynamic section for what each means there) |
 | `float u_adaptUp, u_adaptDown` | The EMA's two time constants, seconds — **the ACTIVE adaptive effect's**, not necessarily Adaptive Brightness's (renamed from `u_abUp`/`u_abDown` 2026-09-09, when Adaptive Gamma got its own pair). The two effects cannot both be on, so one EMA serves both and the host picks; clamped to the panel's own 0.1 s floor, and floored again by `ema_alpha()` |
@@ -231,7 +232,7 @@ the steamcompmgr thread, same discipline as `g_upscaleFilterSharpness`. `Why the
 apply:` under E2 nothing in `PanelShaders.cpp` runs per frame, so without it saved effects
 would only switch on the first time the Shaders area was drawn.
 
-`NativeEffectsState_t::AnyEnabled()` counts all seven switches, both adaptive effects
+`NativeEffectsState_t::AnyEnabled()` counts every effect switch (Color Boost included), both adaptive effects
 and Bloom included, so any one of them forces the full composite the
 pre-pass needs. `NeedsStatistics()` is the narrower question — "does anything read the
 measure pass's history" — and is true for Adaptive Brightness and Adaptive Gamma alone.
@@ -247,11 +248,14 @@ Every backend already forced a full composite for `!g_reshade_effect.empty()`
 `vulkan_native_effects_active()`; without that, direct scanout would skip the pre-pass and
 the effects would silently vanish whenever the base layer could be scanned out directly.
 
-## The seven effects
+## The seven effects (plus Color Boost, 2026-10-29)
+
+(The heading's "seven" is the historical count the section grew from; the per-tap order
+below now has an extra colour step, Color Boost, right after Vibrancy.)
 
 Shadow Control, Saturation and Pre-Sharpen's maths is ported 1:1 from the retired `.fx`;
 Vibrancy, Adaptive Gamma and Bloom are new (2026-09-08). Applied **per tap, in this
-order**: Shadow Control → Saturation → Vibrancy → (Pre-Sharpen) → Bloom (the glow, from
+order**: Shadow Control → Saturation → Vibrancy → Color Boost → (Pre-Sharpen) → Bloom (the glow, from
 its own three dispatches) → Adaptive Brightness (Whole image's gain, or Dynamic's curve)
 → Adaptive Gamma (one exponent) → `saturate`. The last
 two can never both run — see
@@ -464,6 +468,65 @@ muddied exactly the comparison this check exists to make.)
 
 Captures: `build-release/verify-shots/vibrancy-split-2026-09-08/effects-regression-captures/10-colors-*.png`;
 full numeric results: that directory's `results.txt`.
+
+### Color Boost (`image.shaders.color_boost`) — NEW 2026-10-29
+
+The user's request, verbatim: *"Add another shader: "Color Boost". It should make all of
+the colors more vibrant with a gamma (maybe inverted?) curve, so low saturation stuff gets
+greatly boosted and already high saturation stuff doesnt "blow out"."*
+
+**Config**: `ReshadeColorBoostSettings` — `enabled` (default false), `strength` (float,
+0.0..3.0, default 1.0; 0 is an exact identity). JSON `reshade.color_boost`. Additive key,
+no schema bump (Vibrancy's precedent): an older profile has no such object and resolves
+to these defaults. One param, no skin-tone toggle (YAGNI).
+
+**Against its neighbours.** Saturation is a flat multiplier (every colour gains the same
+factor, so it clips the strong ones first). Vibrancy (this fork's, the user's own
+definition) boosts already-saturated colours *more*. Color Boost goes the other way: the
+weaker a colour, the more it gains, and a colour already at its strongest gains nothing.
+
+```
+d    = c - luma                      // chroma vector; luma = effects_luma(c), Rec.601, encoded
+t    = max over channels of  d>0 ? d/(1-luma) : -d/luma    // 1/gmax, in [0,1]
+t'   = 1 - (1 - t)^k,   k = 1 + strength
+out  = luma + d * (t' / t)           // t == 0 (grey, t < 1e-5): out = c
+```
+
+`t` is the colour's chroma as a **fraction of the largest chroma its own hue can have at
+this luma** (`gmax` = the biggest `g` with `luma + d*g` still inside `[0,1]` on every
+channel; `t = 1/gmax`). 0 means grey, 1 means a channel already sits at 0 or 1.
+
+`Why an inverted gamma curve on that fraction, not on raw saturation:` the user asked for
+"low saturation greatly boosted, high saturation does not blow out". `t' = 1 - (1-t)^k` has
+slope `k` at `t = 0` (muted greatly boosted), slope `0` at `t = 1` (nothing at the edge),
+and `t' <= 1` for every `t`, so the output **cannot leave the gamut by construction**:
+saturated colours approach the edge asymptotically instead of hitting a clamp. Measuring
+against the *gamut fraction* rather than `max-min` makes "already high saturation" mean
+"close to clipping for this hue and brightness" — a dark, strong colour and a light,
+strong colour both count as strong when they are near their own edge, which plain
+`max-min` cannot tell. A plain gamma on `max-min` has no such guarantee and needs a clamp,
+which is exactly the blow-out being avoided.
+
+Properties (pinned by the closed-form checks): grey stays exactly grey; hue (the
+direction of `d`) and luma are preserved (`d` is only scaled and `effects_luma` is
+linear); `strength 0` is `t' = t`, an exact identity; the output never leaves `[0,1]` (the
+shader's final `clamp` only absorbs float rounding); monotonic — a more saturated input
+stays more saturated.
+
+`Why after Vibrancy in grade():` both are colour-intensity steps; running Color Boost last
+lets it act on the picture Saturation/Vibrancy produced and means whatever those two
+pushed toward the edge is left alone by it, rather than being boosted and then having to
+be clamped. The panel row sits right after Vibrancy for the same reason.
+
+**Numbers** (closed form on the `colors` scene's five bands, strength 1.0, so k = 2;
+input gamut fraction `t` -> output, ratio `out_t/in_t`): band 1 `0.121 -> 0.228` (1.88),
+band 2 `0.369 -> 0.602` (1.63), band 3 `0.645 -> 0.874` (1.36), band 4 (255,60,0, already
+on the edge) `1.000 -> 1.000` (1.00); grey band unchanged. The ratio strictly *decreases*
+across bands, the mirror image of Vibrancy's rising ratio. A 200 000-colour random sweep
+at strengths 0.5/1/3 never left `[0,255]`. Regression: `colors-colorboost-<S>`
+(per-band closed form, S = 0.5/1.0/3.0) and `colors-colorboost-shape` in
+`scripts/effects-regression.sh`; the live capture was **not run** when this was written
+(needs a GPU session), only the closed-form side was checked offline.
 
 ### Pre-Sharpen (`image.shaders.presharpen`) — now RCAS
 
@@ -3620,7 +3683,7 @@ for the evidence and the why), from seven 2026-09-07 (Local adaptation, below), 
 eight 2026-09-14 (Adaptive Brightness V2's own darkening — Max darken, Darken — see
 [the row-budget note](#the-row-budget-eight-to-ten-not-a-fold-2026-09-14) in that effect's
 own section). See `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s
-`kParamBudget`. Counts: Saturation 2, Vibrancy 1 (new 2026-09-08), Pre-Sharpen 1, Bloom 3
+`kParamBudget`. Counts: Saturation 2, Vibrancy 1 (new 2026-09-08), Color Boost 1 (new 2026-10-29), Pre-Sharpen 1, Bloom 3
 (new 2026-09-08), Adaptive Brightness 8 (zero headroom of the OLD 8-ceiling; two spare
 now), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two adaptation speeds 2026-09-09),
 Adaptive Brightness V2 **10** (zero headroom, raised the same day it hit the old ceiling

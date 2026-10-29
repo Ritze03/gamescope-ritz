@@ -117,6 +117,11 @@ uniform effects_t {
     // discipline as every other field here.
     float u_v2MaxDarken;   // 1.0..4.0, the darkening mirror of the toe/knee's slope cap S
     float u_v2Darken;      // 0.0..1.0 -> effects_curve.h's abv2_g_static_dark()
+
+    // ---- Color Boost (NEW 2026-10-29) ----
+    // Must stay LAST (mirrors EffectsPushData_t). 0.0..3.0, 0 = identity;
+    // the curve exponent is k = 1 + this. See grade() step 4.
+    float u_colorBoost;
 };
 
 // ROW 0 of the history texture is HISTORY_COUNT texels, one smoothed
@@ -276,6 +281,8 @@ const uint EFFECT_ADAPTIVE_V2         = 1u << 9;
 // alone must never turn the pre-pass on, so with every other effect off the
 // split shows raw|raw and costs nothing.
 const uint EFFECT_PREVIEW_SPLIT       = 1u << 10;
+// NEW 2026-10-29: Color Boost -- see grade() step 4.
+const uint EFFECT_COLOR_BOOST         = 1u << 11;
 // The history texture was (re)created this frame and holds nothing: the
 // measure pass writes `measured` straight in instead of blending with it.
 const uint EFFECT_RESET_HISTORY       = 1u << 31;
@@ -352,6 +359,35 @@ vec3 grade(vec3 c)
         float sat  = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
         float gain = 1.0 + u_vibrancy * sat;
         c = clamp(luma + (c - luma) * gain, 0.0, 1.0);
+    }
+
+    // 4. Color Boost (NEW 2026-10-29): the opposite direction to step 3.
+    //    Works on t = the pixel's chroma as a FRACTION of the largest
+    //    chroma its hue has at this luma (t = 1/gmax, where gmax is the
+    //    biggest g with luma + d*g still inside [0,1] on every channel):
+    //    0 = grey, 1 = already on the gamut edge. An inverted gamma curve
+    //      t' = 1 - (1 - t)^k,  k = 1 + strength
+    //    has slope k at t = 0 (muted colours gain most) and slope 0 at
+    //    t = 1 (colours at the edge gain nothing), and t' <= 1 always, so
+    //    the result can never leave [0,1]: nothing blows out, no clamp is
+    //    needed. out = luma + d * (t'/t) keeps hue and luma exactly (d is
+    //    only scaled; effects_luma is linear) and leaves grey exactly
+    //    grey. strength 0 -> k = 1 -> t' = t -> exact identity.
+    if ((u_flags & EFFECT_COLOR_BOOST) != 0u)
+    {
+        c = clamp(c, 0.0, 1.0);
+        float luma = effects_luma(c);
+        vec3  d    = c - luma;
+        // Per channel: how much of the way to the gamut edge d already is.
+        vec3  tc   = max(d, vec3(0.0)) / max(1.0 - luma, 1e-6)
+                   + max(-d, vec3(0.0)) / max(luma, 1e-6);
+        float t    = clamp(max(tc.r, max(tc.g, tc.b)), 0.0, 1.0);
+        if (t > 1e-5)
+        {
+            float k  = 1.0 + max(u_colorBoost, 0.0);
+            float tp = 1.0 - pow(1.0 - t, k);
+            c = clamp(luma + d * (tp / t), 0.0, 1.0);   // clamp: fp rounding only
+        }
     }
 
     return c;

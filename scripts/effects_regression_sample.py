@@ -54,7 +54,7 @@ Subcommands
                                          the "colors" scene (2026-09-08): pins one
                                          effect's per-band output against the closed-
                                          form formula; `effect` is off | saturation |
-                                         vibrancy
+                                         vibrancy | colorboost
     bloomflat <image>                    BLOOM (2026-09-08): the control -- with the
                                          effect off, haloinv's flat field must come out
                                          flat, which is what makes every profile below
@@ -79,6 +79,10 @@ Subcommands
                                         Dark Floor (2026-09-14) on the `blackout` scene:
                                         graded stays within 3 counts of raw on a coarse
                                         grid, and nothing under 64 comes out at 128+
+    colorboostshape <image>              Color Boost (2026-10-29) on the "colors" scene:
+                                         out_t/in_t (gamut fraction after / before)
+                                         strictly decreases across bands 1-4, band 4
+                                         unchanged, no channel clips, luma preserved
     colorshape <image-saturation> <image-vibrancy>
                                          the same "colors" capture under Saturation and
                                          under Vibrancy at the same nominal strength:
@@ -1067,6 +1071,33 @@ def expected_vibrancy(rgb, strength):
     return tuple(clamp255(l + (c - l) * gain) for c in rgb)
 
 
+def gamut_fraction(rgb):
+    """t = 1/gmax of grade()'s EFFECT_COLOR_BOOST block: the pixel's chroma as
+    a fraction of the largest chroma its hue has at this luma (0 grey, 1 on
+    the gamut edge). rgb is 0..255."""
+    l = rgb_luma(rgb)
+    t = 0.0
+    for c in rgb:
+        d = c - l
+        if d > 0:
+            t = max(t, d / max(255.0 - l, 1e-6))
+        elif d < 0:
+            t = max(t, -d / max(l, 1e-6))
+    return min(t, 1.0)
+
+
+def expected_color_boost(rgb, strength):
+    """effects_common.h's grade(), EFFECT_COLOR_BOOST block (NEW 2026-10-29):
+    t' = 1 - (1-t)^k, k = 1+strength; out = luma + (c-luma)*(t'/t)."""
+    t = gamut_fraction(rgb)
+    if t <= 1e-5:
+        return tuple(float(c) for c in rgb)
+    l = rgb_luma(rgb)
+    tp = 1.0 - (1.0 - t) ** (1.0 + strength)
+    g = tp / t
+    return tuple(clamp255(l + (c - l) * g) for c in rgb)
+
+
 def cmd_colorcheck(args):
     image, effect, strength_s = args
     strength = float(strength_s)
@@ -1079,10 +1110,12 @@ def cmd_colorcheck(args):
             " ".join(f"b{i}=({bands[i][0]:.0f},{bands[i][1]:.0f},{bands[i][2]:.0f})" for i in range(5))
         sys.exit(0 if emit(worst <= 3.0, name, detail) else 1)
 
-    if effect not in ("saturation", "vibrancy"):
+    fns = {"saturation": expected_saturation, "vibrancy": expected_vibrancy,
+           "colorboost": expected_color_boost}
+    if effect not in fns:
         print(f"FAIL\t{name}\tunknown effect '{effect}'", file=sys.stderr)
         sys.exit(2)
-    fn = expected_saturation if effect == "saturation" else expected_vibrancy
+    fn = fns[effect]
 
     checks = []
     worst = 0.0
@@ -1148,6 +1181,38 @@ def cmd_colorshape(args):
         " (spread " + f"{sat_spread:.2f}" + "); vibrancy ratios " + \
         " ".join(f"{r:.2f}" for r in vib_r) + " (spread " + f"{vib_spread:.2f}" + ")"
     sys.exit(0 if emit(not failed, "colors-shape", detail) else 1)
+
+
+def cmd_colorboostshape(args):
+    """Color Boost (2026-10-29), the shape check on the "colors" scene: the
+    ratio out_t/in_t (the gamut fraction after / before) must DECREASE across
+    bands 1-4 (muted boosted most, the already-fully-saturated band 4 not at
+    all) -- the opposite of Vibrancy's rising ratio -- and no channel of any
+    band may clip (0 or 255 reached only where the input already sat there:
+    band 4's own 255/0). Hue (channel order) and luma are preserved."""
+    (image,) = args
+    bands = color_regions(load(image))
+    ratios = []
+    for i in range(1, 5):
+        ti, to = gamut_fraction(COLOR_BANDS[i]), gamut_fraction(bands[i])
+        ratios.append(to / ti)
+    decreasing = all(ratios[i] > ratios[i + 1] + 0.01 for i in range(3))
+    clip = []
+    for i in range(1, 4):   # band 4 sits on the edge already
+        if max(bands[i]) >= 254.0 or min(bands[i]) <= 1.0:
+            clip.append(i)
+    luma_d = max(abs(rgb_luma(bands[i]) - rgb_luma(COLOR_BANDS[i])) for i in range(5))
+    checks = [
+        ("out_t/in_t strictly decreases across bands 1-4", decreasing),
+        ("band 1 is boosted (ratio > 1.3)", ratios[0] > 1.3),
+        ("band 4 (on the gamut edge) is unchanged (ratio ~ 1)", abs(ratios[3] - 1.0) <= 0.05),
+        ("no channel clips in bands 1-3" + (f" (clipped: {clip})" if clip else ""), not clip),
+        (f"luma preserved (worst delta {luma_d:.1f})", luma_d <= 2.5),
+    ]
+    failed = [c for c, ok in checks if not ok]
+    detail = ("FAILED: " + "; ".join(failed) + "; " if failed else "") + \
+        "out_t/in_t " + " ".join(f"{r:.2f}" for r in ratios)
+    sys.exit(0 if emit(not failed, "colors-colorboost-shape", detail) else 1)
 
 
 def cmd_previewsplit(args):
@@ -1706,7 +1771,8 @@ def main():
     cmd, args = sys.argv[1], sys.argv[2:]
     {"regions": cmd_regions, "check": cmd_check, "temporal": cmd_temporal, "ablog": cmd_ablog,
      "split": cmd_split, "splitcmp": cmd_splitcmp, "halo": cmd_halo, "slider": cmd_slider,
-     "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape, "noclip": cmd_noclip,
+     "colorcheck": cmd_colorcheck, "colorshape": cmd_colorshape,
+     "colorboostshape": cmd_colorboostshape, "noclip": cmd_noclip,
      "means": cmd_means, "agsettle": cmd_agsettle,
      "bloomflat": cmd_bloomflat, "bloomline": cmd_bloomline,
      "bloomsame": cmd_bloomsame, "bloomjitter": cmd_bloomjitter,

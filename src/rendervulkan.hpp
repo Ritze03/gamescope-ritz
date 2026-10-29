@@ -623,6 +623,11 @@ struct NativeEffectsState_t
 	bool  bVibrancy = false;
 	float flVibrancy = 0.0f;             // 0..2, 0 neutral
 
+	// NEW 2026-10-29 (ConfigSchema.h's ReshadeColorBoostSettings): lifts
+	// muted colours most, leaves colours at the gamut edge alone.
+	bool  bColorBoost = false;
+	float flColorBoost = 1.0f;           // 0..3, 0 neutral
+
 	bool  bPreSharpen = false;
 	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale
 
@@ -753,7 +758,7 @@ struct NativeEffectsState_t
 
 	bool AnyEnabled() const
 	{
-		return bShadowLift || bSaturation || bVibrancy || bPreSharpen || bBloom
+		return bShadowLift || bSaturation || bVibrancy || bColorBoost || bPreSharpen || bBloom
 			|| bAdaptiveBrightness || bAdaptiveGamma || bAdaptiveV2;
 	}
 };

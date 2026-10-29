@@ -5053,6 +5053,8 @@ struct EffectsPushData_t
 	// shader applies LAST, after every effect above; see
 	// effects_common.h's EFFECT_PREVIEW_SPLIT.
 	static constexpr uint32_t kPreviewSplit      = 1u << 10;
+	// NEW 2026-10-29: Color Boost (effects_common.h's EFFECT_COLOR_BOOST).
+	static constexpr uint32_t kColorBoost        = 1u << 11;
 	// The history texture was created this frame: the measure pass writes
 	// the measurement straight in rather than blending with undefined bits.
 	static constexpr uint32_t kResetHistory      = 1u << 31;
@@ -5104,6 +5106,8 @@ struct EffectsPushData_t
 	// side's own append (effects_common.h).
 	float    u_v2MaxDarken;
 	float    u_v2Darken;
+	// Color Boost (NEW 2026-10-29) -- must stay LAST, mirroring the GLSL side.
+	float    u_colorBoost;
 
 	// Pre-Sharpen slider (0..2, 0.5 default) -> RCAS con.x. RCAS scales its
 	// clip-limited lobe by con.x in 0..1 (FsrRcasCon() derives it as
@@ -5125,6 +5129,7 @@ struct EffectsPushData_t
 		if ( s.bSaturation )            u_flags |= kSaturation;
 		if ( s.bSaturationProtectSkin ) u_flags |= kSaturationSkin;
 		if ( s.bVibrancy )              u_flags |= kVibrancy;
+		if ( s.bColorBoost )            u_flags |= kColorBoost;
 		if ( s.bPreSharpen )            u_flags |= kPreSharpen;
 		if ( s.bBloom )                 u_flags |= kBloom;
 		if ( s.bAdaptiveBrightness )    u_flags |= kAdaptiveBrightness;
@@ -5287,6 +5292,7 @@ struct EffectsPushData_t
 		// floor), same masking discipline as every other field above.
 		u_v2MaxDarken = bAdaptiveV2 ? std::max( s.flV2MaxDarken, 1.0f ) : 1.0f;
 		u_v2Darken    = bAdaptiveV2 ? std::clamp( s.flV2Darken, 0.0f, 1.0f ) : 0.0f;
+		u_colorBoost  = s.bColorBoost ? std::clamp( s.flColorBoost, 0.0f, 3.0f ) : 0.0f;
 	}
 };
 

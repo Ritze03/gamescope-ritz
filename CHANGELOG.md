@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.6] – 2026-10-29
+
+### Added
+- **Color Boost**: a new Shaders effect that makes colours more vibrant, boosting dull
+  colours the most while strong ones are left alone, so nothing blows out.
+
 ## [0.14.5] – 2026-10-28
 
 ### Added

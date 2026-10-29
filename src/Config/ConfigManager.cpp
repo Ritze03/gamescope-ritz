@@ -464,6 +464,15 @@ namespace gamescope::config
                     vb.strength = JGetFloat( *pVibrancy, "strength", vb.strength );
                 }
 
+                // NEW 2026-10-29: Color Boost. Additive key, no schema bump;
+                // an old config resolves to the struct defaults (off).
+                if ( const nlohmann::json *pColorBoost = JGetObject( *pReshade, "color_boost" ) )
+                {
+                    auto &cb = s.reshade.color_boost;
+                    cb.enabled = JGetBool( *pColorBoost, "enabled", cb.enabled );
+                    cb.strength = JGetFloat( *pColorBoost, "strength", cb.strength );
+                }
+
                 if ( const nlohmann::json *pPreSharpen = JGetObject( *pReshade, "pre_sharpen" ) )
                 {
                     s.reshade.pre_sharpen.enabled = JGetBool( *pPreSharpen, "enabled", s.reshade.pre_sharpen.enabled );
@@ -866,6 +875,10 @@ namespace gamescope::config
             jVibrancy[ "enabled" ] = s.reshade.vibrancy.enabled;
             jVibrancy[ "strength" ] = s.reshade.vibrancy.strength;
 
+            nlohmann::json jColorBoost = nlohmann::json::object();
+            jColorBoost[ "enabled" ] = s.reshade.color_boost.enabled;
+            jColorBoost[ "strength" ] = s.reshade.color_boost.strength;
+
             nlohmann::json jPreSharpen = nlohmann::json::object();
             jPreSharpen[ "enabled" ] = s.reshade.pre_sharpen.enabled;
             jPreSharpen[ "strength" ] = s.reshade.pre_sharpen.strength.has_value()
@@ -928,6 +941,7 @@ namespace gamescope::config
             jReshade[ "preview_split" ] = s.reshade.preview_split;
             jReshade[ "saturation" ] = std::move( jSaturation );
             jReshade[ "vibrancy" ] = std::move( jVibrancy );
+            jReshade[ "color_boost" ] = std::move( jColorBoost );
             jReshade[ "pre_sharpen" ] = std::move( jPreSharpen );
             jReshade[ "bloom" ] = std::move( jBloom );
             jReshade[ "adaptive_brightness" ] = std::move( jAdaptive );

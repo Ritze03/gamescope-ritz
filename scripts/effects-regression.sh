@@ -250,6 +250,7 @@ write_config() {
 		    "reshade": {
 		        "saturation": { "enabled": false, "protect_skin_tones": false },
 		        "vibrancy": { "enabled": false },
+		        "color_boost": { "enabled": false },
 		        "pre_sharpen": { "enabled": false },
 		        "shadow_lift": { "enabled": false },
 		        "bloom": { "enabled": false },
@@ -610,6 +611,17 @@ set_saturation() {   # 0 off, or a strength 0.0..3.0
 	fi
 	sleep "$SETTLE_S"
 }
+CB_ID="image.shaders.color_boost"
+CB_STRENGTH_ID="image.shaders.color_boost.strength"
+set_colorboost() {   # 0 off, or a strength 0.05..3.0 (Color Boost, 2026-10-29)
+	if [[ "$1" == "0" ]]; then
+		gsctl overlay_e2_set "$CB_ID 0" >/dev/null 2>&1 || true
+	else
+		gsctl overlay_e2_set "$CB_STRENGTH_ID $1" >/dev/null 2>&1 || true
+		gsctl overlay_e2_set "$CB_ID 1" >/dev/null 2>&1 || true
+	fi
+	sleep "$SETTLE_S"
+}
 set_vibrancy() {   # 0 off, or a strength 0.0..2.0
 	if [[ "$1" == "0" ]]; then
 		gsctl overlay_e2_set "$VIB_ID 0" >/dev/null 2>&1 || true
@@ -647,6 +659,16 @@ done
 set_vibrancy 0
 
 run_sampler colorshape "$SHOT_SAT_SHAPE" "$SHOT_VIB_SHAPE"
+
+# Color Boost (2026-10-29): closed-form per band, then the shape check
+# (out_t/in_t decreasing across bands, nothing clips) at strength 1.0.
+for S in 0.5 1.0 3.0; do
+	set_colorboost "$S"
+	SHOT="$(take_screenshot "10-colors-colorboost-$S")"
+	run_sampler colorcheck "$SHOT" colorboost "$S"
+	[[ "$S" == "1.0" ]] && run_sampler colorboostshape "$SHOT"
+done
+set_colorboost 0
 
 # ---------------------------------------------------------------------------
 # ADAPTIVE GAMMA (2026-09-08). "Make something similar, but make it gamma
@@ -718,7 +740,7 @@ ag_defaults() {
 }
 set_ag_speed() { set_ag_param "$AG_UP_ID" "$1"; set_ag_param "$AG_DOWN_ID" "$2"; }
 
-set_saturation 0; set_vibrancy 0; set_ab 0
+set_saturation 0; set_vibrancy 0; set_colorboost 0; set_ab 0
 ag_defaults
 set_ag 1
 
@@ -1334,7 +1356,7 @@ CLIENT_EXTRA_ARGS=""
 toggle_motion   # this instance starts with --motion 3 running; pause it for the flat/still checks below
 sleep 1
 
-set_saturation 0; set_vibrancy 0; set_ab 0; set_ag 0
+set_saturation 0; set_vibrancy 0; set_colorboost 0; set_ab 0; set_ag 0
 v2_defaults
 set_v2 1
 sleep "$ADAPT_SETTLE_S"
@@ -1528,7 +1550,7 @@ set_preview_split() { gsctl overlay_e2_set "$PREVIEW_SPLIT_ID $1" >/dev/null 2>&
 SCENES="colors,dark"
 start_instance
 sleep "$ADAPT_SETTLE_S"
-set_saturation 0; set_vibrancy 0; set_ab 0; set_ag 0; set_v2 0; set_preview_split 0
+set_saturation 0; set_vibrancy 0; set_colorboost 0; set_ab 0; set_ag 0; set_v2 0; set_preview_split 0
 
 PS_SAT_OFF="$(take_screenshot 36-colors-preview-off)"
 set_saturation 2.5
