@@ -85,11 +85,16 @@ makes symlinks into the clone and never overwrites a user's configuration). It u
 copy `extensions/gamescope-ritz.json` over
 `~/.config/ritz/extensions/ritze__gamescope_ritz.json`, the user's own module file.
 
-To use this module, copy it there by hand:
+To use this module, copy it there by hand (the README's "Ritz launcher extension" section
+carries the same command). With ritz-get's default clone path it works from any directory:
 
 ```sh
-cp extensions/gamescope-ritz.json ~/.config/ritz/extensions/ritze__gamescope_ritz.json
+mkdir -p ~/.config/ritz/extensions
+cp ~/.local/share/ritz-get/src/gamescope-ritz/extensions/gamescope-ritz.json \
+   ~/.config/ritz/extensions/ritze__gamescope_ritz.json
 ```
+
+From a hand-made clone, use `extensions/gamescope-ritz.json` as the source instead.
 
 *Why that destination name:* Ritz names an author's module file `<author>__<name>.json`
 (lowercased, spaces/hyphens to underscores), so the user's real "Gamescope-Ritz" module by

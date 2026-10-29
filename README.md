@@ -132,16 +132,27 @@ gamescope-ritz -- vkcube             # or any game/binary, tried by hand
 #    same searchable settings, alone over the game, no shell behind it.
 ```
 
-To use the Ritz launcher extension, copy it by hand (it is never installed for you). From your
-clone (with ritz-get: `~/.local/share/ritz-get/src/gamescope-ritz`):
-`cp extensions/gamescope-ritz.json ~/.config/ritz/extensions/ritze__gamescope_ritz.json`
-
 Installing is idempotent: the build tree in `build/` is reused, so running it again only
 rebuilds what changed. The `/usr/local/bin` link is made once and needs your password
 only that first time; later runs need no root.
 
 If a build stops on a missing package, that is the dependency check doing its job —
 it prints the missing items. [Dependencies](#dependencies) lists the same thing up front.
+
+### Ritz launcher extension
+
+> **The [Ritz](superdoc/features/ritz-extension.md) extension is never installed for
+> you** — copy it by hand once. With ritz-get's default paths, this works from anywhere:
+
+```sh
+mkdir -p ~/.config/ritz/extensions
+cp ~/.local/share/ritz-get/src/gamescope-ritz/extensions/gamescope-ritz.json \
+   ~/.config/ritz/extensions/ritze__gamescope_ritz.json
+```
+
+Cloned by hand instead? Run the `cp` from your clone with `extensions/gamescope-ritz.json`
+as the source. Re-run it after an update to pick up a newer extension; it overwrites
+your copy of the module file.
 
 ### Updating
 
