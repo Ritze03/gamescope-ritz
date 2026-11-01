@@ -845,6 +845,7 @@ void vulkan_wait( uint64_t ulSeqNo, bool bReset );
 // modified. See the definition for why compileAllPipelines()' background pass
 // never covers these keys.
 void vulkan_warm_overlay_composite_pipelines( const struct FrameInfo_t *pFrameInfo, uint32_t nExtraLayers );
+bool vulkan_select_free_output_image();
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer );
 gamescope::Rc<CVulkanTexture> vulkan_acquire_screenshot_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace = k_EStreamColorspace_Unknown);
 gamescope::Rc<CVulkanTexture> vulkan_acquire_capture_texture(uint32_t width, uint32_t height, bool exportable, uint32_t drmFormat, EStreamColorspace colorspace = k_EStreamColorspace_Unknown);

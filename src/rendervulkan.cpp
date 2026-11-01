@@ -6551,6 +6551,34 @@ bool vulkan_has_drm_modifiers_for_features(VkFormat format, VkFormatFeatureFlags
 	return false;
 }
 
+// Points g_output.nOutImage at an output image nobody else holds, so the next
+// vulkan_composite() never draws into a picture still on screen. Returns false
+// (nOutImage untouched) when all three are held.
+//
+// Only for a backend that hands its output images to a host compositor (nested
+// Wayland): the host keeps an image from the commit that attaches it until its
+// wl_buffer.release, which IsInUse() sees as the backend Fb's acquisition
+// count. The plain (n + 1) % 3 ring assumed the host lets go of an image within
+// two frames. GNOME/Mutter showing a fullscreen window held all three at once,
+// including the ring's next pick (measured on a 9070 XT, 165 Hz), so the next
+// composite overwrote a buffer the host was still reading. Picking a free image keeps
+// vulkan_get_last_output_image()'s "+2" meaning "the image just drawn", because
+// vulkan_composite() advances from the index chosen here.
+bool vulkan_select_free_output_image()
+{
+	const uint32_t uCount = uint32_t( g_output.outputImages.size() );
+	for ( uint32_t i = 0; i < uCount; i++ )
+	{
+		const uint32_t n = ( g_output.nOutImage + i ) % uCount;
+		if ( g_output.outputImages[ n ] && !g_output.outputImages[ n ]->IsInUse() )
+		{
+			g_output.nOutImage = n;
+			return true;
+		}
+	}
+	return false;
+}
+
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer )
 {
 	// Get previous image ( +2 )

@@ -182,6 +182,33 @@ if the host offers it.
 
 While [frame generation](frame-generation.md) is enabled, full composite is forced (`bNeedsFullComposite |= fghost::Enabled()`).
 
+## Output images the host still holds
+
+A full composite draws into one of three output images (`g_output.outputImages`) and
+attaches it to the toplevel; the host keeps that image from the attach until it sends
+`wl_buffer.release`, which the backend Fb's acquisition count (and so
+`CVulkanTexture::IsInUse()`) reflects. Before each composite,
+`CWaylandConnector::Present()` calls `vulkan_select_free_output_image()`
+(`src/rendervulkan.cpp`), which points `g_output.nOutImage` at an image the host has
+released. If all three are still held, the frame is skipped (`force_repaint()`, return
+`-EBUSY`) and the next vblank tries again. `Why:` upstream simply advances the ring
+(`(n + 1) % 3`), assuming the host releases an image within two frames. GNOME/Mutter
+scanning a fullscreen gamescope window out directly does not. Measured 2026-10-26 on
+the user's 9070 XT, 165 Hz, with the user's CS2 flags:
+
+- 6.9% of composites targeted an image Mutter still held.
+- 2.2% found all three held.
+
+Drawing into a buffer the host is still reading can show on screen as corruption that
+a screen recording does not catch, since the recording copies the finished frame. This
+was found while chasing coloured specks over moving content in CS2; whether this change
+removes those specks is **not yet confirmed** (the user's first retest ran the old
+binary). Upstream rarely composites in nested mode, so the race is latent there. This
+fork composites every frame whenever its HUD, crosshair or overlay is up, since those
+layers have no backend Fb (see the check above `if ( !bNeedsFullComposite )`). A
+headless host (private headless mutter, sway) releases promptly and never shows the
+race: 0 of 1662 composites were held there. Measure on a real output.
+
 
 ## Related links
 

@@ -1373,6 +1373,16 @@ namespace gamescope
             }
             else
             {
+                // Never draw into an output image the host still holds: it may be the
+                // one on screen (see vulkan_select_free_output_image()). With all three
+                // held the host already has newer frames queued than it has shown, so
+                // this one is dropped and the next vblank tries again.
+                if ( !vulkan_select_free_output_image() )
+                {
+                    force_repaint();
+                    return -EBUSY;
+                }
+
                 std::optional oCompositeResult = vulkan_composite( (FrameInfo_t *)pFrameInfo, nullptr, false );
 
                 if ( !oCompositeResult )
