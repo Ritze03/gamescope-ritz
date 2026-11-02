@@ -997,6 +997,21 @@ docs; and `Report::generating` is now just "Generate state and a generated frame
 within 1 s", with no 1.2 / 1.1 multiplier gate (see [fps-display](fps-display.md)). The host
 changes are help-text and comment wording only.
 
+### Pause while cursor visible (`framegen.pause_when_cursor_visible`)
+
+Row **Pause while cursor visible**, per profile, default **Off**, right after Pause at
+refresh rate. While on and the game's cursor is visible, `FrameGen_PrePaint` feeds the pacer
+`in.frameGen = false` (real-rate planning, the same input the library gets when Frame
+generation is off), so real frames are shown and nothing is interpolated; it resumes by
+itself when the cursor hides. `framegen.enabled` is untouched. "Visible" is the
+Crosshair's signal, `wlserver.bCursorHasImage && !bMouseConstraintLocked`, read on the
+steamcompmgr thread where `bCursorHasImage` is written. The flag crosses to the host in
+bit 31 of the packed main config word (`FrameGenHost.cpp` `Pack`/`Unpack`); the library
+never sees it. Motion blur and the Lag spike buffer are unaffected (they keep their own
+switches). `Why:` menus and settings screens show the cursor, and interpolating UI
+smears it; the user asked for *"a setting to framegen, that allows the user to turn it
+off, while the mouse cursor is visible. (To avoid artifacting in settings menus)"*.
+
 ### Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
@@ -1105,6 +1120,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.target_fps` | 0, 30..1000 | target mode: 0 = the display's refresh; below 30 clamps to 30, above 1000 to 1000 |
 | `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
+| `framegen.pause_when_cursor_visible` | `false` (default) / `true` | the row "Pause while cursor visible": real frames pass through while the game's cursor shows (see [its section](#pause-while-cursor-visible-framegenpause_when_cursor_visible)); additive, absent loads `false`, schema stays 5 |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
 | `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2). On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` / `very_low` / `low` / `default` (default since 2026-10-28) / `high` | trust ramp (40,68) / (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30. `very_low` (2026-10-28, packed as safety value 4 with its third bit in bit 30 of the main config word) `Why:` ml-fg measured the ramp with Learned e2v5 + zero test at x2: (12,40) gave 0.16% ghost pixels and 1.3% whole-frame fallbacks; (40,68) gave +0.28 dB on game clips and +0.30 dB on video clips, 0.28% ghost pixels and ~0 fallbacks. A later ramp is smoother and holds the real frame far less often, but ghosts more where the motion is wrong |

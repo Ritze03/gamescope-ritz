@@ -37,7 +37,7 @@ namespace fghost
 		// The user's config, packed into one word so a reader never sees a torn
 		// mix of two SetConfig() calls. bits 0-3 multiplier, 4-5 quality, 6-7
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
-		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 safety's third bit (VeryLow = 4 needs it; bits 6-7 hold the low two), 31 unused. The
+		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 safety's third bit (VeryLow = 4 needs it; bits 6-7 hold the low two), 31 pause while cursor visible. The
 		// crosshair box size is its own word, g_uUiBox, and Learned motion's runtime settings (net,
 		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full).
 		constexpr int kMinTargetFps = 30;
@@ -62,7 +62,8 @@ namespace fghost
 				| ( uint32_t( bEnabled ? 1 : 0 ) << 26 )
 				| ( uint32_t( c.gpuLimit ? 1 : 0 ) << 27 )
 				| ( uint32_t( c.motion ) << 28 )
-				| ( ( ( uint32_t( c.safety ) >> 2 ) & 1u ) << 30 );
+				| ( ( ( uint32_t( c.safety ) >> 2 ) & 1u ) << 30 )
+				| ( uint32_t( c.pauseWhenCursorVisible ? 1 : 0 ) << 31 );
 		}
 
 		// Learned motion's runtime settings, their own word: bits 0-3 net (framegen::LearnedNet
@@ -124,6 +125,7 @@ namespace fghost
 			c.pauseAtRefresh = ( ( u >> 23 ) & 1u ) != 0;
 			c.ui = UiProt( ( u >> 24 ) & 0x3u );
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
+			c.pauseWhenCursorVisible = ( ( u >> 31 ) & 1u ) != 0;
 			c.motion = Motion( ( u >> 28 ) & 0x3u );
 			if ( c.motion > Motion::Learned )
 				c.motion = Motion::V1;

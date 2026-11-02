@@ -505,6 +505,9 @@ namespace gamescope::config
         // may exceed the refresh); extra frames are presented between vblanks
         // where the backend can show them. ADDITIVE: an older config loads true.
         bool pause_at_refresh = true;
+        // "Pause while cursor visible": real frames pass through while the game's
+        // cursor is showing (menus). ADDITIVE: absent loads false, schema stays 5.
+        bool pause_when_cursor_visible = false;
         // "Limit to GPU speed" (2026-10-04): the cost guard. true: when frame
         // generation costs too much of the GPU it lowers the output rate or passes
         // real frames through. false (default, the user's call). ADDITIVE: absent

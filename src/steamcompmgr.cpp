@@ -8328,7 +8328,12 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	// buffer (the delay, sized by the library from the game's own spikes). With
 	// frame generation off the pacer plans real-rate: the buffer then fills gaps
 	// only. extraDelayNs (a fixed manual delay) stays 0.
-	in.frameGen = cfg.enabled;
+	// "Pause while cursor visible": the same signal as the Crosshair's hide (cursor
+	// image set and the pointer not locked), read here on the steamcompmgr thread
+	// where bCursorHasImage is written. Real-rate planning, nothing else changes.
+	const bool bCursorPause = cfg.pauseWhenCursorVisible && wlserver.bCursorHasImage &&
+		!wlserver.bMouseConstraintLocked.load( std::memory_order_relaxed );
+	in.frameGen = cfg.enabled && !bCursorPause;
 	in.extraDelayNs = 0;
 	in.lagBuffer.enabled = lagCfg.enabled;
 	in.lagBuffer.lookbackSec = double( lagCfg.lookbackMin ) * 60.0;

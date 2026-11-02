@@ -180,6 +180,7 @@ namespace gamescope
 			c.priority = IndexOf( f.priority, kPriorityKeys, 2, 1 ) == 1
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
 			c.pauseAtRefresh = f.pause_at_refresh;
+			c.pauseWhenCursorVisible = f.pause_when_cursor_visible;
 			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
@@ -428,6 +429,17 @@ namespace gamescope
 			.Default( true )
 			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
 			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
+
+		a.Switch( "framegen.pause_when_cursor_visible", "Pause while cursor visible",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_when_cursor_visible; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_when_cursor_visible = b; PersistAndPush(); } ) )
+			.Help( "Shows the game's real frames while its mouse cursor is visible, so menus and "
+			       "settings screens do not get interpolation artifacts. Generation resumes by "
+			       "itself when the cursor hides again." )
+			.Default( false )
+			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
+			.DisabledUnless( On, "frame generation is off" );
 
 		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
 			ui::AnyBind::Of<bool>(

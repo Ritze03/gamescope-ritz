@@ -220,6 +220,10 @@ namespace fghost
 		// the extra frames are presented between vblanks where the backend can show
 		// them (Pacing.h's "BEYOND THE REFRESH RATE").
 		bool pauseAtRefresh = true;
+		// "Pause while cursor visible": while the game's cursor is showing (menus),
+		// the host passes real frames through instead of generating. The host reads
+		// the cursor on the steamcompmgr thread; the library never sees this.
+		bool pauseWhenCursorVisible = false;
 		// "Limit to GPU speed": the cost guard (lower the output rate, or pass
 		// real frames through, when generation takes too much of the GPU).
 		bool gpuLimit = false;

@@ -1779,6 +1779,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.target_fps" ) );
     REQUIRE( IsSettingsKey( "framegen.priority" ) );
     REQUIRE( IsSettingsKey( "framegen.pause_at_refresh" ) );
+    REQUIRE( IsSettingsKey( "framegen.pause_when_cursor_visible" ) );
     REQUIRE( IsSettingsKey( "framegen.quality" ) );
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );

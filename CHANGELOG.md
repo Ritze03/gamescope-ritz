@@ -11,6 +11,11 @@ The newest version below is the one this build reports.
 
 ## [0.14.7] – 2026-11-02
 
+### Added
+- **Frame generation: Pause while cursor visible**: a new switch (off by default)
+  shows the game's real frames while its mouse cursor is visible, so menus get no
+  interpolation artifacts.
+
 ### Fixed
 - **Desktop window drawing**: in a window on GNOME, gamescope no longer draws a new
   frame into a picture the desktop is still showing while the HUD or crosshair is up.
