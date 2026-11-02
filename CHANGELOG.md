@@ -19,6 +19,8 @@ The newest version below is the one this build reports.
 ### Fixed
 - **Desktop window drawing**: in a window on GNOME, gamescope no longer draws a new
   frame into a picture the desktop is still showing while the HUD or crosshair is up.
+- **Force maximize nested window**: a game that moves its window after being maximized
+  (e.g. Minecraft) no longer leaves part of the screen out of the mouse's reach.
 
 ## [0.14.6] – 2026-10-29
 

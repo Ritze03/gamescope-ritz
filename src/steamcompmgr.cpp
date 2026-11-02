@@ -4687,9 +4687,16 @@ void xwayland_ctx_t::DetermineAndApplyFocus( const std::vector< steamcompmgr_win
 	// sees all of it at the origin. Place it there once, a client that moves it
 	// afterwards keeps its position. Oversized windows stay put, clients centre
 	// those to keep the middle reachable.
+	//
+	// Force maximize nested window re-pins on every pass instead of once: the
+	// user asked for the window to fill the canvas, so a client that moves its
+	// root-sized window off the origin after we resized it (Minecraft/GLFW
+	// restoring its own position) would otherwise leave part of the canvas
+	// unreachable by the pointer. Size unchanged => `placed` stays set, so
+	// the once-only rule alone never corrected it.
 	const Rect rect = w->GetGeometry();
 
-	if ( !w->placed && rect.nWidth == ctx->root_width && rect.nHeight == ctx->root_height )
+	if ( ( !w->placed || ctx->force_windows_fullscreen ) && rect.nWidth == ctx->root_width && rect.nHeight == ctx->root_height )
 	{
 		if ( rect.nX != 0 || rect.nY != 0 )
 			XMoveWindow(ctx->dpy, w->xwayland().id, 0, 0);

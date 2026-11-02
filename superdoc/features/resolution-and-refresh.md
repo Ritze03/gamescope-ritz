@@ -186,6 +186,14 @@ to `input.general`/`PanelDisplay.cpp` to `PanelInput.cpp`, see
 a per-game config swap while running picks it up immediately, not only at the next
 launch.
 
+**Re-pinned to the origin (2026-11-02).** `determine_and_apply_focus()`'s placement
+(`!w->placed` once-only move of a root-sized focus window to 0,0, upstream `8e72b0a`)
+now also runs every pass while this flag is set. `Why:` X confines the pointer to the
+root, so a root-sized window sitting off the origin has an unreachable strip; a client
+(Minecraft/GLFW) that moves its window after we resized it keeps the same size, so
+`placed` stayed true and nothing corrected it (user: "the mouse cant reach all of the
+space"). Cause inferred from code, not reproduced live.
+
 ### The pointer follows the change
 
 The absolute-pointer mapping (force-grab off) is rebuilt from the painted base layer every
