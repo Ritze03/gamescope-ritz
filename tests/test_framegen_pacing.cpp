@@ -8,6 +8,9 @@
 #include <cstdint>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
+
+#include "FrameGen/AtRefreshExtra.h"
 #include "pacing.h"
 
 namespace fgpacing = framegen::pacing;
@@ -145,4 +148,43 @@ TEST_CASE( "vblank measured lead: max draw + 0.75 ms, floored, clamped to a refr
 	REQUIRE( CVBlankTimer::MeasuredLead( 750'000ull, k240 ) == 1'500'000ull );
 	// ...but the floor itself never exceeds a refresh.
 	REQUIRE( CVBlankTimer::MeasuredLead( 50'000ull, 1'000'000ull ) == 1'000'000ull );
+}
+
+TEST_CASE( "at the refresh the extra timer drives the output where it can exceed it", "[framegen_pacing]" )
+{
+	const double flTick = 1000.0 / 280.0;
+
+	REQUIRE( fgpacing::OutputIntervalMs( fgpacing::Mode::Target, 2, 0, 1000.0 / 60.0, 280.0, false ) == Catch::Approx( flTick ) );
+
+	REQUIRE( fgatrefresh::UseExtraTimer( true, false, flTick, flTick ) );
+	REQUIRE( fgatrefresh::UseExtraTimer( true, false, flTick * 1.019, flTick ) );
+	// Not at the refresh: left to the vblank cadence / the library's own band.
+	REQUIRE_FALSE( fgatrefresh::UseExtraTimer( true, false, flTick * 1.05, flTick ) );
+	REQUIRE_FALSE( fgatrefresh::UseExtraTimer( true, false, flTick * 0.97, flTick ) );
+	REQUIRE_FALSE( fgatrefresh::UseExtraTimer( true, false, 0.0, flTick ) );
+	// Backend cannot exceed the refresh, or Pause at refresh rate is on: unchanged.
+	REQUIRE_FALSE( fgatrefresh::UseExtraTimer( false, false, flTick, flTick ) );
+	REQUIRE_FALSE( fgatrefresh::UseExtraTimer( true, true, flTick, flTick ) );
+
+	// Timer spacing: a little faster than the tick at the refresh, untouched elsewhere.
+	REQUIRE( fgatrefresh::TimerIntervalMs( flTick, flTick ) == Catch::Approx( flTick * 0.9 ) );
+	REQUIRE( fgatrefresh::TimerIntervalMs( flTick * 0.5, flTick ) == Catch::Approx( flTick * 0.5 ) );
+
+	// Late paints: 6.3 ms every 10th paint, 2.6 ms otherwise (the user's journal). A timer
+	// at exactly the tick loses time on each late one; at 0.9 tick the mean leaves slack
+	// and it delivers more than one commit per tick on average.
+	auto commits = [&]( double flIntervalMs ) {
+		fgpacing::Ns last = 0, now = 0;
+		int n = 0;
+		for ( int i = 0; now < 1000ull * 1000000ull; i++ )
+		{
+			const fgpacing::Ns target = fgpacing::NextExtraTargetNs( last, now, flIntervalMs );
+			last = target;
+			now = target + fgpacing::Ns( ( i % 10 == 9 ? 6.3 : 2.6 ) * 1e6 );
+			n++;
+		}
+		return n;
+	};
+	REQUIRE( commits( fgatrefresh::TimerIntervalMs( flTick, flTick ) ) > 280 );
+	REQUIRE( commits( flTick ) < 280 );
 }

@@ -1164,6 +1164,26 @@ vblank timer:
   disarms; the vblank path then paints exactly as before. With the switch On, or FG off, no timer
   is ever armed.
 
+**At the refresh itself (2026-11-03).** `ExtraTimer()` stops at `o < 0.98 tick`, so Target
+"display refresh" (`o == tick`) and a fixed multiplier landing on the refresh were driven by the
+vblank timer, where a paint that overruns its vblank loses that output for good (the cadence in
+`PaintGenerated()` is per vblank slot). A user's journal (nested Wayland, 280 Hz, tearing hint on,
+not VRR, Forza at 60 fps, Smoothness): *"game 59.8 fps, presented 219.8 fps (3.67x), ... draw mean
+2.59 / max 6.29 ms ... missed 17/60"*, always 211-238 presented, i.e. `280 x (1 - missed/60)`. The
+misses are the game's GPU burst delaying our queued composite (no mid-draw preemption): max draws
+of 6-10 ms against a 2.6 ms mean. A target of 320 reached the full 280 because it is extra-timer
+driven: a late paint is presented at once and the next follows, and the host discards the surplus.
+Fix, host side only (`src/FrameGen/AtRefreshExtra.h`, used by `FrameGen_ExtraPaced()` /
+`FrameGen_ArmExtraTimer()`): when the last paint could exceed the refresh (`bCanExceed`), the cap is
+off and `o` is within 2% of a tick, the extra timer drives it too, ticking every 0.9 tick
+(`kOversupply`, ~311 Hz at 280). `Why` the oversupply and not just `o == tick` on the extra timer:
+the host shows only the newest buffer per vblank, so a timer at exactly the refresh still loses an
+output wherever a late paint and its successor land in one host vblank and has no slack to catch
+up; the surplus is what the 320 workaround amounted to (0.875 tick). The library's plan (`o`, delay,
+content time) is untouched; only the timer's spacing differs. Unchanged: Pause at refresh rate on
+(Multiplier mode), backends that cannot exceed the refresh (SDL, non-tearing DRM), VRR handling,
+`o` further from a tick. Not verified live on the user's setup.
+
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
 connector's name, `"Wayland"`):
@@ -1391,7 +1411,7 @@ ticks only while generating under VRR/tearing (`PaintTick`), the D12 resets and 
 estimator. Pause at refresh rate: the uncapped output interval, the extra timer being
 requested (Off, fixed 4x at 200 fps on 144 Hz = 800/s; target 500), Off on a backend that cannot
 exceed the refresh being capped like On, On unchanged, the cost guard still bounding Off, and
-`PaintTick` with the extra timer. `tests/test_config.cpp` covers the `framegen` keys (including
+`PaintTick` with the extra timer. At the refresh: `AtRefreshExtra.h` (`tests/test_framegen_pacing.cpp`) pins when the extra timer takes over at `o == tick` and the 0.9-tick spacing. `tests/test_config.cpp` covers the `framegen` keys (including
 `ui_protection`, absent -> `crosshair`, and `pause_at_refresh`, defaulting to true on a legacy config, and `safety: off`) and the
 legacy-multiplier migration. The renderer needs a GPU and is verified by eye on a real game (status line +
 MangoHud output timing).

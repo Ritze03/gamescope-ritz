@@ -107,6 +107,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
+#include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/TearHint.h"
 #include "../subprojects/FrameGen/gpu/pacing.h"
@@ -7989,6 +7990,19 @@ namespace
 		return fghost::Active() && s_FrameGen.bActive && s_FrameGen.pacer.Planning();
 	}
 
+	// The display tick in ms, as the vblank timer paces it (same refresh the pacer is given).
+	double FrameGen_TickMs()
+	{
+		const double flHz = double( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh ) / 1000.0;
+		return 1000.0 / std::max( flHz, 1.0 );
+	}
+
+	bool FrameGen_AtRefreshExtra()
+	{
+		// The library's ExtraTimer() band stops short of o == tick; see FrameGen/AtRefreshExtra.h.
+		return fgatrefresh::UseExtraTimer( s_FrameGen.bCanExceed, false, s_FrameGen.pacer.OutputMs(), FrameGen_TickMs() );
+	}
+
 	// Is the output paced on g_FrameGenExtraTimer instead of the vblank timer?
 	// (Pause at refresh rate off, the output interval shorter than a vblank, the
 	// backend able to show it.) The config is read fresh so that switching the
@@ -7996,7 +8010,9 @@ namespace
 	// this mode, only the extra timer would trigger.
 	bool FrameGen_ExtraPaced()
 	{
-		return FrameGen_TimerPaced() && s_FrameGen.pacer.ExtraTimer() && !fghost::GetConfig().pauseAtRefresh;
+		if ( !FrameGen_TimerPaced() || fghost::GetConfig().pauseAtRefresh )
+			return false;
+		return s_FrameGen.pacer.ExtraTimer() || FrameGen_AtRefreshExtra();
 	}
 
 	// The extra timer fired since the last call: its target time, else 0.
@@ -8054,7 +8070,8 @@ namespace
 		}
 		if ( F.bExtraArmed || !( bWantsPaint || F.bExtraWantNext ) )
 			return;
-		const uint64_t ulTarget = fgpacing::NextExtraTargetNs( F.ulLastV, get_time_in_nanos(), F.pacer.OutputMs() );
+		const double flOutMs = fgatrefresh::TimerIntervalMs( F.pacer.OutputMs(), FrameGen_TickMs() );
+		const uint64_t ulTarget = fgpacing::NextExtraTargetNs( F.ulLastV, get_time_in_nanos(), flOutMs );
 		F.ulArmedTarget = ulTarget;
 		F.bExtraArmed = true;
 		g_FrameGenExtraTimer.ArmTimer( ulTarget );
