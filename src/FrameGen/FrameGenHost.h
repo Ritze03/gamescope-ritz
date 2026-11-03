@@ -224,6 +224,10 @@ namespace fghost
 		// the host passes real frames through instead of generating. The host reads
 		// the cursor on the steamcompmgr thread; the library never sees this.
 		bool pauseWhenCursorVisible = false;
+		// "Hold game while generating": the compositor holds the game's next frame
+		// (the gamescope_swapchain frame_gate) until the outputs of the current pair
+		// are out. Host-only (steamcompmgr.cpp's FrameGen_UpdateGate); the library never sees it.
+		bool holdGame = false;
 		// "Limit to GPU speed": the cost guard (lower the output rate, or pass
 		// real frames through, when generation takes too much of the GPU).
 		bool gpuLimit = false;

@@ -1012,6 +1012,54 @@ switches). `Why:` menus and settings screens show the cursor, and interpolating 
 smears it; the user asked for *"a setting to framegen, that allows the user to turn it
 off, while the mouse cursor is visible. (To avoid artifacting in settings menus)"*.
 
+### Hold game while generating (`framegen.hold_game`, 2026-11-03)
+
+Row **Hold game while generating**, per profile, default **Off**, after Pause while cursor
+visible. The game waits to start its next frame until the generated frames for the current
+pair are out, so generation gets GPU time without a fixed fps cap.
+
+`Why:` frame generation runs on gamescope's own GPU queue. When the game saturates the GPU
+(Minecraft + shader pack uncapped at ~200 fps, target 280 on a 280 Hz VRR screen), gamescope's
+paints took 3-5x longer (draw mean 3.5 ms against 0.7 ms with an idle GPU) and output fell to
+~200; realtime queue priority barely helped. A fixed fps cap would fix it but starves
+generation whenever the game dips under the cap, so the user asked for what an in-process
+frame-generation Vulkan layer does: the game is blocked from starting its next frame while the
+in-between frames are made, and the GPU is shared implicitly.
+
+Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never held):
+
+- **Protocol**: `gamescope_swapchain` (and its factory) is version 2, adding event
+  `frame_gate(released_count, enabled)` (appended after `retired`, so v1 opcodes are
+  unchanged). The compositor counts every commit per surface (`gate_commits`); `released_count`
+  is how many the client may move past. The compositor sends only to resources of version >= 2.
+- **Layer** (`layer/VkLayer_FROG_gamescope_wsi.cpp`, `gamescopeFrameGateWait`): after the driver
+  `vkQueuePresentKHR` it counts the present and, only if the last event said `enabled = 1` and
+  `released_count` is behind its present count, dispatches the wayland queue with `ppoll` until
+  released, un-armed (`enabled = 0`), retired, or a hard timeout (3 x the swapchain's refresh
+  cycle, clamped to 8..50 ms). A timeout un-arms gating until the compositor re-enables it, so a
+  lost event costs one hitch, never a deadlock. The layer binds the factory at
+  `min(advertised, 2)`: an old compositor never sends the event (the layer never waits), an old
+  layer never receives it. Counting presents (not an explicit serial request) is self-healing:
+  the layer follows the compositor if it counts more (a surface outliving an earlier swapchain),
+  and a timeout resyncs to the compositor's count.
+- **Compositor** (`FrameGen_PrePaint`, `wlserver_frame_gate_*` in `wlserver.cpp`): the gate
+  targets one surface, the focused window's, and is armed only while `hold_game` and Frame
+  generation are on, the cursor-pause is not in effect, and the pacer made a *generated* output
+  (`d.prevId != 0 && d.t < 1`) within the last 250 ms. So pass-through (game at the output rate),
+  Pause at refresh stopping generation, an unfocused window and FG off all disarm it (the
+  compositor then sends `enabled = 0` once and releases every commit at arrival). While armed,
+  a commit is held (not released) when it arrives.
+- **Release signal**: a paint whose pacer decision has `repaintNext == false`, i.e. the pacer's own
+  statement that no further output is due for the current pair, releases the held commit. Chosen
+  because it needs no extra fence (the output's GPU work is already queued on gamescope's queue,
+  which is what the game then no longer competes with), it is already the pacer's definition of
+  "pair done", and with nothing to generate it never holds. Cost: about one game frame of added
+  delay; with Priority *Smoothness* the pair's outputs are spread over a game interval, so the
+  hold is longer than with *Low latency*.
+
+The flag is host-only: bit 7 of `FrameGenHost.cpp`'s Learned word (the main word is full); the
+library never sees it.
+
 ### Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
@@ -1121,6 +1169,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.pause_when_cursor_visible` | `false` (default) / `true` | the row "Pause while cursor visible": real frames pass through while the game's cursor shows (see [its section](#pause-while-cursor-visible-framegenpause_when_cursor_visible)); additive, absent loads `false`, schema stays 5 |
+| `framegen.hold_game` | `false` (default) / `true` | the row "Hold game while generating": the game's next frame waits for the current pair's generated frames (see [its section](#hold-game-while-generating-framegenhold_game-2026-11-03)); additive, absent loads `false` |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
 | `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2). On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` / `very_low` / `low` / `default` (default since 2026-10-28) / `high` | trust ramp (40,68) / (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30. `very_low` (2026-10-28, packed as safety value 4 with its third bit in bit 30 of the main config word) `Why:` ml-fg measured the ramp with Learned e2v5 + zero test at x2: (12,40) gave 0.16% ghost pixels and 1.3% whole-frame fallbacks; (40,68) gave +0.28 dB on game clips and +0.30 dB on video clips, 0.28% ghost pixels and ~0 fallbacks. A later ramp is smoother and holds the real frame far less often, but ghosts more where the motion is wrong |

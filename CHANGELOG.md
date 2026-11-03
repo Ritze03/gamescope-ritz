@@ -9,6 +9,17 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.8] – 2026-11-03
+
+### Added
+- **Frame generation: Hold game while generating**: a new switch (off by default) makes
+  the game wait to start its next frame until the generated frames are out, so frame
+  generation gets GPU time on a saturated GPU without a fixed fps cap.
+
+### Fixed
+- **Frame limiter**: it now also holds Vulkan games that present with vsync off
+  (e.g. CS2, Forza, Minecraft), which used to run past the limit.
+
 ## [0.14.7] – 2026-11-02
 
 ### Added

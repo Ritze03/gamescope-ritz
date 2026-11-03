@@ -29,7 +29,7 @@
     it.
   </description>
 
-  <interface name="gamescope_swapchain_factory_v2" version="1">
+  <interface name="gamescope_swapchain_factory_v2" version="2">
     <request name="destroy" type="destructor"></request>
 
     <request name="create_swapchain">
@@ -43,7 +43,7 @@
     </request>
   </interface>
 
-  <interface name="gamescope_swapchain" version="1">
+  <interface name="gamescope_swapchain" version="2">
     <request name="destroy" type="destructor"></request>
 
     <request name="override_window_content">
@@ -189,6 +189,28 @@
 
     <event name="retired">
       <description summary="Swapchain was remotely retired"></description>
+    </event>
+
+    <event name="frame_gate" since="2">
+      <description summary="the compositor lets the client start its next frame">
+        Frame gate (version 2). Lets the compositor hold the client between
+        presents so its own GPU work (frame generation) is not competing with
+        the client's next frame.
+
+        The client counts every present it commits on this swapchain. After a
+        present it may only wait if the last frame_gate it received had
+        enabled = 1 and released_count is lower than its own present count.
+        It resumes when a frame_gate arrives with released_count >= its
+        present count, when enabled becomes 0, when the swapchain is retired,
+        or after a client-side timeout (a few refresh cycles): the compositor
+        can never stall a client for longer than that.
+
+        released_count counts commits of the surface (the compositor counts the
+        same commits). A client that never receives this event, or whose
+        compositor predates it, never waits.
+      </description>
+      <arg name="released_count" type="uint" summary="number of commits released so far (wraps)"/>
+      <arg name="enabled" type="uint" summary="1: the compositor is gating this swapchain, 0: it is not and the client must not wait"/>
     </event>
   </interface>
 </protocol>

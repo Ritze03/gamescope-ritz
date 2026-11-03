@@ -7903,8 +7903,30 @@ namespace
 		// A real frame arrived since the last paint: the hasRepaint that goes with it
 		// is not a genuine (UI) repaint request.
 		bool bArrivalRepaint = false;
+
+		// -- "Hold game while generating" (the frame gate, see FrameGen_UpdateGate()) --
+		// The surface the gate currently holds back (null = gating off), and when
+		// the pacer last made a generated output (the "is it really generating"
+		// signal: a pass-through game, or Pause at refresh stopping it, lets it lapse).
+		struct wlr_surface *pGateSurface = nullptr;
+		uint64_t ulLastGeneratedNs = 0;
 	};
 	FrameGenPacing_t s_FrameGen;
+
+	// Gating needs a generated output within this long to stay armed.
+	constexpr uint64_t kFrameGateRecentNs = 250ull * 1000ull * 1000ull;
+
+	// Point the gate at `pSurface` (null = nobody is held). Changes only; takes
+	// the wlserver lock itself (the paint path does not hold it).
+	void FrameGen_SetGateTarget( struct wlr_surface *pSurface )
+	{
+		if ( pSurface == s_FrameGen.pGateSurface )
+			return;
+		s_FrameGen.pGateSurface = pSurface;
+		wlserver_lock();
+		wlserver_frame_gate_set_target( pSurface );
+		wlserver_unlock();
+	}
 
 	// The nested-Wayland tearing hint's state (FrameGen/TearHint.h); main loop only.
 	fgtear::Hint s_TearHint;
@@ -8240,6 +8262,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			s_FrameGen.bExtraWantNext = false;
 			s_FrameGen.pacer.Reset();
 			fghost::SetFrame( fghost::FrameRequest{} );
+			FrameGen_SetGateTarget( nullptr );
 
 			fghost::PacingStatus status;
 			status.valid = false;
@@ -8289,6 +8312,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		s_FrameGen.bRepaintNext = false;
 		s_FrameGen.bExtraWantNext = false;
 		fghost::SetFrame( fghost::FrameRequest{} );
+		FrameGen_SetGateTarget( nullptr );
 		return false;
 	}
 
@@ -8380,6 +8404,31 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	fghost::SetFrame( request );
 	s_FrameGen.bRepaintNext = d.repaintNext;
 	s_FrameGen.bExtraWantNext = false;   // this paint answered it; PostPaint sets it again if more is due
+
+	// "Hold game while generating": the gate signal. A generated output (a synthesised
+	// frame, not a real one) keeps it armed for kFrameGateRecentNs; while armed the
+	// focused window's commits are held back, and a paint that leaves NO further output
+	// due for the current pair (!repaintNext: the pacer has issued the pair's last
+	// output) lets the held game frame go.
+	// Why this signal: it is the pacer's own statement that the generated frames of this
+	// pair are all out, needs no GPU fence (the paint is on the GPU queue already, which
+	// is what the game then no longer competes with), and holds nothing when the pacer is
+	// passing real frames through (no generated output -> disarmed within 250 ms).
+	if ( d.prevId != 0 && d.t < 1.0f )
+		s_FrameGen.ulLastGeneratedNs = ulNow;
+	{
+		struct wlr_surface *pGateTarget = nullptr;
+		if ( cfg.holdGame && cfg.enabled && !bCursorPause && s_FrameGen.ulLastGeneratedNs != 0 &&
+			 ulNow - s_FrameGen.ulLastGeneratedNs <= kFrameGateRecentNs )
+			pGateTarget = pFocusWindow->current_surface();
+		FrameGen_SetGateTarget( pGateTarget );
+		if ( pGateTarget && !d.repaintNext )
+		{
+			wlserver_lock();
+			wlserver_frame_gate_release( pGateTarget );
+			wlserver_unlock();
+		}
+	}
 	s_FrameGen.ulLastV = in.presentNs;
 
 	if ( s_FrameGen.pacer.StatusDue( in.now ) )
