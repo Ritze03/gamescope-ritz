@@ -7910,6 +7910,7 @@ namespace
 		// signal: a pass-through game, or Pause at refresh stopping it, lets it lapse).
 		struct wlr_surface *pGateSurface = nullptr;
 		uint64_t ulLastGeneratedNs = 0;
+		uint64_t ulGateRearmNs = 0;   // when the gate target was last re-told "gated"
 	};
 	FrameGenPacing_t s_FrameGen;
 
@@ -8176,19 +8177,38 @@ namespace
 				Timer.GetRecentMeanDrawTime() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, szGpu, nMissed, nDraws, nMissedRefresh, nDrawsR );
 		}
 
+		// "hold: off" / "hold: on, not armed (...)" / "hold: armed (surface 12, 1 swapchain(s), 1 v2),
+		// held 80, released 78, other-surface commits 0 (since the last line)": whether
+		// "Hold game while generating" is reaching a game. armed with held 0 = the
+		// game's commits are not landing on the surface the gate holds; held > 0 with
+		// released 0 = the pacer never says "last output of the pair".
+		char szHold[ 200 ];
+		{
+			wlserver_frame_gate_stats_t gate;
+			wlserver_frame_gate_take_stats( &gate );
+			if ( !cfg.holdGame )
+				snprintf( szHold, sizeof( szHold ), "hold: off" );
+			else if ( !s_FrameGen.pGateSurface )
+				snprintf( szHold, sizeof( szHold ), "hold: on, not armed (%s), other-surface commits %u",
+					cfg.enabled ? "no generated output in the last 250 ms or no focus window" : "frame generation off", gate.other );
+			else
+				snprintf( szHold, sizeof( szHold ), "hold: armed (surface %u, %u swapchain(s), %u v2), held %u, released %u, other-surface commits %u",
+					gate.target, gate.swapchains, gate.v2, gate.held, gate.released, gate.other );
+		}
+
 		// The periodic line is info too (it was debug): a steady-state shortfall (e.g.
 		// 257-279 presented against a 280 target while still "generating") never
 		// changes state, so it never appeared. One line per 5 s, only while active.
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
 				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming );
+				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szHold );
 		else
-			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s",
+			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s",
 				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming );
+				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szHold );
 	}
 
 	fghost::PacingStatus FrameGen_ToStatus( const fgpacing::Pacer::Report &r )
@@ -8382,6 +8402,14 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		// (the previous output is still the one on screen) and ask for the next vblank.
 		s_FrameGen.bOwnForce = true;
 		force_repaint();
+		// A skipped paint is "no output due": if the pacer also has nothing pending
+		// (!repaintNext) a held game frame must not wait for a paint that will not come.
+		if ( s_FrameGen.pGateSurface && !d.repaintNext )
+		{
+			wlserver_lock();
+			wlserver_frame_gate_release( s_FrameGen.pGateSurface );
+			wlserver_unlock();
+		}
 		return true;
 	}
 	s_FrameGen.bArrivalRepaint = false;
@@ -8422,11 +8450,25 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			 ulNow - s_FrameGen.ulLastGeneratedNs <= kFrameGateRecentNs )
 			pGateTarget = pFocusWindow->current_surface();
 		FrameGen_SetGateTarget( pGateTarget );
-		if ( pGateTarget && !d.repaintNext )
+		if ( pGateTarget )
 		{
-			wlserver_lock();
-			wlserver_frame_gate_release( pGateTarget );
-			wlserver_unlock();
+			// Every ~100 ms the target is told "gated" again whatever the pacer says,
+			// so a client that timed out and un-armed itself comes back (see
+			// wlserver_frame_gate_rearm()).
+			constexpr uint64_t kRearmNs = 100ull * 1000ull * 1000ull;
+			const bool bRearm = ulNow - s_FrameGen.ulGateRearmNs >= kRearmNs;
+			if ( !d.repaintNext || bRearm )
+			{
+				wlserver_lock();
+				if ( !d.repaintNext )
+					wlserver_frame_gate_release( pGateTarget );
+				if ( bRearm )
+				{
+					s_FrameGen.ulGateRearmNs = ulNow;
+					wlserver_frame_gate_rearm( pGateTarget );
+				}
+				wlserver_unlock();
+			}
 		}
 	}
 	s_FrameGen.ulLastV = in.presentNs;

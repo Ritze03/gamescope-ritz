@@ -17,6 +17,9 @@ The newest version below is the one this build reports.
   generation gets GPU time on a saturated GPU without a fixed fps cap.
 
 ### Fixed
+- **Hold game while generating**: it now keeps holding the game after a slow wait
+  instead of switching itself off, and the frame generation status line shows
+  whether it is active.
 - **Frame limiter**: it now also holds Vulkan games that present with vsync off
   (e.g. CS2, Forza, Minecraft), which used to run past the limit.
 

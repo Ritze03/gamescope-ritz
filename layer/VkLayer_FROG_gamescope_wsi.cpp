@@ -556,8 +556,13 @@ namespace GamescopeWSILayer {
     bool gateEnabled = false;
     uint32_t gateReleased = 0;  // commits the compositor let go (wraps)
     uint32_t presentCount = 0;  // presents we committed on this swapchain (wraps)
+
+    // Debug readout (GAMESCOPE_WSI_DEBUG), same mutex: waits since the last summary line.
+    uint32_t dbgPresents = 0, dbgWaits = 0, dbgTimeouts = 0;
+    uint64_t dbgWaitNs = 0, dbgLastSummary = 0;
   };
   VKROOTS_DEFINE_SYNCHRONIZED_MAP_TYPE(GamescopeSwapchain, VkSwapchainKHR);
+  static bool gateDebug();
   static constexpr gamescope_swapchain_listener s_swapchainListener = {
     .past_present_timing = [](
             void *data,
@@ -615,6 +620,9 @@ namespace GamescopeWSILayer {
             uint32_t enabled) {
       GamescopeSwapchainData *swapchain = reinterpret_cast<GamescopeSwapchainData*>(data);
       std::unique_lock lock(*swapchain->presentTimingMutex);
+      if (gateDebug() && swapchain->gateEnabled != (enabled != 0))
+        fprintf(stderr, "[Gamescope WSI] frame gate %s (released %u, presented %u)\n",
+          enabled ? "enabled" : "disabled", released_count, swapchain->presentCount);
       swapchain->gateEnabled = enabled != 0;
       swapchain->gateReleased = released_count;
       // The compositor cannot have released more than we presented. If it counts more
@@ -624,23 +632,70 @@ namespace GamescopeWSILayer {
     },
   };
 
+  // GAMESCOPE_WSI_DEBUG=1: log gate enable/disable, every timeout and a once-a-second
+  // summary of what the gate did to this swapchain.
+  static bool gateDebug() {
+    static const bool s_on = []{ const char *e = getenv("GAMESCOPE_WSI_DEBUG"); return e && *e && atoi(e) != 0; }();
+    return s_on;
+  }
+  // Caller holds presentTimingMutex.
+  static void gamescopeFrameGateSummary(GamescopeSwapchainData *swapchain) {
+    if (!gateDebug())
+      return;
+    const uint64_t now = getTimeMonotonic();
+    if (swapchain->dbgLastSummary == 0)
+      swapchain->dbgLastSummary = now;
+    if (now - swapchain->dbgLastSummary < 1'000'000'000ul)
+      return;
+    fprintf(stderr, "[Gamescope WSI] frame gate: %s, %u presents, %u waits (mean %.2f ms), %u timeouts in %.1f s\n",
+      swapchain->gateEnabled ? "armed" : "off", swapchain->dbgPresents, swapchain->dbgWaits,
+      swapchain->dbgWaits ? double(swapchain->dbgWaitNs) / swapchain->dbgWaits / 1e6 : 0.0,
+      swapchain->dbgTimeouts, double(now - swapchain->dbgLastSummary) / 1e9);
+    swapchain->dbgPresents = swapchain->dbgWaits = swapchain->dbgTimeouts = 0;
+    swapchain->dbgWaitNs = 0;
+    swapchain->dbgLastSummary = now;
+  }
+
   // Frame gate: after a present is committed, wait (bounded) until the compositor
   // has let that commit go, so its frame generation owns the GPU while the game is
   // not yet building its next frame. Never waits unless the compositor said it is
-  // gating this swapchain; a timeout un-arms it until the compositor says so again.
+  // gating this swapchain; a timeout just ends that one wait.
   static void gamescopeFrameGateWait(GamescopeSwapchainData *swapchain) {
     uint64_t cycle;
     {
       std::unique_lock lock(*swapchain->presentTimingMutex);
       swapchain->presentCount++;
+      swapchain->dbgPresents++;
       if (!swapchain->gateEnabled || swapchain->retired ||
-          int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0)
+          int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0) {
+        gamescopeFrameGateSummary(swapchain);
         return;
+      }
       cycle = swapchain->refreshCycle;
     }
+    const uint64_t waitStart = getTimeMonotonic();
+    // Records the wait (debug readout) on every way out of the loop below.
+    auto finish = [&](bool timedOut) {
+      if (!gateDebug())
+        return;
+      std::unique_lock lock(*swapchain->presentTimingMutex);
+      swapchain->dbgWaits++;
+      swapchain->dbgWaitNs += getTimeMonotonic() - waitStart;
+      if (timedOut) {
+        swapchain->dbgTimeouts++;
+        fprintf(stderr, "[Gamescope WSI] frame gate timeout after %.1f ms (presented %u, released %u)\n",
+          double(getTimeMonotonic() - waitStart) / 1e6, swapchain->presentCount, swapchain->gateReleased);
+      }
+      gamescopeFrameGateSummary(swapchain);
+    };
 
     // 3 refresh cycles, but never so short that a normal wake-up looks like a timeout
     // nor so long that a lost event is a visible hitch.
+    // Why a SHORT cap and not "until the pair's last output": that moment is about one
+    // game frame interval after the commit, so a game held until then has an interval
+    // of (last interval + its render time), which only grows -- a feedback loop that
+    // ends at whatever the cap is (measured nested: 130 fps -> 40 fps, every wait
+    // running into a 40 ms cap). The cap is what keeps the hold a constant.
     const uint64_t timeoutNs = std::clamp<uint64_t>(3 * cycle, 8'000'000ul, 50'000'000ul);
     const uint64_t deadline = getTimeMonotonic() + timeoutNs;
     wl_display *display = swapchain->display;
@@ -658,15 +713,24 @@ namespace GamescopeWSILayer {
       {
         std::unique_lock lock(*swapchain->presentTimingMutex);
         if (!swapchain->gateEnabled || swapchain->retired ||
-            int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0)
+            int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0) {
+          lock.unlock();
+          finish(false);
           return;
+        }
       }
 
       const uint64_t now = getTimeMonotonic();
       if (now >= deadline) {
-        std::unique_lock lock(*swapchain->presentTimingMutex);
-        swapchain->gateEnabled = false;
-        swapchain->presentCount = swapchain->gateReleased;
+        {
+          // The cap is a normal way out, not a fault: stay armed and just forget
+          // the commit we gave up on. (Un-arming here left the gate dead until the
+          // compositor next sent an event, which it does only when it releases a
+          // held commit -- rarely, once the pacer is behind.)
+          std::unique_lock lock(*swapchain->presentTimingMutex);
+          swapchain->presentCount = swapchain->gateReleased;
+        }
+        finish(true);
         return;
       }
 

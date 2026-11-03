@@ -163,6 +163,30 @@ gamescope::ConVar<bool> cv_drm_debug_syncobj_force_wait_on_commit( "drm_debug_sy
 // The one surface gamescope is holding back right now (the focused frame-generation
 // window's, set by steamcompmgr every paint), or null. All of it under wlserver_lock.
 static struct wlr_surface *s_pFrameGateSurface = nullptr;
+// Activity counters for the status line (wlserver_frame_gate_take_stats()).
+static std::atomic<uint32_t> s_nGateHeld{ 0 }, s_nGateReleased{ 0 }, s_nGateOther{ 0 };
+
+void wlserver_frame_gate_take_stats( wlserver_frame_gate_stats_t *pStats )
+{
+	pStats->held = s_nGateHeld.exchange( 0 );
+	pStats->released = s_nGateReleased.exchange( 0 );
+	pStats->other = s_nGateOther.exchange( 0 );
+	pStats->target = pStats->swapchains = pStats->v2 = 0;
+	wlserver_lock();
+	if ( s_pFrameGateSurface )
+	{
+		if ( s_pFrameGateSurface->resource )
+			pStats->target = wl_resource_get_id( s_pFrameGateSurface->resource );
+		if ( wlserver_wl_surface_info *wl_surf = get_wl_surface_info( s_pFrameGateSurface ) )
+			for ( wl_resource *pSwapchain : wl_surf->gamescope_swapchains )
+			{
+				pStats->swapchains++;
+				if ( wl_resource_get_version( pSwapchain ) >= GAMESCOPE_SWAPCHAIN_FRAME_GATE_SINCE_VERSION )
+					pStats->v2++;
+			}
+	}
+	wlserver_unlock( false );
+}
 
 static void wlserver_frame_gate_send( wlserver_wl_surface_info *wl_surf, bool bEnabled )
 {
@@ -181,7 +205,12 @@ static void wlserver_frame_gate_on_commit( struct wlr_surface *surf, wlserver_wl
 {
 	wl_surf->gate_commits++;
 	if ( surf == s_pFrameGateSurface )
+	{
+		s_nGateHeld++;
 		return;   // held: wlserver_frame_gate_release() lets it go
+	}
+	if ( !wl_surf->gamescope_swapchains.empty() )
+		s_nGateOther++;
 	wl_surf->gate_released = wl_surf->gate_commits;
 	// Not gated: tell the client once (only if it was told "gated" before) that it
 	// must not wait; per-commit events are only for the gated surface.
@@ -197,8 +226,24 @@ void wlserver_frame_gate_release( struct wlr_surface *surf )
 		return;
 	if ( wl_surf->gate_released == wl_surf->gate_commits && wl_surf->gate_enabled_sent )
 		return;
+	if ( wl_surf->gate_released != wl_surf->gate_commits )
+	{
+		s_nGateReleased++;
+	}
 	wl_surf->gate_released = wl_surf->gate_commits;
 	wlserver_frame_gate_send( wl_surf, true );
+}
+
+// Re-state "gated" to the client without letting anything go. A client that timed
+// out of a wait un-arms itself and only an event re-arms it; the release above sends
+// one only when a held commit is let go, which a pacer that is behind may not do for
+// a long time, leaving the gate dead. steamcompmgr calls this every ~100 ms.
+void wlserver_frame_gate_rearm( struct wlr_surface *surf )
+{
+	assert( wlserver_is_lock_held() );
+	wlserver_wl_surface_info *wl_surf = surf ? get_wl_surface_info( surf ) : nullptr;
+	if ( wl_surf && !wl_surf->gamescope_swapchains.empty() )
+		wlserver_frame_gate_send( wl_surf, true );
 }
 
 void wlserver_frame_gate_set_target( struct wlr_surface *surf )

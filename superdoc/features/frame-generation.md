@@ -1036,8 +1036,15 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   `vkQueuePresentKHR` it counts the present and, only if the last event said `enabled = 1` and
   `released_count` is behind its present count, dispatches the wayland queue with `ppoll` until
   released, un-armed (`enabled = 0`), retired, or a hard timeout (3 x the swapchain's refresh
-  cycle, clamped to 8..50 ms). A timeout un-arms gating until the compositor re-enables it, so a
-  lost event costs one hitch, never a deadlock. The layer binds the factory at
+  cycle, clamped to 8..50 ms). The timeout ends only that one wait (the layer forgets the
+  commit it gave up on and stays armed), so a lost event costs one capped wait, never a
+  deadlock. `Why:` the first version un-armed on a timeout until the compositor re-enabled it,
+  and the compositor sends an event only when it releases a held commit, so one timeout could
+  switch the gate off for good; and the wait the pacer would give (until the pair's last
+  output, about one game interval after the commit) lengthens the game's interval by itself
+  each frame (interval = last interval + render time), which measured nested as 130 fps ->
+  40 fps with every wait running into a long cap. The short cap is what makes the hold a
+  constant: each present waits for min(pair end, 3 refreshes). The layer binds the factory at
   `min(advertised, 2)`: an old compositor never sends the event (the layer never waits), an old
   layer never receives it. Counting presents (not an explicit serial request) is self-healing:
   the layer follows the compositor if it counts more (a surface outliving an earlier swapchain),
@@ -1056,6 +1063,25 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   "pair done", and with nothing to generate it never holds. Cost: about one game frame of added
   delay; with Priority *Smoothness* the pair's outputs are spread over a game interval, so the
   hold is longer than with *Low latency*.
+
+- **Re-arm and skipped paints**: every ~100 ms the compositor re-sends `enabled = 1` to the target
+  (`wlserver_frame_gate_rearm`) so a client that un-armed for another reason (connection
+  trouble) comes back, and a *skipped* paint (`d.skip`) with `!repaintNext` also releases (it
+  returned before the release code, so a held frame could wait for a paint that never came).
+- **Readouts**: the `frame generation status:` line (every 5 s, `gamescopectl log_framegen_pacing
+  debug`) ends with `hold: off`, `hold: on, not armed (...)` or `hold: armed (surface N, S
+  swapchain(s), V v2), held K, released R, other-surface commits O` (counts since the last
+  line). armed with `held 0` = the game's commits do not land on the gated surface; `v2 0` =
+  the swapchain's client bound an old factory; held > 0 and released 0 = the pacer never says
+  "pair done". The layer prints, only with `GAMESCOPE_WSI_DEBUG=1` (to the game's stderr), a
+  line for each gate enable/disable and timeout and a once-a-second `frame gate: armed, 50
+  presents, 50 waits (mean 20.0 ms), 43 timeouts in 1.0 s`.
+- **Testing nested**: `gamescope --backend headless -r 144 --profile <p> -- vkcube` with a
+  profile that has `framegen` enabled and `hold_game` true/false (point `XDG_CONFIG_HOME` at a
+  scratch dir; `DISABLE_LSFG=1` silences the other implicit frame-generation layer). Measured:
+  game 130-220 fps with the gate off, 48-50 fps with it on (presented stays 144). The layer
+  actually loaded is the one in `~/.local/share/vulkan/implicit_layer.d` (it wins over
+  `VK_ADD_LAYER_PATH`; use `VK_IMPLICIT_LAYER_PATH`, check with `VK_LOADER_DEBUG=layer`).
 
 The flag is host-only: bit 7 of `FrameGenHost.cpp`'s Learned word (the main word is full); the
 library never sees it.
