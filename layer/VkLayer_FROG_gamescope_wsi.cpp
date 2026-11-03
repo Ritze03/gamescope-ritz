@@ -385,8 +385,8 @@ namespace GamescopeWSILayer {
       } else if (interface == "gamescope_swapchain_factory_v2"sv) {
         objects->gamescopeSwapchainFactory = reinterpret_cast<gamescope_swapchain_factory_v2 *>(
           wl_registry_bind(registry, name, &gamescope_swapchain_factory_v2_interface,
-            // Version 2 added frame_gate; an older compositor advertises 1 and never sends it.
-            std::min<uint32_t>(version, 2)));
+            // Version 2 added frame_gate, 3 register_window; an older compositor advertises less and never sends it.
+            std::min<uint32_t>(version, 3)));
       }
     },
     .global_remove = [](void* data, wl_registry* registry, uint32_t name) {
@@ -554,8 +554,8 @@ namespace GamescopeWSILayer {
     // gateEnabled: the compositor's last word was "I am gating this swapchain". We
     // only ever wait while it is true, so an old compositor (no event) never blocks us.
     bool gateEnabled = false;
-    uint32_t gateReleased = 0;  // commits the compositor let go (wraps)
-    uint32_t presentCount = 0;  // presents we committed on this swapchain (wraps)
+    uint32_t gateReleased = 0;  // the compositor's latest release serial (wraps)
+    uint32_t gateSeen = 0;      // the serial when the current wait began
 
     // Debug readout (GAMESCOPE_WSI_DEBUG), same mutex: waits since the last summary line.
     uint32_t dbgPresents = 0, dbgWaits = 0, dbgTimeouts = 0;
@@ -621,14 +621,10 @@ namespace GamescopeWSILayer {
       GamescopeSwapchainData *swapchain = reinterpret_cast<GamescopeSwapchainData*>(data);
       std::unique_lock lock(*swapchain->presentTimingMutex);
       if (gateDebug() && swapchain->gateEnabled != (enabled != 0))
-        fprintf(stderr, "[Gamescope WSI] frame gate %s (released %u, presented %u)\n",
-          enabled ? "enabled" : "disabled", released_count, swapchain->presentCount);
+        fprintf(stderr, "[Gamescope WSI] frame gate %s (release serial %u)\n",
+          enabled ? "enabled" : "disabled", released_count);
       swapchain->gateEnabled = enabled != 0;
       swapchain->gateReleased = released_count;
-      // The compositor cannot have released more than we presented. If it counts more
-      // (the surface outlived an earlier swapchain), follow it instead of waiting forever.
-      if (int32_t(released_count - swapchain->presentCount) > 0)
-        swapchain->presentCount = released_count;
     },
   };
 
@@ -664,14 +660,27 @@ namespace GamescopeWSILayer {
     uint64_t cycle;
     {
       std::unique_lock lock(*swapchain->presentTimingMutex);
-      swapchain->presentCount++;
       swapchain->dbgPresents++;
-      if (!swapchain->gateEnabled || swapchain->retired ||
-          int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0) {
+      if (!swapchain->gateEnabled || swapchain->retired) {
         gamescopeFrameGateSummary(swapchain);
         return;
       }
       cycle = swapchain->refreshCycle;
+    }
+    // Take in whatever the compositor already sent (releases for earlier frames), then
+    // wait for a release NEWER than that: the serial is not a commit count, so "the
+    // release for my present" can only mean "the next one after it".
+    wl_display_flush(swapchain->display);
+    if (waylandPumpEvents(swapchain->display) < 0) {
+      std::unique_lock lock(*swapchain->presentTimingMutex);
+      swapchain->gateEnabled = false;
+      return;
+    }
+    {
+      std::unique_lock lock(*swapchain->presentTimingMutex);
+      if (!swapchain->gateEnabled || swapchain->retired)
+        return;
+      swapchain->gateSeen = swapchain->gateReleased;
     }
     const uint64_t waitStart = getTimeMonotonic();
     // Records the wait (debug readout) on every way out of the loop below.
@@ -683,8 +692,8 @@ namespace GamescopeWSILayer {
       swapchain->dbgWaitNs += getTimeMonotonic() - waitStart;
       if (timedOut) {
         swapchain->dbgTimeouts++;
-        fprintf(stderr, "[Gamescope WSI] frame gate timeout after %.1f ms (presented %u, released %u)\n",
-          double(getTimeMonotonic() - waitStart) / 1e6, swapchain->presentCount, swapchain->gateReleased);
+        fprintf(stderr, "[Gamescope WSI] frame gate timeout after %.1f ms (release serial %u)\n",
+          double(getTimeMonotonic() - waitStart) / 1e6, swapchain->gateReleased);
       }
       gamescopeFrameGateSummary(swapchain);
     };
@@ -713,7 +722,7 @@ namespace GamescopeWSILayer {
       {
         std::unique_lock lock(*swapchain->presentTimingMutex);
         if (!swapchain->gateEnabled || swapchain->retired ||
-            int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0) {
+            swapchain->gateReleased != swapchain->gateSeen) {
           lock.unlock();
           finish(false);
           return;
@@ -724,11 +733,9 @@ namespace GamescopeWSILayer {
       if (now >= deadline) {
         {
           // The cap is a normal way out, not a fault: stay armed and just forget
-          // the commit we gave up on. (Un-arming here left the gate dead until the
-          // compositor next sent an event, which it does only when it releases a
-          // held commit -- rarely, once the pacer is behind.)
-          std::unique_lock lock(*swapchain->presentTimingMutex);
-          swapchain->presentCount = swapchain->gateReleased;
+          // the release we gave up on. (Un-arming here left the gate dead until the
+          // compositor next sent an event, which it does only when it releases --
+          // rarely, once the pacer is behind.)
         }
         finish(true);
         return;
@@ -1432,6 +1439,13 @@ namespace GamescopeWSILayer {
         gamescope_swapchain_add_listener(gamescopeSwapchainObject, &s_swapchainListener, reinterpret_cast<void*>(gamescopeSwapchain.get()));
       }
 
+      // A swapchain that is not bypassing Xwayland never sends override_window_content,
+      // so the compositor cannot tell which X11 window it belongs to; say so, or the
+      // frame gate cannot reach it.
+      if (!gamescopeSurface->isWayland() && !canBypass &&
+          gamescope_swapchain_get_version(gamescopeSwapchainObject) >= GAMESCOPE_SWAPCHAIN_REGISTER_WINDOW_SINCE_VERSION)
+        gamescope_swapchain_register_window(gamescopeSwapchainObject, serverId, gamescopeSurface->window);
+
       uint32_t imageCount = 0;
       pDispatch->GetSwapchainImagesKHR(device, *pSwapchain, &imageCount, nullptr);
 
@@ -1646,8 +1660,9 @@ namespace GamescopeWSILayer {
       if (result >= VK_SUCCESS) {
         for (uint32_t i = 0; i < presentInfo.swapchainCount; i++) {
           if (auto gamescopeSwapchain = GamescopeSwapchain::get(presentInfo.pSwapchains[i])) {
-            if (gamescopeSwapchain->isWayland || gamescopeSwapchain->isBypassingXWayland)
-              gamescopeFrameGateWait(gamescopeSwapchain.get());
+            // Every path, bypassing or not: the compositor finds this swapchain by
+            // surface, by wl_client or (register_window) by X11 window.
+            gamescopeFrameGateWait(gamescopeSwapchain.get());
           }
         }
       }

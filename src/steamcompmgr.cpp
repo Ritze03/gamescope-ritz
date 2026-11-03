@@ -8194,12 +8194,11 @@ namespace
 				Timer.GetRecentMeanDrawTime() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, szGpu, nMissed, nDraws, nMissedRefresh, nDrawsR );
 		}
 
-		// "hold: off" / "hold: on, not armed (...)" / "hold: armed (surface 12, 1 swapchain(s), 1 v2),
-		// held 80, released 78, other-surface commits 0 (since the last line)": whether
+		// "hold: off" / "hold: on, not armed (...)" / "hold: armed (...)": whether
 		// "Hold game while generating" is reaching a game. armed with held 0 = the
 		// game's commits are not landing on the surface the gate holds; held > 0 with
 		// released 0 = the pacer never says "last output of the pair".
-		char szHold[ 200 ];
+		char szHold[ 260 ];
 		{
 			wlserver_frame_gate_stats_t gate;
 			wlserver_frame_gate_take_stats( &gate );
@@ -8209,8 +8208,13 @@ namespace
 				snprintf( szHold, sizeof( szHold ), "hold: on, not armed (%s), other-surface commits %u",
 					cfg.enabled ? "no generated output in the last 250 ms or no focus window" : "frame generation off", gate.other );
 			else
-				snprintf( szHold, sizeof( szHold ), "hold: armed (surface %u, %u swapchain(s), %u v2), held %u, released %u, other-surface commits %u",
-					gate.target, gate.swapchains, gate.v2, gate.held, gate.released, gate.other );
+			{
+				char szWin[ 24 ] = "";
+				if ( gate.xid )
+					snprintf( szWin, sizeof( szWin ), "window 0x%x, ", gate.xid );
+				snprintf( szHold, sizeof( szHold ), "hold: armed (%ssurface %u, via %s, %u swapchain(s), %u v2), commits %u, releases %u, other-surface commits %u",
+					szWin, gate.target, gate.via, gate.swapchains, gate.v2, gate.held, gate.released, gate.other );
+			}
 		}
 
 		// The periodic line is info too (it was debug): a steady-state shortfall (e.g.

@@ -387,6 +387,8 @@ struct wlserver_frame_gate_stats_t
 {
 	uint32_t held = 0, released = 0, other = 0;
 	uint32_t target = 0, swapchains = 0, v2 = 0;
+	uint32_t xid = 0;              // the gated window's X11 id (0 = not an X11 window)
+	const char *via = "none";      // how the swapchains were found: surface / wayland client / xwayland window
 };
 void wlserver_frame_gate_take_stats( wlserver_frame_gate_stats_t *pStats );
 

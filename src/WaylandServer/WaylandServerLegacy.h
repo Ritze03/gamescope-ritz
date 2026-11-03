@@ -57,14 +57,6 @@ struct wlserver_wl_surface_info
 	uint64_t desired_present_time = 0;
 
 	uint64_t last_refresh_cycle = 0;
-
-	// Frame gate (gamescope_swapchain v2 frame_gate, "Hold game while generating"):
-	// every commit of this surface is counted; gate_released is how many of them
-	// the client has been told it may move past; gate_enabled_sent is the
-	// `enabled` flag of the last event sent (clients only wait while it is true).
-	uint32_t gate_commits = 0;
-	uint32_t gate_released = 0;
-	bool gate_enabled_sent = false;
 };
 
 wlserver_wl_surface_info *get_wl_surface_info(struct wlr_surface *wlr_surf);

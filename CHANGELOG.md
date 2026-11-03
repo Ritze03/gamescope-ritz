@@ -20,6 +20,9 @@ The newest version below is the one this build reports.
 - **Frame generation at the display refresh**: on a backend that can show frames
   between refreshes (nested Wayland, tearing DRM), a target equal to the refresh now
   reaches it instead of losing an output every time a frame is drawn late.
+- **Hold game while generating**: it now also holds games that bypass Xwayland's
+  swapchain (X11 windows the layer cannot flip, native Wayland games such as Proton's
+  Wayland driver), which it silently did not reach before.
 - **Hold game while generating**: it now keeps holding the game after a slow wait
   instead of switching itself off, and the frame generation status line shows
   whether it is active.

@@ -1028,16 +1028,35 @@ in-between frames are made, and the GPU is shared implicitly.
 
 Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never held):
 
-- **Protocol**: `gamescope_swapchain` (and its factory) is version 2, adding event
+- **Protocol**: `gamescope_swapchain` (and its factory) is version 3: v2 added event
   `frame_gate(released_count, enabled)` (appended after `retired`, so v1 opcodes are
-  unchanged). The compositor counts every commit per surface (`gate_commits`); `released_count`
-  is how many the client may move past. The compositor sends only to resources of version >= 2.
+  unchanged), v3 added request `register_window(server_id, x11_window)` (appended last). From
+  2026-11-03 (later) `released_count` is a **release serial**, not a per-commit count: the
+  compositor bumps it at each release and the layer waits for a serial newer than the one it had
+  when it began waiting. The compositor sends only to resources of version >= 2.
+- **Which swapchains hear the gate** (`wlserver_frame_gate_recipients`): not just the ones on
+  the gated surface. A recipient is a swapchain (a) attached to the gated surface, (b) owned by
+  the same `wl_client` as the gated surface (native Wayland: Wine's Wayland driver, or the
+  layer's bypass surface; the swapchain can sit on another surface of the client than the one
+  steamcompmgr focuses), or (c) registered by `register_window` for the focused window's X11 id
+  (an X11 game that is **not** bypassing Xwayland). `Why:` the first version matched only (a).
+  A swapchain that is not bypassing never sends `override_window_content`, so its
+  `gamescope_swapchain` object lives on the layer's own, never-committed `wl_surface` while the
+  game's buffers arrive as commits of Xwayland's surface: the status line read `armed (surface
+  22, 0 swapchain(s)), held 300` and nothing was ever held. Why the layer skipped waiting there
+  too: `gamescopeFrameGateWait` was only called for `isWayland || isBypassingXWayland`; it now
+  runs for every swapchain. Why a serial and not counts: on the non-bypass path Xwayland's
+  commits are not 1:1 with presents (MAILBOX replaces, Xwayland coalesces), and on a native
+  Wayland client the target surface may not be the one the game commits on, so a count could be
+  unreachable. The compositor only bumps the serial when a commit of the gated client arrived
+  since the previous release (`handle_wl_surface_commit` notes every commit, including ones on
+  surfaces gamescope does not show), so a release never "answers" a frame that was not
+  presented.
 - **Layer** (`layer/VkLayer_FROG_gamescope_wsi.cpp`, `gamescopeFrameGateWait`): after the driver
-  `vkQueuePresentKHR` it counts the present and, only if the last event said `enabled = 1` and
-  `released_count` is behind its present count, dispatches the wayland queue with `ppoll` until
-  released, un-armed (`enabled = 0`), retired, or a hard timeout (3 x the swapchain's refresh
-  cycle, clamped to 8..50 ms). The timeout ends only that one wait (the layer forgets the
-  commit it gave up on and stays armed), so a lost event costs one capped wait, never a
+  `vkQueuePresentKHR`, only if the last event said `enabled = 1`, it takes in pending events,
+  remembers the current serial and dispatches the wayland queue with `ppoll` until a different
+  serial arrives, un-armed (`enabled = 0`), retired, or a hard timeout (3 x the swapchain's refresh
+  cycle, clamped to 8..50 ms). The timeout ends only that one wait (the layer stays armed), so a lost event costs one capped wait, never a
   deadlock. `Why:` the first version un-armed on a timeout until the compositor re-enabled it,
   and the compositor sends an event only when it releases a held commit, so one timeout could
   switch the gate off for good; and the wait the pacer would give (until the pair's last
@@ -1045,19 +1064,17 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   each frame (interval = last interval + render time), which measured nested as 130 fps ->
   40 fps with every wait running into a long cap. The short cap is what makes the hold a
   constant: each present waits for min(pair end, 3 refreshes). The layer binds the factory at
-  `min(advertised, 2)`: an old compositor never sends the event (the layer never waits), an old
-  layer never receives it. Counting presents (not an explicit serial request) is self-healing:
-  the layer follows the compositor if it counts more (a surface outliving an earlier swapchain),
-  and a timeout resyncs to the compositor's count.
+  `min(advertised, 3)`: an old compositor never sends the event (the layer never waits), an old
+  layer never receives it.
 - **Compositor** (`FrameGen_PrePaint`, `wlserver_frame_gate_*` in `wlserver.cpp`): the gate
   targets one surface, the focused window's, and is armed only while `hold_game` and Frame
   generation are on, the cursor-pause is not in effect, and the pacer made a *generated* output
   (`d.prevId != 0 && d.t < 1`) within the last 250 ms. So pass-through (game at the output rate),
   Pause at refresh stopping generation, an unfocused window and FG off all disarm it (the
   compositor then sends `enabled = 0` once and releases every commit at arrival). While armed,
-  a commit is held (not released) when it arrives.
+  the game's presents wait for the next release.
 - **Release signal**: a paint whose pacer decision has `repaintNext == false`, i.e. the pacer's own
-  statement that no further output is due for the current pair, releases the held commit. Chosen
+  statement that no further output is due for the current pair, releases the waiting present (`wlserver_frame_gate_release`). Chosen
   because it needs no extra fence (the output's GPU work is already queued on gamescope's queue,
   which is what the game then no longer competes with), it is already the pacer's definition of
   "pair done", and with nothing to generate it never holds. Cost: about one game frame of added
@@ -1069,19 +1086,42 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   trouble) comes back, and a *skipped* paint (`d.skip`) with `!repaintNext` also releases (it
   returned before the release code, so a held frame could wait for a paint that never came).
 - **Readouts**: the `frame generation status:` line (every 5 s, `gamescopectl log_framegen_pacing
-  debug`) ends with `hold: off`, `hold: on, not armed (...)` or `hold: armed (surface N, S
-  swapchain(s), V v2), held K, released R, other-surface commits O` (counts since the last
-  line). armed with `held 0` = the game's commits do not land on the gated surface; `v2 0` =
-  the swapchain's client bound an old factory; held > 0 and released 0 = the pacer never says
-  "pair done". The layer prints, only with `GAMESCOPE_WSI_DEBUG=1` (to the game's stderr), a
+  debug`) ends with `hold: off`, `hold: on, not armed (...)` or `hold: armed ([window 0xX, ]surface N,
+  via V, S swapchain(s), W v2), commits K, releases R, other-surface commits O` (counts since
+  the last line); `via` is `xwayland window` (X11 game, not bypassing), `wayland client`
+  (native Wayland, or the layer's bypass surface) or `surface`. armed with `0 swapchain(s)` =
+  no layer swapchain could be tied to the gated window (a game without our layer, GL, or
+  an X11 child window whose id differs from the focus window's); `v2 0` = the swapchain's
+  client bound an old factory; commits > 0 and releases 0 = the pacer never says "pair done". The layer prints, only with `GAMESCOPE_WSI_DEBUG=1` (to the game's stderr), a
   line for each gate enable/disable and timeout and a once-a-second `frame gate: armed, 50
   presents, 50 waits (mean 20.0 ms), 43 timeouts in 1.0 s`.
-- **Testing nested**: `gamescope --backend headless -r 144 --profile <p> -- vkcube` with a
-  profile that has `framegen` enabled and `hold_game` true/false (point `XDG_CONFIG_HOME` at a
-  scratch dir; `DISABLE_LSFG=1` silences the other implicit frame-generation layer). Measured:
-  game 130-220 fps with the gate off, 48-50 fps with it on (presented stays 144). The layer
-  actually loaded is the one in `~/.local/share/vulkan/implicit_layer.d` (it wins over
-  `VK_ADD_LAYER_PATH`; use `VK_IMPLICIT_LAYER_PATH`, check with `VK_LOADER_DEBUG=layer`).
+- **Testing nested**: `gamescope --backend headless -r 1500 --profile <p> [--expose-wayland] -- vkcube
+  --wsi xcb|wayland` with a profile that has `framegen` enabled (target 1500) and `hold_game`
+  true/false (point `XDG_CONFIG_HOME` at a scratch dir, `audio.capture` off; the other implicit
+  frame-generation layer has its own disable variable, set it). The refresh must be above what
+  the game reaches, or the pacer passes real frames through and the gate (rightly) never arms.
+  The layer actually loaded is the one in `~/.local/share/vulkan/implicit_layer.d` (it wins over
+  `VK_ADD_LAYER_PATH`; use `VK_IMPLICIT_LAYER_PATH` with a manifest whose `library_path` points at
+  the build tree: the built manifest names `/usr/local/lib/...`, which is the OLD installed layer).
+  The three paths: bypass (`vkcube --wsi xcb`, `via surface`), native Wayland (`--wsi wayland`,
+  `via surface`/`wayland client`), and X11 **not** bypassing (set the `_WINE_ALLOW_FLIP` = 0
+  CARDINAL property on the window the instant it is created, e.g. an xcb client waiting for
+  CreateNotify; a property set later is only noticed by the per-present check, which vkcube
+  ignores; `via xwayland window`). Measured nested, hold off -> on: bypass 360 -> ~110 fps;
+  non-bypass, native Wayland: the gate engages (see the `hold:` line) and the game is held.
+- **Native Wayland recreate / refresh cycle**: `refresh_cycle` is sent when the value changes
+  *per surface*, so a swapchain made later on the same surface (a native Wayland client
+  recreating on resize; vkcube does) never got it, and a non-bypassing swapchain's own surface
+  never commits at all. The layer then assumed 16.7 ms and capped its wait at 3 x that, 50 ms,
+  which held the game to 20 fps. Fixed twice: `create_swapchain` resets the surface's
+  `last_refresh_cycle` (the next present re-sends), and arming a swapchain sends it the
+  output's refresh cycle once.
+- **Not verified**: the user's Forza (Proton Wayland driver, `PROTON_ENABLE_WAYLAND=1`) was not
+  available to test. Wine's Wayland driver renders Vulkan into a *subsurface* of the toplevel
+  (from memory of winewayland.drv, unconfirmed), which would explain `0 swapchain(s)` on the
+  toplevel `surface 22` with commits arriving: the layer attaches its swapchain to the
+  Vulkan surface (a different `wl_surface` of the same client). The wl_client match covers
+  that, as does nothing else; check the `via` field on the real game.
 
 The flag is host-only: bit 7 of `FrameGenHost.cpp`'s Learned word (the main word is full); the
 library never sees it.
