@@ -159,6 +159,75 @@ std::vector<ResListEntry_t>& gamescope_xwayland_server_t::retrieve_commits()
 
 gamescope::ConVar<bool> cv_drm_debug_syncobj_force_wait_on_commit( "drm_debug_syncobj_force_wait_on_commit", false, "Force a wait on DRM sync objects before committing buffers" );
 
+// ---- Frame gate (gamescope_swapchain v2 frame_gate) ------------------------------
+// The one surface gamescope is holding back right now (the focused frame-generation
+// window's, set by steamcompmgr every paint), or null. All of it under wlserver_lock.
+static struct wlr_surface *s_pFrameGateSurface = nullptr;
+
+static void wlserver_frame_gate_send( wlserver_wl_surface_info *wl_surf, bool bEnabled )
+{
+	wl_surf->gate_enabled_sent = bEnabled;
+	for ( wl_resource *pSwapchain : wl_surf->gamescope_swapchains )
+	{
+		// Only a v2 resource knows the event; an older client never waits, never gets it.
+		if ( wl_resource_get_version( pSwapchain ) >= GAMESCOPE_SWAPCHAIN_FRAME_GATE_SINCE_VERSION )
+			gamescope_swapchain_send_frame_gate( pSwapchain, wl_surf->gate_released, bEnabled ? 1 : 0 );
+	}
+}
+
+// A commit arrived (wlserver thread, lock held): count it, and let the client go on
+// at once unless this is the held surface.
+static void wlserver_frame_gate_on_commit( struct wlr_surface *surf, wlserver_wl_surface_info *wl_surf )
+{
+	wl_surf->gate_commits++;
+	if ( surf == s_pFrameGateSurface )
+		return;   // held: wlserver_frame_gate_release() lets it go
+	wl_surf->gate_released = wl_surf->gate_commits;
+	// Not gated: tell the client once (only if it was told "gated" before) that it
+	// must not wait; per-commit events are only for the gated surface.
+	if ( wl_surf->gate_enabled_sent )
+		wlserver_frame_gate_send( wl_surf, false );
+}
+
+void wlserver_frame_gate_release( struct wlr_surface *surf )
+{
+	assert( wlserver_is_lock_held() );
+	wlserver_wl_surface_info *wl_surf = surf ? get_wl_surface_info( surf ) : nullptr;
+	if ( !wl_surf || wl_surf->gamescope_swapchains.empty() )
+		return;
+	if ( wl_surf->gate_released == wl_surf->gate_commits && wl_surf->gate_enabled_sent )
+		return;
+	wl_surf->gate_released = wl_surf->gate_commits;
+	wlserver_frame_gate_send( wl_surf, true );
+}
+
+void wlserver_frame_gate_set_target( struct wlr_surface *surf )
+{
+	assert( wlserver_is_lock_held() );
+	if ( surf == s_pFrameGateSurface )
+		return;
+	// The old target (focus moved, or gating turned off) is let go and told not to wait.
+	if ( s_pFrameGateSurface )
+	{
+		if ( wlserver_wl_surface_info *old = get_wl_surface_info( s_pFrameGateSurface ) )
+		{
+			old->gate_released = old->gate_commits;
+			if ( old->gate_enabled_sent )
+				wlserver_frame_gate_send( old, false );
+		}
+	}
+	s_pFrameGateSurface = surf;
+	if ( surf )
+	{
+		// Arm it: from here on the client waits after each present until released.
+		if ( wlserver_wl_surface_info *wl_surf = get_wl_surface_info( surf ) )
+		{
+			wl_surf->gate_released = wl_surf->gate_commits;
+			wlserver_frame_gate_send( wl_surf, true );
+		}
+	}
+}
+
 std::optional<ResListEntry_t> PrepareCommit( struct wlr_surface *surf, struct wlr_buffer *buf )
 {
 	auto wl_surf = get_wl_surface_info( surf );
@@ -198,6 +267,8 @@ std::optional<ResListEntry_t> PrepareCommit( struct wlr_surface *surf, struct wl
 	wl_surf->desired_present_time = 0;
 	wl_surf->pending_presentation_feedbacks.clear();
 	wl_surf->oCurrentPresentMode = std::nullopt;
+
+	wlserver_frame_gate_on_commit( surf, wl_surf );
 
 	struct wlr_surface *pConstraintSurface = wlserver_surface_to_main_surface( surf );
 
@@ -1682,6 +1753,9 @@ static void handle_wl_surface_destroy( struct wl_listener *l, void *data )
 
 	surf->wlr->data = nullptr;
 
+	if ( surf->wlr == s_pFrameGateSurface )
+		s_pFrameGateSurface = nullptr;
+
 	for ( wl_resource *pSwapchain : surf->gamescope_swapchains )
 	{
 		wl_resource_set_user_data( pSwapchain, nullptr );
@@ -2120,7 +2194,7 @@ static void gamescope_swapchain_factory_v2_bind( struct wl_client *client, void 
 
 static void create_gamescope_swapchain_factory_v2( void )
 {
-	uint32_t version = 1;
+	uint32_t version = 2;   // 2: gamescope_swapchain frame_gate
 	wl_global_create( wlserver.display, &gamescope_swapchain_factory_v2_interface, version, NULL, gamescope_swapchain_factory_v2_bind );
 }
 

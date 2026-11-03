@@ -370,6 +370,12 @@ void wlserver_presentation_feedback_discard( struct wlr_surface *surface, std::v
 void wlserver_past_present_timing( struct wlr_surface *surface, uint32_t present_id, uint64_t desired_present_time, uint64_t actual_present_time, uint64_t earliest_present_time, uint64_t present_margin );
 void wlserver_refresh_cycle( struct wlr_surface *surface, uint64_t refresh_cycle );
 
+// Frame gate ("Hold game while generating"), wlserver_lock held. set_target: the
+// one surface to hold back (null = none); the gamescope_swapchain v2 clients on it
+// then wait after each present until release() lets that commit go.
+void wlserver_frame_gate_set_target( struct wlr_surface *surface );
+void wlserver_frame_gate_release( struct wlr_surface *surface );
+
 void wlserver_app_presented( uint32_t app_id, uint64_t frametime_ns );
 
 void wlserver_shutdown();

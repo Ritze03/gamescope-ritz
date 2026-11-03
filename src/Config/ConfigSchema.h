@@ -508,6 +508,11 @@ namespace gamescope::config
         // "Pause while cursor visible": real frames pass through while the game's
         // cursor is showing (menus). ADDITIVE: absent loads false, schema stays 5.
         bool pause_when_cursor_visible = false;
+        // "Hold game while generating" (2026-11-03): the game waits to start its next
+        // frame until the generated frames for the current pair are out (the
+        // gamescope_swapchain v2 frame_gate), so generation gets GPU time without a
+        // fixed cap. ADDITIVE: absent loads false, schema stays 5.
+        bool hold_game = false;
         // "Limit to GPU speed" (2026-10-04): the cost guard. true: when frame
         // generation costs too much of the GPU it lowers the output rate or passes
         // real frames through. false (default, the user's call). ADDITIVE: absent

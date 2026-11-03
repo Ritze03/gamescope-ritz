@@ -384,7 +384,9 @@ namespace GamescopeWSILayer {
           wl_registry_bind(registry, name, &wl_compositor_interface, version));
       } else if (interface == "gamescope_swapchain_factory_v2"sv) {
         objects->gamescopeSwapchainFactory = reinterpret_cast<gamescope_swapchain_factory_v2 *>(
-          wl_registry_bind(registry, name, &gamescope_swapchain_factory_v2_interface, version));
+          wl_registry_bind(registry, name, &gamescope_swapchain_factory_v2_interface,
+            // Version 2 added frame_gate; an older compositor advertises 1 and never sends it.
+            std::min<uint32_t>(version, 2)));
       }
     },
     .global_remove = [](void* data, wl_registry* registry, uint32_t name) {
@@ -547,6 +549,13 @@ namespace GamescopeWSILayer {
     std::unique_ptr<std::mutex> presentTimingMutex = std::make_unique<std::mutex>();
     std::vector<VkPastPresentationTimingGOOGLE> pastPresentTimings;
     uint64_t refreshCycle = 16'666'666;
+
+    // Frame gate (gamescope_swapchain v2 frame_gate), all under presentTimingMutex.
+    // gateEnabled: the compositor's last word was "I am gating this swapchain". We
+    // only ever wait while it is true, so an old compositor (no event) never blocks us.
+    bool gateEnabled = false;
+    uint32_t gateReleased = 0;  // commits the compositor let go (wraps)
+    uint32_t presentCount = 0;  // presents we committed on this swapchain (wraps)
   };
   VKROOTS_DEFINE_SYNCHRONIZED_MAP_TYPE(GamescopeSwapchain, VkSwapchainKHR);
   static constexpr gamescope_swapchain_listener s_swapchainListener = {
@@ -598,7 +607,75 @@ namespace GamescopeWSILayer {
       }
       fprintf(stderr, "[Gamescope WSI] Swapchain retired\n");
     },
+
+    .frame_gate = [](
+            void *data,
+            gamescope_swapchain *object,
+            uint32_t released_count,
+            uint32_t enabled) {
+      GamescopeSwapchainData *swapchain = reinterpret_cast<GamescopeSwapchainData*>(data);
+      std::unique_lock lock(*swapchain->presentTimingMutex);
+      swapchain->gateEnabled = enabled != 0;
+      swapchain->gateReleased = released_count;
+      // The compositor cannot have released more than we presented. If it counts more
+      // (the surface outlived an earlier swapchain), follow it instead of waiting forever.
+      if (int32_t(released_count - swapchain->presentCount) > 0)
+        swapchain->presentCount = released_count;
+    },
   };
+
+  // Frame gate: after a present is committed, wait (bounded) until the compositor
+  // has let that commit go, so its frame generation owns the GPU while the game is
+  // not yet building its next frame. Never waits unless the compositor said it is
+  // gating this swapchain; a timeout un-arms it until the compositor says so again.
+  static void gamescopeFrameGateWait(GamescopeSwapchainData *swapchain) {
+    uint64_t cycle;
+    {
+      std::unique_lock lock(*swapchain->presentTimingMutex);
+      swapchain->presentCount++;
+      if (!swapchain->gateEnabled || swapchain->retired ||
+          int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0)
+        return;
+      cycle = swapchain->refreshCycle;
+    }
+
+    // 3 refresh cycles, but never so short that a normal wake-up looks like a timeout
+    // nor so long that a lost event is a visible hitch.
+    const uint64_t timeoutNs = std::clamp<uint64_t>(3 * cycle, 8'000'000ul, 50'000'000ul);
+    const uint64_t deadline = getTimeMonotonic() + timeoutNs;
+    wl_display *display = swapchain->display;
+    const int wlFd = wl_display_get_fd(display);
+    wl_display_flush(display);
+
+    while (true) {
+      if (waylandPumpEvents(display) < 0) {
+        // Connection trouble: stop gating, the normal paths report it.
+        std::unique_lock lock(*swapchain->presentTimingMutex);
+        swapchain->gateEnabled = false;
+        return;
+      }
+
+      {
+        std::unique_lock lock(*swapchain->presentTimingMutex);
+        if (!swapchain->gateEnabled || swapchain->retired ||
+            int32_t(swapchain->presentCount - swapchain->gateReleased) <= 0)
+          return;
+      }
+
+      const uint64_t now = getTimeMonotonic();
+      if (now >= deadline) {
+        std::unique_lock lock(*swapchain->presentTimingMutex);
+        swapchain->gateEnabled = false;
+        swapchain->presentCount = swapchain->gateReleased;
+        return;
+      }
+
+      const uint64_t remaining = deadline - now;
+      pollfd pfd = { .fd = wlFd, .events = POLLIN };
+      timespec timeout = { .tv_sec = time_t(remaining / 1'000'000'000ul), .tv_nsec = long(remaining % 1'000'000'000ul) };
+      ppoll(&pfd, 1, &timeout, NULL);
+    }
+  }
 
   class VkInstanceOverrides {
   public:
@@ -1486,7 +1563,12 @@ namespace GamescopeWSILayer {
               gamescope_swapchain_override_window_content(gamescopeSwapchain->object, gamescopeSwapchain->serverId, gamescopeSurface->window);
             }
             VkPresentModeKHR presentMode = oOriginalPresentModeInfo ? oOriginalPresentModeInfo->pPresentModes[i] : gamescopeSwapchain->presentMode;
-            if (forceFifo && !frameLimiterAware)
+            // While the frame limiter is on, tell the compositor FIFO for EVERY app:
+            // it only holds (and so only limits) commits flagged FIFO, and a game that
+            // presents MAILBOX / IMMEDIATE (vsync off) or a limiter-aware one that kept
+            // a non-FIFO mode would otherwise sail past the limit. Tearing is moot when
+            // the user asked for a cap. (Driver side is MAILBOX regardless, see above.)
+            if (forceFifo)
               presentMode = VK_PRESENT_MODE_FIFO_KHR;
             gamescope_swapchain_set_present_mode(gamescopeSwapchain->object, uint32_t(presentMode));
           }
@@ -1494,6 +1576,17 @@ namespace GamescopeWSILayer {
       }
 
       VkResult result = pDispatch->QueuePresentKHR(queue, &presentInfo);
+
+      // Frame gate: hold here, after the commit, so the game does not start its next
+      // frame while the compositor is still generating frames for this one.
+      if (result >= VK_SUCCESS) {
+        for (uint32_t i = 0; i < presentInfo.swapchainCount; i++) {
+          if (auto gamescopeSwapchain = GamescopeSwapchain::get(presentInfo.pSwapchains[i])) {
+            if (gamescopeSwapchain->isWayland || gamescopeSwapchain->isBypassingXWayland)
+              gamescopeFrameGateWait(gamescopeSwapchain.get());
+          }
+        }
+      }
 
       for (uint32_t i = 0; i < presentInfo.swapchainCount; i++) {
         VkSwapchainKHR swapchain = presentInfo.pSwapchains[i];

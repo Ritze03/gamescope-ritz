@@ -276,6 +276,20 @@ capped rate on screen, and never caps the game itself. refresh/N is the natural 
 nested refresh if set, else the output refresh, and steps N down when the game is too fast
 for it.
 
+### The limiter holds every Vulkan game (2026-11-03)
+
+The compositor only holds commits flagged FIFO (`wlserver_surface_is_fifo()` from the
+`set_present_mode` the layer sends), and the layer always forces MAILBOX at the driver. The layer
+used to report the app's own mode unless the app was "frame-limiter aware" (DXVK >= 2.3 /
+vkd3d >= 2.12), so a game presenting MAILBOX / IMMEDIATE (vsync off: CS2, Forza under
+vkd3d-proton, Minecraft's LWJGL Vulkan) was never held. While the limiter is active the layer now
+reports FIFO to the compositor for every app (`layer/VkLayer_FROG_gamescope_wsi.cpp`,
+`QueuePresentKHR`); aware apps still also see FIFO-only mode lists and get `OUT_OF_DATE` once on a
+limiter flip, unchanged. `Why:` tearing is moot when the user asked for a cap, and the report is
+only the compositor's pacing hint, not what the driver presents. Needs the layer's
+`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before. The frame limiter's sibling for frame
+generation is [Hold game while generating](frame-generation.md#hold-game-while-generating-framegenhold_game-2026-11-03).
+
 ## Honest limits (the help text says these too)
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:
