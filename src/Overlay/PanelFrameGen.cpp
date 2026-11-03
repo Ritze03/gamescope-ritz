@@ -446,9 +446,10 @@ namespace gamescope
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.hold_game; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.hold_game = b; PersistAndPush(); } ) )
-			.Help( "The game waits to start its next frame until the generated frames for the "
-			       "current pair are out, so frame generation gets GPU time without a fixed frame "
-			       "cap. Costs about one game frame of delay. Works with in-game vsync off. "
+			.Help( "When the game and frame generation together overload the GPU, the game is "
+			       "slowed just enough that frame generation keeps making its frames; with GPU "
+			       "to spare the game runs free. No fixed frame cap, it adapts within a second "
+			       "or two. Works with in-game vsync off. "
 			       "Needs the game to run through gamescope's Vulkan layer; a game that does not "
 			       "is never held." )
 			.Default( false )

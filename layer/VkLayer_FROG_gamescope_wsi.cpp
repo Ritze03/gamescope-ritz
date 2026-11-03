@@ -555,7 +555,9 @@ namespace GamescopeWSILayer {
     // only ever wait while it is true, so an old compositor (no event) never blocks us.
     bool gateEnabled = false;
     uint32_t gateReleased = 0;  // the compositor's latest release serial (wraps)
-    uint32_t gateSeen = 0;      // the serial when the current wait began
+    uint32_t gateConsumed = 0;  // the release serial this swapchain has already used up:
+                                // one release = permission for ONE present, and one that
+                                // arrived before the present is kept, not lost
 
     // Debug readout (GAMESCOPE_WSI_DEBUG), same mutex: waits since the last summary line.
     uint32_t dbgPresents = 0, dbgWaits = 0, dbgTimeouts = 0;
@@ -623,6 +625,9 @@ namespace GamescopeWSILayer {
       if (gateDebug() && swapchain->gateEnabled != (enabled != 0))
         fprintf(stderr, "[Gamescope WSI] frame gate %s (release serial %u)\n",
           enabled ? "enabled" : "disabled", released_count);
+      // Newly armed: releases from before do not count as permission.
+      if (!swapchain->gateEnabled && enabled != 0)
+        swapchain->gateConsumed = released_count;
       swapchain->gateEnabled = enabled != 0;
       swapchain->gateReleased = released_count;
     },
@@ -657,7 +662,6 @@ namespace GamescopeWSILayer {
   // not yet building its next frame. Never waits unless the compositor said it is
   // gating this swapchain; a timeout just ends that one wait.
   static void gamescopeFrameGateWait(GamescopeSwapchainData *swapchain) {
-    uint64_t cycle;
     {
       std::unique_lock lock(*swapchain->presentTimingMutex);
       swapchain->dbgPresents++;
@@ -665,11 +669,12 @@ namespace GamescopeWSILayer {
         gamescopeFrameGateSummary(swapchain);
         return;
       }
-      cycle = swapchain->refreshCycle;
     }
-    // Take in whatever the compositor already sent (releases for earlier frames), then
-    // wait for a release NEWER than that: the serial is not a commit count, so "the
-    // release for my present" can only mean "the next one after it".
+    // Take in whatever the compositor already sent. The compositor releases on a
+    // schedule (its HoldController's game-rate interval), one release per permitted
+    // frame: a release that arrived while the game was still rendering is this
+    // present's permission and it does not wait at all (a game slower than the allowed
+    // rate is never held). Several unused releases still grant only one frame.
     wl_display_flush(swapchain->display);
     if (waylandPumpEvents(swapchain->display) < 0) {
       std::unique_lock lock(*swapchain->presentTimingMutex);
@@ -680,7 +685,11 @@ namespace GamescopeWSILayer {
       std::unique_lock lock(*swapchain->presentTimingMutex);
       if (!swapchain->gateEnabled || swapchain->retired)
         return;
-      swapchain->gateSeen = swapchain->gateReleased;
+      if (swapchain->gateReleased != swapchain->gateConsumed) {
+        swapchain->gateConsumed = swapchain->gateReleased;
+        gamescopeFrameGateSummary(swapchain);
+        return;
+      }
     }
     const uint64_t waitStart = getTimeMonotonic();
     // Records the wait (debug readout) on every way out of the loop below.
@@ -698,14 +707,12 @@ namespace GamescopeWSILayer {
       gamescopeFrameGateSummary(swapchain);
     };
 
-    // 3 refresh cycles, but never so short that a normal wake-up looks like a timeout
-    // nor so long that a lost event is a visible hitch.
-    // Why a SHORT cap and not "until the pair's last output": that moment is about one
-    // game frame interval after the commit, so a game held until then has an interval
-    // of (last interval + its render time), which only grows -- a feedback loop that
-    // ends at whatever the cap is (measured nested: 130 fps -> 40 fps, every wait
-    // running into a 40 ms cap). The cap is what keeps the hold a constant.
-    const uint64_t timeoutNs = std::clamp<uint64_t>(3 * cycle, 8'000'000ul, 50'000'000ul);
+    // A safety net only (a lost event, a stalled compositor), never the normal release
+    // path: the controller's slot is at most ~33 ms (floor 30 fps), so 50 ms is not
+    // reached in normal operation. Why not the old 3 refresh cycles clamped 8..50 ms: a
+    // short cap WAS the release path under the pair-end design and, with the game held
+    // for it, collapsed a saturated game to the cap's rate (221 fps -> 20-25 fps).
+    constexpr uint64_t timeoutNs = 50'000'000ul;
     const uint64_t deadline = getTimeMonotonic() + timeoutNs;
     wl_display *display = swapchain->display;
     const int wlFd = wl_display_get_fd(display);
@@ -722,7 +729,8 @@ namespace GamescopeWSILayer {
       {
         std::unique_lock lock(*swapchain->presentTimingMutex);
         if (!swapchain->gateEnabled || swapchain->retired ||
-            swapchain->gateReleased != swapchain->gateSeen) {
+            swapchain->gateReleased != swapchain->gateConsumed) {
+          swapchain->gateConsumed = swapchain->gateReleased;
           lock.unlock();
           finish(false);
           return;

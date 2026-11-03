@@ -17,6 +17,9 @@ The newest version below is the one this build reports.
   generation gets GPU time on a saturated GPU without a fixed fps cap.
 
 ### Fixed
+- **Hold game while generating**: it no longer collapses a GPU-bound game to 20-25 fps;
+  it now slows the game only as far as needed for frame generation to keep up, and
+  not at all while the GPU has room.
 - **Frame generation at the display refresh**: on a backend that can show frames
   between refreshes (nested Wayland, tearing DRM), a target equal to the refresh now
   reaches it instead of losing an output every time a frame is drawn late.

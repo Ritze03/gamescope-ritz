@@ -184,7 +184,6 @@ struct gate_swapchain_t
 static std::vector<gate_swapchain_t> s_GateSwapchains;   // every live gamescope_swapchain
 static std::vector<wl_resource *> s_GateArmed;           // told enabled = 1 and not yet told 0
 static uint32_t s_GateSerial = 0;
-static bool s_bGatePending = false;                      // a group commit since the last release
 // Activity counters for the status line (wlserver_frame_gate_take_stats()).
 static std::atomic<uint32_t> s_nGateHeld{ 0 }, s_nGateReleased{ 0 }, s_nGateOther{ 0 };
 
@@ -294,7 +293,6 @@ static void wlserver_frame_gate_on_commit( struct wlr_surface *surf )
 	wl_client *client = gate_surface_client( s_pFrameGateSurface );
 	if ( surf == s_pFrameGateSurface || ( client && gate_surface_client( surf ) == client ) )
 	{
-		s_bGatePending = true;
 		s_nGateHeld++;
 		return;
 	}
@@ -303,16 +301,15 @@ static void wlserver_frame_gate_on_commit( struct wlr_surface *surf )
 		s_nGateOther++;
 }
 
-// The pacer has issued the last output of the current pair: let the game's waiting
-// present go. Does nothing unless a commit arrived since the previous release (the
-// serial must not advance with nothing to release, or a game would be let go by a
-// release that was for the frame before).
+// One release = permission for one game frame (steamcompmgr's HoldController sets the
+// rate). Unconditional: the layer consumes a release that arrives before its present
+// instead of losing it, so a game slower than the allowed rate is never held, and
+// several unconsumed releases still grant only one frame (no burst credit).
 void wlserver_frame_gate_release( struct wlr_surface *surf )
 {
 	assert( wlserver_is_lock_held() );
-	if ( !surf || surf != s_pFrameGateSurface || !s_bGatePending )
+	if ( !surf || surf != s_pFrameGateSurface )
 		return;
-	s_bGatePending = false;
 	s_GateSerial++;
 	s_nGateReleased++;
 	wlserver_frame_gate_sync();
@@ -336,7 +333,6 @@ void wlserver_frame_gate_set_target( struct wlr_surface *surf )
 	if ( surf == s_pFrameGateSurface )
 		return;
 	s_pFrameGateSurface = surf;
-	s_bGatePending = false;
 	// Old recipients are told not to wait, new ones are armed.
 	wlserver_frame_gate_sync();
 }

@@ -209,20 +209,21 @@
         presents so its own GPU work (frame generation) is not competing with
         the client's next frame.
 
-        released_count is a release serial: the compositor bumps it each time
-        it has issued the last generated output of the current pair of game
-        frames and a commit of the client arrived since the previous release.
-        It is NOT a per-commit count (the game's commits do not map 1:1 to
-        presents on every path: a swapchain that is not bypassing Xwayland
-        reaches the compositor as Xwayland's own commits, a native Wayland
-        client may commit on a different surface than the swapchain's).
+        released_count is a release serial: the compositor bumps it on a schedule,
+        once per game frame it permits (it paces the game to the rate its GPU
+        budget allows). One release is permission for one present. It is NOT a
+        per-commit count (the game's commits do not map 1:1 to presents on every
+        path: a swapchain that is not bypassing Xwayland reaches the compositor
+        as Xwayland's own commits, a native Wayland client may commit on a
+        different surface than the swapchain's).
 
         After a present the client may only wait if the last frame_gate it
-        received had enabled = 1. It then waits until a frame_gate arrives
-        whose released_count differs from the one it had seen when it started
-        waiting, or enabled becomes 0, or the swapchain is retired, or a
-        client-side timeout (a few refresh cycles) expires: the compositor can
-        never stall a client for longer than that.
+        received had enabled = 1. If a release arrived since its previous
+        present (or since it was enabled) it uses that one up and does not wait;
+        otherwise it waits until a frame_gate arrives whose released_count
+        differs from the last one it used, or enabled becomes 0, or the
+        swapchain is retired, or a client-side timeout (a safety net, 50 ms)
+        expires: the compositor can never stall a client for longer than that.
 
         A client that never receives this event, or whose compositor predates
         it, never waits.

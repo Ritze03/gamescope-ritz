@@ -1015,8 +1015,10 @@ off, while the mouse cursor is visible. (To avoid artifacting in settings menus)
 ### Hold game while generating (`framegen.hold_game`, 2026-11-03)
 
 Row **Hold game while generating**, per profile, default **Off**, after Pause while cursor
-visible. The game waits to start its next frame until the generated frames for the current
-pair are out, so generation gets GPU time without a fixed fps cap.
+visible. The game is paced by an **adaptive rate controller** to the fastest rate the GPU
+leaves room for, so generation gets GPU time and reaches its target without a fixed fps cap.
+(2026-11-03, later: replaced the original "wait until the pair's generated frames are out",
+see *Adaptive game-rate controller* below.)
 
 `Why:` frame generation runs on gamescope's own GPU queue. When the game saturates the GPU
 (Minecraft + shader pack uncapped at ~200 fps, target 280 on a 280 Hz VRR screen), gamescope's
@@ -1032,8 +1034,8 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   `frame_gate(released_count, enabled)` (appended after `retired`, so v1 opcodes are
   unchanged), v3 added request `register_window(server_id, x11_window)` (appended last). From
   2026-11-03 (later) `released_count` is a **release serial**, not a per-commit count: the
-  compositor bumps it at each release and the layer waits for a serial newer than the one it had
-  when it began waiting. The compositor sends only to resources of version >= 2.
+  compositor bumps it at each release; one release = permission for one present (see the layer
+  bullet). The compositor sends only to resources of version >= 2.
 - **Which swapchains hear the gate** (`wlserver_frame_gate_recipients`): not just the ones on
   the gated surface. A recipient is a swapchain (a) attached to the gated surface, (b) owned by
   the same `wl_client` as the gated surface (native Wayland: Wine's Wayland driver, or the
@@ -1048,51 +1050,71 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
   runs for every swapchain. Why a serial and not counts: on the non-bypass path Xwayland's
   commits are not 1:1 with presents (MAILBOX replaces, Xwayland coalesces), and on a native
   Wayland client the target surface may not be the one the game commits on, so a count could be
-  unreachable. The compositor only bumps the serial when a commit of the gated client arrived
-  since the previous release (`handle_wl_surface_commit` notes every commit, including ones on
-  surfaces gamescope does not show), so a release never "answers" a frame that was not
-  presented.
+  unreachable. Commits are still counted (`handle_wl_surface_commit`, the status line's `commits`)
+  but no longer gate a release.
 - **Layer** (`layer/VkLayer_FROG_gamescope_wsi.cpp`, `gamescopeFrameGateWait`): after the driver
-  `vkQueuePresentKHR`, only if the last event said `enabled = 1`, it takes in pending events,
-  remembers the current serial and dispatches the wayland queue with `ppoll` until a different
-  serial arrives, un-armed (`enabled = 0`), retired, or a hard timeout (3 x the swapchain's refresh
-  cycle, clamped to 8..50 ms). The timeout ends only that one wait (the layer stays armed), so a lost event costs one capped wait, never a
-  deadlock. `Why:` the first version un-armed on a timeout until the compositor re-enabled it,
-  and the compositor sends an event only when it releases a held commit, so one timeout could
-  switch the gate off for good; and the wait the pacer would give (until the pair's last
-  output, about one game interval after the commit) lengthens the game's interval by itself
-  each frame (interval = last interval + render time), which measured nested as 130 fps ->
-  40 fps with every wait running into a long cap. The short cap is what makes the hold a
-  constant: each present waits for min(pair end, 3 refreshes). The layer binds the factory at
+  `vkQueuePresentKHR`, only if the last event said `enabled = 1`, it takes in pending events. If a
+  release arrived since its previous present (`gateReleased != gateConsumed`) it consumes it and
+  does **not wait**; else it dispatches the wayland queue with `ppoll` until a new serial arrives,
+  un-armed (`enabled = 0`), retired, or a 50 ms safety timeout. Newly armed = earlier releases are
+  not credit (`gateConsumed` is set to the serial on the enable edge); several unused releases
+  grant one frame (no burst). The timeout ends only that one wait (the layer stays armed). `Why`
+  consume-early: the first controller-less version waited for a serial newer than the one seen
+  when the wait began, so a release that came while the game was still rendering was lost and a
+  game slower than the allowed rate was held for nothing. `Why` 50 ms flat (was 3 refresh cycles
+  clamped 8..50 ms): the cap used to *be* the release path and set the game's rate; it is only a
+  safety net now (the slowest slot, the 30 fps floor, is 33 ms). `Why` not a v4 protocol field for
+  the interval: not needed, the schedule lives in the compositor. The layer binds the factory at
   `min(advertised, 3)`: an old compositor never sends the event (the layer never waits), an old
   layer never receives it.
-- **Compositor** (`FrameGen_PrePaint`, `wlserver_frame_gate_*` in `wlserver.cpp`): the gate
-  targets one surface, the focused window's, and is armed only while `hold_game` and Frame
-  generation are on, the cursor-pause is not in effect, and the pacer made a *generated* output
-  (`d.prevId != 0 && d.t < 1`) within the last 250 ms. So pass-through (game at the output rate),
-  Pause at refresh stopping generation, an unfocused window and FG off all disarm it (the
-  compositor then sends `enabled = 0` once and releases every commit at arrival). While armed,
-  the game's presents wait for the next release.
-- **Release signal**: a paint whose pacer decision has `repaintNext == false`, i.e. the pacer's own
-  statement that no further output is due for the current pair, releases the waiting present (`wlserver_frame_gate_release`). Chosen
-  because it needs no extra fence (the output's GPU work is already queued on gamescope's queue,
-  which is what the game then no longer competes with), it is already the pacer's definition of
-  "pair done", and with nothing to generate it never holds. Cost: about one game frame of added
-  delay; with Priority *Smoothness* the pair's outputs are spread over a game interval, so the
-  hold is longer than with *Low latency*.
+- **Compositor** (`FrameGen_GateTick` in `steamcompmgr.cpp`, `wlserver_frame_gate_*` in
+  `wlserver.cpp`): the gate targets one surface, the focused window's, and is armed only while
+  `hold_game` and Frame generation are on, the cursor-pause is not in effect, the pacer made a
+  *generated* output (`d.prevId != 0 && d.t < 1`) within the last 250 ms **and the controller says
+  throttle** (not "unlimited"). So pass-through, Pause at refresh, an unfocused window and FG off
+  all disarm it (the compositor sends `enabled = 0` once and the controller resets).
+- **Adaptive game-rate controller** (`src/FrameGen/HoldController.h`, namespace `fghold`, pure,
+  `tests/test_framegen_hold.cpp`): AIMD on the *allowed game rate*. Signal: the FG paint missing
+  its deadline, `GetRecentDrawsOver( lead )` of the last 60 paints (the status line's `missed
+  K/60`), evaluated each paint (a cadence-skip paint too); the game's measured rate is an EMA
+  of arrival intervals (`FrameGen_OnArrival`). Starts **unlimited** (gate disarmed). Misses > 2
+  of >= 30 paints -> cap = measured rate x 0.93, then x 0.93 again per 300 ms cooldown while it
+  persists; clean (<= 1 miss) for 1 s -> +3% (>= +3 fps) every 250 ms; cap > 1.25 x the measured
+  rate -> unlimited again (the cap stopped binding). Floor `max(30 fps, output/8)` so the
+  multiplier stays in range; never above the measured rate. All constants are named and
+  explained in the header. Hysteresis = the 300 ms cooldown (the miss ring must refill before
+  the next verdict) and the 1 s clean dwell; the toy-GPU test bounds the steady sawtooth to
+  < 20% peak-to-peak.
+- **Release signal**: time-based, from the same paint hook: one `wlserver_frame_gate_release` per
+  controller interval (`1 / cap`), unconditional (no "a commit arrived" condition: the layer
+  consumes an early release, so the game proceeds as soon as its slot comes). The schedule is
+  advanced by the interval rather than reset to now, so paint granularity (~3.5 ms at 280 Hz)
+  does not quantise the rate; it re-syncs only when a whole interval behind. `Why` paints and
+  not a timerfd: they tick at the output rate while generating, which is far finer than the
+  30-200 fps slots, and it adds no thread or fd.
+- **History (why the pair-end release was removed)**: the first design released when the pacer
+  decision had `repaintNext == false` (the pair's last output). The user's Minecraft (Vulkan,
+  nested Wayland, 280 Hz non-VRR, target = refresh, Smoothness): hold OFF game 221-226 fps,
+  presented 233-251, draw mean 3.4-4.2 ms against 3.57 ms per refresh, missed 35-50/60 (GPU
+  saturated, FG cannot reach 280). Hold ON: game 20-25 fps, layer `25 presents, 25 waits (mean
+  10.4 ms), 23 timeouts in 1.0 s`, delay 55.7 ms. Holding lengthens the pair, which delays the
+  next release: a positive feedback loop that collapses the game to the timeout floor. The goal
+  stated by the user: GPU near 100%, game as fast as possible, FG reaching its target, no fixed
+  cap, and a drop must not starve FG.
 
 - **Re-arm and skipped paints**: every ~100 ms the compositor re-sends `enabled = 1` to the target
   (`wlserver_frame_gate_rearm`) so a client that un-armed for another reason (connection
-  trouble) comes back, and a *skipped* paint (`d.skip`) with `!repaintNext` also releases (it
-  returned before the release code, so a held frame could wait for a paint that never came).
+  trouble) comes back, and a *skipped* paint (`d.skip`) also runs the gate tick, so releases keep their schedule
+  on cadence-skip vblanks.
 - **Readouts**: the `frame generation status:` line (every 5 s, `gamescopectl log_framegen_pacing
   debug`) ends with `hold: off`, `hold: on, not armed (...)` or `hold: armed ([window 0xX, ]surface N,
-  via V, S swapchain(s), W v2), commits K, releases R, other-surface commits O` (counts since
+  via V, S swapchain(s), W v2), game cap N fps (throttling), misses M/60, commits K, releases R, other-surface commits O`
+  (`hold: on, not armed (...)` also says "game cap unlimited, the GPU keeps up" when the controller sees no misses) (counts since
   the last line); `via` is `xwayland window` (X11 game, not bypassing), `wayland client`
   (native Wayland, or the layer's bypass surface) or `surface`. armed with `0 swapchain(s)` =
   no layer swapchain could be tied to the gated window (a game without our layer, GL, or
   an X11 child window whose id differs from the focus window's); `v2 0` = the swapchain's
-  client bound an old factory; commits > 0 and releases 0 = the pacer never says "pair done". The layer prints, only with `GAMESCOPE_WSI_DEBUG=1` (to the game's stderr), a
+  client bound an old factory; commits > 0 and releases 0 = the paint hook is not running. The layer prints, only with `GAMESCOPE_WSI_DEBUG=1` (to the game's stderr), a
   line for each gate enable/disable and timeout and a once-a-second `frame gate: armed, 50
   presents, 50 waits (mean 20.0 ms), 43 timeouts in 1.0 s`.
 - **Testing nested**: `gamescope --backend headless -r 1500 --profile <p> [--expose-wayland] -- vkcube
@@ -1255,7 +1277,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.priority` | `low_latency` / `smoothness` (default) | what pacing trades under jittery frame times |
 | `framegen.pause_at_refresh` | `true` (default) / `false` | stop generating once the game reaches the refresh (on), or keep generating above it (off); additive, an older config loads `true` |
 | `framegen.pause_when_cursor_visible` | `false` (default) / `true` | the row "Pause while cursor visible": real frames pass through while the game's cursor shows (see [its section](#pause-while-cursor-visible-framegenpause_when_cursor_visible)); additive, absent loads `false`, schema stays 5 |
-| `framegen.hold_game` | `false` (default) / `true` | the row "Hold game while generating": the game's next frame waits for the current pair's generated frames (see [its section](#hold-game-while-generating-framegenhold_game-2026-11-03)); additive, absent loads `false` |
+| `framegen.hold_game` | `false` (default) / `true` | the row "Hold game while generating": the game is paced to the rate the GPU leaves room for (see [its section](#hold-game-while-generating-framegenhold_game-2026-11-03)); additive, absent loads `false` |
 | `framegen.gpu_limit` | `false` (default) / `true` | the row "Limit to GPU speed": the cost guard (see "Cost guard" in the pacing section) on (lower the output rate, then pass through) or off (always generate at the chosen rate); additive, absent loads `false`, schema stays 5 |
 | `framegen.quality` | `quality` / `performance` | the one Quality row for [both motion versions](#motion-version-2). On V2 it picks V2's Quality / Performance mode. On V1: Performance = flow scale 4, sub-pixel off: roughly 35-50% cheaper, can miss thin fast detail. Help quotes the measured GPU ms per game frame on an RX 7900 XTX (estimate + generated frames; Quality / Performance): 1080p 0.35 / 0.42 / 0.49 vs 0.19 / 0.26 / 0.31 at 2x / 3x / 4x, 1440p 0.50 / 0.62 / 0.71 vs 0.25 / 0.36 / 0.46; PSNR at 2x 29.15 vs 28.33 dB. Asked for 2026-10-04: *"actually show how much faster / slower quality to performance mode roughly is"* |
 | `framegen.safety` | `off` / `very_low` / `low` / `default` (default since 2026-10-28) / `high` | trust ramp (40,68) / (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30. `very_low` (2026-10-28, packed as safety value 4 with its third bit in bit 30 of the main config word) `Why:` ml-fg measured the ramp with Learned e2v5 + zero test at x2: (12,40) gave 0.16% ghost pixels and 1.3% whole-frame fallbacks; (40,68) gave +0.28 dB on game clips and +0.30 dB on video clips, 0.28% ghost pixels and ~0 fallbacks. A later ramp is smoother and holds the real frame far less often, but ghosts more where the motion is wrong |
