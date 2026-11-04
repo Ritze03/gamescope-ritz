@@ -1183,6 +1183,21 @@ content time) is untouched; only the timer's spacing differs. Unchanged: Pause a
 (Multiplier mode), backends that cannot exceed the refresh (SDL, non-tearing DRM), VRR handling,
 `o` further from a tick. Not verified live on the user's setup.
 
+**Oversupply re-check (2026-11-04): 0.9 kept.** Test: nested Wayland on the 280 Hz screen,
+Minecraft, Target = display refresh, limit 120, 20 s per value switched live in one session
+(temporary ConVar and a temporary counter of the host's presentation feedback, both removed),
+four interleaved repeats of 0.90 / 0.95 / 0.98 / 1.00. Frames actually shown to the host (the
+`wp_presentation` `presented` feedback count per second, vs `discarded`) in the undisturbed
+repeats: 0.90 168, 169; 0.95 171, 166, 181; 0.98 169, 169, 171; 1.00 173, 173, 169, 176 per
+second, game 120-122 fps, missed 0/60 everywhere, GPU busy 86-89% at every value. No
+difference beyond scene noise, and no periodic loss at 0.98 or 1.00. So 0.95-1.00 are as good
+as 0.9 in this case, but nothing measurable is saved either (GPU busy equal within 1-3 points),
+and this case never makes a paint late, which is what the surplus is for (the Forza journal
+above), so 0.9 stays. Not concluded: uncapped (game 60-200 fps, other compiles running on the
+machine, runs discarded) and a heavy GPU-saturated case. Also seen: the host shows only about
+170 of the roughly 280-311 frames sent per second (the rest are `discarded`), at every value.
+`Why:` do not lower the value on this evidence; revisit with a late-paint workload.
+
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
 connector's name, `"Wayland"`):
