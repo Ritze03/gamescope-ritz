@@ -15,6 +15,8 @@ The newest version below is the one this build reports.
 - **HUD and Crosshair with Frame generation**: drawing them no longer makes every output
   frame wait for the game's own GPU work, so Frame generation reaches its target with the
   game uncapped.
+- **Frame limiter**: Vulkan games now run at exactly the limit set, for example 120 on a
+  280 Hz screen instead of 140, and leave Frame generation room to reach its target.
 
 ### Removed
 - **Frame generation: Hold game while generating**: the switch is gone, because the

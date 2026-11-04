@@ -89,6 +89,9 @@ one place that wires all of it together at startup.
   `NullBinds_Tick()`, called once a frame from `steamcompmgr.cpp` next to
   `Zoom_FillRequest()`, keeps a profile's setting live even if the Shell is never
   opened. See [null-binds](../features/null-binds.md).
+- **Frame limiter** — `g_nSteamCompMgrTargetFPS` in `src/steamcompmgr.cpp` holds commits to the
+  vblank grid; `src/LimiterPace.h` decides when the WSI layer paces the game on its own timer
+  instead (the limiter file's second word). See [resolution-and-refresh](../features/resolution-and-refresh.md).
 - **Frame generation, motion blur and the lag spike buffer** (rail group MOTION) — `src/FrameGen/`:
   `FrameGenHost.{h,cpp}` (`fghost`, the renderer glue: frame ring, lazy per-slot synthesis,
   the one `recordSynthBlur` call, own command buffer, status; `Config` for frame generation,

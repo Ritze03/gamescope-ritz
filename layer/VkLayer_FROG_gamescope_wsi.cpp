@@ -7,6 +7,7 @@
 #include "gamescope-swapchain-client-protocol.h"
 #include "../src/color_helpers.h"
 #include "../src/layer_defines.h"
+#include "../src/LimiterPace.h"
 
 #include <charconv>
 #include <cstdio>
@@ -323,10 +324,17 @@ namespace GamescopeWSILayer {
   // This just utilizes the same code as the Mesa path used
   // for without the layer or GL though. Need to keep it around anyway.
   static std::mutex gamescopeSwapchainLimiterFDMutex;
-  static uint32_t gamescopeFrameLimiterOverride() {
+  // The compositor's limiter file: word 0, the frame limiter is on (all Mesa's own
+  // gamescope path reads); word 1, the rate this layer must pace the game to, or 0
+  // when the compositor limits by holding FIFO commits instead.
+  struct GamescopeLimiterInfo {
+    uint32_t enabled = 0;
+    uint32_t paceFps = 0;
+  };
+  static GamescopeLimiterInfo gamescopeLimiterInfo() {
     const char *path = getenv("GAMESCOPE_LIMITER_FILE");
     if (!path)
-        return 0;
+        return {};
 
     int fd = -1;
     {
@@ -341,15 +349,15 @@ namespace GamescopeWSILayer {
     }
 
     if (fd < 0)
-        return 0;
+        return {};
 
-    uint32_t overrideValue = 0;
-    pread(fd, &overrideValue, sizeof(overrideValue), 0);
-    return overrideValue;
+    GamescopeLimiterInfo info;
+    pread(fd, &info, sizeof(info), 0);
+    return info;
   }
 
   static bool gamescopeIsForcingFifo() {
-    return gamescopeFrameLimiterOverride() == 1;
+    return gamescopeLimiterInfo().enabled == 1;
   }
 
   struct GamescopeWaylandObjects {
@@ -547,6 +555,8 @@ namespace GamescopeWSILayer {
     std::unique_ptr<std::mutex> presentTimingMutex = std::make_unique<std::mutex>();
     std::vector<VkPastPresentationTimingGOOGLE> pastPresentTimings;
     uint64_t refreshCycle = 16'666'666;
+
+    uint64_t limitDeadline = 0; // Frame limiter: when the current frame's slot ends.
   };
   VKROOTS_DEFINE_SYNCHRONIZED_MAP_TYPE(GamescopeSwapchain, VkSwapchainKHR);
   static constexpr gamescope_swapchain_listener s_swapchainListener = {
@@ -1398,7 +1408,8 @@ namespace GamescopeWSILayer {
       const VkPresentInfoKHR*          pPresentInfo) {
       VkPresentInfoKHR presentInfo = *pPresentInfo;
 
-      bool forceFifo = gamescopeIsForcingFifo();
+      const GamescopeLimiterInfo limiter = gamescopeLimiterInfo();
+      bool forceFifo = limiter.enabled == 1;
 
       auto pPresentTimes = vkroots::FindInChain<const VkPresentTimesInfoGOOGLE>(&presentInfo);
 
@@ -1491,8 +1502,10 @@ namespace GamescopeWSILayer {
             // presents MAILBOX / IMMEDIATE (vsync off) or a limiter-aware one that kept
             // a non-FIFO mode would otherwise sail past the limit. Tearing is moot when
             // the user asked for a cap. (Driver side is MAILBOX regardless, see above.)
+            // When this layer paces the game itself it is the opposite: the compositor
+            // must not hold anything, not even a FIFO app's commits.
             if (forceFifo)
-              presentMode = VK_PRESENT_MODE_FIFO_KHR;
+              presentMode = limiter.paceFps ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
             gamescope_swapchain_set_present_mode(gamescopeSwapchain->object, uint32_t(presentMode));
           }
         }
@@ -1500,6 +1513,7 @@ namespace GamescopeWSILayer {
 
       VkResult result = pDispatch->QueuePresentKHR(queue, &presentInfo);
 
+      uint64_t limitDeadline = 0;
       for (uint32_t i = 0; i < presentInfo.swapchainCount; i++) {
         VkSwapchainKHR swapchain = presentInfo.pSwapchains[i];
 
@@ -1549,7 +1563,20 @@ namespace GamescopeWSILayer {
               fprintf(stderr, "[Gamescope WSI] QueuePresentKHR: Failed to get cached window size for swapchain %u\n", i);
             }
           }
+
+          if (limiter.paceFps && !limitDeadline) {
+            limitDeadline = limiterpace::NextDeadline(gamescopeSwapchain->limitDeadline, getTimeMonotonic(), limiter.paceFps);
+            gamescopeSwapchain->limitDeadline = limitDeadline;
+          }
         }
+      }
+
+      // Frame limiter: hold the game here, after its present and before it starts the
+      // next frame, where a game's own limiter sleeps. Not inside the loop above:
+      // GamescopeSwapchain::get() keeps the whole map locked for as long as it is held.
+      if (limitDeadline) {
+        const timespec until = { .tv_sec = time_t(limitDeadline / 1'000'000'000ul), .tv_nsec = long(limitDeadline % 1'000'000'000ul) };
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &until, nullptr);
       }
 
       return result;

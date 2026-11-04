@@ -289,6 +289,59 @@ limiter flip, unchanged. `Why:` tearing is moot when the user asked for a cap, a
 only the compositor's pacing hint, not what the driver presents. Needs the layer's
 `GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before.
 
+### The limiter paces Vulkan games in the layer (2026-11-04)
+
+The compositor's limiter works at its paints: without VRR it releases every Nth vblank (an integer
+divisor, so 120 on 280 Hz is really 140); with VRR a time schedule is only looked at when something
+wakes the loop. A Vulkan game is now paced by the WSI layer instead: `update_runtime_info()` writes
+a second word to the limiter file, the rate to pace to (`g_uLimiterPaceFps`, set in the main loop),
+and after each present the layer sleeps to an absolute deadline
+(`limiterpace::NextDeadline()`, `src/LimiterPace.h`, `clock_nanosleep`) and reports MAILBOX so the
+compositor holds nothing. No per-frame traffic, no protocol: it reaches X11 bypass, X11 non-bypass
+and native Wayland swapchains alike.
+
+- **Who paces** (`limiterpace::LayerPaces()`): the layer, unless VRR is off, none of frame
+  generation / motion blur / the lag spike buffer is on, and the limit divides the refresh. `Why`
+  that case stays on the vblank grid: it is exact there and locked to the display, where a timer
+  would beat against the refresh (60 on 59.94 Hz drops a frame every 16 s). A game without our
+  layer (GL, plain X11) never reads the word and is limited as before, frame callbacks included.
+- **Where it sleeps**: after the present, before the game's next frame, where Minecraft's own
+  limiter sleeps, so input is read after the wait. Sleeping before the driver's present was tried:
+  no better on output, and it delays a finished frame by the whole sleep.
+- **Why not at the paints.** Traced with the paint times beside the game's acquire and present
+  times: under the old limiter the game sat blocked in `vkAcquireNextImageKHR` for 6.0 ms per
+  frame, and came back 0.01 ms (median) after a paint's wake-up, because that is when a held commit
+  is let go and its buffer freed. With about 3.5 ms of CPU to record its frame it then presented
+  right before the next paint, 883 of 3000 paints fell within 1 ms after a present, and those
+  waited 5.4 ms on average, 7.4 at most, for the frame that had just been queued. The game's limiter
+  and the layer's put the frame at whatever phase the timer gives, so it hits fewer paints, and a
+  paint that is hit waits only for what is left of the burst. That is the gap between the 6.5 and
+  3.5 ms maxima under the two limiters. It stopped mattering much once the wait itself was fixed,
+  see [frame-generation](frame-generation.md#paints-behind-the-games-gpu-burst-2026-11-04), but the
+  held game stays wrong: output locked at 2.00x, and a limit that is not the number asked for.
+- `Why` a word in the limiter file and not the frame gate the Hold game switch used: the layer
+  already reads that file at every present; the gate needs compositor traffic per frame, and a timer
+  on the compositor's loop to make it exact.
+
+Measured (Minecraft, 280 Hz, VRR on, Target = refresh, Smoothness, HUD fix in, same session, two
+25 s runs each; the worktree build with the limiter path switched live):
+
+| Limit | Old limiter | Layer |
+| --- | --- | --- |
+| 90 | game 89, output 121-164 | game 90, output 311 |
+| 120 | game 118, output 243-281 | game 120.5, output 311 |
+| 160 | game 157, output 310 | game 160, output 311 |
+
+Before the HUD fix, and for comparison Minecraft's own limit of 120 in the same scene: old limiter
+game 113-117, output 220-240; layer game 121, output 299-300; Minecraft's own game 119, output
+300-301, `other` paints missing 35-41% in both. With VRR off the old limiter gave output 184-195
+and the layer 302.
+
+**Not verified live:** a game that does not bypass Xwayland (frame callbacks are still gated there,
+so with VRR it may run a little under the limit); DXVK / vkd3d-proton games (the limiter-aware
+path), Minecraft being the only game tested; the rate on a real display with frame generation off
+was checked headless only.
+
 ## Honest limits (the help text says these too)
 
 Not achievable at runtime in nested mode, and not promised anywhere in the UI or here:

@@ -88,6 +88,7 @@
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
 #include "UpscaleFilterGate.h"
+#include "LimiterPace.h"
 #include "vblankmanager.hpp"
 #include "log.hpp"
 #include "Utils/Defer.h"
@@ -979,6 +980,9 @@ uint32_t g_uCurrentBasePlaneAppID = 0;
 bool g_bCurrentBasePlaneIsFifo = false;
 
 static int g_nSteamCompMgrTargetFPS = 0;
+// The frame limiter's rate for the WSI layer to pace the game to, or 0 while the limiter
+// holds commits to the vblank grid here instead (see the main loop).
+static uint32_t g_uLimiterPaceFps = 0;
 static uint64_t g_uDynamicRefreshEqualityTime = 0;
 static int g_nDynamicRefreshRate[gamescope::GAMESCOPE_SCREEN_TYPE_COUNT] = { 0, 0 };
 // Delay to stop modes flickering back and forth.
@@ -6681,8 +6685,9 @@ update_runtime_info()
 	if ( g_nRuntimeInfoFd < 0 )
 		return;
 
-	uint32_t limiter_enabled = g_nSteamCompMgrTargetFPS != 0 ? 1 : 0;
-	pwrite( g_nRuntimeInfoFd, &limiter_enabled, sizeof( limiter_enabled ), 0 );
+	// Word 0 is what Mesa's own gamescope path reads too; see the layer for word 1.
+	const uint32_t info[ 2 ] = { g_nSteamCompMgrTargetFPS != 0 ? 1u : 0u, g_uLimiterPaceFps };
+	pwrite( g_nRuntimeInfoFd, info, sizeof( info ), 0 );
 }
 
 static void
@@ -10663,14 +10668,17 @@ steamcompmgr_main(int argc, char **argv)
 			int nRealRefreshmHz = g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh;
 			g_SteamCompMgrAppRefreshCycle = gamescope::mHzToRefreshCycle( nRealRefreshmHz );
 			g_SteamCompMgrLimitedAppRefreshCycle = g_SteamCompMgrAppRefreshCycle;
+			uint32_t uPaceFps = 0;
 			if ( g_nSteamCompMgrTargetFPS )
 			{
 				int nRealRefreshHz = gamescope::ConvertmHzToHz( nRealRefreshmHz );
 				int nTargetFPS = g_nSteamCompMgrTargetFPS;
 				nTargetFPS = std::min<int>( nTargetFPS, nRealRefreshHz );
 
-				if ( GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive() )
+				const bool bVRR = GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive();
+				if ( limiterpace::LayerPaces( bVRR, fghost::Active(), nRealRefreshHz, nTargetFPS ) )
 				{
+					uPaceFps = uint32_t( g_nSteamCompMgrTargetFPS );
 					g_SteamCompMgrLimitedAppRefreshCycle = gamescope::mHzToRefreshCycle( gamescope::ConvertHztomHz( nTargetFPS ) );
 				}
 				else
@@ -10679,6 +10687,11 @@ steamcompmgr_main(int argc, char **argv)
 
 					g_SteamCompMgrLimitedAppRefreshCycle = g_SteamCompMgrAppRefreshCycle * nVblankDivisor;
 				}
+			}
+			if ( uPaceFps != g_uLimiterPaceFps )
+			{
+				g_uLimiterPaceFps = uPaceFps;
+				update_runtime_info();
 			}
 		}
 
