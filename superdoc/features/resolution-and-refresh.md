@@ -287,7 +287,8 @@ reports FIFO to the compositor for every app (`layer/VkLayer_FROG_gamescope_wsi.
 `QueuePresentKHR`); aware apps still also see FIFO-only mode lists and get `OUT_OF_DATE` once on a
 limiter flip, unchanged. `Why:` tearing is moot when the user asked for a cap, and the report is
 only the compositor's pacing hint, not what the driver presents. Needs the layer's
-`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before.
+`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before. Since 2026-11-04 this applies only while the
+limiter is on the vblank grid; see the next section.
 
 ### The limiter paces Vulkan games in the layer (2026-11-04)
 
@@ -311,7 +312,7 @@ and native Wayland swapchains alike.
 - **Why not at the paints.** Traced with the paint times beside the game's acquire and present
   times: under the old limiter the game sat blocked in `vkAcquireNextImageKHR` for 6.0 ms per
   frame, and came back 0.01 ms (median) after a paint's wake-up, because that is when a held commit
-  is let go and its buffer freed. With about 3.5 ms of CPU to record its frame it then presented
+  is let go and its buffer freed. With about 3 ms of CPU to record its frame it then presented
   right before the next paint, 883 of 3000 paints fell within 1 ms after a present, and those
   waited 5.4 ms on average, 7.4 at most, for the frame that had just been queued. The game's limiter
   and the layer's put the frame at whatever phase the timer gives, so it hits fewer paints, and a
@@ -339,8 +340,10 @@ and the layer 302.
 
 **Not verified live:** a game that does not bypass Xwayland (frame callbacks are still gated there,
 so with VRR it may run a little under the limit); DXVK / vkd3d-proton games (the limiter-aware
-path), Minecraft being the only game tested; the rate on a real display with frame generation off
-was checked headless only.
+path), Minecraft being the only game tested. With frame generation off the rate was checked
+headless only (vkcube at 280 Hz, frames over time: limit 120 gave 119.5 on X11 bypass with FIFO,
+119.8 with MAILBOX, 118.6 on native Wayland; limit 140, on the grid, 139.9; at 60 Hz, limit 60,
+60.1), not by eye on a display.
 
 ## Honest limits (the help text says these too)
 

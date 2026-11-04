@@ -1033,12 +1033,29 @@ The settings overlay and the toasts still draw per paint while they are on scree
 
 Measured (Minecraft, 280 Hz, VRR on, Target = refresh, Smoothness, motion blur 2 samples, Learned
 e2v5 half, HUD and Crosshair on, fixed view, worktree build, the same session and two 25 s runs
-each, switched live; output 311 is the extra timer's deliberate 0.9-tick oversupply):
+each, switched live; output 311 is the extra timer's deliberate 0.9-tick oversupply; the second
+uncapped run with the fix, with compilers running beside it, gave output 281-311, and both limit
+120 runs with the fix had compilers beside them, hence the game's spread):
 
 | Game limit | HUD drawn at every paint | HUD drawn when it changes |
 | --- | --- | --- |
-| none | game 227-232, output 227-235, missed 50-60/60, draw 4.4-4.7 ms, `other` wait 1.7-2.1 mean | game 210-225, output 302-311, missed 0-14/60, draw 0.65-1.05 ms, `other` wait 0.1-0.2 mean |
-| 120 | game 120, output 247-252, missed 26-30/60, `other` wait 3.4 mean | game 117-120, output 311, missed 0-2/60, `other` wait 0.4-0.5 mean |
+| none | game 225-238, output 226-246, missed 50-60/60, draw 4.4-4.7 ms, `other` wait 1.7-2.1 mean | game 223-226, output 311, missed 0/60, draw 0.65 ms, `other` wait 0.1 mean |
+| 120 | game 118-125, output 240-256, missed 26-30/60, `other` wait 3.4 mean | game 107-129, output 311, missed 0-2/60, `other` wait 0.4-0.5 mean |
+
+The final build from the ritz-get install (LTO), same settings, 30 s runs without compilers
+running beside it, render distance 16 unless noted; every row missed 0-4 of 60 paints:
+
+| Case | Game | Output |
+| --- | --- | --- |
+| Fullscreen, VRR, uncapped | 216-231 | 305-311 |
+| Fullscreen, VRR, limit 90 / 120 / 160 | 89-93 / 117-124 / 158-166 | 311 |
+| Window, no VRR, uncapped | 229-237 | 309-311 |
+| Window, no VRR, limit 120 | 119-124 | 310-311 |
+| Fullscreen, VRR, render distance 40, uncapped, GPU busy 100% | 151-156 | 311 |
+
+What is left of the stall: when the digits change, that one paint still waits for the game's
+frame (`wait` max 3-9 ms, about 1% of paints in the render distance 40 scene). No longer visible
+in `missed`.
 
 `Why` it hid so long: with the game limited by its own limiter and light shaders the bursts are
 short and fall at random phases, so most paints missed them; heavier shaders or a limit that frees
