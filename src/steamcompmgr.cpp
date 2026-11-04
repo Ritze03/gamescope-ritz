@@ -108,6 +108,7 @@
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/AtRefreshExtra.h"
+#include "FrameGen/EarlyPredict.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/HoldController.h"
 #include "FrameGen/TearHint.h"
@@ -7917,6 +7918,12 @@ namespace
 		// schedule: ulNextReleaseNs is when the next time-based release is due.
 		fghold::Controller holdCtl;
 		uint64_t ulNextReleaseNs = 0;
+
+		// -- the early pair (FrameGen_EarlyPredict()) --
+		// The inputs the last paint gave the pacer: the prediction asks a COPY of the pacer
+		// the question the next paint will ask, with these and the next paint's V.
+		fgpacing::Pacer::Inputs lastIn;
+		bool bHaveLastIn = false;
 	};
 	FrameGenPacing_t s_FrameGen;
 
@@ -8211,9 +8218,9 @@ namespace
 			char szPair[ 128 ], szOther[ 128 ], szEarly[ 80 ];
 			Bucket( "pair", split.pair, szPair, sizeof( szPair ) );
 			Bucket( "other", split.other, szOther, sizeof( szOther ) );
-			// "early on n=170 exec 1.2/2.0": the early pair's own submissions (not inside any paint)
-			snprintf( szEarly, sizeof( szEarly ), "early %s n=%u exec %.1f/%.1f", fghost::EarlyPairEnabled() ? "on" : "off", split.early.n,
-				split.early.n ? split.early.execSum / split.early.n : 0.0, split.early.execMax );
+			// "early on n=170 wasted=3 exec 1.2/2.0": the early pair's own submissions (not inside any paint), and early estimates no paint used
+			snprintf( szEarly, sizeof( szEarly ), "early %s n=%u wasted=%u exec %.1f/%.1f", fghost::EarlyPairEnabled() ? "on" : "off", split.early.n,
+				split.early.miss, split.early.n ? split.early.execSum / split.early.n : 0.0, split.early.execMax );
 			snprintf( szSplit, sizeof( szSplit ), "paint split: %s, %s, %s ms", szEarly, szPair, szOther );
 		}
 
@@ -8298,6 +8305,34 @@ namespace
 // displayed. NOT the time of this call, which is the main loop noticing it, and
 // not the vblank that latches it -- those are quantised to the refresh (+-7 ms
 // at 60 fps on 144 Hz), arrival is not.
+// The early pair: predict which pair the NEXT paint plays and have the per-pair GPU work (ring
+// copy of a new frame, motion estimate) submitted now, outside a paint, on the same queue.
+// Run right after a paint (the gap before the next one) and when a real frame arrives.
+// pCommit is the newest real frame: its acquire fence has signalled (a done commit) and we are
+// on the paint's thread. The prediction is a COPY of the pacer asked OnPaint at the next
+// paint's V (the vblank grid, or the extra timer's interval), so every Smoothness / Low
+// latency / blur rule is the library's own; a wrong guess costs one wasted estimate
+// (counted), never a wrong picture, because the paint compares ids and re-estimates.
+static void FrameGen_EarlyPredict( steamcompmgr_win_t *w, commit_t *pCommit )
+{
+	if ( !s_FrameGen.bHaveLastIn || !pCommit || !pCommit->vulkanTex || !fghost::EarlyPairEnabled() )
+		return;
+	if ( w->isSteamStreamingClient || window_is_steam( w ) || is_fading_out() )
+		return;
+	const uint64_t ulNow = get_time_in_nanos();
+	const uint64_t ulTickNs = uint64_t( FrameGen_TickMs() * 1e6 );
+	const uint64_t ulExtraNs = FrameGen_ExtraPaced() ? uint64_t( fgatrefresh::TimerIntervalMs( s_FrameGen.pacer.OutputMs(), FrameGen_TickMs() ) * 1e6 ) : 0;
+	fgpacing::Pacer::Inputs in = s_FrameGen.lastIn;
+	in.now = ulNow;
+	in.presentNs = fgearly::NextPaintV( s_FrameGen.ulLastV, ulNow, ulTickNs, ulExtraNs );
+	fgpacing::Pacer next = s_FrameGen.pacer;
+	const fgpacing::Pacer::Decision d = next.OnPaint( in, pCommit->commitID, true, true );
+	if ( d.reset || d.inert )
+		return;
+	const bool bPair = !d.skip && d.prevId != 0 && d.currId != d.prevId;
+	fghost::EarlyPair( pCommit->vulkanTex, pCommit->colorspace(), pCommit->commitID, bPair ? d.prevId : 0, bPair ? d.currId : 0 );
+}
+
 static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 {
 	fgpacing::FrameFormat layer;
@@ -8310,10 +8345,7 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 	s_FrameGen.holdCtl.OnArrival( get_time_in_nanos() );
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
 	s_FrameGen.bArrivalRepaint = true;
-	// The commit's acquire fence has signalled (that is what made it a done commit) and this is
-	// the paint's thread: do the ring copy and the motion estimate now, not in the next paint.
-	if ( pCommit->vulkanTex && !w->isSteamStreamingClient && !window_is_steam( w ) && !is_fading_out() )
-		fghost::EarlyPair( pCommit->vulkanTex, pCommit->colorspace(), pCommit->commitID );
+	FrameGen_EarlyPredict( w, pCommit );
 }
 
 // "Hold game while generating", once per paint (also a cadence-skip one).
@@ -8398,6 +8430,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 			s_FrameGen.bRepaintNext = false;
 			s_FrameGen.bExtraWantNext = false;
 			s_FrameGen.pacer.Reset();
+			s_FrameGen.bHaveLastIn = false;
 			fghost::SetFrame( fghost::FrameRequest{} );
 			FrameGen_SetGateTarget( nullptr );
 
@@ -8446,6 +8479,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		// client, no commit yet): the renderer stays inert and the next game frame
 		// starts a fresh sequence.
 		s_FrameGen.pacer.Discontinuity();
+		s_FrameGen.bHaveLastIn = false;
 		s_FrameGen.bRepaintNext = false;
 		s_FrameGen.bExtraWantNext = false;
 		fghost::SetFrame( fghost::FrameRequest{} );
@@ -8541,6 +8575,8 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	request.showId = d.showId;
 	request.historyDepth = s_FrameGen.pacer.HistoryDepth();
 	fghost::SetFrame( request );
+	s_FrameGen.lastIn = in;
+	s_FrameGen.bHaveLastIn = true;
 	s_FrameGen.bRepaintNext = d.repaintNext;
 	s_FrameGen.bExtraWantNext = false;   // this paint answered it; PostPaint sets it again if more is due
 
@@ -8568,6 +8604,15 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 // Right after hasRepaint was cleared (see the block comment above).
 static void FrameGen_PostPaint()
 {
+	// Right after a paint: prepare the pair the next one will play (the gap, not a random
+	// point just before the next paint). The base commit is the newest real frame.
+	if ( s_FrameGen.bActive )
+	{
+		global_focus_t *pFocus = GetCurrentFocus();
+		steamcompmgr_win_t *pWin = pFocus ? pFocus->focusWindow : nullptr;
+		if ( pWin && g_HeldCommits[ HELD_COMMIT_BASE ] )
+			FrameGen_EarlyPredict( pWin, g_HeldCommits[ HELD_COMMIT_BASE ].get() );
+	}
 	if ( s_FrameGen.bRepaintNext )
 	{
 		s_FrameGen.bRepaintNext = false;

@@ -548,14 +548,18 @@ namespace fghost
 	//     frame) and records nothing.
 	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace );
 
-	// The early pair: called from steamcompmgr's frame-arrival path (same thread as the paint,
-	// the commit's acquire fence has signalled) with the commit's own texture. Does the paint's
-	// "new real frame" work (ring copy, UI observe, motion estimate for the pair previous real
-	// frame -> this one) in its own submission on the same queue, so the paint records only the
-	// synthesis. Does nothing (the paint does it all, as before) when the framegen_early_pair
-	// ConVar is off, on the first frame, after a reset / format / size / colourspace change,
-	// while the last paint was inert, or while the pair played is not the newest one (Smoothness,
-	// lag spike buffer).
-	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId );
+	// The early pair, called by steamcompmgr OUTSIDE a paint (same thread; commit texture
+	// readable): right after a paint, and when a real frame arrives. The caller predicts the
+	// pair the NEXT paint will play (a copy of the pacer asked its next OnPaint) and passes it
+	// as ulPrevId / ulCurrId (0 = none). This does the paint's per-pair work early, in its own
+	// submission on the same queue: the ring copy and UI observe when ulCommitId is not in the
+	// ring yet, and the motion estimate for the predicted pair when both its frames are in the
+	// ring and it is not the stored estimate. Same-queue order puts every earlier synth ahead
+	// of it, so replacing the one stored estimate is safe. The paint then records only the
+	// synthesis; if it plays another pair it estimates again, which is counted as wasted.
+	// Does nothing when the framegen_early_pair ConVar is off, while the lag spike buffer is
+	// on, on the first frame, after a reset / format / size / colourspace change, or while the
+	// last paint was inert.
+	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId, uint64_t ulPrevId, uint64_t ulCurrId );
 	bool EarlyPairEnabled();   // the ConVar, for the status line
 }
