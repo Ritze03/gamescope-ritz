@@ -1148,6 +1148,10 @@ Mechanism (Vulkan games through our WSI layer only; GL / plain X11 are never hel
 The flag is host-only: bit 7 of `FrameGenHost.cpp`'s Learned word (the main word is full); the
 library never sees it.
 
+### Paint split readout (diagnostic, 2026-11-04)
+
+The status line carries `paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 miss=20 cpu ... ms` (mean/max over the line's period, two buckets: paints that consumed a new real frame, and all others; no behaviour change). `Why:` Minecraft on 280 Hz lost about one paint per real frame while the GPU was only half busy, and two causes look identical in `draw max`: gamescope's own work is long (the pair's flow estimate runs in the paint that first sees the frame), or the composite is submitted on time but queues behind the game's GPU burst. `exec` is GPU execution of frame generation's command buffer plus the composite's (timestamp pairs, `vulkan_paint_split_*` in `rendervulkan.cpp`, read a paint later, never blocking); `wait` is first submit to GPU-finished minus `exec`, so high `exec` means suspect 1 and high `wait` with low `exec` means suspect 2. `cpu` is vblank wake to the composite's submit. Caveats: "GPU finished" is the CPU time `vulkan_wait()` returned (every backend waits right after the composite; a late wait would inflate `wait`); `miss` is wake to GPU-finished past the wake-up lead, so it can undercount versus the timer's draw time (Present's tail is not in it); `cpu` is long for a paint not woken by the vblank timer.
+
 ### Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is

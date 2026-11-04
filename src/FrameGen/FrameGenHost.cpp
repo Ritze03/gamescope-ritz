@@ -1626,6 +1626,7 @@ namespace fghost
 			if ( !pCmd )
 			{
 				pCmd = g_device.commandBuffer();
+				vulkan_paint_split_begin( pCmd.get() );   // diagnostic timing split
 				H.interp.beginFrame();   // once per command buffer, before its first record
 			}
 			return pCmd.get();
@@ -1653,6 +1654,7 @@ namespace fghost
 				H.bEstimateValid = false;
 
 			CVulkanCmdBuffer *pCb = Cmd();
+			vulkan_paint_split_mark_pair();
 			pCb->bindPipeline( g_device.pipeline( CopyShader( H.plan ) ) );
 			pCb->bindTexture( 0, pLayer0 );
 			pCb->setTextureSrgb( 0, true );             // raw UNORM view: encoded values, as the effects passes read it
@@ -1867,6 +1869,7 @@ namespace fghost
 
 		if ( pCmd )
 		{
+			vulkan_paint_split_end( pCmd.get() );
 			const uint64_t ulSeq = g_device.submit( std::move( pCmd ) );
 			if ( bProfileWritten )
 				H.ulProfileSeq = ulSeq;

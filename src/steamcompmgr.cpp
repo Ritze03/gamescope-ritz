@@ -8167,7 +8167,9 @@ namespace
 		// missed 37/60 (>lead), 2/60 (>refresh)": where a paint's time goes. Draw = wake to end of Present over the
 		// last 60 paints; missed = those that ran past their wake-up lead (ended after
 		// their vblank) and, second, those longer than one whole refresh; fg gpu = the library's GPU timestamps (last values), n/a without.
-		char szTiming[ 200 ];
+		char szTiming[ 256 ];
+		// "paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 ... ms" (mean/max; see vulkan_paint_split_*)
+		char szSplit[ 320 ];
 		{
 			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			// What the timer actually used last: measured (non-VRR only), VRR's fixed
@@ -8197,13 +8199,26 @@ namespace
 			snprintf( szGpu, sizeof( szGpu ), "estimate %s synth %s pair %s ui %s", szE, szS, szP, szU );
 			snprintf( szTiming, sizeof( szTiming ), "draw mean %.2f / max %.2f ms, fg gpu: %s ms, missed %zu/%zu (>lead), %zu/%zu (>refresh)",
 				Timer.GetRecentMeanDrawTime() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, szGpu, nMissed, nDraws, nMissedRefresh, nDrawsR );
+
+			PaintSplitStats_t split;
+			vulkan_paint_split_take( &split );
+			auto Bucket = []( const char *pszName, const PaintSplitAgg_t &A, char *p, size_t cb )
+			{
+				const double d = A.n ? double( A.n ) : 1.0;
+				snprintf( p, cb, "%s n=%u miss=%u cpu %.1f/%.1f exec %.1f/%.1f wait %.1f/%.1f", pszName, A.n, A.miss,
+					A.cpuSum / d, A.cpuMax, A.execSum / d, A.execMax, A.waitSum / d, A.waitMax );
+			};
+			char szPair[ 128 ], szOther[ 128 ];
+			Bucket( "pair", split.pair, szPair, sizeof( szPair ) );
+			Bucket( "other", split.other, szOther, sizeof( szOther ) );
+			snprintf( szSplit, sizeof( szSplit ), "paint split: %s, %s ms", szPair, szOther );
 		}
 
 		// "hold: off" / "hold: on, not armed (...)" / "hold: armed (...)": whether
 		// "Hold game while generating" is reaching a game. armed with held 0 = the
 		// game's commits are not landing on the surface the gate holds; held > 0 with
 		// released 0 = the pacer never says "last output of the pair".
-		char szHold[ 420 ];
+		char szHold[ 640 ];
 		{
 			wlserver_frame_gate_stats_t gate;
 			wlserver_frame_gate_take_stats( &gate );
@@ -8233,15 +8248,15 @@ namespace
 		// 257-279 presented against a 280 target while still "generating") never
 		// changes state, so it never appeared. One line per 5 s, only while active.
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s, %s",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
 				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szHold );
+				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szSplit, szHold );
 		else
-			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s",
+			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s, %s",
 				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szHold );
+				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szSplit, szHold );
 	}
 
 	fghost::PacingStatus FrameGen_ToStatus( const fgpacing::Pacer::Report &r )

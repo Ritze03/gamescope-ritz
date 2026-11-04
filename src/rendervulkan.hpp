@@ -836,6 +836,23 @@ bool vulkan_ui_crop_read( uint8_t *pRgba, uint32_t uWidth, uint32_t uHeight );
 
 std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *frameInfo, gamescope::Rc<CVulkanTexture> pScreenshotTexture, bool partial, gamescope::Rc<CVulkanTexture> pOutputOverride = nullptr, bool increment = true, std::unique_ptr<CVulkanCmdBuffer> pInCommandBuffer = nullptr );
 void vulkan_wait( uint64_t ulSeqNo, bool bReset );
+
+// DIAGNOSTIC (Frame generation status line, "paint split"): where a paint's time goes.
+// Per paint: cpu = wake to the composite's submit; exec = GPU execution of the
+// frame generation command buffer plus the composite's (timestamp pairs); wait =
+// first submit to GPU-finished minus exec, i.e. queue delay. Two buckets: paints that
+// consumed a new real frame ("pair") and the rest. See rendervulkan.cpp.
+struct PaintSplitAgg_t
+{
+	uint32_t n = 0, miss = 0;
+	double cpuSum = 0, execSum = 0, waitSum = 0;   // ms
+	float cpuMax = 0, execMax = 0, waitMax = 0;    // ms
+};
+struct PaintSplitStats_t { PaintSplitAgg_t pair, other; };
+void vulkan_paint_split_begin( CVulkanCmdBuffer *pCmd );   // frame generation's command buffer, first
+void vulkan_paint_split_end( CVulkanCmdBuffer *pCmd );     // ... and just before its submit
+void vulkan_paint_split_mark_pair();                       // this paint consumed a new real frame
+void vulkan_paint_split_take( PaintSplitStats_t *pOut );   // copy and reset the aggregate
 // Launch-time warm-up for the overlay layers -- called once from
 // SettingsOverlay.cpp's launch block. Synchronously compiles the final-pass
 // composite pipeline vulkan_composite() would select for *pFrameInfo with

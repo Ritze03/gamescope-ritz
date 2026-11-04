@@ -45,6 +45,7 @@
 #include "Overlay/Notifications.h"
 #include "FrameGen/FrameGenHost.h"
 #include "convar.h"
+#include "vblankmanager.hpp"
 
 #include "cs_composite_blit.h"
 #include "cs_composite_blur.h"
@@ -4067,6 +4068,128 @@ static void effects_gpu_timer_collect()
 	s_nEffectsTimerHistoryCount = std::min( s_nEffectsTimerHistoryCount + 1u, kEffectsTimerHistory );
 }
 
+// ---- DIAGNOSTIC: paint split (Frame generation status line) -----------------
+// One slot per in-flight paint, four timestamps each: frame generation's command
+// buffer (start, end; it is its own submission, queued ahead of the composite) and
+// the composite's (start, end). exec = both spans; wait = (GPU finished) minus
+// (first submit of the paint) minus exec. "GPU finished" is the CPU time at which
+// vulkan_wait() on the composite's sequence returned: every backend waits right
+// after the composite, so it is accurate to the wait's wake-up latency (small), but
+// a backend that waited late would inflate wait. Results are read a paint later with
+// no WAIT bit, never blocking. Same thread as the paint loop; the aggregate has a
+// mutex only because the status line reads it.
+// Miss = wake to GPU-finished past GetLastLead(); a lower bound of the draw time
+// the timer sees (Present's own tail is not in it). cpu uses the vblank wake time,
+// so a paint not woken by the vblank timer shows a long cpu.
+static constexpr uint32_t kPaintSplitSlots = 4;
+struct PaintSplitSlot_t
+{
+	bool bBusy = false, bFg = false, bPair = false;
+	uint64_t ulSeq = 0, ulWake = 0, ulFirstSubmit = 0, ulSubmit = 0, ulDone = 0;
+};
+static VkQueryPool s_psPool = VK_NULL_HANDLE;
+static PaintSplitSlot_t s_psSlot[ kPaintSplitSlots ];
+static uint32_t s_psNext = 0;
+static int s_psCur = -1;   // slot being built this paint
+static std::mutex s_psMutex;
+static PaintSplitStats_t s_psStats;
+
+static void paint_split_collect()
+{
+	for ( uint32_t i = 0; i < kPaintSplitSlots; i++ )
+	{
+		PaintSplitSlot_t &S = s_psSlot[ i ];
+		if ( !S.bBusy || S.ulSeq == 0 )
+			continue;
+		if ( S.ulDone == 0 )
+		{
+			if ( g_device.completedSeqNo() >= S.ulSeq )
+				S = {};   // finished but never waited on: no sample
+			continue;
+		}
+		uint64_t r[ 4 ] = {};
+		// Without a frame generation buffer only the composite pair was written.
+		const uint32_t uFirst = S.bFg ? 0 : 2;
+		if ( g_device.vk.GetQueryPoolResults( g_device.device(), s_psPool, i * 4 + uFirst, 4 - uFirst, sizeof( r ), r + uFirst, sizeof( uint64_t ), VK_QUERY_RESULT_64_BIT ) != VK_SUCCESS )
+			continue;   // not ready yet: try next paint
+		const double flNs = double( g_device.timestampPeriodNs() );
+		const double flExec = ( double( r[ 3 ] - r[ 2 ] ) + ( S.bFg ? double( r[ 1 ] - r[ 0 ] ) : 0.0 ) ) * flNs / 1e6;
+		const double flCpu = double( S.ulSubmit - S.ulWake ) / 1e6;
+		const double flWait = std::max( 0.0, double( S.ulDone - S.ulFirstSubmit ) / 1e6 - flExec );
+		if ( flExec >= 0.0 && flExec < 1000.0 )
+		{
+			std::lock_guard<std::mutex> lock( s_psMutex );
+			PaintSplitAgg_t &A = S.bPair ? s_psStats.pair : s_psStats.other;
+			A.n++;
+			A.miss += ( S.ulDone - S.ulWake ) > GetVBlankTimer().GetLastLead();
+			A.cpuSum += flCpu; A.execSum += flExec; A.waitSum += flWait;
+			A.cpuMax = std::max( A.cpuMax, float( flCpu ) );
+			A.execMax = std::max( A.execMax, float( flExec ) );
+			A.waitMax = std::max( A.waitMax, float( flWait ) );
+		}
+		S = {};
+	}
+}
+
+// Opens this paint's slot (once) and resets its queries; false = diagnostic off/busy.
+static bool paint_split_open( CVulkanCmdBuffer *pCmd, uint32_t uFirstQuery, uint32_t uCount )
+{
+	if ( !g_device.supportsTimestamps() )
+		return false;
+	if ( s_psPool == VK_NULL_HANDLE )
+	{
+		VkQueryPoolCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = kPaintSplitSlots * 4 };
+		if ( g_device.vk.CreateQueryPool( g_device.device(), &ci, nullptr, &s_psPool ) != VK_SUCCESS )
+		{
+			s_psPool = VK_NULL_HANDLE;
+			return false;
+		}
+	}
+	if ( s_psCur < 0 )
+	{
+		paint_split_collect();
+		const uint32_t i = s_psNext % kPaintSplitSlots;
+		if ( s_psSlot[ i ].bBusy )
+			return false;   // still in flight: skip this paint
+		s_psNext++;
+		s_psSlot[ i ] = {};
+		s_psSlot[ i ].bBusy = true;
+		s_psSlot[ i ].ulWake = g_SteamCompMgrVBlankTime.ulWakeupTime;
+		s_psCur = int( i );
+	}
+	g_device.vk.CmdResetQueryPool( pCmd->rawBuffer(), s_psPool, s_psCur * 4 + uFirstQuery, uCount );
+	g_device.vk.CmdWriteTimestamp( pCmd->rawBuffer(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_psPool, s_psCur * 4 + uFirstQuery );
+	return true;
+}
+
+void vulkan_paint_split_begin( CVulkanCmdBuffer *pCmd )
+{
+	if ( paint_split_open( pCmd, 0, 2 ) )
+		s_psSlot[ s_psCur ].bFg = true;
+}
+
+void vulkan_paint_split_end( CVulkanCmdBuffer *pCmd )
+{
+	if ( s_psCur < 0 || !s_psSlot[ s_psCur ].bFg )
+		return;
+	g_device.vk.CmdWriteTimestamp( pCmd->rawBuffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_psPool, s_psCur * 4 + 1 );
+	s_psSlot[ s_psCur ].ulFirstSubmit = get_time_in_nanos();
+}
+
+void vulkan_paint_split_mark_pair()
+{
+	if ( s_psCur >= 0 )
+		s_psSlot[ s_psCur ].bPair = true;
+}
+
+void vulkan_paint_split_take( PaintSplitStats_t *pOut )
+{
+	paint_split_collect();
+	std::lock_guard<std::mutex> lock( s_psMutex );
+	*pOut = s_psStats;
+	s_psStats = {};
+}
+
 // Called once, right after slot 0 is bound and before the measure dispatch --
 // i.e. the very top of the pre-pass block.
 static void effects_gpu_timer_begin( CVulkanCmdBuffer *cmdBuffer )
@@ -5646,7 +5769,12 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	// Overrides (screenshots, upscale cache) are logical-sized, so never rotated.
 	const uint32_t uOutputRotation = pOutputOverride ? 0u : g_uOutputRotation;
 
+	const bool bPaintSplitEligible = !pInCommandBuffer;
 	auto cmdBuffer = pInCommandBuffer ? std::move( pInCommandBuffer ) : g_device.commandBuffer();
+
+	// Diagnostic paint split: only the presented composite while Frame generation renders.
+	const bool bPaintSplit = bPaintSplitEligible && pOutputOverride == nullptr && increment && fghost::RenderWanted()
+		&& paint_split_open( cmdBuffer.get(), 2, 2 );
 
 	// Cross-queue sync point: if the settings overlay drew a new frame on the
 	// general queue this vblank, make this (compute-queue) submission wait on
@@ -6403,7 +6531,19 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 		}
 	}
 
+	if ( bPaintSplit )
+		g_device.vk.CmdWriteTimestamp( cmdBuffer->rawBuffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_psPool, s_psCur * 4 + 3 );
+	const uint64_t ulPsSubmit = bPaintSplit ? get_time_in_nanos() : 0;
 	uint64_t sequence = g_device.submit(std::move(cmdBuffer));
+	if ( bPaintSplit )
+	{
+		PaintSplitSlot_t &S = s_psSlot[ s_psCur ];
+		S.ulSeq = sequence;
+		S.ulSubmit = ulPsSubmit;
+		if ( !S.ulFirstSubmit )
+			S.ulFirstSubmit = ulPsSubmit;
+		s_psCur = -1;
+	}
 
 	effects_ab_log_flush( sequence, abLogState, flAbLogDt, uAbLogWidth, uAbLogHeight );
 	effects_preview_flush( sequence );
@@ -6508,7 +6648,12 @@ void vulkan_warm_overlay_composite_pipelines( const struct FrameInfo_t *pFrameIn
 
 void vulkan_wait( uint64_t ulSeqNo, bool bReset )
 {
-	return g_device.wait( ulSeqNo, bReset );
+	g_device.wait( ulSeqNo, bReset );
+	const uint64_t ulPsNow = get_time_in_nanos();
+	for ( PaintSplitSlot_t &S : s_psSlot )
+		if ( S.bBusy && S.ulSeq == ulSeqNo && !S.ulDone )
+			S.ulDone = ulPsNow;   // diagnostic paint split: "GPU finished" as the CPU sees it
+	return;
 }
 
 bool vulkan_has_drm_props()
