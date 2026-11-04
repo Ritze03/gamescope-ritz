@@ -494,6 +494,12 @@ namespace gamescope
 		}
 	}
 
+	// What the config last pushed live (see PanelDisplay_ApplyConfigFpsLimit() below); the
+	// stepper records its own value too, since saving it bumps no config generation, so a
+	// later switch to a profile holding the old pushed value must still apply.
+	static int s_nLastPushedFpsLimit = -1;
+	static bool s_bFpsLimitReady = false;
+
 	static void SetFpsLimit( int nFps )
 	{
 		nFps = fpslimit::Clamp( nFps );
@@ -502,7 +508,7 @@ namespace gamescope
 		// true with no exception a reader has to check.
 		ApplyEdit(
 			[ nFps ]( config::Settings &cfg ) { cfg.gamescope.fps_limit = nFps; },
-			[ nFps ] { ApplyFpsLimitLive( nFps ); } );
+			[ nFps ] { s_nLastPushedFpsLimit = nFps; ApplyFpsLimitLive( nFps ); } );
 	}
 
 	// Applies the saved fps_limit to the running compositor: once at startup (nothing
@@ -510,9 +516,6 @@ namespace gamescope
 	// Why: a startup that only seeded config left the game uncapped until the stepper was
 	// touched. Only a CHANGE of the configured value is pushed (fpslimit::NeedsPush), so
 	// unrelated reloads leave a limit set live meanwhile alone.
-	static int s_nLastPushedFpsLimit = -1;
-	static bool s_bFpsLimitReady = false;
-
 	void PanelDisplay_ApplyConfigFpsLimit( const config::Settings &cfg, bool bStartup )
 	{
 		if ( bStartup )
