@@ -1195,7 +1195,9 @@ as 0.9 in this case, but nothing measurable is saved either (GPU busy equal with
 and this case never makes a paint late, which is what the surplus is for (the Forza journal
 above), so 0.9 stays. Not concluded: uncapped (game 60-200 fps, other compiles running on the
 machine, runs discarded) and a heavy GPU-saturated case. Also seen: the host shows only about
-170 of the roughly 280-311 frames sent per second (the rest are `discarded`), at every value.
+170 of the roughly 280-311 frames sent per second (the rest are `discarded`), at every value
+(explained the same day: that is the host's own frame rate under GPU load, not gamescope; see
+"Frames the host shows" under Logging).
 `Why:` do not lower the value on this evidence; revisit with a late-paint workload.
 
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
@@ -1340,6 +1342,56 @@ lines from `steamcompmgr.cpp`:
 
 Not keyed on the rounded multiplier: a game at a fractional ratio would flap between two
 values and spam the log.
+
+### Frames the host shows (nested Wayland, 2026-11-04)
+
+Under nested Wayland the status line ends with `host: sent 311/s shown 217/s discarded 94/s`
+(`src/FrameGen/HostShown.h`, counted in the Wayland backend's `wp_presentation` feedback
+handlers; one feedback object per commit of the toplevel surface, so `sent` = commits,
+`shown` = `presented`, `discarded` = replaced by a newer commit before the host drew; other
+backends print nothing). No behaviour change. `Why:` the "presented 311 fps" figure counts
+what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and
+nothing in the log said so.
+
+**Cause of the "only ~170-240 of 311 shown" report: the host's own frame rate, not
+gamescope.** Setup: Minecraft, Default profile (Target = refresh, Smoothness, Learned motion),
+nested on the 280 Hz DP-1 under Hyprland 0.56.2; the counter checked per commit
+(`sent` == feedback requests == `presented` + `discarded` in a per-event trace, every run).
+Falsification: a 100-line plain Wayland shm client (no gamescope, no frame generation) that
+commits at 311/s with the same feedback counting, as a window next to the game on the same
+monitor, gets the same number gamescope does in the same 40 s:
+
+| host state, 311 commits/s sent | gamescope shown | plain client shown | GPU busy |
+| --- | --- | --- | --- |
+| no game running (idle GPU), window | -- | 279-281 (31 discarded) | idle |
+| no game running, fullscreen, VRR on | -- | 280 (31 discarded) | idle |
+| game + FG, window, no VRR, limit 120 | 213, 211, 156 | 215, 214, 156 | 83, 84, 96% |
+| same, uncapped | 168, 153 | 172, 152 | 99, 100% |
+| same, limit 30 | 225, 204 | 226, 204 | 70% |
+| game + FG, fullscreen, VRR on, limit 120 / 30 / uncapped | 217, 244, 244 / 243 / 143, 227 | (not possible, the game covers it) | 78 / 60 / 100% |
+
+So gamescope's commits were evenly spaced (window, limit 120: 51 % of commit-to-commit gaps
+0.5-0.9 refresh, 42 % 0.9-1.1, 6 % 1.1-1.5, 0.1 % under 0.5; the busiest runs had 4-6 % under
+0.5) and every one was answered; what
+changes is how many vblanks the host actually draws. With the game running, 46 % of the
+shown frames' timestamps were two refreshes apart (window, limit 120, 191 shown) instead of
+one; fullscreen with VRR lost less (8-11 % two apart, 244 shown). The host's rate fell with
+the GPU's load in every pair of runs (busy 60-70 % -> 204-243, 78-84 % -> 211-244, 96-100 %
+-> 143-168), and a client that has nothing to do with gamescope loses the same frames.
+That is a correlation: whether Hyprland's own render submissions queue behind the game's GPU
+work, or something else in its frame scheduling, was not isolated. A discarded commit is a
+frame the screen never showed; with 311 sent against a 280 Hz refresh at least ~31 must be
+discarded even on an idle host.
+
+Things that are **not** the cause (each checked): gamescope waits for no frame callback
+(the backend never calls `wl_surface_frame`) and commits at once; the 311/s commits are
+evenly spaced, not paired inside one host vblank (the `<0.5 refresh` bucket held 0.1-6 %);
+the host reported 280 Hz and the true VRR state was sampled each run (VRR only while
+fullscreen: Hyprland `vrr = 3`); no compiler or other heavy job of ours ran (load 3-6).
+Not measured: fullscreen **without** VRR (the harness refused the only live way to switch
+VRR off, `hyprctl eval`; Hyprland's `keyword` is a no-op under its Lua config), so that cell
+of the matrix is empty; and whether the user's concurrent screen-share encoder (about 33 %
+VCN) or other apps cost the host frames.
 
 ## When it passes real frames through
 

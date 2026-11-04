@@ -97,7 +97,9 @@ one place that wires all of it together at startup.
   the one `recordSynthBlur` call, own command buffer, status; `Config` for frame generation,
   `BlurConfig` for motion blur, `LagBufferConfig` for the lag spike buffer; the ring follows the
   pacer's history depth) and `TearHint.h` (`fgtear::Hint`, the latched nested-Wayland
-  tearing hint for the output timer), and `FrameGenLib.cpp` (wrapper that compiles the
+  tearing hint for the output timer), `HostShown.h` (`fghostshown`, commits / shown /
+  discarded counters fed by the Wayland backend's presentation feedback, printed in the status
+  line), and `FrameGenLib.cpp` (wrapper that compiles the
   `subprojects/FrameGen` library -- optical flow, blur, UI protection **and the pacer**,
   `subprojects/FrameGen/gpu/pacing.h`, `framegen::pacing`, which the host includes directly -- into the binary). The Inspector's UI-protection box
   picture is `src/Overlay/UiBoxPreview.{h,cpp}` (texture + drawing) over the host's

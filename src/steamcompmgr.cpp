@@ -111,6 +111,7 @@
 #include "Overlay/Notifications.h"
 #include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenHost.h"
+#include "FrameGen/HostShown.h"
 #include "FrameGen/TearHint.h"
 #include "../subprojects/FrameGen/gpu/pacing.h"
 #include "Config/ConfigManager.h"
@@ -8190,6 +8191,14 @@ namespace
 			Bucket( "pair", split.pair, szPair, sizeof( szPair ) );
 			Bucket( "other", split.other, szOther, sizeof( szOther ) );
 			snprintf( szSplit, sizeof( szSplit ), "paint split: %s, %s ms", szPair, szOther );
+			// What the nested host showed of what was sent (Wayland only; see HostShown.h).
+			const fghostshown::Rates shown = fghostshown::TakeRates( ulNow );
+			if ( shown.bValid )
+			{
+				const size_t n = strlen( szSplit );
+				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s",
+					shown.flCommits, shown.flShown, shown.flDiscarded );
+			}
 		}
 
 		// The periodic line is info too (it was debug): a steady-state shortfall (e.g.

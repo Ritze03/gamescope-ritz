@@ -14,6 +14,7 @@
 #include "Clipboard/WaylandDataControl.h"
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
+#include "FrameGen/HostShown.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -1842,6 +1843,7 @@ namespace gamescope
             {
                 struct wp_presentation_feedback *pFeedback = wp_presentation_feedback( m_pBackend->GetPresentation(), m_pSurface );
                 wp_presentation_feedback_add_listener( pFeedback, &s_PresentationFeedbackListener, this );
+                fghostshown::Get().ulCommits.fetch_add( 1, std::memory_order_relaxed );
             }
 
             if ( m_pWPColorManagedSurface )
@@ -2202,6 +2204,7 @@ namespace gamescope
             UpdateVRRRefreshRate();
         }
 
+        fghostshown::Get().ulShown.fetch_add( 1, std::memory_order_relaxed );
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );
 
@@ -2210,6 +2213,7 @@ namespace gamescope
     }
     void CWaylandPlane::Wayland_PresentationFeedback_Discarded( struct wp_presentation_feedback *pFeedback )
     {
+        fghostshown::Get().ulDiscarded.fetch_add( 1, std::memory_order_relaxed );
         wp_presentation_feedback_destroy( pFeedback );
 
         // Nudge so that steamcompmgr releases commits.
