@@ -8169,7 +8169,7 @@ namespace
 		// their vblank) and, second, those longer than one whole refresh; fg gpu = the library's GPU timestamps (last values), n/a without.
 		char szTiming[ 256 ];
 		// "paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 ... ms" (mean/max; see vulkan_paint_split_*)
-		char szSplit[ 320 ];
+		char szSplit[ 400 ];
 		{
 			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			// What the timer actually used last: measured (non-VRR only), VRR's fixed
@@ -8208,10 +8208,13 @@ namespace
 				snprintf( p, cb, "%s n=%u miss=%u cpu %.1f/%.1f exec %.1f/%.1f wait %.1f/%.1f", pszName, A.n, A.miss,
 					A.cpuSum / d, A.cpuMax, A.execSum / d, A.execMax, A.waitSum / d, A.waitMax );
 			};
-			char szPair[ 128 ], szOther[ 128 ];
+			char szPair[ 128 ], szOther[ 128 ], szEarly[ 80 ];
 			Bucket( "pair", split.pair, szPair, sizeof( szPair ) );
 			Bucket( "other", split.other, szOther, sizeof( szOther ) );
-			snprintf( szSplit, sizeof( szSplit ), "paint split: %s, %s ms", szPair, szOther );
+			// "early on n=170 exec 1.2/2.0": the early pair's own submissions (not inside any paint)
+			snprintf( szEarly, sizeof( szEarly ), "early %s n=%u exec %.1f/%.1f", fghost::EarlyPairEnabled() ? "on" : "off", split.early.n,
+				split.early.n ? split.early.execSum / split.early.n : 0.0, split.early.execMax );
+			snprintf( szSplit, sizeof( szSplit ), "paint split: %s, %s, %s ms", szEarly, szPair, szOther );
 		}
 
 		// "hold: off" / "hold: on, not armed (...)" / "hold: armed (...)": whether
@@ -8307,6 +8310,10 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 	s_FrameGen.holdCtl.OnArrival( get_time_in_nanos() );
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
 	s_FrameGen.bArrivalRepaint = true;
+	// The commit's acquire fence has signalled (that is what made it a done commit) and this is
+	// the paint's thread: do the ring copy and the motion estimate now, not in the next paint.
+	if ( pCommit->vulkanTex && !w->isSteamStreamingClient && !window_is_steam( w ) && !is_fading_out() )
+		fghost::EarlyPair( pCommit->vulkanTex, pCommit->colorspace(), pCommit->commitID );
 }
 
 // "Hold game while generating", once per paint (also a cadence-skip one).

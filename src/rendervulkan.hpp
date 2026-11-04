@@ -848,10 +848,13 @@ struct PaintSplitAgg_t
 	double cpuSum = 0, execSum = 0, waitSum = 0;   // ms
 	float cpuMax = 0, execMax = 0, waitMax = 0;    // ms
 };
-struct PaintSplitStats_t { PaintSplitAgg_t pair, other; };
+struct PaintSplitStats_t { PaintSplitAgg_t pair, other, early; };   // early: the early pair's own submissions (exec only)
 void vulkan_paint_split_begin( CVulkanCmdBuffer *pCmd );   // frame generation's command buffer, first
 void vulkan_paint_split_end( CVulkanCmdBuffer *pCmd );     // ... and just before its submit
 void vulkan_paint_split_mark_pair();                       // this paint consumed a new real frame
+void vulkan_early_split_begin( CVulkanCmdBuffer *pCmd );   // the early pair's own command buffer, first
+void vulkan_early_split_end( CVulkanCmdBuffer *pCmd );     // ... just before its submit
+void vulkan_early_split_submitted( uint64_t ulSeq );       // ... and its sequence number after it
 void vulkan_paint_split_take( PaintSplitStats_t *pOut );   // copy and reset the aggregate
 // Launch-time warm-up for the overlay layers -- called once from
 // SettingsOverlay.cpp's launch block. Synchronously compiles the final-pass
