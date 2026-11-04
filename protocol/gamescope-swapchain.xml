@@ -29,7 +29,7 @@
     it.
   </description>
 
-  <interface name="gamescope_swapchain_factory_v2" version="3">
+  <interface name="gamescope_swapchain_factory_v2" version="1">
     <request name="destroy" type="destructor"></request>
 
     <request name="create_swapchain">
@@ -43,7 +43,7 @@
     </request>
   </interface>
 
-  <interface name="gamescope_swapchain" version="3">
+  <interface name="gamescope_swapchain" version="1">
     <request name="destroy" type="destructor"></request>
 
     <request name="override_window_content">
@@ -164,18 +164,6 @@
       <arg name="desired_present_time_lo" type="uint" summary="low part of the desired presentation time for this commit. Uses CLOCK_MONOTONIC. 0 = present as soon as possible."/>
     </request>
 
-    <request name="register_window" since="3">
-      <description summary="tie this swapchain to an X11 window it does not bypass">
-        A swapchain that is NOT bypassing Xwayland never sends
-        override_window_content, so the compositor cannot tell which window it
-        belongs to (the game's buffers reach it as commits of Xwayland's own
-        surface). This request names the window, so frame_gate can reach the
-        swapchain of whichever X11 window the compositor is gating.
-      </description>
-      <arg name="gamescope_xwayland_server_id" type="uint" summary="gamescope xwayland server ID"/>
-      <arg name="x11_window" type="uint" summary="X11 window ID"/>
-    </request>
-
     <event name="past_present_timing">
       <description summary="information about past presentation">
         Gives information on the past presentation timing
@@ -201,35 +189,6 @@
 
     <event name="retired">
       <description summary="Swapchain was remotely retired"></description>
-    </event>
-
-    <event name="frame_gate" since="2">
-      <description summary="the compositor lets the client start its next frame">
-        Frame gate (version 2). Lets the compositor hold the client between
-        presents so its own GPU work (frame generation) is not competing with
-        the client's next frame.
-
-        released_count is a release serial: the compositor bumps it on a schedule,
-        once per game frame it permits (it paces the game to the rate its GPU
-        budget allows). One release is permission for one present. It is NOT a
-        per-commit count (the game's commits do not map 1:1 to presents on every
-        path: a swapchain that is not bypassing Xwayland reaches the compositor
-        as Xwayland's own commits, a native Wayland client may commit on a
-        different surface than the swapchain's).
-
-        After a present the client may only wait if the last frame_gate it
-        received had enabled = 1. If a release arrived since its previous
-        present (or since it was enabled) it uses that one up and does not wait;
-        otherwise it waits until a frame_gate arrives whose released_count
-        differs from the last one it used, or enabled becomes 0, or the
-        swapchain is retired, or a client-side timeout (a safety net, 50 ms)
-        expires: the compositor can never stall a client for longer than that.
-
-        A client that never receives this event, or whose compositor predates
-        it, never waits.
-      </description>
-      <arg name="released_count" type="uint" summary="release serial (wraps)"/>
-      <arg name="enabled" type="uint" summary="1: the compositor is gating this swapchain, 0: it is not and the client must not wait"/>
     </event>
   </interface>
 </protocol>

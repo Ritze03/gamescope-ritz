@@ -370,28 +370,6 @@ void wlserver_presentation_feedback_discard( struct wlr_surface *surface, std::v
 void wlserver_past_present_timing( struct wlr_surface *surface, uint32_t present_id, uint64_t desired_present_time, uint64_t actual_present_time, uint64_t earliest_present_time, uint64_t present_margin );
 void wlserver_refresh_cycle( struct wlr_surface *surface, uint64_t refresh_cycle );
 
-// Frame gate ("Hold game while generating"), wlserver_lock held. set_target: the
-// one surface to hold back (null = none); the gamescope_swapchain v2 clients on it
-// then wait after each present until release() lets that commit go.
-void wlserver_frame_gate_set_target( struct wlr_surface *surface );
-void wlserver_frame_gate_release( struct wlr_surface *surface );
-void wlserver_frame_gate_rearm( struct wlr_surface *surface );   // re-send "gated" (a client that timed out un-armed itself)
-
-// The gate's activity since the last call (counters reset), for the frame generation
-// status line. held: commits on the gated surface that were held back; released:
-// release() calls that let at least one held commit go; other: commits on other
-// surfaces that carry a swapchain; target/swapchains: the gated surface's wl_resource
-// id (0 = none) and how many gamescope_swapchain objects it has; v2: how many of
-// those are version 2 (the only ones that get the event).
-struct wlserver_frame_gate_stats_t
-{
-	uint32_t held = 0, released = 0, other = 0;
-	uint32_t target = 0, swapchains = 0, v2 = 0;
-	uint32_t xid = 0;              // the gated window's X11 id (0 = not an X11 window)
-	const char *via = "none";      // how the swapchains were found: surface / wayland client / xwayland window
-};
-void wlserver_frame_gate_take_stats( wlserver_frame_gate_stats_t *pStats );
-
 void wlserver_app_presented( uint32_t app_id, uint64_t frametime_ns );
 
 void wlserver_shutdown();

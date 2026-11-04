@@ -159,184 +159,6 @@ std::vector<ResListEntry_t>& gamescope_xwayland_server_t::retrieve_commits()
 
 gamescope::ConVar<bool> cv_drm_debug_syncobj_force_wait_on_commit( "drm_debug_syncobj_force_wait_on_commit", false, "Force a wait on DRM sync objects before committing buffers" );
 
-// ---- Frame gate (gamescope_swapchain v2 frame_gate) ------------------------------
-// The one surface gamescope is holding back right now (the focused frame-generation
-// window's, set by steamcompmgr every paint), or null. All of it under wlserver_lock.
-//
-// Who hears about it ("recipients") is NOT just the swapchains attached to that surface:
-//  - the swapchains of the same wl_client as the surface: a native Wayland game (Wine's
-//    Wayland driver) or the layer's bypass surface; the swapchain may sit on another
-//    surface of the client than the one steamcompmgr focuses;
-//  - the swapchains registered for the focused window's X11 id (register_window): an
-//    X11 game that is NOT bypassing Xwayland, whose buffers arrive as Xwayland's own
-//    commits and whose swapchain object lives on the layer's unrelated surface;
-//  - the swapchains attached to the surface itself.
-// Why not count commits per surface as before: on those paths the game's presents and
-// the target surface's commits are not 1:1, so the compositor sends a release serial
-// and the layer waits for the next one (see the protocol description).
-static struct wlr_surface *s_pFrameGateSurface = nullptr;
-struct gate_swapchain_t
-{
-	wl_resource *resource;
-	gamescope_xwayland_server_t *server = nullptr;   // register_window
-	uint32_t x11_window = 0;
-};
-static std::vector<gate_swapchain_t> s_GateSwapchains;   // every live gamescope_swapchain
-static std::vector<wl_resource *> s_GateArmed;           // told enabled = 1 and not yet told 0
-static uint32_t s_GateSerial = 0;
-// Activity counters for the status line (wlserver_frame_gate_take_stats()).
-static std::atomic<uint32_t> s_nGateHeld{ 0 }, s_nGateReleased{ 0 }, s_nGateOther{ 0 };
-
-static wl_client *gate_surface_client( struct wlr_surface *surf )
-{
-	return ( surf && surf->resource ) ? wl_resource_get_client( surf->resource ) : nullptr;
-}
-
-// How a recipient was found, for the status line.
-enum { kGateViaNone = 0, kGateViaSurface = 1, kGateViaClient = 2, kGateViaWindow = 4 };
-
-static std::vector<wl_resource *> wlserver_frame_gate_recipients( struct wlr_surface *surf, uint32_t *pVia = nullptr, uint32_t *pXid = nullptr )
-{
-	std::vector<wl_resource *> out;
-	if ( pVia ) *pVia = 0;
-	wlserver_wl_surface_info *wl_surf = surf ? get_wl_surface_info( surf ) : nullptr;
-	if ( !wl_surf )
-		return out;
-	wl_client *client = gate_surface_client( surf );
-	wlserver_x11_surface_info *x11 = wl_surf->x11_surface;
-	if ( pXid && x11 ) *pXid = x11->x11_id;
-	for ( const gate_swapchain_t &sc : s_GateSwapchains )
-	{
-		uint32_t via = 0;
-		if ( std::find( wl_surf->gamescope_swapchains.begin(), wl_surf->gamescope_swapchains.end(), sc.resource ) != wl_surf->gamescope_swapchains.end() )
-			via |= kGateViaSurface;
-		if ( client && wl_resource_get_client( sc.resource ) == client )
-			via |= kGateViaClient;
-		if ( x11 && sc.server && sc.server == x11->xwayland_server && sc.x11_window == x11->x11_id )
-			via |= kGateViaWindow;
-		if ( !via )
-			continue;
-		out.push_back( sc.resource );
-		if ( pVia ) *pVia |= via;
-	}
-	return out;
-}
-
-void wlserver_frame_gate_take_stats( wlserver_frame_gate_stats_t *pStats )
-{
-	pStats->held = s_nGateHeld.exchange( 0 );
-	pStats->released = s_nGateReleased.exchange( 0 );
-	pStats->other = s_nGateOther.exchange( 0 );
-	pStats->target = pStats->swapchains = pStats->v2 = pStats->xid = 0;
-	pStats->via = "none";
-	wlserver_lock();
-	if ( s_pFrameGateSurface )
-	{
-		if ( s_pFrameGateSurface->resource )
-			pStats->target = wl_resource_get_id( s_pFrameGateSurface->resource );
-		uint32_t via = 0;
-		for ( wl_resource *pSwapchain : wlserver_frame_gate_recipients( s_pFrameGateSurface, &via, &pStats->xid ) )
-		{
-			pStats->swapchains++;
-			if ( wl_resource_get_version( pSwapchain ) >= GAMESCOPE_SWAPCHAIN_FRAME_GATE_SINCE_VERSION )
-				pStats->v2++;
-		}
-		// Window match wins the label: it is the only way an X11 game that is not
-		// bypassing Xwayland is reached (the others are layer / native Wayland).
-		if ( via & kGateViaWindow )
-			pStats->via = "xwayland window";
-		else if ( via & kGateViaSurface )
-			pStats->via = "surface";
-		else if ( via & kGateViaClient )
-			pStats->via = "wayland client";
-	}
-	wlserver_unlock( false );
-}
-
-static void wlserver_frame_gate_send_one( wl_resource *pSwapchain, bool bEnabled )
-{
-	// Only a v2 resource knows the event; an older client never waits, never gets it.
-	if ( wl_resource_get_version( pSwapchain ) >= GAMESCOPE_SWAPCHAIN_FRAME_GATE_SINCE_VERSION )
-		gamescope_swapchain_send_frame_gate( pSwapchain, s_GateSerial, bEnabled ? 1 : 0 );
-}
-
-// Brings the swapchains' state in line with the current target: recipients get
-// `enabled = 1` (with the current serial), anyone armed before who is not a recipient
-// any more (focus moved, gating turned off) gets `enabled = 0`.
-static void wlserver_frame_gate_sync()
-{
-	std::vector<wl_resource *> now = wlserver_frame_gate_recipients( s_pFrameGateSurface );
-	for ( wl_resource *old : s_GateArmed )
-		if ( std::find( now.begin(), now.end(), old ) == now.end() )
-			wlserver_frame_gate_send_one( old, false );
-	for ( wl_resource *r : now )
-	{
-		// A newly armed swapchain is told the output's refresh cycle: the layer sizes its
-		// wait cap from it, and one that is not bypassing never gets refresh_cycle from the
-		// present path (its own surface never commits), so it would cap at 3 x 16.7 ms.
-		if ( g_nOutputRefresh > 0 && std::find( s_GateArmed.begin(), s_GateArmed.end(), r ) == s_GateArmed.end() )
-		{
-			const uint64_t cycle = 1000000000000ull / uint64_t( g_nOutputRefresh );
-			gamescope_swapchain_send_refresh_cycle( r, cycle >> 32, cycle & 0xffffffff );
-		}
-		wlserver_frame_gate_send_one( r, true );
-	}
-	s_GateArmed = std::move( now );
-}
-
-// A commit arrived (wlserver thread, lock held, any surface): note that the gated
-// client has something new for the next release.
-static void wlserver_frame_gate_on_commit( struct wlr_surface *surf )
-{
-	if ( !s_pFrameGateSurface )
-		return;
-	wl_client *client = gate_surface_client( s_pFrameGateSurface );
-	if ( surf == s_pFrameGateSurface || ( client && gate_surface_client( surf ) == client ) )
-	{
-		s_nGateHeld++;
-		return;
-	}
-	wlserver_wl_surface_info *wl_surf = get_wl_surface_info( surf );
-	if ( wl_surf && !wl_surf->gamescope_swapchains.empty() )
-		s_nGateOther++;
-}
-
-// One release = permission for one game frame (steamcompmgr's HoldController sets the
-// rate). Unconditional: the layer consumes a release that arrives before its present
-// instead of losing it, so a game slower than the allowed rate is never held, and
-// several unconsumed releases still grant only one frame (no burst credit).
-void wlserver_frame_gate_release( struct wlr_surface *surf )
-{
-	assert( wlserver_is_lock_held() );
-	if ( !surf || surf != s_pFrameGateSurface )
-		return;
-	s_GateSerial++;
-	s_nGateReleased++;
-	wlserver_frame_gate_sync();
-}
-
-// Re-state "gated" to the client without letting anything go. A client that timed
-// out of a wait un-arms itself and only an event re-arms it; the release above sends
-// one only when a commit is let go, which a pacer that is behind may not do for a
-// long time, leaving the gate dead. steamcompmgr calls this every ~100 ms. (Also
-// picks up swapchains created since the last sync.)
-void wlserver_frame_gate_rearm( struct wlr_surface *surf )
-{
-	assert( wlserver_is_lock_held() );
-	if ( surf && surf == s_pFrameGateSurface )
-		wlserver_frame_gate_sync();
-}
-
-void wlserver_frame_gate_set_target( struct wlr_surface *surf )
-{
-	assert( wlserver_is_lock_held() );
-	if ( surf == s_pFrameGateSurface )
-		return;
-	s_pFrameGateSurface = surf;
-	// Old recipients are told not to wait, new ones are armed.
-	wlserver_frame_gate_sync();
-}
-
 std::optional<ResListEntry_t> PrepareCommit( struct wlr_surface *surf, struct wlr_buffer *buf )
 {
 	auto wl_surf = get_wl_surface_info( surf );
@@ -1778,7 +1600,6 @@ wlserver_wl_surface_info *get_wl_surface_info(struct wlr_surface *wlr_surf)
 static void handle_wl_surface_commit( struct wl_listener *l, void *data )
 {
 	wlserver_wl_surface_info *surf = wl_container_of( l, surf, commit );
-	wlserver_frame_gate_on_commit( surf->wlr );
 	xwayland_surface_commit(surf->wlr);
 }
 
@@ -1860,9 +1681,6 @@ static void handle_wl_surface_destroy( struct wl_listener *l, void *data )
 	}
 
 	surf->wlr->data = nullptr;
-
-	if ( surf->wlr == s_pFrameGateSurface )
-		s_pFrameGateSurface = nullptr;
 
 	for ( wl_resource *pSwapchain : surf->gamescope_swapchains )
 	{
@@ -2133,8 +1951,6 @@ static void gamescope_swapchain_handle_resource_destroy( struct wl_resource *res
 #ifdef GAMESCOPE_SWAPCHAIN_DEBUG
 	wl_log.infof( "gamescope_swapchain_handle_resource_destroy swapchain: %p", resource );
 #endif
-	std::erase_if( s_GateSwapchains, [=]( const gate_swapchain_t &sc ) { return sc.resource == resource; } );
-	std::erase( s_GateArmed, resource );
 
 	gamescope_xwayland_server_t *server = NULL;
 	for (size_t i = 0; (server = wlserver_get_xwayland_server(i)); i++)
@@ -2160,21 +1976,6 @@ static void gamescope_swapchain_override_window_content( struct wl_client *clien
 	gamescope_xwayland_server_t *server = wlserver_get_xwayland_server( server_id );
 	assert( server );
 	server->handle_override_window_content(client, resource, wl_surface_info->wlr, x11_window);
-}
-
-static void gamescope_swapchain_register_window( struct wl_client *client, struct wl_resource *resource, uint32_t server_id, uint32_t x11_window )
-{
-	gamescope_xwayland_server_t *server = wlserver_get_xwayland_server( server_id );
-	if ( !server )
-		return;
-	for ( gate_swapchain_t &sc : s_GateSwapchains )
-	{
-		if ( sc.resource == resource )
-		{
-			sc.server = server;
-			sc.x11_window = x11_window;
-		}
-	}
 }
 
 static void gamescope_swapchain_swapchain_feedback( struct wl_client *client, struct wl_resource *resource,
@@ -2284,7 +2085,6 @@ static const struct gamescope_swapchain_interface gamescope_swapchain_impl = {
 	.set_present_mode = gamescope_swapchain_set_present_mode,
 	.set_hdr_metadata = gamescope_swapchain_set_hdr_metadata,
 	.set_present_time = gamescope_swapchain_set_present_time,
-	.register_window = gamescope_swapchain_register_window,
 };
 
 static void gamescope_swapchain_factory_v2_destroy( struct wl_client *client, struct wl_resource *resource )
@@ -2307,10 +2107,9 @@ static void gamescope_swapchain_factory_v2_create_swapchain( struct wl_client *c
 
 	wl_surface_info->gamescope_swapchains.emplace_back( gamescope_swapchain_resource );
 	// refresh_cycle is sent when the value changes, per surface: a swapchain made later on
-	// the same surface (a resize) would never get it and the layer would assume 16.7 ms
-	// (its frame-gate wait cap is 3 of them). Make the next present send it again.
+	// the same surface (a resize) would never get it and the layer would assume 16.7 ms.
+	// Make the next present send it again.
 	wl_surface_info->last_refresh_cycle = 0;
-	s_GateSwapchains.push_back( gate_swapchain_t{ gamescope_swapchain_resource } );
 }
 
 static const struct gamescope_swapchain_factory_v2_interface gamescope_swapchain_factory_v2_impl = {
@@ -2326,7 +2125,7 @@ static void gamescope_swapchain_factory_v2_bind( struct wl_client *client, void 
 
 static void create_gamescope_swapchain_factory_v2( void )
 {
-	uint32_t version = 3;   // 2: gamescope_swapchain frame_gate; 3: register_window
+	uint32_t version = 1;
 	wl_global_create( wlserver.display, &gamescope_swapchain_factory_v2_interface, version, NULL, gamescope_swapchain_factory_v2_bind );
 }
 

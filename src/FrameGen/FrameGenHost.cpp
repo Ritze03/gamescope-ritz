@@ -78,8 +78,7 @@ namespace fghost
 			return ( uint32_t( c.learnedNet ) & 0xFu )
 				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 4 )
 				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 5 )
-				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 6 )
-				| ( uint32_t( c.holdGame ? 1 : 0 ) << 7 );   // host-only: the library never sees it
+				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 6 );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -138,7 +137,6 @@ namespace fghost
 			c.learnedHalf = ( ( uLearned >> 4 ) & 1u ) != 0;
 			c.learnedZeroTest = ( ( uLearned >> 5 ) & 1u ) != 0;
 			c.learnedStaticGuard = ( ( uLearned >> 6 ) & 1u ) != 0;
-			c.holdGame = ( ( uLearned >> 7 ) & 1u ) != 0;
 			return c;
 		}
 

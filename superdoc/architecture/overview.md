@@ -89,7 +89,7 @@ one place that wires all of it together at startup.
   `NullBinds_Tick()`, called once a frame from `steamcompmgr.cpp` next to
   `Zoom_FillRequest()`, keeps a profile's setting live even if the Shell is never
   opened. See [null-binds](../features/null-binds.md).
-- **Frame generation, motion blur and the lag spike buffer** (rail group MOTION) — `src/FrameGen/` (`HoldController.h`: the Hold-game rate controller):
+- **Frame generation, motion blur and the lag spike buffer** (rail group MOTION) — `src/FrameGen/`:
   `FrameGenHost.{h,cpp}` (`fghost`, the renderer glue: frame ring, lazy per-slot synthesis,
   the one `recordSynthBlur` call, own command buffer, status; `Config` for frame generation,
   `BlurConfig` for motion blur, `LagBufferConfig` for the lag spike buffer; the ring follows the

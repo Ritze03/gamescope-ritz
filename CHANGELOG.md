@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.9] – 2026-11-04
+
+### Removed
+- **Frame generation: Hold game while generating**: the switch is gone, because the
+  stall it worked around is fixed and it could only ratchet the game down to its floor.
+
 ## [0.14.8] – 2026-11-03
 
 ### Added

@@ -181,7 +181,6 @@ namespace gamescope
 				? fghost::Priority::Smoothness : fghost::Priority::LowLatency;
 			c.pauseAtRefresh = f.pause_at_refresh;
 			c.pauseWhenCursorVisible = f.pause_when_cursor_visible;
-			c.holdGame = f.hold_game;
 			c.gpuLimit = f.gpu_limit;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
@@ -440,20 +439,6 @@ namespace gamescope
 			       "itself when the cursor hides again." )
 			.Default( false )
 			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Switch( "framegen.hold_game", "Hold game while generating",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.hold_game; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.hold_game = b; PersistAndPush(); } ) )
-			.Help( "When the game and frame generation together overload the GPU, the game is "
-			       "slowed just enough that frame generation keeps making its frames; with GPU "
-			       "to spare the game runs free. No fixed frame cap, it adapts within a second "
-			       "or two. Works with in-game vsync off. "
-			       "Needs the game to run through gamescope's Vulkan layer; a game that does not "
-			       "is never held." )
-			.Default( false )
-			.Keywords( "frame generation hold game wait block gpu share saturated usage uncapped cap limit" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",

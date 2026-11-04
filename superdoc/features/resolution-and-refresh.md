@@ -287,8 +287,7 @@ reports FIFO to the compositor for every app (`layer/VkLayer_FROG_gamescope_wsi.
 `QueuePresentKHR`); aware apps still also see FIFO-only mode lists and get `OUT_OF_DATE` once on a
 limiter flip, unchanged. `Why:` tearing is moot when the user asked for a cap, and the report is
 only the compositor's pacing hint, not what the driver presents. Needs the layer's
-`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before. The frame limiter's sibling for frame
-generation is [Hold game while generating](frame-generation.md#hold-game-while-generating-framegenhold_game-2026-11-03).
+`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before.
 
 ## Honest limits (the help text says these too)
 

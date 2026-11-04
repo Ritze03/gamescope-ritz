@@ -1780,7 +1780,6 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.priority" ) );
     REQUIRE( IsSettingsKey( "framegen.pause_at_refresh" ) );
     REQUIRE( IsSettingsKey( "framegen.pause_when_cursor_visible" ) );
-    REQUIRE( IsSettingsKey( "framegen.hold_game" ) );
     REQUIRE( IsSettingsKey( "framegen.quality" ) );
     REQUIRE( IsSettingsKey( "framegen.safety" ) );
     REQUIRE( IsSettingsKey( "framegen.hud_protection" ) );
@@ -1788,6 +1787,7 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     REQUIRE( IsSettingsKey( "framegen.ui_box_height" ) );
     REQUIRE( IsSettingsKey( "framegen.motion_version" ) );
     REQUIRE( !IsSettingsKey( "framegen.v2_mode" ) );   // removed 2026-10-22: Quality serves both versions
+    REQUIRE( !IsSettingsKey( "framegen.hold_game" ) );   // removed 2026-11-04: a saved key is ignored on load
 }
 
 // Motion version 2 (2026-10-22): an additive key, default when absent, round trip, and an
