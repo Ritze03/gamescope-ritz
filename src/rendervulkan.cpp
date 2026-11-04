@@ -4158,12 +4158,6 @@ void vulkan_early_split_end( CVulkanCmdBuffer *pCmd )
 		g_device.vk.CmdWriteTimestamp( pCmd->rawBuffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_epPool, s_epCur * 2 + 1 );
 }
 
-void vulkan_early_split_wasted()
-{
-	std::lock_guard<std::mutex> lock( s_psMutex );
-	s_psStats.early.miss++;
-}
-
 void vulkan_early_split_submitted( uint64_t ulSeq )
 {
 	if ( s_epCur >= 0 )

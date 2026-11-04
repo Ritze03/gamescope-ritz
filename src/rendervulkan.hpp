@@ -855,7 +855,6 @@ void vulkan_paint_split_mark_pair();                       // this paint consume
 void vulkan_early_split_begin( CVulkanCmdBuffer *pCmd );   // the early pair's own command buffer, first
 void vulkan_early_split_end( CVulkanCmdBuffer *pCmd );     // ... just before its submit
 void vulkan_early_split_submitted( uint64_t ulSeq );       // ... and its sequence number after it
-void vulkan_early_split_wasted();                       // an early estimate no paint used (counted in early.miss)
 void vulkan_paint_split_take( PaintSplitStats_t *pOut );   // copy and reset the aggregate
 // Launch-time warm-up for the overlay layers -- called once from
 // SettingsOverlay.cpp's launch block. Synchronously compiles the final-pass

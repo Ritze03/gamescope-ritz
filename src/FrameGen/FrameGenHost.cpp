@@ -391,9 +391,6 @@ namespace fghost
 			bool bHaveCur = false;   // pRing[nCurSlot] holds a valid real frame
 			uint64_t ulCurId = 0;    // the commit id of pRing[nCurSlot]
 			uint64_t ulEarlyId = 0;  // a frame the early pair copied that no paint has used yet (the split readout's "pair")
-			// An estimate the early pair recorded that no paint has used yet, and for which pair.
-			bool bEarlyEst = false;
-			uint64_t ulEarlyEstPrev = 0, ulEarlyEstCurr = 0;
 
 			// D13: whether the library holds a motion estimate, and for which pair
 			// (the library keeps exactly one: the latest), how many synths it has
@@ -1513,13 +1510,10 @@ namespace fghost
 
 	bool EarlyPairEnabled() { return cv_framegen_early_pair; }
 
-	// ulEarlyId != 0: the early pair (EarlyPair()): same code, run outside a paint, with the
-	// request the last paint made patched to newest = ulEarlyId and the PREDICTED pair
-	// (ulEarlyPrev, ulEarlyCurr; 0 = no estimate wanted). Records the ring copy and observe
-	// (only when ulEarlyId is a frame not yet in the ring) and the estimate, never a synth,
-	// and returns null.
-	static gamescope::Rc<CVulkanTexture> RecordImpl( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace, uint64_t ulEarlyId,
-		uint64_t ulEarlyPrev = 0, uint64_t ulEarlyCurr = 0 )
+	// ulEarlyId != 0: the early pair (EarlyPair()): same code, run when the frame arrives, with
+	// the request the last paint made patched to "the pair (previous real frame, this one)";
+	// records the ring copy, the observe and the estimate, never a synth, and returns null.
+	static gamescope::Rc<CVulkanTexture> RecordImpl( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace, uint64_t ulEarlyId )
 	{
 		const bool bEarly = ulEarlyId != 0;
 		uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
@@ -1572,9 +1566,10 @@ namespace fghost
 			req = g_Frame;
 		}
 
-		// Early: only while the last paint was a live, non-inert request (pass-through, Pause at
-		// refresh settled: nothing to prepare). Which pair is wanted is the caller's prediction.
-		if ( bEarly && ( req.t < 0.0f || req.newestId == 0 ) )
+		// Early: only while the last paint was a live, non-inert request whose pair was the NEWEST
+		// one (a pair that plays behind, Smoothness or a lag buffer, would be clobbered by an
+		// estimate of the newest pair, so those stay in the paint).
+		if ( bEarly && ( req.t < 0.0f || req.newestId == 0 || ( req.currId && req.currId != req.newestId ) ) )
 			return nullptr;
 
 		// Pacing has not driven the renderer, or says it is settled pass-through:
@@ -1600,16 +1595,14 @@ namespace fghost
 		if ( bEarly )
 		{
 			// Not the first frame, same size as the live interpolator, same colourspace, no reset
-			// pending: anything else is the paint's to sort out, as before. A frame already in
-			// the ring (ulEarlyId == ulCurId) skips the copy below and only estimates; a frame
-			// older than the ring's newest is never an early one.
-			if ( !H.bLive || !H.bHaveCur || ( H.ulCurId != ulEarlyId && FindSlot( H, ulEarlyId ) >= 0 ) || g_bResetRequested.load( std::memory_order_relaxed )
+			// pending, not seen yet: anything else is the paint's to sort out, as before.
+			if ( !H.bLive || !H.bHaveCur || H.ulCurId == ulEarlyId || g_bResetRequested.load( std::memory_order_relaxed )
 				|| pLayer0->width() != H.uWidth || pLayer0->height() != H.uHeight
 				|| ( H.bHaveColorspace && H.eColorspace != eColorspace ) )
 				return nullptr;
 			req.newestId = ulEarlyId;
-			req.prevId = ulEarlyPrev;
-			req.currId = ulEarlyCurr;
+			req.prevId = H.ulCurId;
+			req.currId = ulEarlyId;
 			req.outId = 0;
 		}
 
@@ -1775,14 +1768,6 @@ namespace fghost
 		// the (blurred) real frame currId when the window ends at 1; no pair means no
 		// renderer work, the real frame showId is shown (below).
 		bool bPairPlaying = false;   // this composite shows a synth of the profile's pair
-		if ( !bEarly && H.bEarlyEst && req.prevId && req.currId )
-		{
-			// The early estimate is used by this paint, or it was a wrong guess (another pair is
-			// played: this paint estimates it again).
-			if ( H.ulEarlyEstPrev != req.prevId || H.ulEarlyEstCurr != req.currId )
-				vulkan_early_split_wasted();
-			H.bEarlyEst = false;
-		}
 		if ( req.prevId && req.currId && req.prevId != req.currId )
 		{
 			const int nPrevSlot = FindSlot( H, req.prevId );
@@ -1831,14 +1816,6 @@ namespace fghost
 					bOk = H.interp.recordEstimate( pCb->rawBuffer(), pPrev->srgbView(), pCurr->srgbView() );
 					if ( bOk )
 					{
-						if ( bEarly )
-						{
-							if ( H.bEarlyEst )
-								vulkan_early_split_wasted();   // the previous early estimate was never used
-							H.bEarlyEst = true;
-							H.ulEarlyEstPrev = req.prevId;
-							H.ulEarlyEstCurr = req.currId;
-						}
 						H.bEstContig = bObservedThisCb;
 						H.bEstimateValid = true;
 						H.ulEstPrev = req.prevId;
@@ -1976,9 +1953,9 @@ namespace fghost
 		return RecordImpl( std::move( pLayer0 ), eColorspace, 0 );
 	}
 
-	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId, uint64_t ulPrevId, uint64_t ulCurrId )
+	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId )
 	{
 		if ( ulCommitId )
-			RecordImpl( std::move( pTex ), eColorspace, ulCommitId, ulPrevId, ulCurrId );
+			RecordImpl( std::move( pTex ), eColorspace, ulCommitId );
 	}
 }
