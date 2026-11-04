@@ -1012,6 +1012,41 @@ switches). `Why:` menus and settings screens show the cursor, and interpolating 
 smears it; the user asked for *"a setting to framegen, that allows the user to turn it
 off, while the mouse cursor is visible. (To avoid artifacting in settings menus)"*.
 
+### Paints behind the game's GPU burst (2026-11-04)
+
+For two days of measurements the paints that showed a generated frame lost their deadline while
+the GPU had room: `exec` stayed about 0.5 ms and `wait` ran up to the length of the game's frame.
+The readout's "queues behind the game's GPU burst" was right, but the reason was ours, not the
+hardware's: **the HUD**. `FpsDisplay_AddLayer()` drew its texture on the **general queue**, the
+one the game renders on, at every paint, and the composite (compute queue) waits for that draw
+(`FpsDisplay_WaitForRender()`), so every paint queued behind whatever the game had in flight
+there. A paint right after the game's present waited for all of its frame; a paint in the gap
+did not wait. Why `exec` gave it away: real contention for the GPU would stretch the time between
+the composite's timestamps. It did not, the composite just started late.
+
+The fix (`FpsDisplay.cpp`): the draw data of the frame (and `Crosshair_RasterGeneration()`, the
+stretched crosshair's raster) is hashed, and with nothing new the texture is left as it is:
+nothing goes on the general queue, and the composite's wait is on a point already passed. The
+HUD still costs a wait when its digits change, on that one paint. `Why` not two textures, so the
+composite never waits at all: the misses were already 0-2 of 60, so it would buy nothing measured.
+The settings overlay and the toasts still draw per paint while they are on screen.
+
+Measured (Minecraft, 280 Hz, VRR on, Target = refresh, Smoothness, motion blur 2 samples, Learned
+e2v5 half, HUD and Crosshair on, fixed view, worktree build, the same session and two 25 s runs
+each, switched live; output 311 is the extra timer's deliberate 0.9-tick oversupply):
+
+| Game limit | HUD drawn at every paint | HUD drawn when it changes |
+| --- | --- | --- |
+| none | game 227-232, output 227-235, missed 50-60/60, draw 4.4-4.7 ms, `other` wait 1.7-2.1 mean | game 210-225, output 302-311, missed 0-14/60, draw 0.65-1.05 ms, `other` wait 0.1-0.2 mean |
+| 120 | game 120, output 247-252, missed 26-30/60, `other` wait 3.4 mean | game 117-120, output 311, missed 0-2/60, `other` wait 0.4-0.5 mean |
+
+`Why` it hid so long: with the game limited by its own limiter and light shaders the bursts are
+short and fall at random phases, so most paints missed them; heavier shaders or a limit that frees
+the game at a paint made the same wait look like a GPU limit. Raising the GPU clocks changed
+nothing and realtime queue priority barely helped, because neither is what the paint waited for.
+Early pair, tried the same day, moved the estimate out of the paint and the wait rose by the same
+amount, and was reverted: on the new limiter, output 242-244 with it, 246-249 without.
+
 ### Hold game while generating (removed 2026-11-04)
 
 From 2026-11-03 to 2026-11-04 a per-profile switch, `framegen.hold_game`, held the game in the
@@ -1287,8 +1322,10 @@ values and spam the log.
 
 The Frame limiter caps the *game*; FG multiplies the capped rate. refresh/N is the natural
 pairing (e.g. 144 Hz, limit 48, 3x), but is no longer required: a game running anywhere
-below the refresh generates. FG never caps the game itself. See
-[resolution-and-refresh](resolution-and-refresh.md).
+below the refresh generates. FG never caps the game itself. While FG (or blur, or the lag
+buffer) is on, a Vulkan game is limited by the WSI layer's timer and not at the paints, so
+120 means 120 and the game's frame does not land on the next paint. See
+[resolution-and-refresh](resolution-and-refresh.md#the-limiter-paces-vulkan-games-in-the-layer-2026-11-04).
 
 ## Costs
 

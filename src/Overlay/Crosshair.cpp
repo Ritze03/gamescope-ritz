@@ -549,6 +549,11 @@ namespace gamescope
 		return bAnimating;
 	}
 
+	uint64_t Crosshair_RasterGeneration()
+	{
+		return s_bOutThisFrame ? s_ulOutGeneration : 0;
+	}
+
 	bool Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer, CVulkanTexture *pHudTexture )
 	{
 		// One frame's worth: Crosshair_Draw() sets this every frame it has

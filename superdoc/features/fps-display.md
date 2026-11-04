@@ -12,6 +12,12 @@ render pipeline (own ImGui context, offscreen texture, timeline semaphore),
 entirely independent of the settings panel, so it keeps drawing over the
 game while the panel is closed.
 
+**The layer's texture is redrawn only when it changed** (2026-11-04). `FpsDisplay_AddLayer()` still
+runs ImGui every paint but hashes the draw data and skips the general-queue draw when it matches
+what the texture holds. `Why:` the composite waits for that draw, and the general queue is the one
+the game renders on, so a draw per paint put every paint behind the game's frame. See
+[frame-generation](frame-generation.md#paints-behind-the-games-gpu-burst-2026-11-04).
+
 ## History: two phases, both 2026-09-03
 
 **Phase 1** stripped what used to be a small performance profiler (CPU/GPU

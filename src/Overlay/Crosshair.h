@@ -111,6 +111,9 @@ namespace gamescope
 	// w * w -- crushed soft edges, a dimmer line and a gap that read too
 	// wide. See crosshair::ResampleToOutput() in CrosshairMath.h.
 	bool Crosshair_RecordUpload( CVulkanCmdBuffer *pCmdBuffer, CVulkanTexture *pHudTexture );
+	// Identifies the raster this frame's upload would copy (0 = none): the HUD redraws
+	// its texture only when this or its own draw data changed.
+	uint64_t Crosshair_RasterGeneration();
 
 	// Called from wlserver's pointer-button dispatch, on the wlserver
 	// thread, for a BTN_RIGHT press/release that is being delivered TO THE

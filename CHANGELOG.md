@@ -11,6 +11,11 @@ The newest version below is the one this build reports.
 
 ## [0.14.9] – 2026-11-04
 
+### Fixed
+- **HUD and Crosshair with Frame generation**: drawing them no longer makes every output
+  frame wait for the game's own GPU work, so Frame generation reaches its target with the
+  game uncapped.
+
 ### Removed
 - **Frame generation: Hold game while generating**: the switch is gone, because the
   stall it worked around is fixed and it could only ratchet the game down to its floor.

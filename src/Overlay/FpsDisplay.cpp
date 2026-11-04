@@ -775,10 +775,14 @@ namespace gamescope
 
 	// Must run with the HUD's ImGui context current (the pipeline
 	// re-creation below reads the backend data off it).
+	static uint64_t s_ulDrawnHash = 0;   // what the texture holds (HashDrawData()); 0 = needs a draw
+
 	static bool EnsureTexture( uint32_t uWidth, uint32_t uHeight, VkFormat eFormat )
 	{
 		if ( s_pOverlayTexture && s_uTextureWidth == uWidth && s_uTextureHeight == uHeight && s_eTextureFormat == eFormat )
 			return true;
+
+		s_ulDrawnHash = 0;
 
 		// Drain before dropping the old texture (see DrainPrevSubmission) -- the in-flight general-queue
 		// submission holds no Rc<> on it (it only names a raw VkImageView in
@@ -1701,6 +1705,27 @@ namespace gamescope
 		return ImVec2( nudgedOrigin.x + boxSize.x * 0.5f, nudgedOrigin.y + boxSize.y * 0.5f );
 	}
 
+	// What a draw would put in the texture. `Why:` the texture is drawn on the general
+	// queue, the one the game renders on, and the composite (compute queue) waits for
+	// that draw. A new draw every paint made every paint queue behind whatever the game
+	// had in flight there, see frame-generation.md; a HUD that did not change has nothing
+	// to wait for.
+	static uint64_t HashDrawData( const ImDrawData *pData, uint64_t ulSeed )
+	{
+		uint64_t ulHash = ulSeed;
+		auto Mix = [ &ulHash ]( const void *p, size_t cb )
+		{
+			ulHash = ulHash * 0x9E3779B97F4A7C15ull ^ std::hash<std::string_view>{}( std::string_view( (const char *)p, cb ) );
+		};
+		for ( const ImDrawList *pList : pData->CmdLists )
+		{
+			Mix( pList->VtxBuffer.Data, size_t( pList->VtxBuffer.Size ) * sizeof( ImDrawVert ) );
+			Mix( pList->IdxBuffer.Data, size_t( pList->IdxBuffer.Size ) * sizeof( ImDrawIdx ) );
+			Mix( pList->CmdBuffer.Data, size_t( pList->CmdBuffer.Size ) * sizeof( ImDrawCmd ) );
+		}
+		return ulHash | 1;
+	}
+
 	static bool RenderAndSubmit()
 	{
 		DrainPrevSubmission();
@@ -1942,7 +1967,10 @@ namespace gamescope
 
 		ImGui::Render();
 
-		const bool bSubmitted = RenderAndSubmit();
+		const uint64_t ulHash = HashDrawData( ImGui::GetDrawData(), Crosshair_RasterGeneration() );
+		const bool bSubmitted = ulHash == s_ulDrawnHash || RenderAndSubmit();
+		if ( bSubmitted )
+			s_ulDrawnHash = ulHash;
 
 		RestoreContext();
 
