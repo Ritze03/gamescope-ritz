@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "LimiterPace.h"
+#include "FpsLimitApply.h"
 
 using namespace limiterpace;
 
@@ -33,4 +34,18 @@ TEST_CASE( "limiter: the deadline schedule", "[limiter]" )
 	// More than a slot behind: a new schedule from now, no burst of frames to catch up.
 	const uint64_t ulLate = ulStart + 3 * kInterval;
 	CHECK( NextDeadline( ulStart, ulLate, 120 ) == ulLate );
+}
+
+TEST_CASE( "limiter: the saved value is pushed on a change only", "[limiter]" )
+{
+	int nLast = -1;
+	CHECK( fpslimit::NeedsPush( nLast, 120 ) );      // startup: pushed
+	CHECK_FALSE( fpslimit::NeedsPush( nLast, 120 ) ); // unrelated reload: a live limit stays
+	CHECK( fpslimit::NeedsPush( nLast, 0 ) );        // profile with no limit: back to unlimited
+	CHECK( fpslimit::NeedsPush( nLast, 5 ) );        // 1-9 is raised to the floor
+	CHECK( nLast == fpslimit::kMin );
+	CHECK( fpslimit::NeedsPush( nLast, 9000 ) );
+	CHECK( nLast == fpslimit::kMax );
+	int nFresh = -1;
+	CHECK( fpslimit::NeedsPush( nFresh, 0 ) );       // a saved 0 still counts as a first push
 }

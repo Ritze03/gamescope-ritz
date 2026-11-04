@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.14.9] – 2026-11-04
 
 ### Fixed
+- **Frame limiter at launch**: the saved limit now applies from the start and after a
+  profile switch, instead of only once you touched the FPS limit setting.
 - **HUD and Crosshair with Frame generation**: drawing them no longer makes every output
   frame wait for the game's own GPU work, so Frame generation reaches its target with
   the game uncapped.

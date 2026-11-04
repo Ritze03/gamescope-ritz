@@ -43,6 +43,7 @@
 #include "Overlay/Notifications.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFrameGen.h"
+#include "Overlay/PanelDisplay.h"
 #include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelLagBuffer.h"
 #include "Overlay/PanelAudio.h"
@@ -670,8 +671,11 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 		return;
 
 	// The rest needs a running compositor -- the same set PanelDisplay.cpp's
-	// PushCachedSettingsToLiveState() pushes when that area reloads (fps_limit
-	// deliberately not: it round-trips through an X11 property, see there).
+	// PushCachedSettingsToLiveState() pushes when that area reloads, plus the Frame
+	// limiter. Its startup apply is steamcompmgr_main()'s (the Xwayland servers
+	// must exist); this is the profile-switch half, a no-op until that has run.
+	if ( !Given( Opt::FramerateLimit ) )
+		gamescope::PanelDisplay_ApplyConfigFpsLimit( config, /*bStartup*/ false );
 	if ( !Given( Opt::GrabCursor ) )
 		steamcompmgr_set_force_relative_mouse( config.gamescope.force_grab_cursor );
 	// input.general's "Force grab keyboard" -- mirrors force_grab_cursor

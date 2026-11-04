@@ -17,6 +17,7 @@
 #pragma once
 
 #include "UI/Registry.h"
+#include "../Config/ConfigManager.h"
 
 namespace gamescope
 {
@@ -35,4 +36,12 @@ namespace gamescope
 	// style preference. See PanelDisplay.cpp's file-level comment for the
 	// thread-safety argument in full.
 	void PanelDisplay_RegisterAreas( ui::Registry &reg );
+
+	// The saved Frame limiter value into the running compositor. Startup: called once
+	// from steamcompmgr_main() when the Xwayland servers exist. Profile switch: called by
+	// main.cpp's live-apply hook (ignored until the startup call has happened).
+	void PanelDisplay_ApplyConfigFpsLimit( const config::Settings &cfg, bool bStartup );
+	// An explicit --framerate-limit wins over the profile: applied through the same
+	// setter (the bare variable it set before was zeroed by the first frame).
+	void PanelDisplay_ApplyLaunchFpsLimit( int nFps );
 }

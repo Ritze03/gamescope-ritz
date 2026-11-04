@@ -276,6 +276,26 @@ capped rate on screen, and never caps the game itself. refresh/N is the natural 
 nested refresh if set, else the output refresh, and steps N down when the game is too fast
 for it.
 
+### The saved limit is applied at launch and on a profile switch (2026-11-04)
+
+Nothing used to apply `gamescope.fps_limit` outside the stepper's own edit: the startup config
+apply returns before the compositor exists, and the panel's reload push skipped it on purpose. So
+the stepper showed the saved 120 while the game ran uncapped until the stepper was touched. Now
+`PanelDisplay_ApplyConfigFpsLimit()` (`PanelDisplay.cpp`) runs once in `steamcompmgr_main()` as soon
+as the Xwayland servers exist, and again from `main.cpp`'s live-apply hook on a profile switch (0
+included, so a switch to a profile with no limit uncaps). It uses the stepper's own setter (the
+`g_nCombinedAppRefreshCycleOverride` path, plus the `GAMESCOPE_FPS_LIMIT` property at startup), and
+`update_runtime_info()` puts the rate in the limiter file, which the layer reads per present, so
+the game may start before or after.
+
+- `Why` only a change of the configured value is pushed (`fpslimit::NeedsPush()`,
+  `src/FpsLimitApply.h`): the hook fires on every config change, and a limit set live meanwhile
+  (the `gamescope_control` protocol, `debug_set_fps_limit`, the stepper) must survive an unrelated
+  reload.
+- An explicit `--framerate-limit` wins over the profile (`Opt::FramerateLimit`), and is now applied
+  through the same setter: the bare variable it used to set was zeroed by the first frame's
+  `update_app_target_refresh_cycle()`.
+
 ### The limiter holds every Vulkan game (2026-11-03)
 
 The compositor only holds commits flagged FIFO (`wlserver_surface_is_fifo()` from the

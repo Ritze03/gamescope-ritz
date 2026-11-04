@@ -65,6 +65,7 @@
 #include "Config/AppId.h"
 #include "Config/NestedDefault.h"
 #include "LaunchOptions.h"
+#include "FpsLimitApply.h"
 #include "Fonts.h"
 #include "Widgets.h"
 
@@ -299,13 +300,10 @@ namespace gamescope
 		set_sdr_on_hdr_brightness( s_CachedSettings.gamescope.sdr_on_hdr_brightness_nits );
 		set_hdr_input_gain( s_CachedSettings.gamescope.hdr_input_gain );
 		set_sdr_input_gain( s_CachedSettings.gamescope.sdr_input_gain );
-		// fps_limit deliberately NOT re-pushed here: SetFpsLimit() below
-		// round-trips through an X11 PropertyNotify (see its own comment),
-		// which needs the root Xwayland server to exist -- true once this
-		// panel first draws, but re-sending it on every config reload isn't
-		// needed for correctness the way the plain-global writes above are,
-		// since nothing else clobbers GAMESCOPE_FPS_LIMIT out from under a
-		// reload the way e.g. a Steam-focus override clobbers filter/scaler.
+		// fps_limit is not pushed here: main.cpp's ritz_apply_config_live() hook applies it
+		// on a profile switch (PanelDisplay_ApplyConfigFpsLimit() below), and
+		// steamcompmgr_main() once at startup. Re-pushing it on every reload would clobber
+		// a limit set live meanwhile (gamescope_control, the stepper).
 	}
 
 	// One slider, always "higher = sharper" -- and, since 2026-08-24, ONE
@@ -468,14 +466,16 @@ namespace gamescope
 	// than leaving 1..9 reachable) closes that trap at the single choke
 	// point every write path (slider, ConCommand, gamescope_control) already
 	// goes through.
-	static constexpr int kMinFpsLimit = 10;
-	static constexpr int kMaxFpsLimit = 480;
+	static constexpr int kMinFpsLimit = fpslimit::kMin;
+	static constexpr int kMaxFpsLimit = fpslimit::kMax;
 
-	static void ApplyFpsLimitLive( int nFps )
+	// bWriteProperty: the X write needs the steamcompmgr thread (the Xlib connection is
+	// not locked), so a profile switch, which may come from another thread, skips it.
+	static void ApplyFpsLimitLive( int nFps, bool bWriteProperty = true )
 	{
 		steamcompmgr_set_app_refresh_cycle_override( GetBackend()->GetScreenType(), nFps, true, true );
 
-		gamescope_xwayland_server_t *pRootServer = wlserver_get_xwayland_server( 0 );
+		gamescope_xwayland_server_t *pRootServer = bWriteProperty ? wlserver_get_xwayland_server( 0 ) : nullptr;
 		if ( pRootServer && pRootServer->ctx )
 		{
 			xwayland_ctx_t *pRootCtx = pRootServer->ctx.get();
@@ -496,13 +496,37 @@ namespace gamescope
 
 	static void SetFpsLimit( int nFps )
 	{
-		nFps = ( nFps <= 0 ) ? 0 : std::clamp( nFps, kMinFpsLimit, kMaxFpsLimit );
+		nFps = fpslimit::Clamp( nFps );
 		// Already had the right order before ApplyEdit() existed; routed
 		// through it anyway so "every setter here goes through one door" is
 		// true with no exception a reader has to check.
 		ApplyEdit(
 			[ nFps ]( config::Settings &cfg ) { cfg.gamescope.fps_limit = nFps; },
 			[ nFps ] { ApplyFpsLimitLive( nFps ); } );
+	}
+
+	// Applies the saved fps_limit to the running compositor: once at startup (nothing
+	// else does, the stepper only writes on an edit) and on a profile switch.
+	// Why: a startup that only seeded config left the game uncapped until the stepper was
+	// touched. Only a CHANGE of the configured value is pushed (fpslimit::NeedsPush), so
+	// unrelated reloads leave a limit set live meanwhile alone.
+	static int s_nLastPushedFpsLimit = -1;
+	static bool s_bFpsLimitReady = false;
+
+	void PanelDisplay_ApplyConfigFpsLimit( const config::Settings &cfg, bool bStartup )
+	{
+		if ( bStartup )
+			s_bFpsLimitReady = true;
+		else if ( !s_bFpsLimitReady )
+			return; // no compositor yet; the startup call reads the then-current config
+		if ( fpslimit::NeedsPush( s_nLastPushedFpsLimit, cfg.gamescope.fps_limit ) )
+			ApplyFpsLimitLive( s_nLastPushedFpsLimit, bStartup );
+	}
+
+	void PanelDisplay_ApplyLaunchFpsLimit( int nFps )
+	{
+		s_bFpsLimitReady = true;
+		ApplyFpsLimitLive( nFps );
 	}
 
 	// =====================================================================

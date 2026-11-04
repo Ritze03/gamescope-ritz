@@ -106,6 +106,7 @@
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
+#include "Overlay/PanelDisplay.h"
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/AtRefreshExtra.h"
@@ -10240,6 +10241,13 @@ steamcompmgr_main(int argc, char **argv)
 
 	gamescope_xwayland_server_t *root_server = wlserver_get_xwayland_server(0);
 	xwayland_ctx_t *root_ctx = root_server->ctx.get();
+
+	// The Frame limiter's startup apply: the saved value (or an explicit
+	// --framerate-limit, which wins) must be in force before the game's first frame.
+	if ( gamescope::LaunchOptions::Given( gamescope::LaunchOptions::Opt::FramerateLimit ) )
+		gamescope::PanelDisplay_ApplyLaunchFpsLimit( g_nSteamCompMgrTargetFPS );
+	else
+		gamescope::PanelDisplay_ApplyConfigFpsLimit( gamescope::config::ResolvedSettings(), /*bStartup*/ true );
 
 	gamesRunningCount = get_prop(root_ctx, root_ctx->root, root_ctx->atoms.gamesRunningAtom, 0);
 	overscanScaleRatio = get_prop(root_ctx, root_ctx->root, root_ctx->atoms.screenScaleAtom, 0xFFFFFFFF) / (double)0xFFFFFFFF;
