@@ -4093,81 +4093,9 @@ static uint32_t s_psNext = 0;
 static int s_psCur = -1;   // slot being built this paint
 static std::mutex s_psMutex;
 static PaintSplitStats_t s_psStats;
-static bool s_psPendingPair = false;   // mark_pair came before this paint's slot was opened
-
-// The early pair's submissions (outside any paint): their own 2-timestamp slots. Counted
-// into s_psStats.early as exec only; they have no cpu/wait of their own.
-static constexpr uint32_t kEarlySplitSlots = 4;
-static VkQueryPool s_epPool = VK_NULL_HANDLE;
-static uint64_t s_epSeq[ kEarlySplitSlots ];   // 0 = free; ~0 = being recorded
-static int s_epCur = -1;
-
-static void early_split_collect()
-{
-	if ( s_epPool == VK_NULL_HANDLE )
-		return;
-	for ( uint32_t i = 0; i < kEarlySplitSlots; i++ )
-	{
-		if ( s_epSeq[ i ] == 0 || s_epSeq[ i ] == ~0ull || g_device.completedSeqNo() < s_epSeq[ i ] )
-			continue;
-		uint64_t r[ 2 ] = {};
-		if ( g_device.vk.GetQueryPoolResults( g_device.device(), s_epPool, i * 2, 2, sizeof( r ), r, sizeof( uint64_t ), VK_QUERY_RESULT_64_BIT ) != VK_SUCCESS )
-			continue;
-		const double flExec = double( r[ 1 ] - r[ 0 ] ) * double( g_device.timestampPeriodNs() ) / 1e6;
-		if ( flExec >= 0.0 && flExec < 1000.0 )
-		{
-			std::lock_guard<std::mutex> lock( s_psMutex );
-			s_psStats.early.n++;
-			s_psStats.early.execSum += flExec;
-			s_psStats.early.execMax = std::max( s_psStats.early.execMax, float( flExec ) );
-		}
-		s_epSeq[ i ] = 0;
-	}
-}
-
-void vulkan_early_split_begin( CVulkanCmdBuffer *pCmd )
-{
-	s_epCur = -1;
-	if ( !g_device.supportsTimestamps() )
-		return;
-	if ( s_epPool == VK_NULL_HANDLE )
-	{
-		VkQueryPoolCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = kEarlySplitSlots * 2 };
-		if ( g_device.vk.CreateQueryPool( g_device.device(), &ci, nullptr, &s_epPool ) != VK_SUCCESS )
-		{
-			s_epPool = VK_NULL_HANDLE;
-			return;
-		}
-	}
-	early_split_collect();
-	for ( uint32_t i = 0; i < kEarlySplitSlots; i++ )
-	{
-		if ( s_epSeq[ i ] != 0 )
-			continue;
-		s_epSeq[ i ] = ~0ull;
-		s_epCur = int( i );
-		g_device.vk.CmdResetQueryPool( pCmd->rawBuffer(), s_epPool, i * 2, 2 );
-		g_device.vk.CmdWriteTimestamp( pCmd->rawBuffer(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_epPool, i * 2 );
-		return;
-	}
-}
-
-void vulkan_early_split_end( CVulkanCmdBuffer *pCmd )
-{
-	if ( s_epCur >= 0 )
-		g_device.vk.CmdWriteTimestamp( pCmd->rawBuffer(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_epPool, s_epCur * 2 + 1 );
-}
-
-void vulkan_early_split_submitted( uint64_t ulSeq )
-{
-	if ( s_epCur >= 0 )
-		s_epSeq[ s_epCur ] = ulSeq;
-	s_epCur = -1;
-}
 
 static void paint_split_collect()
 {
-	early_split_collect();
 	for ( uint32_t i = 0; i < kPaintSplitSlots; i++ )
 	{
 		PaintSplitSlot_t &S = s_psSlot[ i ];
@@ -4227,8 +4155,6 @@ static bool paint_split_open( CVulkanCmdBuffer *pCmd, uint32_t uFirstQuery, uint
 		s_psSlot[ i ] = {};
 		s_psSlot[ i ].bBusy = true;
 		s_psSlot[ i ].ulWake = g_SteamCompMgrVBlankTime.ulWakeupTime;
-		s_psSlot[ i ].bPair = s_psPendingPair;
-		s_psPendingPair = false;
 		s_psCur = int( i );
 	}
 	g_device.vk.CmdResetQueryPool( pCmd->rawBuffer(), s_psPool, s_psCur * 4 + uFirstQuery, uCount );
@@ -4254,8 +4180,6 @@ void vulkan_paint_split_mark_pair()
 {
 	if ( s_psCur >= 0 )
 		s_psSlot[ s_psCur ].bPair = true;
-	else
-		s_psPendingPair = true;
 }
 
 void vulkan_paint_split_take( PaintSplitStats_t *pOut )

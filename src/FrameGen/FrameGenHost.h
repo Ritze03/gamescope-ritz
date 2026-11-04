@@ -547,15 +547,4 @@ namespace fghost
 	//     prevId == 0 it shows the real frame showId (layer 0, or an older ring
 	//     frame) and records nothing.
 	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace );
-
-	// The early pair: called from steamcompmgr's frame-arrival path (same thread as the paint,
-	// the commit's acquire fence has signalled) with the commit's own texture. Does the paint's
-	// "new real frame" work (ring copy, UI observe, motion estimate for the pair previous real
-	// frame -> this one) in its own submission on the same queue, so the paint records only the
-	// synthesis. Does nothing (the paint does it all, as before) when the framegen_early_pair
-	// ConVar is off, on the first frame, after a reset / format / size / colourspace change,
-	// while the last paint was inert, or while the pair played is not the newest one (Smoothness,
-	// lag spike buffer).
-	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId );
-	bool EarlyPairEnabled();   // the ConVar, for the status line
 }

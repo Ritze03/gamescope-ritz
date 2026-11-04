@@ -23,12 +23,8 @@
 #include "steamcompmgr.hpp"
 #include "log.hpp"
 #include "main.hpp"
-#include "convar.h"
 
 static LogScope fg_log( "framegen" );
-
-// A/B switch for the early pair (see EarlyPair() in FrameGenHost.h), live via gamescopectl.
-static gamescope::ConVar<bool> cv_framegen_early_pair( "framegen_early_pair", true, "Frame generation: record the ring copy and motion estimate when a game frame arrives instead of inside the next paint (off = all of it in the paint)." );
 
 namespace fghost
 {
@@ -390,7 +386,6 @@ namespace fghost
 			int nCurSlot = 0;
 			bool bHaveCur = false;   // pRing[nCurSlot] holds a valid real frame
 			uint64_t ulCurId = 0;    // the commit id of pRing[nCurSlot]
-			uint64_t ulEarlyId = 0;  // a frame the early pair copied that no paint has used yet (the split readout's "pair")
 
 			// D13: whether the library holds a motion estimate, and for which pair
 			// (the library keeps exactly one: the latest), how many synths it has
@@ -1508,14 +1503,8 @@ namespace fghost
 	//  3. The per-composite entry point
 	// ------------------------------------------------------------------
 
-	bool EarlyPairEnabled() { return cv_framegen_early_pair; }
-
-	// ulEarlyId != 0: the early pair (EarlyPair()): same code, run when the frame arrives, with
-	// the request the last paint made patched to "the pair (previous real frame, this one)";
-	// records the ring copy, the observe and the estimate, never a synth, and returns null.
-	static gamescope::Rc<CVulkanTexture> RecordImpl( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace, uint64_t ulEarlyId )
+	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace )
 	{
-		const bool bEarly = ulEarlyId != 0;
 		uint32_t uPackedConfig = g_uConfig.load( std::memory_order_relaxed );
 		const uint32_t uPackedBlur = g_uBlur.load( std::memory_order_relaxed );
 		const BlurConfig blurCfg = UnpackBlur( uPackedBlur );
@@ -1527,10 +1516,6 @@ namespace fghost
 		const uint32_t uPackedLearned = g_uLearned.load( std::memory_order_relaxed );
 		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
-
-		// Early: only while something generates or blurs and the switch is on; never releases anything.
-		if ( bEarly && ( !cv_framegen_early_pair || ( !cfg.enabled && !blurCfg.enabled ) || bLagOn || !g_pHost || !( g_uGate.load( std::memory_order_relaxed ) & kGateLive ) ) )
-			return nullptr;
 
 		// Frame generation, motion blur and the lag spike buffer all off (or never on): release
 		// everything. The first branch is the whole cost of the off path once
@@ -1554,23 +1539,14 @@ namespace fghost
 
 		// For the box-size slider's "px" figure and the preview: the game's frame
 		// size as the renderer sees it.
-		if ( !bEarly )
-		{
-			g_ulGameFrameSize.store( ( uint64_t( pLayer0->width() ) << 32 ) | pLayer0->height(), std::memory_order_relaxed );
-			BoxPreviewPoll();
-		}
+		g_ulGameFrameSize.store( ( uint64_t( pLayer0->width() ) << 32 ) | pLayer0->height(), std::memory_order_relaxed );
+		BoxPreviewPoll();
 
 		FrameRequest req;
 		{
 			std::lock_guard<std::mutex> lock( g_FrameMutex );
 			req = g_Frame;
 		}
-
-		// Early: only while the last paint was a live, non-inert request whose pair was the NEWEST
-		// one (a pair that plays behind, Smoothness or a lag buffer, would be clobbered by an
-		// estimate of the newest pair, so those stay in the paint).
-		if ( bEarly && ( req.t < 0.0f || req.newestId == 0 || ( req.currId && req.currId != req.newestId ) ) )
-			return nullptr;
 
 		// Pacing has not driven the renderer, or says it is settled pass-through:
 		// stay completely inert. Enabled() is true so the backends already
@@ -1591,20 +1567,6 @@ namespace fghost
 		}
 
 		Host_t &H = HostGet();
-
-		if ( bEarly )
-		{
-			// Not the first frame, same size as the live interpolator, same colourspace, no reset
-			// pending, not seen yet: anything else is the paint's to sort out, as before.
-			if ( !H.bLive || !H.bHaveCur || H.ulCurId == ulEarlyId || g_bResetRequested.load( std::memory_order_relaxed )
-				|| pLayer0->width() != H.uWidth || pLayer0->height() != H.uHeight
-				|| ( H.bHaveColorspace && H.eColorspace != eColorspace ) )
-				return nullptr;
-			req.newestId = ulEarlyId;
-			req.prevId = H.ulCurId;
-			req.currId = ulEarlyId;
-			req.outId = 0;
-		}
 
 		if ( g_bResetRequested.exchange( false, std::memory_order_relaxed ) )
 			DropFrames( H );
@@ -1664,10 +1626,7 @@ namespace fghost
 			if ( !pCmd )
 			{
 				pCmd = g_device.commandBuffer();
-				if ( bEarly )
-					vulkan_early_split_begin( pCmd.get() );   // diagnostic timing split
-				else
-					vulkan_paint_split_begin( pCmd.get() );
+				vulkan_paint_split_begin( pCmd.get() );   // diagnostic timing split
 				H.interp.beginFrame();   // once per command buffer, before its first record
 			}
 			return pCmd.get();
@@ -1677,14 +1636,6 @@ namespace fghost
 
 		bool bObservedThisCb = false;
 		bool bBoxPreviewRecorded = false;
-
-		// The paint that first uses a frame the early pair already copied is the "pair" paint
-		// of the split readout.
-		if ( !bEarly && H.ulEarlyId && H.ulEarlyId == req.newestId )
-		{
-			vulkan_paint_split_mark_pair();
-			H.ulEarlyId = 0;
-		}
 
 		// D11: a newestId not seen before is a new real frame. Copy it into the next
 		// ring slot (in this very command buffer) whatever this composite shows, so
@@ -1703,10 +1654,7 @@ namespace fghost
 				H.bEstimateValid = false;
 
 			CVulkanCmdBuffer *pCb = Cmd();
-			if ( bEarly )
-				H.ulEarlyId = req.newestId;
-			else
-				vulkan_paint_split_mark_pair();
+			vulkan_paint_split_mark_pair();
 			pCb->bindPipeline( g_device.pipeline( CopyShader( H.plan ) ) );
 			pCb->bindTexture( 0, pLayer0 );
 			pCb->setTextureSrgb( 0, true );             // raw UNORM view: encoded values, as the effects passes read it
@@ -1777,7 +1725,7 @@ namespace fghost
 			OutSlot_t *pHit = nullptr;
 			for ( OutSlot_t &o : H.out )
 			{
-				if ( !bEarly && o.bValid && o.ulOutId == req.outId )
+				if ( o.bValid && o.ulOutId == req.outId )
 					pHit = &o;
 			}
 
@@ -1830,11 +1778,7 @@ namespace fghost
 					}
 				}
 
-				if ( bEarly )
-				{
-					// the estimate is all the early pair records; the synths are the paint's
-				}
-				else if ( bOk && H.nPairSynths >= kMaxSynthsPerPair )
+				if ( bOk && H.nPairSynths >= kMaxSynthsPerPair )
 				{
 					// Over the per-pair synth cap (pacing stops asking long before this):
 					// show the most recent output of the pool, or the real frame.
@@ -1925,37 +1869,18 @@ namespace fghost
 
 		if ( pCmd )
 		{
-			if ( bEarly )
-				vulkan_early_split_end( pCmd.get() );
-			else
-				vulkan_paint_split_end( pCmd.get() );
+			vulkan_paint_split_end( pCmd.get() );
 			const uint64_t ulSeq = g_device.submit( std::move( pCmd ) );
-			if ( bEarly )
-				vulkan_early_split_submitted( ulSeq );
 			if ( bProfileWritten )
 				H.ulProfileSeq = ulSeq;
 			if ( bBoxPreviewRecorded )
 				BoxPreviewSubmitted( ulSeq );
 		}
 
-		if ( bEarly )
-			return nullptr;
-
 		// Cheap poll for the finished pair's timings (a counter read, never a wait).
 		if ( H.bProfiling )
 			HarvestProfile( H, false, bPairPlaying );
 
 		return pResult;
-	}
-
-	gamescope::Rc<CVulkanTexture> RecordBaseLayer( gamescope::Rc<CVulkanTexture> pLayer0, GamescopeAppTextureColorspace eColorspace )
-	{
-		return RecordImpl( std::move( pLayer0 ), eColorspace, 0 );
-	}
-
-	void EarlyPair( gamescope::Rc<CVulkanTexture> pTex, GamescopeAppTextureColorspace eColorspace, uint64_t ulCommitId )
-	{
-		if ( ulCommitId )
-			RecordImpl( std::move( pTex ), eColorspace, ulCommitId );
 	}
 }

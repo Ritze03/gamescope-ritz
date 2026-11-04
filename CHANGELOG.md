@@ -9,12 +9,6 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
-## [0.14.9] – 2026-11-04
-
-### Fixed
-- **Frame generation timing**: the work for a new game frame is now started as the frame
-  arrives instead of inside the next paint, so paints fit their time budget more often.
-
 ## [0.14.8] – 2026-11-03
 
 ### Added
