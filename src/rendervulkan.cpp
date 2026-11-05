@@ -3603,7 +3603,7 @@ static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
 		for ( uint32_t i = 0; i < uImageCount; i++ )
 		{
 			pOutput->outputImagesPartialOverlay[i] = new CVulkanTexture();
-			if ( !pOutput->outputImagesPartialOverlay[i]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[0].get() ) )
+			if ( !pOutput->outputImagesPartialOverlay[i]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[i].get() ) )
 			{
 				vk_log.errorf( "failed to allocate buffer for KMS" );
 				return false;
