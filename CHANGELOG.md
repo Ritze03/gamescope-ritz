@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.10] – 2026-11-05
+
+### Fixed
+- **Direct scanout under Hyprland**: with `render:direct_scanout = 2`, frame generation
+  and FSR now reach the screen at nearly the full refresh rate instead of resetting the
+  screen on every frame.
+
 ## [0.14.9] – 2026-11-04
 
 ### Fixed

@@ -8196,8 +8196,8 @@ namespace
 			if ( shown.bValid )
 			{
 				const size_t n = strlen( szSplit );
-				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s",
-					shown.flCommits, shown.flShown, shown.flDiscarded );
+				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s no free image %.0f/s",
+					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flNoFreeImage );
 			}
 		}
 

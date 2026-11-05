@@ -1345,11 +1345,12 @@ values and spam the log.
 
 ### Frames the host shows (nested Wayland, 2026-11-04)
 
-Under nested Wayland the status line ends with `host: sent 311/s shown 217/s discarded 94/s`
-(`src/FrameGen/HostShown.h`, counted in the Wayland backend's `wp_presentation` feedback
-handlers; one feedback object per commit of the toplevel surface, so `sent` = commits,
-`shown` = `presented`, `discarded` = replaced by a newer commit before the host drew; other
-backends print nothing). No behaviour change. `Why:` the "presented 311 fps" figure counts
+Under nested Wayland the status line ends with `host: sent 311/s shown 217/s discarded 94/s
+zero-copy 0/s no free image 0/s` (`src/FrameGen/HostShown.h`, counted in the Wayland backend's
+`wp_presentation` feedback handlers; one feedback object per commit of the toplevel surface,
+so `sent` = commits, `shown` = `presented`, `discarded` = replaced by a newer commit before the
+host drew, `zero-copy` = shown frames the host scanned out directly, `no free image` = paints
+dropped because the host held every output image; other backends print nothing). `Why:` the "presented 311 fps" figure counts
 what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and
 nothing in the log said so.
 
@@ -1404,9 +1405,10 @@ busy the GPU is on average**, and on a saturated queue the host gets about one d
 job. `Why this matters:` frame generation runs on the compute queue, so gamescope keeps
 producing 311 frames per second, and they then die in the host. Uncapped, **shown is about
 the game's frame rate**: game 152 -> shown 157, 150 -> 157, 120 -> 124; the earlier runs above
-agree (228 -> 227, 178 -> 168, 158 -> 153). The evidence is indirect: Hyprland's own fence was
-not observed, a tiny job on the same queue stands in for its draw, and the test that removes
-the draw altogether (direct scanout, below) is still open.
+agree (228 -> 227, 178 -> 168, 158 -> 153). **Proven 2026-11-05**: with Hyprland's draw taken
+out of the path and nothing else changed, the same load shows 272-278 (see
+[direct scanout](#direct-scanout-the-fix), below). Hyprland's own fence was still never
+observed, so the wait itself is inferred; that its draw is what loses the frames is not.
 
 Synthetic reproduction, no game and no gamescope (`dc`: a dmabuf client committing 311/s,
 fullscreen on the 280 Hz screen, VRR on, signalled buffers; `burst`: a headless Vulkan
@@ -1461,17 +1463,41 @@ cannot cut a command buffer without wrapping every `vkCmd*` and re-binding state
 contained on gamescope's side shortens the game's job. `Why:` the fix has to take the
 host's draw out of the path.
 
-**Direct scanout is the one remaining way, and it is not tested yet.** With it Hyprland hands
-gamescope's buffer to the display and draws nothing. Hyprland, read live with the game
-fullscreen: `solitaryBlockedBy` empty and `directScanoutBlockedBy` `USER, RECORD`, so only two
-things stand in the way: `render:direct_scanout` is 0, and a screen capture is running.
-`RECORD` is global, on all monitors while any capture runs, and every number in this section
-was taken with `simple-screensharing` capturing DP-1 through the portal (`maxFramerate`
-280002, its `enc` engine at 640-690 ms/s). So neither direct scanout nor a run without the
-capture has been measured, and the capture's own cost under load is unknown; at idle it costs
-nothing (280 shown with it). The user's `settings.lua` has it off with the comment "Breaks FSR
-in Gamescope"; that was not checked. Under direct scanout the host also holds buffers longer,
-so the three output images may need a re-check (`vulkan_select_free_output_image()`).
+#### Direct scanout: the fix
+
+With `render:direct_scanout = 2` Hyprland hands gamescope's buffer to the display and draws
+nothing, so no job of its own waits behind the game. Until 2026-11-05 that could not happen for
+gamescope: KMS refused its output images, which also explains the user's `settings.lua` comment
+"Breaks FSR in Gamescope". The refusal, the fix and the buffer count are in
+[backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host). The setting itself is the
+user's: Hyprland's config still has it off.
+
+Synthetic (`dc` + `burst`, as above, scanout on, `zc` = zero-copy every shown frame): **280 at
+every job length**, 8, 12, 16 and 24 ms at 30 per second, and 5 and 7 ms at 120 per second with
+the GPU 84% busy. With the draw in the path the same jobs showed 253-264, 211, 181, and 240.
+
+Minecraft, fullscreen, VRR, frame generation on (Default profile), Hyprland's option switched
+live by a temporary config file, the two states interleaved inside each launch:
+
+| shown per second | limit 120 | limit 30 | uncapped |
+| --- | --- | --- | --- |
+| before, no capture, `direct_scanout` 0 | 232, 231, 129* | 206, 206, 170* | 162, 161, 128* |
+| before, `direct_scanout` 2 (scanout never engaged) | 147, 130, 84* | 204, 171, 117* | 88, 74, 73* |
+| after, `direct_scanout` 0 | 221, 127*, 227, 183+, 130* | 196, 165*, 201, 151+, 162* | 131*, 127*, 158, 160+, 127* |
+| after, `direct_scanout` 2 | 275, 276, 277, 277, 272 | 277, 278, 278, 268, 276 | 272*, 272, 261, 268*, 272 |
+
+`*` the scene had turned heavier (uncapped game about 120 instead of 153; it drifts on its own
+with the player idle). `+` the first run after a launch, still settling. Scanout does not care:
+272 with the game at 120 or at 153. In every run of the last row all shown frames were zero-copy
+(`zero-copy` = `shown`), `directScanoutTo` was set in all 8 samples and `directScanoutBlockedBy`
+was empty, and uncapped game fps was what it was without scanout. Shown no longer follows the
+game's frame rate. Frame generation was on throughout, so the uncapped column is the case that
+matters: game 121-154, shown 261-272.
+
+The capture was not part of this: `simple-screensharing` running gave 230-233 / 206-208 /
+156-159, closed gave the first row, within noise across two sessions, with `RECORD` gone and no
+video stream left in `pw-dump`. A capture does block scanout, though: `RECORD` is global, on
+every monitor while any capture runs.
 
 ## When it passes real frames through
 

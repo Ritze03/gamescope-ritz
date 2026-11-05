@@ -449,6 +449,11 @@ namespace gamescope
         virtual bool SupportsTearing() const = 0;
 
         virtual bool UsesVulkanSwapchain() const = 0;
+
+        // True when a host compositor receives the output images and may put them
+        // straight on a display plane (nested Wayland). See vulkan_output_image_count()
+        // and the modifier filter in CVulkanTexture::BInit().
+        virtual bool HostMayScanOutOutputImages() const { return false; }
         virtual bool IsSessionBased() const = 0;
 
         virtual bool SupportsExplicitSync() const = 0;

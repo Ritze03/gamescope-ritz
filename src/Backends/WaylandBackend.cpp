@@ -728,6 +728,7 @@ namespace gamescope
 
         virtual bool SupportsTearing() const override;
         virtual bool UsesVulkanSwapchain() const override;
+        virtual bool HostMayScanOutOutputImages() const override { return true; }
 
         virtual bool IsSessionBased() const override;
         virtual bool SupportsExplicitSync() const override;
@@ -1380,6 +1381,7 @@ namespace gamescope
                 // this one is dropped and the next vblank tries again.
                 if ( !vulkan_select_free_output_image() )
                 {
+                    fghostshown::Get().ulNoFreeImage.fetch_add( 1, std::memory_order_relaxed );
                     force_repaint();
                     return -EBUSY;
                 }
@@ -2205,6 +2207,8 @@ namespace gamescope
         }
 
         fghostshown::Get().ulShown.fetch_add( 1, std::memory_order_relaxed );
+        if ( uFlags & WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY )
+            fghostshown::Get().ulZeroCopy.fetch_add( 1, std::memory_order_relaxed );
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );
 

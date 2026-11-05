@@ -221,6 +221,12 @@ namespace gamescope
 			return false;
 		}
 
+		virtual bool HostMayScanOutOutputImages() const override
+		{
+            // Doesn't need to be 'initted' for this check.
+            return m_pChild->HostMayScanOutOutputImages();
+		}
+
 		virtual bool UsesVulkanSwapchain() const override
 		{
             // Doesn't need to be 'initted' for this check.

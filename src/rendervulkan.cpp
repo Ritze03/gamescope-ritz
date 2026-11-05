@@ -2449,6 +2449,15 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 		{
 			uint64_t modifier = possibleModifiers[i];
 
+			// A nested host offers every modifier it can sample, not only what its display
+			// planes take. Left alone, the driver picks a pipe-aligned DCC modifier here that
+			// KMS refuses, so the host cannot scan the image out, and Hyprland retries with a
+			// modeset on every frame (superdoc/features/backend-wayland.md). Uncompressed
+			// images have no such limit and no metadata that a plane could read stale.
+			if ( flags.bOutputImage && GetBackend()->HostMayScanOutOutputImages() &&
+			     IS_AMD_FMT_MOD( modifier ) && AMD_FMT_MOD_GET( DCC, modifier ) )
+				continue;
+
 			VkExternalImageFormatProperties externalFormatProps = {
 				.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES,
 			};
@@ -3546,6 +3555,13 @@ bool vulkan_remake_swapchain( void )
 	return bRet;
 }
 
+// A host scanning an image out holds it until the next page flip, and the one committed
+// behind it until that flip too, which left too few images to keep drawing at 280 Hz.
+static uint32_t vulkan_output_image_count()
+{
+	return GetBackend()->HostMayScanOutOutputImages() ? 4u : 3u;
+}
+
 static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
 {
 	CVulkanTexture::createFlags outputImageflags;
@@ -3555,15 +3571,9 @@ static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
 	outputImageflags.bSampled = true; // for pipewire blits
 	outputImageflags.bOutputImage = true;
 
-	pOutput->outputImages.resize(3); // extra image for partial composition.
-	pOutput->outputImagesPartialOverlay.resize(3);
-
-	pOutput->outputImages[0] = nullptr;
-	pOutput->outputImages[1] = nullptr;
-	pOutput->outputImages[2] = nullptr;
-	pOutput->outputImagesPartialOverlay[0] = nullptr;
-	pOutput->outputImagesPartialOverlay[1] = nullptr;
-	pOutput->outputImagesPartialOverlay[2] = nullptr;
+	const uint32_t uImageCount = vulkan_output_image_count();
+	pOutput->outputImages.assign( uImageCount, nullptr ); // extra image for partial composition.
+	pOutput->outputImagesPartialOverlay.assign( uImageCount, nullptr );
 
 	uint32_t uDRMFormat = pOutput->uOutputFormat;
 
@@ -3573,28 +3583,14 @@ static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
 	if ( g_uOutputRotation & 1u )
 		std::swap( uOutputWidth, uOutputHeight );
 
-	pOutput->outputImages[0] = new CVulkanTexture();
-	bool bSuccess = pOutput->outputImages[0]->BInit( uOutputWidth, uOutputHeight, 1u, uDRMFormat, outputImageflags );
-	if ( bSuccess != true )
+	for ( uint32_t i = 0; i < uImageCount; i++ )
 	{
-		vk_log.errorf( "failed to allocate buffer for KMS" );
-		return false;
-	}
-
-	pOutput->outputImages[1] = new CVulkanTexture();
-	bSuccess = pOutput->outputImages[1]->BInit( uOutputWidth, uOutputHeight, 1u, uDRMFormat, outputImageflags );
-	if ( bSuccess != true )
-	{
-		vk_log.errorf( "failed to allocate buffer for KMS" );
-		return false;
-	}
-
-	pOutput->outputImages[2] = new CVulkanTexture();
-	bSuccess = pOutput->outputImages[2]->BInit( uOutputWidth, uOutputHeight, 1u, uDRMFormat, outputImageflags );
-	if ( bSuccess != true )
-	{
-		vk_log.errorf( "failed to allocate buffer for KMS" );
-		return false;
+		pOutput->outputImages[i] = new CVulkanTexture();
+		if ( !pOutput->outputImages[i]->BInit( uOutputWidth, uOutputHeight, 1u, uDRMFormat, outputImageflags ) )
+		{
+			vk_log.errorf( "failed to allocate buffer for KMS" );
+			return false;
+		}
 	}
 
 	// Oh no.
@@ -3604,28 +3600,14 @@ static bool vulkan_make_output_images( VulkanOutput_t *pOutput )
 	{
 		uint32_t uPartialDRMFormat = pOutput->uOutputFormatOverlay;
 
-		pOutput->outputImagesPartialOverlay[0] = new CVulkanTexture();
-		bool bSuccess = pOutput->outputImagesPartialOverlay[0]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[0].get() );
-		if ( bSuccess != true )
+		for ( uint32_t i = 0; i < uImageCount; i++ )
 		{
-			vk_log.errorf( "failed to allocate buffer for KMS" );
-			return false;
-		}
-
-		pOutput->outputImagesPartialOverlay[1] = new CVulkanTexture();
-		bSuccess = pOutput->outputImagesPartialOverlay[1]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[1].get() );
-		if ( bSuccess != true )
-		{
-			vk_log.errorf( "failed to allocate buffer for KMS" );
-			return false;
-		}
-
-		pOutput->outputImagesPartialOverlay[2] = new CVulkanTexture();
-		bSuccess = pOutput->outputImagesPartialOverlay[2]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[2].get() );
-		if ( bSuccess != true )
-		{
-			vk_log.errorf( "failed to allocate buffer for KMS" );
-			return false;
+			pOutput->outputImagesPartialOverlay[i] = new CVulkanTexture();
+			if ( !pOutput->outputImagesPartialOverlay[i]->BInit( uOutputWidth, uOutputHeight, 1u, uPartialDRMFormat, outputImageflags, nullptr, 0, 0, pOutput->outputImages[0].get() ) )
+			{
+				vk_log.errorf( "failed to allocate buffer for KMS" );
+				return false;
+			}
 		}
 	}
 
@@ -6559,7 +6541,7 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 
 	if ( !GetBackend()->UsesVulkanSwapchain() && pOutputOverride == nullptr && increment )
 	{
-		g_output.nOutImage = ( g_output.nOutImage + 1 ) % 3;
+		g_output.nOutImage = ( g_output.nOutImage + 1 ) % uint32_t( g_output.outputImages.size() );
 	}
 
 	return sequence;
@@ -6698,7 +6680,7 @@ bool vulkan_has_drm_modifiers_for_features(VkFormat format, VkFormatFeatureFlags
 
 // Points g_output.nOutImage at an output image nobody else holds, so the next
 // vulkan_composite() never draws into a picture still on screen. Returns false
-// (nOutImage untouched) when all three are held.
+// (nOutImage untouched) when all of them are held.
 //
 // Only for a backend that hands its output images to a host compositor (nested
 // Wayland): the host keeps an image from the commit that attaches it until its
@@ -6726,17 +6708,18 @@ bool vulkan_select_free_output_image()
 
 gamescope::Rc<CVulkanTexture> vulkan_get_last_output_image( bool partial, bool defer )
 {
-	// Get previous image ( +2 )
+	// Get previous image ( -1 )
 	// 1 2 3
 	//   |
 	// |
-	uint32_t nRegularImage = ( g_output.nOutImage + 2 ) % 3;
+	const uint32_t uCount = uint32_t( g_output.outputImages.size() );
+	uint32_t nRegularImage = ( g_output.nOutImage + uCount - 1 ) % uCount;
 
-	// Get previous previous image ( +1 )
+	// Get previous previous image ( -2 )
 	// 1 2 3
 	//   |
 	//     |
-	uint32_t nDeferredImage = ( g_output.nOutImage + 1 ) % 3;
+	uint32_t nDeferredImage = ( g_output.nOutImage + uCount - 2 ) % uCount;
 
 	uint32_t nOutImage = defer ? nDeferredImage : nRegularImage;
 

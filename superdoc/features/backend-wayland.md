@@ -184,13 +184,13 @@ While [frame generation](frame-generation.md) is enabled, full composite is forc
 
 ## Output images the host still holds
 
-A full composite draws into one of three output images (`g_output.outputImages`) and
-attaches it to the toplevel; the host keeps that image from the attach until it sends
+A full composite draws into one of four output images (`g_output.outputImages`; three on every
+other backend, `vulkan_output_image_count()`) and attaches it to the toplevel; the host keeps that image from the attach until it sends
 `wl_buffer.release`, which the backend Fb's acquisition count (and so
 `CVulkanTexture::IsInUse()`) reflects. Before each composite,
 `CWaylandConnector::Present()` calls `vulkan_select_free_output_image()`
 (`src/rendervulkan.cpp`), which points `g_output.nOutImage` at an image the host has
-released. If all three are still held, the frame is skipped (`force_repaint()`, return
+released. If all of them are still held, the frame is skipped (`force_repaint()`, return
 `-EBUSY`) and the next vblank tries again. `Why:` upstream simply advances the ring
 (`(n + 1) % 3`), assuming the host releases an image within two frames. GNOME/Mutter
 scanning a fullscreen gamescope window out directly does not. Measured 2026-10-26 on
@@ -208,6 +208,50 @@ fork composites every frame whenever its HUD, crosshair or overlay is up, since 
 layers have no backend Fb (see the check above `if ( !bNeedsFullComposite )`). A
 headless host (private headless mutter, sway) releases promptly and never shows the
 race: 0 of 1662 composites were held there. Measure on a real output.
+
+## Direct scanout under a host
+
+A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
+Hyprland that is the only way past 160-230 shown frames with a game running (why:
+[frame-generation.md](frame-generation.md#why-the-host-loses-frames)). Two things have to hold,
+both behind `HostMayScanOutOutputImages()` (`src/backend.h`, true only here), and the status
+line's `zero-copy` count says whether it worked.
+
+**Output images carry no AMD DCC modifier** (modifier filter in `CVulkanTexture::BInit()`). The
+host's `zwp_linux_dmabuf_v1` list is what it can sample, not what its planes take. From that
+list RADV picked `0x200000028a6bf04` (Navi 31: DCC, pipe-aligned, no retile), which is missing
+from the plane's `IN_FORMATS`, so `drmModeAddFB2WithModifiers` failed. Hyprland logged it three
+times, then remembered the dead buffer and only failed silently: `directScanoutBlockedBy` empty,
+`directScanoutTo` 0. Worse, each frame's failed attempt switched the output to the buffer's
+format (`XB30`, the screen runs `XR24`) and the rollback modeset it back. Measured: 511 modesets
+in 6 s with the game, 2342 in about 8 s with vkcube and FSR, and gamescope's images held so long that
+shown fell to 73-147 (limit 120 and uncapped). **That is what "Breaks FSR" meant**, and it was never about FSR's pixels:
+FSR forces a full composite, so gamescope's own output image reaches the host. With frame
+generation also forcing it, the same happens without FSR. Without any composite the window is
+not solitary (`solitaryBlockedBy` `OPAQUE, SURFACES`) and nothing is attempted.
+
+`Why uncompressed and not a displayable modifier:` `0x200000028a67f04` (DCC with retile, the one
+Hyprland allocates for itself) also engaged scanout, but a plane then reads a second DCC surface
+that the driver has to retile, and nothing here can see what a plane actually reads (a
+screenshot makes the host composite again). With no compression a plane reads the same memory a
+screenshot does. Cost, without scanout: about 3% shown (232 -> 224, 206 -> 199, 162 -> 158),
+across launches, so roughly. Games keep DCC: `GetSupportedModifiers()` stays whole, because it
+also decides what gamescope offers its own clients.
+
+**Four output images.** One is on screen, one committed behind it and held until the next flip,
+one being drawn. With three, 34-46 paints a second found none free and shown stopped at 240-273;
+with four, 7-14 and 261-278. Without scanout four also mostly clears the 4-53 per second the
+uncompressed images otherwise cost.
+
+The picture was checked with `grim`, which makes the host composite for that frame, so it shows
+gamescope's buffer and not the plane's read. 720p game, 1080p output, scanout on, frame generation
+on: FSR sharpened (edge variance 190 against linear 126), HUD and Crosshair in place, settings
+overlay drawn, no modesets after the first, no failed import, shown 277-278 with FSR (205 with
+the overlay open, which is the overlay's own cost: gamescope itself sent 216). Flicker, tearing
+and black frames can only be ruled out by eye; `activelyTearing` stayed false and every screenshot
+was intact. Entering and leaving scanout costs one modeset each, since the 10-bit output image is
+not the screen's 8-bit format (`bitdepth = 8`). An 8-bit output image would avoid that but loses
+the composite's precision, and it was not tested with the game.
 
 
 ## Related links
