@@ -1954,6 +1954,9 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twenty-fifth (2026-10-22): Effects (the compressor), directly
 		// below Mixer in the new AUDIO group. See PanelAudio.cpp and Icons.cpp.
 		"audio.effects",
+		// The twenty-sixth (2026-11-05): Diagnostics, last in OTHER. See
+		// PanelDiagnostics.cpp and Icons.cpp.
+		"system.diagnostics",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2192,6 +2195,7 @@ TEST_CASE( "rail: the eight groups are in the order the request named", "[overla
 		{ "setup.keybinds",        ui::RailGroup::Settings },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
+		{ "system.diagnostics",    ui::RailGroup::Other },
 	};
 	const size_t nExpected = sizeof( expected ) / sizeof( expected[ 0 ] );
 
@@ -2346,7 +2350,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"audio.mixer", "audio.effects", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",
-		"system.log", "system.changelog",
+		"system.log", "system.changelog", "system.diagnostics",
 	};
 	for ( const char *pszId : pszAllAreas )
 		reg.Add( pszId, pszId, ui::Section::Display );

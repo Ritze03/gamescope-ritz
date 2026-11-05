@@ -111,6 +111,12 @@ one place that wires all of it together at startup.
   `Overlay/PanelLagBuffer.cpp`. See [frame-generation](../features/frame-generation.md),
   [motion-blur](../features/motion-blur.md) and
   [lag-spike-buffer](../features/lag-spike-buffer.md).
+- **Diagnostics** — `src/Overlay/Diagnostics.{h,cpp}` (runtime: launch-environment snapshot taken first in
+  `main()`, a worker thread that runs `hyprctl`, the startup toast, the browser launch),
+  `DiagnosticsLogic.h` (pure parsing and state decisions, tested by `tests/test_diagnostics.cpp`)
+  and `PanelDiagnostics.cpp` (area `system.diagnostics`, OTHER rail group). `Diagnostics_Tick()`
+  is called every frame from `SettingsOverlay_AddLayer()`. See
+  [diagnostics](../features/diagnostics.md).
 - **Game audio capture** — `src/Audio/Capture.{h,cpp}`: a private PipeWire sink per
   session (a loopback pair on its own `pw_thread_loop`, thread `"gamescope-audio"`),
   the session tag injected into the game's env by `ApplyGameEnvironment()` from

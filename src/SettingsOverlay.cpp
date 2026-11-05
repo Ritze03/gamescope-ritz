@@ -54,6 +54,7 @@
 #include "Overlay/UI/Shell.h"
 #include "Overlay/UI/Tokens.h"
 #include "Overlay/Notifications.h"
+#include "Overlay/Diagnostics.h"
 #include "Config/ConfigManager.h"
 #include "Keybinds.h"   // the startup toast names the LIVE shell chord
 
@@ -1016,6 +1017,7 @@ namespace gamescope
 	{
 		UpdateFadeAlpha();
 		EnsureBackgroundLiveThemeLoaded();
+		gamescope::Diagnostics_Tick();
 
 		// Save/restore the globally-current ImGui context across this entire
 		// pass (see s_pImguiContext). Covers DrainInputQueue() below too, which

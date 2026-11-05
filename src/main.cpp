@@ -41,6 +41,7 @@
 #include "Audio/Capture.h"
 #include "LaunchOptions.h"
 #include "Overlay/Notifications.h"
+#include "Overlay/Diagnostics.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFrameGen.h"
 #include "Overlay/PanelDisplay.h"
@@ -1117,6 +1118,10 @@ int main(int argc, char **argv)
 {
 	g_argc = argc;
 	g_argv = argv;
+
+	// Before anything below touches the environment: the host session's, kept
+	// for hyprctl and the browser (Overlay/Diagnostics.h).
+	gamescope::Diagnostics_CaptureHostEnv();
 
 	// Force disable this horrible broken layer.
 	setenv("DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1", "1", 1);

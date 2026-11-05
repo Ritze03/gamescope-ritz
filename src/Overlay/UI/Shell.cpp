@@ -48,6 +48,7 @@
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/PanelCursor.h"
 #include "Overlay/PanelChangelog.h"
+#include "Overlay/PanelDiagnostics.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
 #include "Overlay/PanelFriends.h"
@@ -943,6 +944,9 @@ namespace gamescope::ui::shell
 			// CHANGELOG.md. Sits next to Log because both answer a question
 			// ABOUT the running system rather than configuring it.
 			PanelChangelog_RegisterArea( reg );
+			// 2026-11-05: checks of the setup around gamescope that cost
+			// frames silently (Hyprland's direct scanout). OTHER, last.
+			PanelDiagnostics_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,

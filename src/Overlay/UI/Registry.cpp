@@ -1003,6 +1003,7 @@ namespace gamescope::ui
 			// ---- OTHER -- unchanged.
 			{ "system.log",            RailGroup::Other },
 			{ "system.changelog",      RailGroup::Other },
+			{ "system.diagnostics",    RailGroup::Other },
 		};
 	}
 

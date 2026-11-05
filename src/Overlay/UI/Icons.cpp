@@ -442,6 +442,14 @@ namespace gamescope::ui
 			Bar( 10.75f, 6.5f, 13.25f, 9.0f ),
 			Bar( 10.75f, 11.0f, 13.25f, 17.0f ) } },
 
+		{ "system.diagnostics", 1, {
+			// A pulse trace: flat, one spike up, one down, flat -- the
+			// "is it healthy" mark. One open polyline; no other glyph is a
+			// single zigzag.
+			IconShape{ IconOp::Polyline, 6, 0.0f, { { 3.5f, 12.5f }, { 8.0f, 12.5f },
+			                                        { 10.5f, 5.5f }, { 14.0f, 19.5f },
+			                                        { 16.0f, 12.5f }, { 20.5f, 12.5f } } } } },
+
 		// ---- SETUP --------------------------------------------------------
 		{ "setup.profiles", 2, {
 			// Two offset cards -- the "one of several saved copies" mark.

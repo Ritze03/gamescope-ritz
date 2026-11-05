@@ -11,6 +11,11 @@ The newest version below is the one this build reports.
 
 ## [0.14.10] – 2026-11-05
 
+### Added
+- **Diagnostics**: a new tab under OTHER that checks whether Hyprland has direct
+  scanout on, warns once at startup when it is off, says what to set, and has a Recheck
+  button.
+
 ### Fixed
 - **Direct scanout under Hyprland**: with `render:direct_scanout = 2`, frame generation
   and FSR now reach the screen at nearly the full refresh rate instead of resetting the
