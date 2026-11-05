@@ -1502,11 +1502,11 @@ disabled for an unrelated reason (HDR off, wrong filter, ...) still greys out bu
 draws no tag.
 
 
-### Rail warning sign and Inspector-only verb (2026-11-05)
+### Rail warning dot and Inspector-only verb (2026-11-05)
 
-`Area::WarnWhen(fn)` puts a drawn warning triangle (`glyph::Warning()`, `Role::Warn`, dark "!")
+`Area::WarnWhen(fn)` puts a plain filled yellow dot (`glyph::WarnDot()`, `glyph::kWarnDotColor`; the triangle with "!" was dropped as looking fake)
 on the area's rail row and on its group heading: after the name (clamped before the chevron, so
 no width change) in the full rail, a badge on the icon's top-right in the icon-only rail.
-Drawn because Fonts.cpp bakes only Latin-1. `Entry::InspectorVerb()` is a labelled row with one
+`Entry::InspectorVerb()` is a labelled row with one
 verb chip that exists only in the Inspector (the row's Details/Configure page and the area's
 Overview). Both are used by Diagnostics; see `superdoc/features/diagnostics.md`.

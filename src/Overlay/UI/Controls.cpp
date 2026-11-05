@@ -255,28 +255,9 @@ namespace gamescope::ui
 			Dl()->AddPolyline( pts, 3, col, ImDrawFlags_None, StrokePx( flSizePx ) );
 		}
 
-		void Warning( ImVec2 vCenterPx, float flSizePx, ImU32 colFill, ImU32 colMark )
+		void WarnDot( ImVec2 vCenterPx, float flDiameterPx )
 		{
-			// A triangle whose centroid, not its box centre, sits on
-			// vCenterPx, so it reads as centred beside a line of text.
-			const float h = flSizePx * 0.88f;          // height
-			const float w = flSizePx * 0.575f;         // half base
-			const ImVec2 top  ( vCenterPx.x,     vCenterPx.y - h * 0.58f );
-			const ImVec2 left ( vCenterPx.x - w, vCenterPx.y + h * 0.42f );
-			const ImVec2 right( vCenterPx.x + w, vCenterPx.y + h * 0.42f );
-			ImDrawList *dl = Dl();
-			dl->AddTriangleFilled( top, left, right, colFill );
-			// A stroke of the same colour rounds the three corners a little.
-			const ImVec2 outline[ 3 ] = { top, right, left };
-			dl->AddPolyline( outline, 3, colFill, ImDrawFlags_Closed | ImDrawFlags_RoundCornersAll,
-			                 std::max( 1.0f, flSizePx * 0.14f ) );
-
-			// The "!": a bar and a dot, cut out of the fill.
-			const float flBar = std::max( 1.0f, flSizePx * 0.14f );
-			dl->AddLine( ImVec2( vCenterPx.x, vCenterPx.y - h * 0.18f ),
-			             ImVec2( vCenterPx.x, vCenterPx.y + h * 0.10f ), colMark, flBar );
-			dl->AddCircleFilled( ImVec2( vCenterPx.x, vCenterPx.y + h * 0.27f ),
-			                     std::max( 0.7f, flBar * 0.62f ), colMark, 8 );
+			Dl()->AddCircleFilled( vCenterPx, flDiameterPx * 0.5f, kWarnDotColor, 24 );
 		}
 
 		void Magnifier( ImVec2 vCenterPx, float flSizePx, ImU32 col )

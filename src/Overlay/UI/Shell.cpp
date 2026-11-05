@@ -2300,7 +2300,7 @@ namespace gamescope::ui::shell
 			// window clip rect, which is exactly the wanted hit-test.
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
-			// The warning sign (Area::WarnWhen): one pass over the areas, so a
+			// The warning dot (Area::WarnWhen): one pass over the areas, so a
 			// group heading knows whether any area under it warns even while
 			// the group is closed and its rows are not drawn.
 			bool bGroupWarns[ 16 ] = {};
@@ -2310,8 +2310,6 @@ namespace gamescope::ui::shell
 				if ( g < 16 && pA->Warns() )
 					bGroupWarns[ g ] = true;
 			}
-			const ImU32 colWarnFill = Col( Role::Warn );
-			const ImU32 colWarnMark = IM_COL32( 24, 16, 6, 255 );
 
 			Walk( s_railAccordionAnim.eOpenGroup, s_railAccordionAnim.flOpenH,
 			      s_railAccordionAnim.eClosingGroup, s_railAccordionAnim.flClosingH,
@@ -2536,10 +2534,9 @@ namespace gamescope::ui::shell
 								Px( 20.0f ), colHdrIcon );
 
 						// Warning badge on the icon's top-right: the name is
-						// hidden in this rail, so the sign rides on the icon.
+						// hidden in this rail, so the dot rides on the icon.
 						if ( bGroupWarns[ (size_t)eGroup ] )
-							glyph::Warning( ImVec2( rcHdr.x1 - Px( 13.0f ), rcHdr.y0 + Px( 11.0f ) ),
-							                Px( 12.0f ), colWarnFill, colWarnMark );
+							glyph::WarnDot( ImVec2( rcHdr.x1 - Px( 11.0f ), rcHdr.y0 + Px( 11.0f ) ), Px( 8.0f ) );
 
 						if ( bHovered )
 						{
@@ -2646,14 +2643,14 @@ namespace gamescope::ui::shell
 						Label( { flLabelX0, rcHdr.y0, rcHdr.x1 - Px( tok::kM ) - flChevron, rcHdr.y1 },
 						       TypeRole::Title, colHdr, RailGroupName( eGroup ) );
 
-						// The sign sits right after the name, clear of the
+						// The dot sits right after the name, clear of the
 						// chevron, so the heading's width never changes.
 						if ( bGroupWarns[ (size_t)eGroup ] )
 						{
 							const float flNameW = MeasureText( TypeRole::Title, RailGroupName( eGroup ) ).x;
 							const float flWx = std::min( flLabelX0 + flNameW + Px( tok::kM ) + Px( 7.0f ),
 							                             rcHdr.x1 - Px( tok::kM ) - flChevron - Px( tok::kM ) - Px( 7.0f ) );
-							glyph::Warning( ImVec2( flWx, flCy ), Px( 14.0f ), colWarnFill, colWarnMark );
+							glyph::WarnDot( ImVec2( flWx, flCy ), Px( 9.0f ) );
 						}
 					}
 				},
@@ -2782,8 +2779,7 @@ namespace gamescope::ui::shell
 				{
 					DrawMark( { rcItem.x0, rcItem.y0, rcItem.x1, rcItem.y1 } );
 					if ( bAreaWarns )
-						glyph::Warning( ImVec2( rcItem.x1 - Px( 13.0f ), rcItem.y0 + Px( 11.0f ) ),
-						                Px( 12.0f ), colWarnFill, colWarnMark );
+						glyph::WarnDot( ImVec2( rcItem.x1 - Px( 11.0f ), rcItem.y0 + Px( 11.0f ) ), Px( 8.0f ) );
 				}
 				else
 				{
@@ -2798,8 +2794,7 @@ namespace gamescope::ui::shell
 						const float flNameW  = MeasureText( TypeRole::Label, area.Title().c_str() ).x;
 						const float flWx = std::min( flLabelX + flNameW + Px( tok::kM ) + Px( 6.0f ),
 						                             rcItem.x1 - Px( tok::kM ) - Px( 6.0f ) );
-						glyph::Warning( ImVec2( flWx, ( rcItem.y0 + rcItem.y1 ) * 0.5f ), Px( 13.0f ),
-						                colWarnFill, colWarnMark );
+						glyph::WarnDot( ImVec2( flWx, ( rcItem.y0 + rcItem.y1 ) * 0.5f ), Px( 8.0f ) );
 					}
 				}
 

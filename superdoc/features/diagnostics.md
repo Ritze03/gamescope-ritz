@@ -84,10 +84,14 @@ detached in its own session). Gamescope is a subreaper, so the child is reaped w
 non-blocking `waitpid` on later ticks. Opening a browser over a fullscreen game may take focus
 from it; nothing opens by itself.
 
-### The warning sign on the rail
+### The warning dot on the rail
 
-While any diagnostic warns, the Shell's rail shows a drawn warning triangle (`glyph::Warning()`,
-`Role::Warn` orange, a dark "!") on the **OTHER** group heading and on the **Diagnostics** row.
+While any diagnostic warns, the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
+`glyph::kWarnDotColor`, antialiased, no "!") on the **OTHER** group heading and on the
+**Diagnostics** row. `Why:` the first cut was a drawn warning triangle with a "!", which looked
+improvised; the user: *"The badge looks really bad. It doesnt look proper. Just make it a yellow
+circle instead of the fake warning symbol."* The colour is a literal yellow, not `Role::Warn`
+(orange).
 `Diagnostics_HasWarning()` is derived from the published results (`AnyWarns()` over them, in
 `DiagnosticsLogic.h`), not a separate flag, so a future check counts as soon as its result is in
 the published range, and it clears when a recheck finds the problem fixed. Only **Off** warns:
