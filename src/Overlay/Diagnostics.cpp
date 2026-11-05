@@ -356,6 +356,12 @@ namespace gamescope
 		return true;
 	}
 
+	bool Diagnostics_HasWarning()
+	{
+		std::lock_guard<std::mutex> l( g_Mutex );
+		return AnyWarns( &g_Pub.scanout, &g_Pub.scanout + 1 );
+	}
+
 	DiagnosticsView Diagnostics_View()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );

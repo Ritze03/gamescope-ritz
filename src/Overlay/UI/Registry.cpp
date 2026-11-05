@@ -537,6 +537,16 @@ namespace gamescope::ui
 		return *this;
 	}
 
+	Entry &Entry::InspectorVerb( const char *pszLabel, const char *pszVerb, std::function<void()> fn,
+	                             std::function<bool()> fnShown )
+	{
+		m_sInspVerbLabel = pszLabel ? pszLabel : "";
+		m_sInspVerbVerb  = pszVerb ? pszVerb : "";
+		m_InspVerbFn     = std::move( fn );
+		m_InspVerbShown  = std::move( fnShown );
+		return *this;
+	}
+
 	Entry &Entry::Help( const char *pszHelp )
 	{
 		if ( !pszHelp || !*pszHelp )
@@ -696,6 +706,7 @@ namespace gamescope::ui
 	Area &Area::Summary( std::function<std::string()> fn )  { m_Summary = std::move( fn ); return *this; }
 	Area &Area::AvailableWhen( std::function<bool()> fn )    { m_Available = std::move( fn ); return *this; }
 	Area &Area::Badge( std::function<std::string()> fn )     { m_Badge = std::move( fn ); return *this; }
+	Area &Area::WarnWhen( std::function<bool()> fn )         { m_Warn = std::move( fn ); return *this; }
 
 	// A content body and registered rows are the CORRECT shape together --
 	// Log's filter bank and text filter are what make its lines usable, so

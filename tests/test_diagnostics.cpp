@@ -96,3 +96,30 @@ TEST_CASE( "diagnostics: not applicable and not Hyprland say so and never warn",
 	REQUIRE( r.eState == ScanoutState::NoHyprland );
 	REQUIRE( !WarnsAbout( r.eState ) );
 }
+
+TEST_CASE( "diagnostics: the rail's warning sign is on for Off alone", "[diagnostics]" )
+{
+	const auto Warns = []( const Facts &f, const RunResult &run )
+	{
+		const ScanoutResult r = DecideDirectScanout( f, run );
+		return AnyWarns( &r, &r + 1 );
+	};
+	Facts sdl;      // not applicable: no host to scan out to
+	Facts noHypr = Nested();
+	noHypr.bHyprland = false;
+
+	REQUIRE(  Warns( Nested(), Ok( R"({"int": 0})" ) ) );                 // Off
+	REQUIRE( !Warns( Nested(), Ok( R"({"int": 1})" ) ) );                 // On
+	REQUIRE( !Warns( Nested(), Ok( R"({"int": 2})" ) ) );
+	REQUIRE( !Warns( Nested(), Out( RunOutcome::TimedOut ) ) );           // Could not check
+	REQUIRE( !Warns( Nested(), Ok( "no such option" ) ) );
+	REQUIRE( !Warns( sdl, Ok( R"({"int": 0})" ) ) );                      // Not applicable
+	REQUIRE( !Warns( noHypr, Ok( R"({"int": 0})" ) ) );                   // Hyprland not detected
+
+	// A recheck that finds it fixed clears the sign; with several results, any one warns.
+	const ScanoutResult both[] = { DecideDirectScanout( Nested(), Ok( R"({"int": 2})" ) ),
+	                               DecideDirectScanout( Nested(), Ok( R"({"int": 0})" ) ) };
+	REQUIRE( AnyWarns( both, both + 2 ) );
+	REQUIRE( !AnyWarns( both, both + 1 ) );
+	REQUIRE( !AnyWarns( both, both ) );
+}

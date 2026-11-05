@@ -68,8 +68,10 @@ namespace gamescope
 		ui::Area &a = reg.Add( "system.diagnostics", "Diagnostics", ui::Section::System );
 
 		a.Keywords( "diagnostics check hyprland direct scanout direct_scanout hyprctl frames "
-		            "lost frame generation host nested wayland problem warning fix" );
+		            "lost frame generation host nested wayland problem warning fix "
+		            "wiki docs documentation render options browser link open" );
 		a.Summary( []{ return Headline( Diagnostics_View() ); } );
+		a.WarnWhen( []{ return Diagnostics_HasWarning(); } );
 
 		a.Group( "Hyprland" );
 
@@ -79,6 +81,15 @@ namespace gamescope
 			       "Hyprland draws every frame itself, and frames that Frame generation makes are "
 			       "lost. Only checked when gamescope runs nested under Hyprland." )
 			.Keywords( "direct scanout hyprland render direct_scanout frames lost" )
+			// The docs button lives in the Inspector only (Entry::InspectorVerb): on
+			// this row's page and on the area's Overview. Shown whenever the check
+			// applies, i.e. under Hyprland on a backend that can scan out.
+			.InspectorVerb( "Hyprland render options", "Open", []{ Diagnostics_OpenDocs(); },
+			                []
+			{
+				const ScanoutState e = Diagnostics_View().scanout.eState;
+				return e == ScanoutState::On || e == ScanoutState::Off || e == ScanoutState::Unknown;
+			} )
 			.Live( "render:direct_scanout", []
 			{
 				const diagnostics::ScanoutResult r = Diagnostics_View().scanout;
@@ -96,11 +107,6 @@ namespace gamescope
 			.DisabledUnless( []{ return !Diagnostics_View().bRunning; }, "A check is running." )
 			.Help( "Runs every diagnostic again and updates the rows. It never shows a pop-up." )
 			.Keywords( "recheck rerun refresh check again diagnostics" );
-
-		a.Action( "diagnostics.hypr_docs", "Hyprland render options", "Open", []{ Diagnostics_OpenDocs(); } )
-			.Help( "Opens the Hyprland wiki's render options (wiki.hypr.land) in your browser, on the "
-			       "host desktop. A browser opened over a fullscreen game may take focus from it." )
-			.Keywords( "hyprland wiki docs documentation render options browser link open" );
 
 		a.Content( []{ return BodyLines(); } );
 		a.FollowsTail( []{ return false; } );

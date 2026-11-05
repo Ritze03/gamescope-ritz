@@ -16,6 +16,10 @@ The newest version below is the one this build reports.
   scanout on, warns once at startup when it is off, says what to set, and has a Recheck
   button.
 
+- **Diagnostics warning sign**: a warning triangle shows on OTHER and on the Diagnostics
+  tab in the rail while a diagnostic is warning, and the Hyprland docs button is now on
+  the right-hand inspector only.
+
 ### Fixed
 - **Direct scanout under Hyprland**: with `render:direct_scanout = 2`, frame generation
   and FSR now reach the screen at nearly the full refresh rate instead of resetting the

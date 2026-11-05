@@ -115,6 +115,13 @@ namespace gamescope::ui
 		// cannot produce it (AUTONOMOUS-DECISIONS D18.2).
 		void Lock( ImVec2 vCenterPx, float flSizePx, ImU32 col );
 
+		// The warning sign (what U+26A0 would be): a filled triangle in colFill
+		// with a "!" cut out in colMark, flSizePx across its box. Drawn, for
+		// the same reason as the lock: the bundled faces bake only Latin-1
+		// (Fonts.cpp), so the character would be a box. Used by the rail's
+		// Diagnostics warning (Shell.cpp); the caller picks Role::Warn.
+		void Warning( ImVec2 vCenterPx, float flSizePx, ImU32 colFill, ImU32 colMark );
+
 		// SPEC §8.0's rail glyph, centred on vCenterPx with flBoxPx as the
 		// 24-unit grid's edge. The Icon comes from Icons.h; this function
 		// contains no coordinates and knows nothing about which glyph it is

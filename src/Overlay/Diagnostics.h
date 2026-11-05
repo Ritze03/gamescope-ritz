@@ -29,6 +29,13 @@ namespace gamescope
 	// no shell, the host's environment). Returns false when xdg-open is missing.
 	bool Diagnostics_OpenDocs();
 
+	// Whether any diagnostic is in a warning state right now (today: direct
+	// scanout Off). Drives the warning sign on the Shell's rail. Any thread;
+	// reads the published results under the same short mutex Diagnostics_View()
+	// uses (held only for a struct copy, never across a child process), starts
+	// nothing. A recheck in flight keeps the previous answer until it lands.
+	bool Diagnostics_HasWarning();
+
 	struct DiagnosticsView
 	{
 		bool                          bRunning = false;

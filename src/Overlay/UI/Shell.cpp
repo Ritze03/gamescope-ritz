@@ -2300,6 +2300,19 @@ namespace gamescope::ui::shell
 			// window clip rect, which is exactly the wanted hit-test.
 			ImGui::PushClipRect( ImVec2( rc.x0, rc.y0 ), ImVec2( rc.x1, rc.y1 ), true );
 
+			// The warning sign (Area::WarnWhen): one pass over the areas, so a
+			// group heading knows whether any area under it warns even while
+			// the group is closed and its rows are not drawn.
+			bool bGroupWarns[ 16 ] = {};
+			for ( const Area *pA : railAreas )
+			{
+				const size_t g = (size_t)RailGroupFor( *pA );
+				if ( g < 16 && pA->Warns() )
+					bGroupWarns[ g ] = true;
+			}
+			const ImU32 colWarnFill = Col( Role::Warn );
+			const ImU32 colWarnMark = IM_COL32( 24, 16, 6, 255 );
+
 			Walk( s_railAccordionAnim.eOpenGroup, s_railAccordionAnim.flOpenH,
 			      s_railAccordionAnim.eClosingGroup, s_railAccordionAnim.flClosingH,
 				// I2 (2026-09-27): the group header is now a real tab/button,
@@ -2522,6 +2535,12 @@ namespace gamescope::ui::shell
 								ImVec2( ( rcHdr.x0 + rcHdr.x1 ) * 0.5f, ( rcHdr.y0 + rcHdr.y1 ) * 0.5f ),
 								Px( 20.0f ), colHdrIcon );
 
+						// Warning badge on the icon's top-right: the name is
+						// hidden in this rail, so the sign rides on the icon.
+						if ( bGroupWarns[ (size_t)eGroup ] )
+							glyph::Warning( ImVec2( rcHdr.x1 - Px( 13.0f ), rcHdr.y0 + Px( 11.0f ) ),
+							                Px( 12.0f ), colWarnFill, colWarnMark );
+
 						if ( bHovered )
 						{
 							// I4 (2026-09-27, post-QC finding 2): plain
@@ -2626,6 +2645,16 @@ namespace gamescope::ui::shell
 						const float flLabelX0 = flIconX0 + flIconBox + Px( tok::kM );
 						Label( { flLabelX0, rcHdr.y0, rcHdr.x1 - Px( tok::kM ) - flChevron, rcHdr.y1 },
 						       TypeRole::Title, colHdr, RailGroupName( eGroup ) );
+
+						// The sign sits right after the name, clear of the
+						// chevron, so the heading's width never changes.
+						if ( bGroupWarns[ (size_t)eGroup ] )
+						{
+							const float flNameW = MeasureText( TypeRole::Title, RailGroupName( eGroup ) ).x;
+							const float flWx = std::min( flLabelX0 + flNameW + Px( tok::kM ) + Px( 7.0f ),
+							                             rcHdr.x1 - Px( tok::kM ) - flChevron - Px( tok::kM ) - Px( 7.0f ) );
+							glyph::Warning( ImVec2( flWx, flCy ), Px( 14.0f ), colWarnFill, colWarnMark );
+						}
 					}
 				},
 				[ & ]( size_t i, const Area &area, float yRaw, float flVisibleH )
@@ -2748,9 +2777,13 @@ namespace gamescope::ui::shell
 						Label( rcBox, TypeRole::Title, colIcon, szInitial, TextAlign::Center );
 				};
 
+				const bool bAreaWarns = area.Warns();
 				if ( bIcons )
 				{
 					DrawMark( { rcItem.x0, rcItem.y0, rcItem.x1, rcItem.y1 } );
+					if ( bAreaWarns )
+						glyph::Warning( ImVec2( rcItem.x1 - Px( 13.0f ), rcItem.y0 + Px( 11.0f ) ),
+						                Px( 12.0f ), colWarnFill, colWarnMark );
 				}
 				else
 				{
@@ -2759,6 +2792,15 @@ namespace gamescope::ui::shell
 					Label( { flX0 + flIcon + Px( tok::kM ), rcItem.y0, rcItem.x1 - Px( tok::kM ), rcItem.y1 },
 					       TypeRole::Label, bActive ? Col( Role::TextPrimary ) : Col( Role::TextLabel ),
 					       area.Title().c_str() );
+					if ( bAreaWarns )
+					{
+						const float flLabelX = flX0 + flIcon + Px( tok::kM );
+						const float flNameW  = MeasureText( TypeRole::Label, area.Title().c_str() ).x;
+						const float flWx = std::min( flLabelX + flNameW + Px( tok::kM ) + Px( 6.0f ),
+						                             rcItem.x1 - Px( tok::kM ) - Px( 6.0f ) );
+						glyph::Warning( ImVec2( flWx, ( rcItem.y0 + rcItem.y1 ) * 0.5f ), Px( 13.0f ),
+						                colWarnFill, colWarnMark );
+					}
 				}
 
 				if ( bRowClipped )
@@ -4936,6 +4978,44 @@ namespace gamescope::ui::shell
 			return y + size.y;
 		}
 
+		// The first entry of the area whose Inspector verb is shown: the one
+		// Enter/Space fires from the Overview.
+		const Entry *FirstOverviewVerb( const Area &area )
+		{
+			for ( size_t i = 0; i < area.EntryCount(); ++i )
+				if ( area.EntryAt( i ).InspectorVerbShown() )
+					return &area.EntryAt( i );
+			return nullptr;
+		}
+
+		// ---- an entry's Inspector-only verb (Entry::InspectorVerb) --------
+		// One row: the verb's label on the left, its chip on the right (the
+		// "Reset to inherited" row's geometry). Returns the y below it, or `y`
+		// unchanged when the entry has none shown. bFocused is the keyboard
+		// ring, drawn as the selected-row fill.
+		float DrawInspectorVerbRow( const Rect &rcIn, float y, const Entry &entry, bool bFocused )
+		{
+			if ( !entry.InspectorVerbShown() )
+				return y;
+			const char *pszVerb = entry.InspectorVerbVerb().c_str();
+			const float flVerbW = MeasureText( TypeRole::Meta, pszVerb ).x + Px( tok::kVerbPadX ) * 2.0f;
+			const Rect  rcLine { rcIn.x0, y, rcIn.x1, y + Px( tok::kControlH ) };
+			if ( bFocused )
+				Fill( rcLine, Accent( 0.10f ) );
+			Label( { rcLine.x0, rcLine.y0, rcLine.x1 - flVerbW - Px( tok::kM ), rcLine.y1 },
+			       TypeRole::Label, Col( Role::TextLabel ), entry.InspectorVerbLabel().c_str() );
+			controls::VerbSpec verb{ pszVerb, controls::Intent::Accent, true };
+			ImGui::PushID( entry.Id().c_str() );
+			ImGui::PushID( "##inspverb" );
+			const int nPressed = controls::VerbStrip(
+				ImRect( rcLine.x1 - flVerbW, rcLine.y0, rcLine.x1, rcLine.y1 ), "verb", &verb, 1 );
+			ImGui::PopID();
+			ImGui::PopID();
+			if ( nPressed == 0 )
+				entry.InvokeInspectorVerb();
+			return y + Px( tok::kControlH ) + Px( tok::kS );
+		}
+
 		// ---- CONFIGURE (SPEC §5.1, §5.3) ---------------------------------
 		// Returns the y of the content's bottom edge. Every Inspector body
 		// returns it, and DrawInspector turns the total into the child's
@@ -5052,6 +5132,9 @@ namespace gamescope::ui::shell
 					}
 				}
 			}
+
+			y = DrawInspectorVerbRow( rcIn, y, entry,
+				s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 && entry.ReadOnly() );
 
 			if ( entry.ReadOnly() )
 			{
@@ -5269,6 +5352,9 @@ namespace gamescope::ui::shell
 			       Col( Role::TextPrimary ), entry.Title().c_str() );
 			y += Px( 24.0f );
 
+			y = DrawInspectorVerbRow( rcIn, y, entry,
+				s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 && entry.ReadOnly() );
+
 			// The binding grid. Typed by nobody -- every row below is read
 			// off the registration, which is what makes Details impossible
 			// to fill with prose someone wanted somewhere.
@@ -5362,6 +5448,16 @@ namespace gamescope::ui::shell
 			{
 				y = DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextBody ), sSummary.c_str(), y );
 				y += Px( tok::kM );
+			}
+
+			// The area's Inspector-only verbs (Entry::InspectorVerb), here so
+			// they are reachable on the page an area opens on. Keyboard focus
+			// in the Overview fires the first shown one (see the key handler).
+			for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+			{
+				const Entry &eV = pArea->EntryAt( i );
+				y = DrawInspectorVerbRow( rcIn, y, eV,
+					s_eFocusRegion == Region::Inspector && &eV == FirstOverviewVerb( *pArea ) );
 			}
 
 			// SPEC §5.5's budget line: "sheet 9 rows · inspector 14 params
@@ -7238,10 +7334,17 @@ namespace gamescope::ui::shell
 				const Entry *pIn = SelectedEntry();
 				if ( !pIn )
 				{
-					// Overview: nothing to focus. Left crosses back, so the
+					// Overview: nothing to focus but an Inspector-only verb,
+					// if the area has one. Left crosses back, so the
 					// region is never a dead end you can only Tab out of.
 					if ( ImGui::IsKeyPressed( ImGuiKey_LeftArrow, true ) )
 						s_eFocusRegion = Region::Sheet;
+					else if ( const Area *pOv = SelectedArea() )
+						if ( const Entry *pV = FirstOverviewVerb( *pOv );
+						     pV && ( ImGui::IsKeyPressed( ImGuiKey_Space, false ) ||
+						             ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
+						             ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ) )
+							pV->InvokeInspectorVerb();
 					return;
 				}
 
@@ -7252,7 +7355,8 @@ namespace gamescope::ui::shell
 				// rather than the keys being special-cased, so there is one
 				// rule instead of two.
 				const int nLast = ( eMode == InspectorMode::Configure && !pIn->ReadOnly() )
-					? (int)pIn->ParamCount() : -1;
+					? (int)pIn->ParamCount()
+					: ( pIn->ReadOnly() && pIn->InspectorVerbShown() ? 0 : -1 );   // 0: the verb row
 				s_nInspectorFocus = std::clamp( s_nInspectorFocus, -1, nLast );
 
 				if ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) )
@@ -7290,6 +7394,11 @@ namespace gamescope::ui::shell
 				const bool bActivateIn = ImGui::IsKeyPressed( ImGuiKey_Space, false ) ||
 				                         ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
 				                         ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false );
+				if ( bActivateIn && bOwnRow && pIn->ReadOnly() && pIn->InspectorVerbShown() )
+				{
+					pIn->InvokeInspectorVerb();
+					return;
+				}
 				if ( bActivateIn && !bBlocked )
 				{
 					const Kind eKind = bOwnRow ? pIn->GetKind() : pParam->GetKind();

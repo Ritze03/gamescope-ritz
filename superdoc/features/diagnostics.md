@@ -62,9 +62,18 @@ and the fix text stay until a recheck reads On.
 
 ### The area
 
-Rows: **Direct scanout** (status; Details: the value read and the reason), **Recheck all**
-(disabled while a run is going), **Hyprland render options** (opens
-`https://wiki.hypr.land/configuring/core/config-options/#render`). Below them, when Off, the
+Sheet rows: **Direct scanout** (status; Details: the value read and the reason) and **Recheck
+all** (disabled while a run is going). The docs button is **not a sheet row**: it is the
+Inspector-only verb `Entry::InspectorVerb()` of the Direct scanout row ("Hyprland render options",
+chip **Open**, `https://wiki.hypr.land/configuring/core/config-options/#render`). It is drawn
+under the title on that row's Inspector page (Details, which a Facts row opens on, and Configure)
+and on the area's **Overview**, the page the area opens on, so it needs no row selected first.
+Keyboard: Enter/Space on the focused Inspector row fires it (Overview: the area's first shown
+verb). Shown while the check applies (state On, Off or Could not check); hidden when Pending,
+Not applicable or Hyprland not detected. It is not a palette row (like every read-only row);
+searching "diagnostics", "hyprland", "wiki" or "docs" finds the area, whose Overview carries it.
+`Why:` the user, on the first version with the button in the sheet: *"It should only show this
+button on the inspector rail on the right side"*. Below the rows, when Off, the
 fix: set `render:direct_scanout = 2` (games only; 1 is every fullscreen window) and reload, in
 both forms Hyprland configs come in (Lua `render = { direct_scanout = 2 }`, hyprlang
 `render { direct_scanout = 2 }`), and that screen capture turns scanout off while it runs. For the
@@ -74,6 +83,32 @@ The link runs `xdg-open <url>` the same way (fixed argv, no shell, the host envi
 detached in its own session). Gamescope is a subreaper, so the child is reaped with a
 non-blocking `waitpid` on later ticks. Opening a browser over a fullscreen game may take focus
 from it; nothing opens by itself.
+
+### The warning sign on the rail
+
+While any diagnostic warns, the Shell's rail shows a drawn warning triangle (`glyph::Warning()`,
+`Role::Warn` orange, a dark "!") on the **OTHER** group heading and on the **Diagnostics** row.
+`Diagnostics_HasWarning()` is derived from the published results (`AnyWarns()` over them, in
+`DiagnosticsLogic.h`), not a separate flag, so a future check counts as soon as its result is in
+the published range, and it clears when a recheck finds the problem fixed. Only **Off** warns:
+"Could not check" does not, the same rule as the toast. It is wired through the generic
+`Area::WarnWhen(fn)`; the rail asks it each frame it is drawn (one short mutex-guarded struct
+copy, no child process, no repaint request: the worker already calls `force_repaint()` when a
+result lands).
+
+How it looks per rail state (`Shell.cpp`, `DrawRail()`):
+
+| Rail state | Heading (OTHER) | Diagnostics row |
+| --- | --- | --- |
+| Full rail, group closed | triangle right after the name, left of the chevron | not drawn (group closed, the heading carries it) |
+| Full rail, group open | same | triangle right after the row title |
+| Icon-only rail | small badge on the icon's top-right | small badge on the icon's top-right |
+
+The triangle is drawn, not the character: the bundled faces bake only Basic Latin and Latin-1
+(`Fonts.cpp`), so U+26A0 would be a box. It is placed after the name and clamped before the
+chevron, so heading width and the accordion animation are unchanged. Not on the HUD or the
+launcher. `Why:` the user: *"if something is active in the diagnostics, it should show a warning
+sign on the OTHER category and the Diagnostics tab name, to tell the user, to look there."*
 
 ### Adding a check
 

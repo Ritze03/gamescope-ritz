@@ -145,6 +145,18 @@ namespace gamescope::diagnostics
 	// The only state that warns.
 	inline bool WarnsAbout( ScanoutState e ) { return e == ScanoutState::Off; }
 
+	// Whether any published check result warns. Derived from the results, not a
+	// flag kept beside them, so a future check counts the moment its result is
+	// in the range. "Could not check" is not a warning (same rule as the toast).
+	template <class It>
+	inline bool AnyWarns( It itBegin, It itEnd )
+	{
+		for ( ; itBegin != itEnd; ++itBegin )
+			if ( WarnsAbout( itBegin->eState ) )
+				return true;
+		return false;
+	}
+
 	inline constexpr const char *kHyprlandRenderDocsUrl =
 		"https://wiki.hypr.land/configuring/core/config-options/#render";
 }

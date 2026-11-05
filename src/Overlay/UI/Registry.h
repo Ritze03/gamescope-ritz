@@ -488,6 +488,29 @@ namespace gamescope::ui
 		Entry &HideFromPalette() { m_bExcludeFromPalette = true; return *this; }
 		bool  ExcludedFromPalette() const { return m_bExcludeFromPalette; }
 
+		// ---- an Inspector-only verb (2026-11-05) ---------------------------
+		// One button that lives ONLY in the Inspector: a labelled row with a
+		// verb chip, drawn under the title on the row's own page (Configure and
+		// Details) and in the AREA'S OVERVIEW -- the page an area opens on --
+		// so it is reachable without first selecting the row. Enter/Space
+		// fires it from the keyboard (Inspector focus; in the Overview, the
+		// first shown verb of the area). `fnShown` (optional) hides it while
+		// it is not relevant. Meant for a read-only (Facts) row whose one
+		// related action does not deserve a sheet row of its own.
+		//
+		// Why: the Diagnostics area's "open the Hyprland docs" button sat in
+		// the sheet as a row of its own; the user: "It should only show this
+		// button on the inspector rail on the right side".
+		// Not in the palette: like every read-only row, a jump target with
+		// nothing to act on there; the area's keywords carry the search.
+		Entry &InspectorVerb( const char *pszLabel, const char *pszVerb, std::function<void()> fn,
+		                      std::function<bool()> fnShown = {} );
+		bool  HasInspectorVerb() const { return (bool)m_InspVerbFn; }
+		bool  InspectorVerbShown() const { return m_InspVerbFn && ( !m_InspVerbShown || m_InspVerbShown() ); }
+		const std::string &InspectorVerbLabel() const { return m_sInspVerbLabel; }
+		const std::string &InspectorVerbVerb() const  { return m_sInspVerbVerb; }
+		void  InvokeInspectorVerb() const { if ( m_InspVerbFn ) m_InspVerbFn(); }
+
 		// ---- presentation flag: dropdown instead of segmented (2026-09-06) --
 		// A Kind::Choice presents as a segmented strip when it fits and as
 		// Choice's own auto-downgrade dropdown when it does not (SPEC §3.2/
@@ -726,6 +749,9 @@ namespace gamescope::ui
 		std::function<std::vector<ListItem>()> m_Items;        // Composite(List)
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
+		std::string m_sInspVerbLabel, m_sInspVerbVerb;           // InspectorVerb()
+		std::function<void()> m_InspVerbFn;
+		std::function<bool()> m_InspVerbShown;
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
@@ -836,6 +862,18 @@ namespace gamescope::ui
 		Area &Keywords( const char *pszKeywords );
 		Area &Summary( std::function<std::string()> fn );
 		Area &AvailableWhen( std::function<bool()> fn );
+
+		// ---- the rail's warning sign (2026-11-05) -------------------------
+		// While `fn` answers true the Shell's rail draws a warning triangle on
+		// this area's row AND on its group's heading, so a problem is visible
+		// even with the group closed or the rail collapsed to icons. `fn` runs
+		// on the paint thread every frame the rail is drawn, so it must be a
+		// cheap read of already-published state: no blocking, no child process.
+		// Why: the user, about Diagnostics: "if something is active in the
+		// diagnostics, it should show a warning sign on the OTHER category and
+		// the Diagnostics tab name, to tell the user, to look there."
+		Area &WarnWhen( std::function<bool()> fn );
+		bool  Warns() const { return m_Warn && m_Warn(); }
 
 		// ---- the layer badge (P3b) ---------------------------------------
 		// A short tag drawn right-aligned in the sheet header. It exists for
@@ -1036,6 +1074,7 @@ namespace gamescope::ui
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
 		std::function<std::string()> m_Summary;
+		std::function<bool()>        m_Warn;       // WarnWhen()
 		std::function<std::string()> m_Badge;
 		std::function<bool()>        m_Available;
 		std::function<std::vector<ContentLine>()> m_Content;  // content areas -- see Content()
