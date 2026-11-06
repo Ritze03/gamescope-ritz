@@ -152,6 +152,7 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 
 ## planning/ — overlay UI implementation notes
 
+- [TODO](planning/TODO.md) — open work with no feature doc yet: the `RADV_DEBUG=allbos` test for the direct scanout crash, and the audio capture shutdown crash.
 - Frame-generation studies — [FidelityFX OpticalFlow / Frame Interpolation](planning/fidelityfx-opticalflow-framegen.md) (2026-09-05: feasible but not sensible — FI needs game depth and motion vectors a compositor never has) and the earlier [external-layer in-tree port](planning/external-framegen-in-tree-port.md) (GPLv3 blocker). Both conclude: run the external layer as a layer under gamescope instead.
 - [UI mockup — pixel-exact spec](planning/ui-mockup-precise-spec.md) — the settings
   overlay's full chrome/color/typography/control spec, measured from the original design
