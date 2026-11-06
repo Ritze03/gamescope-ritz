@@ -2,13 +2,33 @@
 
 The Shell's **Diagnostics** area (`system.diagnostics`, OTHER rail group, last) checks setup
 outside gamescope that costs frames without printing an error, says what is wrong and what to
-set, and has a **Recheck all** button. Code: `src/Overlay/Diagnostics.{h,cpp}` (runtime),
+set, and has a **Recheck all** button. **Since 2026-11-06 nothing warns** (see
+[Warnings are switched off](#warnings-are-switched-off-2026-11-06)). Code: `src/Overlay/Diagnostics.{h,cpp}` (runtime),
 `src/Overlay/DiagnosticsLogic.h` (pure: parsing and state decisions,
 `tests/test_diagnostics.cpp`), `src/Overlay/PanelDiagnostics.cpp` (area). One check today.
 
+## Warnings are switched off (2026-11-06)
+
+`WarnsAbout()` in `DiagnosticsLogic.h` returns false for every state, so there is no startup
+toast and no yellow rail dot. `Why:` on 2026-11-06, gamescope nested on Hyprland with direct
+scanout on and a game running crashed the GPU 4 times in about 285 fullscreen entries (a gfxhub
+write page fault from gamescope, then a cs2 gfx ring timeout, a failed ring reset and a full GPU
+reset that killed the desktop). With `direct_scanout = 0` there were 0 crashes in 183 entries.
+Giving the output image the screen's own format, so no format-change modeset happens, did not
+stop it. **The root cause is unknown** and still being investigated. Telling users to turn the
+option on is therefore harmful. The user: *"Yeah, turn off the warning for now."*
+
+The toast, the dot (`Area::WarnWhen`, `Diagnostics_HasWarning()`), `AnyWarns()` and the check
+itself are all kept. **To restore:** make `WarnsAbout()` `return e == ScanoutState::Off;` again,
+restore the fix text in `PanelDiagnostics.cpp` (set `render:direct_scanout = 2`) and the toast
+text in `Diagnostics.cpp`, and flip the assertions in `tests/test_diagnostics.cpp`. Do that only
+once the crash is fixed. The area now says: Off is the safe setting (costs some generated
+frames), and On carries a caution that it can currently crash the GPU. Both are plain text, not
+a warning.
+
 ## Hyprland direct scanout
 
-Why it matters: under nested Wayland on Hyprland the host's own draw waits behind the game's GPU
+Why it matters (when it works): under nested Wayland on Hyprland the host's own draw waits behind the game's GPU
 job, so frames Frame generation makes are lost (shown about 160 uncapped). With
 `render:direct_scanout = 2` and the output images of [backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)
 the host puts gamescope's buffer on a plane and shown reaches 261-272. See
@@ -21,7 +41,7 @@ States (`ScanoutState`):
 | Not applicable | the backend cannot be scanned out by a host (`HostMayScanOutOutputImages()` false: DRM, headless, OpenVR, **SDL**) | no |
 | Hyprland not detected | `HYPRLAND_INSTANCE_SIGNATURE` was not set when gamescope started | no |
 | On | `render:direct_scanout` is 1 or 2 | no |
-| Off | it is 0 | **yes** |
+| Off | it is 0 | no (until 2026-11-06 **yes**; see above) |
 | Could not check | no `hyprctl`, no answer in 1 s, non-zero exit, no such option, unparsable output, a value other than 0/1/2 | no |
 
 The backend decides before Hyprland does, so headless under a Hyprland session says "Not
@@ -50,7 +70,10 @@ with it. For the browser it also drops what only makes sense for the game: `LD_P
 `LD_LIBRARY_PATH`, `ENABLE_GAMESCOPE*`, `GAMESCOPE_*`, `SDL_VIDEODRIVER`, `STEAM_GAMESCOPE_*`,
 `PRESSURE_VESSEL*`, and so on (`DropForBrowser()`).
 
-### Warning
+### Warning (switched off 2026-11-06)
+
+The text below describes the machinery, which is intact but never fires while `WarnsAbout()`
+is false.
 
 The check starts on the first paint with a sized output (`Diagnostics_Tick()`, called every frame
 from `SettingsOverlay_AddLayer()`). When it finishes with **Off**, `Tick()` raises one warning
@@ -73,20 +96,20 @@ verb). Shown while the check applies (state On, Off or Could not check); hidden 
 Not applicable or Hyprland not detected. It is not a palette row (like every read-only row);
 searching "diagnostics", "hyprland", "wiki" or "docs" finds the area, whose Overview carries it.
 `Why:` the user, on the first version with the button in the sheet: *"It should only show this
-button on the inspector rail on the right side"*. Below the rows, when Off, the
-fix: set `render:direct_scanout = 2` (games only; 1 is every fullscreen window) and reload, in
-both forms Hyprland configs come in (Lua `render = { direct_scanout = 2 }`, hyprlang
-`render { direct_scanout = 2 }`), and that screen capture turns scanout off while it runs. For the
-other states the area shows the one-sentence reason.
+button on the inspector rail on the right side"*. Below the rows, when Off: leave it off for now, what that costs (some generated
+frames), and that scanout on can crash the GPU when entering or leaving fullscreen while a game
+runs (until 2026-11-06 this was the fix `render:direct_scanout = 2` with config snippets). When
+On: a short caution of the same crash. For the other states the area shows the one-sentence
+reason.
 
 The link runs `xdg-open <url>` the same way (fixed argv, no shell, the host environment above,
 detached in its own session). Gamescope is a subreaper, so the child is reaped with a
 non-blocking `waitpid` on later ticks. Opening a browser over a fullscreen game may take focus
 from it; nothing opens by itself.
 
-### The warning dot on the rail
+### The warning dot on the rail (switched off 2026-11-06)
 
-While any diagnostic warns, the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
+Nothing warns now, so the dot is never shown; the machinery stays. While any diagnostic warns, the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
 `glyph::kWarnDotColor`, antialiased, no "!") on the **OTHER** group heading and on the
 **Diagnostics** row. `Why:` the first cut was a drawn warning triangle with a "!", which looked
 improvised; the user: *"The badge looks really bad. It doesnt look proper. Just make it a yellow

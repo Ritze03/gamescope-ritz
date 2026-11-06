@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.11] – 2026-11-06
+
+### Fixed
+- **Diagnostics direct-scanout warning**: Diagnostics no longer warns when Hyprland's
+  direct scanout is off, or asks you to turn it on, because it can currently crash the
+  GPU.
+
 ## [0.14.10] – 2026-11-05
 
 ### Added

@@ -335,8 +335,7 @@ namespace gamescope
 		{
 			g_bToasted = true;
 			Notifications::Show(
-				"Hyprland has direct scanout off, so frames gamescope makes are lost. "
-				"Set render:direct_scanout = 2. Details: Diagnostics.",
+				"Hyprland has direct scanout off. Details: Diagnostics.",
 				Notifications::Kind::Warning, 12.0f );
 		}
 	}

@@ -19,7 +19,7 @@ namespace gamescope::diagnostics
 		NotApplicable,  // this backend has no host to scan out to: no warning
 		NoHyprland,     // not under Hyprland: no warning
 		On,             // render:direct_scanout is 1 or 2
-		Off,            // render:direct_scanout is 0: the one state that warns
+		Off,            // render:direct_scanout is 0 (warned until 2026-11-06, see WarnsAbout)
 		Unknown,        // could not be read: said plainly, never warned about as if Off
 	};
 
@@ -130,9 +130,10 @@ namespace gamescope::diagnostics
 		else if ( *oValue == 0 )
 		{
 			r.eState = ScanoutState::Off;
-			r.sHeadline = "Off (0): generated frames are lost";
-			r.sReason = "Hyprland draws every frame itself and that draw waits behind the "
-			            "game's GPU work.";
+			r.sHeadline = "Off (0)";
+			r.sReason = "Hyprland draws every frame itself, which costs some generated frames. "
+			            "Leaving it off is the safe setting: direct scanout can currently crash "
+			            "the GPU when entering fullscreen.";
 		}
 		else
 		{
@@ -142,8 +143,12 @@ namespace gamescope::diagnostics
 		return r;
 	}
 
-	// The only state that warns.
-	inline bool WarnsAbout( ScanoutState e ) { return e == ScanoutState::Off; }
+	// No state warns since 2026-11-06: direct scanout on crashed the GPU in testing,
+	// so telling the user to turn it on would be harmful. This one point drives both
+	// the startup toast and the rail's yellow dot.
+	// ponytail: to restore the warning once the crash is fixed, make this
+	// `return e == ScanoutState::Off;` (and update tests/test_diagnostics.cpp).
+	inline bool WarnsAbout( [[maybe_unused]] ScanoutState e ) { return false; }
 
 	// Whether any published check result warns. Derived from the results, not a
 	// flag kept beside them, so a future check counts the moment its result is

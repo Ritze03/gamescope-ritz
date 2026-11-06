@@ -45,15 +45,17 @@ namespace gamescope
 			if ( r.eState == ScanoutState::Off )
 			{
 				out.push_back( Line( K::Heading, "Hyprland: direct scanout is off", 2 ) );
-				out.push_back( Line( K::Plain, "Hyprland draws every frame itself, and that draw waits behind the game's GPU work," ) );
-				out.push_back( Line( K::Plain, "so frames made by Frame generation are lost before they reach the screen." ) );
+				out.push_back( Line( K::Plain, "Leave it off for now. Hyprland then draws every frame itself, which costs" ) );
+				out.push_back( Line( K::Plain, "some frames made by Frame generation." ) );
 				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "Set render:direct_scanout = 2 (games only; 1 is every fullscreen window) and reload:" ) );
-				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "    Lua config:       render = { direct_scanout = 2 }" ) );
-				out.push_back( Line( K::Plain, "    hyprlang config:  render { direct_scanout = 2 }" ) );
-				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "Screen capture turns scanout off again while it runs." ) );
+				out.push_back( Line( K::Plain, "With direct scanout on, entering or leaving fullscreen while a game runs can" ) );
+				out.push_back( Line( K::Plain, "currently crash the GPU, so it is not recommended." ) );
+			}
+			else if ( r.eState == ScanoutState::On )
+			{
+				out.push_back( Line( K::Heading, "Hyprland: direct scanout is on", 2 ) );
+				out.push_back( Line( K::Plain, "Caution: with direct scanout on, entering or leaving fullscreen while a game" ) );
+				out.push_back( Line( K::Plain, "runs can currently crash the GPU. Turn it off if that happens." ) );
 			}
 			else if ( !r.sReason.empty() )
 			{
@@ -77,9 +79,10 @@ namespace gamescope
 
 		a.Facts( "diagnostics.hypr_scanout", "Direct scanout",
 			[]{ return Headline( Diagnostics_View() ); } )
-			.Help( "Whether Hyprland lets gamescope's window go straight to the screen. Without it "
-			       "Hyprland draws every frame itself, and frames that Frame generation makes are "
-			       "lost. Only checked when gamescope runs nested under Hyprland." )
+			.Help( "Whether Hyprland lets gamescope's window go straight to the screen. Off costs some "
+			       "frames made by Frame generation, but it is the safe setting: on can currently "
+			       "crash the GPU when entering fullscreen. Only checked when gamescope runs nested "
+			       "under Hyprland." )
 			.Keywords( "direct scanout hyprland render direct_scanout frames lost" )
 			// The docs button lives in the Inspector only (Entry::InspectorVerb): on
 			// this row's page and on the area's Overview. Shown whenever the check

@@ -41,8 +41,8 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 ### HUD
 
 - [Diagnostics](features/diagnostics.md) -- the OTHER > Diagnostics tab: whether Hyprland has
-  direct scanout on (read with `hyprctl`, off the paint thread), the one startup warning, what
-  to set, the Recheck button and the browser link; why the check only applies to the Wayland
+  direct scanout on (read with `hyprctl`, off the paint thread), its warnings (switched off
+  2026-11-06: scanout on can crash the GPU), the Recheck button and the browser link; why the check only applies to the Wayland
   backend and why "could not check" never warns.
 - [Notifications](features/notifications.md) — toasts: the independent-context shape, the lazy glyph-bake/QueueWaitIdle hazard, the launch warm-up and why it never pushes a layer, the HUD seam.
 - [FPS display](features/fps-display.md) — the single-integer FPS HUD: update modes,

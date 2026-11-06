@@ -211,6 +211,15 @@ race: 0 of 1662 composites were held there. Measure on a real output.
 
 ## Direct scanout under a host
 
+**Known issue (2026-11-06): direct scanout on can crash the GPU, root cause unknown. Keep
+`render:direct_scanout` at 0 for now.** `Why:` gamescope nested on Hyprland with scanout on and
+a game running crashed the GPU 4 times in about 285 fullscreen entries (gfxhub write page fault
+from gamescope, then a cs2 gfx ring timeout, a failed ring reset and a full GPU reset that killed
+the desktop); with `direct_scanout = 0`, 0 crashes in 183 entries. Removing the format-change
+modeset (matching XR30 formats) did not stop it. Nothing here explains it yet, so the mechanism
+below works but is not safe to recommend. The Diagnostics area's warning about scanout being off
+is switched off for this reason ([diagnostics.md](diagnostics.md)).
+
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:
 [frame-generation.md](frame-generation.md#why-the-host-loses-frames)). Two things have to hold,
