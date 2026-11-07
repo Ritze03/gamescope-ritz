@@ -75,8 +75,9 @@ producing 311 frames per second, and they then die in the host. Uncapped, **show
 the game's frame rate**: game 152 -> shown 157, 150 -> 157, 120 -> 124; the earlier runs above
 agree (228 -> 227, 178 -> 168, 158 -> 153). **Proven 2026-11-05**: with Hyprland's draw taken
 out of the path and nothing else changed, the same load shows 272-278 (see
-[direct scanout](#direct-scanout-the-fix), below). Hyprland's own fence was still never
-observed, so the wait itself is inferred; that its draw is what loses the frames is not.
+[direct scanout](#direct-scanout-the-fix), below). The wait itself was then **observed**
+(2026-11-07, scheduler trace, see [GPU clock at light load](#gpu-clock-at-light-load-2026-11-07)):
+Hyprland's draws sit behind the game's job on the one graphics ring.
 
 Synthetic reproduction, no game and no gamescope (`dc`: a dmabuf client committing 311/s,
 fullscreen on the 280 Hz screen, VRR on, signalled buffers; `burst`: a headless Vulkan
@@ -101,8 +102,8 @@ on the graphics queue (`burst lat`, submit to signal) sees what a compositor dra
 eighth limit 120 run, the first of its session, read 130 at 97% busy and did not come back; its
 cause is not known.) Limit 30 waits for one ~14 ms job 30 times a second, between the synthetic
 12 ms (212) and 16 ms (182) rows, which is why it shows only ~207 at 60% busy. That job is
-nearly 3x its uncapped length (about 6.4 ms: 973 ms of graphics time per second / 152 fps); why
-was not measured. One game frame is one `vkQueueSubmit` of 2 submit infos and 3 command buffers
+about 2x its uncapped length (13 ms against 6.3 ms by the 2026-11-07 trace); the cause is the
+GPU clock, see [GPU clock at light load](#gpu-clock-at-light-load-2026-11-07). One game frame is one `vkQueueSubmit` of 2 submit infos and 3 command buffers
 (counted in the WSI layer: 30, 120 and 147 calls per second at those three rates), and nearly
 all of it sits in one command buffer: splitting the three into separate submits changed
 nothing. In one heavier scene, limits 40 / 60 / 80 / 100 showed 152 / 175 / 194 / 198 and
@@ -130,6 +131,68 @@ and a priority change can only ever help between jobs. A job cannot be stopped, 
 cannot cut a command buffer without wrapping every `vkCmd*` and re-binding state, so nothing
 contained on gamescope's side shortens the game's job. `Why:` the fix has to take the
 host's draw out of the path.
+
+#### GPU clock at light load (2026-11-07)
+
+Measured with the kernel's `gpu_scheduler` trace events (`drm_sched_job_queue/run/done`,
+5-second captures; Minecraft, RX 7900 XTX, 280 Hz, Frame generation target = refresh, 311/s
+sent, `direct_scanout` 0). Only one graphics ring exists (`gfx_0.0.0`); Hyprland and the game
+share it, and gamescope runs on compute rings (`comp_1.*`). At limit 30 the game's job is 13.7 ms
+typical (30/s) and Hyprland's is 0.15 ms typical (293/s). Of 1327 Hyprland draws, 264 took
+longer than one refresh (3.57 ms), up to 15.9 ms, and nearly all of the overlapping time was the
+game's job. In every trace zero Hyprland jobs ran and finished inside a game job, so there is no
+preemption in practice, and Hyprland submits nothing new while a draw is stuck. Job times are
+derived from completion order on the ring, not from hardware timestamps.
+
+Length of the game's job on the graphics ring:
+
+| Setup | Job |
+| --- | --- |
+| Frame generation on, blur on, limit 30 | 13.7 ms |
+| Frame generation on, blur off, limit 30 | 13.0-13.2 ms |
+| Frame generation off, blur on, limit 30 | 12.5 ms |
+| Frame generation off, blur on, game's own 30 fps, gamescope's limiter off | 12.0 ms |
+| Frame generation on, blur on, uncapped (153 fps) | 6.3 ms |
+| Frame generation on, blur off, limit 120, performance level high | 6.8 ms |
+
+Frame generation adds about 1 ms; neither it nor gamescope's limiter makes the job long. What
+does is the clock (limit 30, Frame generation on, blur off):
+
+| GPU clock setting | Core clock | Shown |
+| --- | --- | --- |
+| normal (CoreCtrl Advanced, range 500-2970 MHz) | about 1284 MHz | 187-214 |
+| minimum clock raised to 2825 MHz (`OD_SCLK`) | average 1745 MHz, samples 384-2180 | 211-236 |
+| `power_dpm_force_performance_level` = high | about 1960 MHz steady | 264-267 for over two minutes |
+| back to normal, same session | not sampled | 213-214, job 13.0 ms |
+
+Uncapped the GPU runs at 2709 MHz and 398 W (at the 402 W limit) with a 6.3 ms job: clock ratio
+2.11x, job ratio 2.10x. The high-level job length at limit 30 was not traced; 264-267 shown fits
+the synthetic 8 ms row (253-264). Why high settles at about 1960 MHz rather than near the maximum
+is not known.
+
+`Why:` the GPU firmware lowers the clock while the graphics queue is mostly idle, which roughly
+doubles the length of each game job, and each job blocks Hyprland's draws for longer. A game
+at its own frame rate does not need those draws, so frame generation is what exposes it; the
+display path treats generated and native frames alike (with Frame generation off about 20% of
+Hyprland's draws still took longer than a refresh). Raising the minimum clock in `OD_SCLK` does
+not hold at light load, so testing that way can look like "clocks do not matter".
+
+Limits: at limit 120 the performance level high shows 230-233, the same as normal (230-233),
+with a 6.8 ms job and the graphics ring 83% busy; the clocks are already up there. Uncapped is
+not helped either (GPU at about 2700 MHz and its power limit; shown stays near the game's
+rate). So high helps when the GPU has spare capacity and is downclocking, and direct scanout
+remains the only change that reaches about 280 in every case.
+
+Workaround, no gamescope code: a CoreCtrl per-app profile with Performance mode Fixed > High
+while the game runs. The sysfs file is root-only, so gamescope cannot set it itself.
+
+Tooling warning: never read `/sys/kernel/debug/dri/*/*` in bulk as root (no `grep` or `cat` over
+the folder). Some files act when read: on 2026-11-07 a `grep` across it hit `amdgpu_evict_vram`,
+which evicted all VRAM, crashed gamescope and Minecraft with GPU page faults and a compute ring
+reset, and then looped in the kernel, unkillable, pinning the GPU at 100% for about ten minutes.
+Safe trace method, it does not touch the GPU: as root enable
+`/sys/kernel/tracing/events/gpu_scheduler/enable` for a few seconds, read
+`/sys/kernel/tracing/trace`, then turn it off.
 
 #### Direct scanout: the fix
 

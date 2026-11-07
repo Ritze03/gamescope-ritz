@@ -339,6 +339,8 @@ in `missed`.
 short and fall at random phases, so most paints missed them; heavier shaders or a limit that frees
 the game at a paint made the same wait look like a GPU limit. Raising the GPU clocks changed
 nothing and realtime queue priority barely helped, because neither is what the paint waited for.
+(That is about gamescope's own paint wait. For the host's shown rate the clock does matter:
+see [GPU clock at light load](frame-generation-host-scanout.md#gpu-clock-at-light-load-2026-11-07).)
 Early pair, tried the same day, moved the estimate out of the paint and the wait rose by the same
 amount, and was reverted: on the new limiter, output 242-244 with it, 246-249 without.
 
