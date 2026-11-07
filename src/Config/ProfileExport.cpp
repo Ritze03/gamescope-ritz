@@ -1,14 +1,11 @@
 #include "ProfileExport.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <optional>
-
-#include <unistd.h>
 
 #include <nlohmann/json.hpp>
 
@@ -147,13 +144,7 @@ namespace gamescope::config::profile_export
             return def.type() == v.type();
         }
 
-        // ---- Settings <-> sections, through ConfigManager's public API -----------
-        std::string TempName()
-        {
-            static std::atomic<int> s_n{ 0 };
-            return "ritz-export-tmp-" + std::to_string( getpid() ) + "-" + std::to_string( s_n++ );
-        }
-
+        // ---- json helpers: sections come from ConfigManager ---------------------
         json StripMeta( json j )
         {
             if ( j.is_object() )
@@ -173,49 +164,12 @@ namespace gamescope::config::profile_export
             return j;
         }
 
-        std::optional<json> SectionsOfSettings( const Settings &s )
-        {
-            ProfileMeta meta;
-            meta.name = TempName();
-            if ( !SaveProfile( meta, s ) )
-                return std::nullopt;
-            const std::string sPath = ProfilePath( meta.name );
-            std::optional<json> oFile = ReadJsonFile( sPath );
-            std::error_code ec;
-            std::filesystem::remove( sPath, ec );
-            if ( !oFile )
-                return std::nullopt;
-            return StripMeta( std::move( *oFile ) );
-        }
-
-        std::optional<Settings> SettingsOfSections( const json &jSections )
-        {
-            const std::string sName = TempName();
-            json j = jSections;
-            j[ "schema_version" ] = kCurrentSchemaVersion;
-            j[ "name" ] = sName;
-            j[ "kind" ] = "general";
-            const std::string sPath = ProfilePath( sName );
-            std::error_code ec;
-            std::filesystem::create_directories( ProfilesDir(), ec );
-            {
-                std::ofstream f( sPath );
-                if ( !f )
-                    return std::nullopt;
-                f << j.dump();
-            }
-            std::optional<Settings> o = LoadProfile( sName );
-            std::filesystem::remove( sPath, ec );
-            return o;
-        }
-
         const std::map<std::string, json> &DefaultsFlat()
         {
             static const std::map<std::string, json> s = []
             {
                 std::map<std::string, json> m;
-                if ( std::optional<json> o = SectionsOfSettings( Settings{} ) )
-                    Flatten( *o, "", m );
+                Flatten( SettingsToSectionsJson( Settings{} ), "", m );
                 return m;
             }();
             return s;
@@ -320,18 +274,13 @@ namespace gamescope::config::profile_export
                 }
                 destSettings = *o;
             }
-            std::optional<json> oOld = SectionsOfSettings( destSettings );
-            if ( !oOld )
-            {
-                plan.error = "Could not read the destination profile.";
-                return plan;
-            }
+            const json jOld = SettingsToSectionsJson( destSettings );
             std::map<std::string, json> oldFlat;
-            Flatten( *oOld, "", oldFlat );
+            Flatten( jOld, "", oldFlat );
             const std::map<std::string, json> &defs = DefaultsFlat();
             const std::vector<ExportGroup> &groups = Groups();
 
-            plan.newSections = *oOld;
+            plan.newSections = jOld;
             for ( const auto &[ sKey, v ] : p.leaves )
             {
                 const ExportGroup *pGroup = GroupOf( groups, sKey );
@@ -430,7 +379,7 @@ namespace gamescope::config::profile_export
                 oSections = StripMeta( std::move( *oSections ) );
         }
         else if ( std::optional<Settings> o = LoadProfile( oMeta->name ) )
-            oSections = SectionsOfSettings( *o );
+            oSections = SettingsToSectionsJson( *o );
         if ( !oSections )
         {
             r.error = "Could not read profile '" + sProfile + "'.";
@@ -489,12 +438,7 @@ namespace gamescope::config::profile_export
             r.error = "Nothing in the selected groups is in this export.";
             return r;
         }
-        std::optional<Settings> oNew = SettingsOfSections( plan.newSections );
-        if ( !oNew )
-        {
-            r.error = "Could not build the settings from the export.";
-            return r;
-        }
+        const Settings settingsNew = SettingsFromSectionsJson( plan.newSections );
         r.skipped = int( plan.skipped.size() );
         r.skipped_keys = plan.skipped;
         r.unknown = plan.unknown;
@@ -504,7 +448,7 @@ namespace gamescope::config::profile_export
             ProfileMeta meta;
             meta.name = UniqueName( sDest );
             meta.kind = ProfileKind::General;
-            ProfileOp op = CreateProfile( meta, &*oNew );
+            ProfileOp op = CreateProfile( meta, &settingsNew );
             if ( !op )
             {
                 r.error = op.error;
@@ -531,7 +475,7 @@ namespace gamescope::config::profile_export
             r.error = "Could not back up '" + plan.destMeta->name + "' first, so nothing was changed.";
             return r;
         }
-        if ( !SaveProfile( *plan.destMeta, *oNew ) )
+        if ( !SaveProfile( *plan.destMeta, settingsNew ) )
         {
             r.error = "Could not write '" + plan.destMeta->name + "'.";
             return r;

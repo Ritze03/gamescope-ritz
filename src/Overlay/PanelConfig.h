@@ -4,6 +4,7 @@
 // superdoc/planning/profiles-concept.md.
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -14,6 +15,8 @@
 #include "Config/ConfigSchema.h"
 #include "Config/ConfigManager.h"   // SanitizeProfileName(), for the form check
 #include "Config/AppId.h"           // SanitizeAppId(), for the form check
+#include "Config/ProfileExport.h"   // the Export / Import dialogs
+#include "UI/Controls.h"            // CheckState, ListBoxStep(): the dialogs' tree
 
 namespace gamescope
 {
@@ -301,6 +304,371 @@ namespace gamescope
 		inline std::string SessionBadge( const config::ProfileMeta &session, bool bOverride )
 		{
 			return bOverride ? session.name + " (launch)" : ListLabel( session );
+		}
+
+		// =================================================================
+		//  Export / Import dialogs (2026-11-07) -- settings as JSON TEXT
+		//  through the clipboard. superdoc/features/profile-export.md.
+		//  Every decision of the two dialogs is a plain function here; the
+		//  dialogs in PanelConfig.cpp only draw and call ProfileExport.
+		// =================================================================
+		using ExportGroups = std::vector<config::profile_export::ExportGroup>;
+		using GroupSet     = config::profile_export::GroupSet;
+
+		// ---- the selection tree (the same tree in both dialogs) ---------
+		// One flat list of rows: a parent (the rail group's label) followed
+		// by its children (the groups under it), in the groups' own order.
+		struct TreeRow
+		{
+			bool        bParent = false;
+			int         nGroup  = -1;     // index into the groups; -1 for a parent
+			std::string sParent;          // the parent label this row is, or sits under
+		};
+
+		inline std::vector<TreeRow> TreeRows( const ExportGroups &groups )
+		{
+			std::vector<TreeRow> out;
+			std::vector<std::string> parents;
+			for ( const auto &g : groups )
+				if ( std::find( parents.begin(), parents.end(), g.parent ) == parents.end() )
+					parents.push_back( g.parent );
+			for ( const std::string &sParent : parents )
+			{
+				out.push_back( TreeRow{ true, -1, sParent } );
+				for ( size_t i = 0; i < groups.size(); ++i )
+					if ( groups[ i ].parent == sParent )
+						out.push_back( TreeRow{ false, (int)i, sParent } );
+			}
+			return out;
+		}
+
+		// `pUsable` null = every group can be ticked (Export). A group outside
+		// it (Import: not in the pasted text) is greyed, never ticked, and a
+		// parent counts and changes only its usable children.
+		inline bool TreeUsable( const GroupSet *pUsable, const std::string &sId )
+		{
+			return !pUsable || pUsable->count( sId ) != 0;
+		}
+
+		inline size_t TreeUsableChildren( const ExportGroups &groups, const std::string &sParent,
+		                                  const GroupSet *pUsable )
+		{
+			size_t n = 0;
+			for ( const auto &g : groups )
+				if ( g.parent == sParent && TreeUsable( pUsable, g.id ) )
+					++n;
+			return n;
+		}
+
+		inline ui::controls::CheckState TreeParentState( const ExportGroups &groups, const std::string &sParent,
+		                                                const GroupSet &ticked, const GroupSet *pUsable )
+		{
+			size_t nOn = 0, nTotal = 0;
+			for ( const auto &g : groups )
+			{
+				if ( g.parent != sParent || !TreeUsable( pUsable, g.id ) )
+					continue;
+				++nTotal;
+				nOn += ticked.count( g.id ) ? 1 : 0;
+			}
+			return ui::controls::CheckAggregate( nOn, nTotal );
+		}
+
+		// A click on a parent sets every usable child: Off and Mixed turn them
+		// all on, On turns them all off (CheckNext()).
+		inline void TreeClickParent( const ExportGroups &groups, const std::string &sParent,
+		                             GroupSet &ticked, const GroupSet *pUsable )
+		{
+			const bool bOn = ui::controls::CheckNext( TreeParentState( groups, sParent, ticked, pUsable ) ) ==
+				ui::controls::CheckState::On;
+			for ( const auto &g : groups )
+			{
+				if ( g.parent != sParent || !TreeUsable( pUsable, g.id ) )
+					continue;
+				if ( bOn )
+					ticked.insert( g.id );
+				else
+					ticked.erase( g.id );
+			}
+		}
+
+		inline void TreeClickChild( GroupSet &ticked, const std::string &sId, const GroupSet *pUsable )
+		{
+			if ( !TreeUsable( pUsable, sId ) )
+				return;
+			if ( !ticked.erase( sId ) )
+				ticked.insert( sId );
+		}
+
+		inline ui::controls::CheckState TreeChildState( const GroupSet &ticked, const std::string &sId )
+		{
+			return ticked.count( sId ) ? ui::controls::CheckState::On : ui::controls::CheckState::Off;
+		}
+
+		// Which rows the keyboard cursor may stop on and Space may toggle.
+		inline std::vector<bool> TreeRowEnabled( const ExportGroups &groups, const std::vector<TreeRow> &rows,
+		                                         const GroupSet *pUsable )
+		{
+			std::vector<bool> out;
+			for ( const TreeRow &r : rows )
+				out.push_back( r.bParent ? TreeUsableChildren( groups, r.sParent, pUsable ) > 0
+				                         : TreeUsable( pUsable, groups[ (size_t)r.nGroup ].id ) );
+			return out;
+		}
+
+		// One cursor step over the rows, skipping greyed ones. -1 = no cursor
+		// yet: the first arrow lands on the first usable row (ListBoxStep's
+		// own rule). At either end, or with nothing usable, the cursor stays.
+		inline int TreeCursorStep( const std::vector<bool> &enabled, int nCursor, ui::controls::ListBoxNav eNav )
+		{
+			const int nCount = (int)enabled.size();
+			if ( std::find( enabled.begin(), enabled.end(), true ) == enabled.end() )
+				return -1;
+			using Nav = ui::controls::ListBoxNav;
+			int nCur = nCursor;
+			Nav eStep = eNav;
+			if ( nCur < 0 )
+			{
+				nCur = -1;
+				eStep = Nav::Down;
+			}
+			else if ( eNav == Nav::Home )
+			{
+				nCur  = ui::controls::ListBoxStep( nCur, nCount, Nav::Home );
+				eStep = Nav::Down;
+				if ( enabled[ (size_t)nCur ] )
+					return nCur;
+			}
+			else if ( eNav == Nav::End )
+			{
+				nCur  = ui::controls::ListBoxStep( nCur, nCount, Nav::End );
+				eStep = Nav::Up;
+				if ( enabled[ (size_t)nCur ] )
+					return nCur;
+			}
+			for ( int i = 0; i <= nCount; ++i )
+			{
+				const int nNext = ui::controls::ListBoxStep( nCur, nCount, eStep );
+				if ( nNext == nCur )
+					break;
+				nCur = nNext;
+				if ( enabled[ (size_t)nCur ] )
+					return nCur;
+			}
+			return nCursor;
+		}
+
+		// ---- Export ---------------------------------------------------------
+		inline bool ExportPrimaryEnabled( const GroupSet &ticked )
+		{
+			return !ticked.empty();
+		}
+
+		// "Settings copied: 3 groups". Counts the ticked groups.
+		inline std::string ExportToast( size_t nGroups )
+		{
+			return "Settings copied: " + std::to_string( nGroups ) + ( nGroups == 1 ? " group" : " groups" );
+		}
+
+		// Only an inheriting game profile has the "Include inherited values"
+		// option; any other profile is always exported in full.
+		inline bool ExportOffersInherited( const config::ProfileMeta &m )
+		{
+			return m.kind == config::ProfileKind::Game && !m.inherits.empty();
+		}
+
+		// ---- Import ---------------------------------------------------------
+		// What the paste field holds: nothing yet (no message, no error), or
+		// something to parse.
+		inline bool ImportTextBlank( const std::string &sText )
+		{
+			return sText.find_first_not_of( " \t\r\n" ) == std::string::npos;
+		}
+
+		// Only groups the pasted text has can be ticked.
+		inline GroupSet ImportUsable( const std::vector<std::string> &present )
+		{
+			return GroupSet( present.begin(), present.end() );
+		}
+
+		// The starting ticks of a fresh paste: every present group that is
+		// ticked by default (Resolution is not: it depends on the machine).
+		inline GroupSet ImportInitialTicks( const ExportGroups &groups, const std::vector<std::string> &present )
+		{
+			const GroupSet usable = ImportUsable( present );
+			GroupSet out;
+			for ( const auto &g : groups )
+				if ( g.default_ticked && usable.count( g.id ) )
+					out.insert( g.id );
+			return out;
+		}
+
+		// The ticks that count: never more than what the paste has.
+		inline GroupSet TicksWithin( const GroupSet &ticked, const GroupSet &usable )
+		{
+			GroupSet out;
+			for ( const std::string &s : ticked )
+				if ( usable.count( s ) )
+					out.insert( s );
+			return out;
+		}
+
+		// The name a new profile starts with: the pasted profile's own name,
+		// else "Imported", made free with " 2", " 3" ... (the same rule
+		// ApplyImport applies when the name is taken).
+		inline std::string ImportSuggestedName( std::string_view svPastedProfile,
+		                                        const std::vector<config::ProfileMeta> &existing )
+		{
+			std::string sBase = config::SanitizeProfileName( svPastedProfile ).value_or( "" );
+			if ( sBase.empty() )
+				sBase = "Imported";
+			auto Taken = [ &existing ]( const std::string &s )
+			{
+				for ( const config::ProfileMeta &m : existing )
+					if ( m.name == s )
+						return true;
+				return false;
+			};
+			if ( !Taken( sBase ) )
+				return sBase;
+			for ( int n = 2; n < 10000; ++n )
+				if ( !Taken( sBase + " " + std::to_string( n ) ) )
+					return sBase + " " + std::to_string( n );
+			return sBase;
+		}
+
+		// The new-profile name field's refusal, "" when fine: the Create form's
+		// own rule (CheckProfileForm), so the two cannot disagree.
+		inline std::string ImportNameError( const std::string &sName,
+		                                    const std::vector<config::ProfileMeta> &existing )
+		{
+			return CheckProfileForm( false, {}, sName, existing ).sNameError;
+		}
+
+		// Import is available only for valid JSON with a ticked group, and for
+		// a new profile with a usable name. Nothing else reaches ApplyImport.
+		inline bool ImportPrimaryEnabled( bool bValidParse, const GroupSet &effectiveTicks, bool bNewProfile,
+		                                  bool bNameOk )
+		{
+			return bValidParse && !effectiveTicks.empty() && ( !bNewProfile || bNameOk );
+		}
+
+		inline std::string ImportBackupNote( const std::string &sDest )
+		{
+			return "A backup of " + sDest + " is kept as " + sDest + ".json.bak";
+		}
+
+		inline std::string UnknownLine( int nUnknown )
+		{
+			return std::to_string( nUnknown ) + ( nUnknown == 1 ? " unknown value skipped" : " unknown values skipped" );
+		}
+
+		inline std::string UnreadableLine( size_t nSkipped )
+		{
+			return std::to_string( nSkipped ) +
+				( nSkipped == 1 ? " value cannot be read and stays as it is" : " values cannot be read and stay as they are" );
+		}
+
+		// The Changes pane's headline.
+		inline std::string ChangesSummary( bool bNewProfile, const std::string &sName, int nCount )
+		{
+			const std::string sN = std::to_string( nCount ) + ( nCount == 1 ? " setting" : " settings" );
+			if ( bNewProfile )
+				return "New profile '" + sName + "': " + sN + " set";
+			if ( nCount == 0 )
+				return "No settings change";
+			return sN + ( nCount == 1 ? " changes" : " change" );
+		}
+
+		// "Imported into 'Comp': 12 settings, 2 skipped". A new profile reads
+		// "Imported as". `nSkipped` is everything pasted that was not applied
+		// (unreadable values and keys this build does not know).
+		inline std::string ImportToast( const std::string &sDest, bool bNewProfile, int nApplied, int nSkipped )
+		{
+			std::string s;
+			if ( nApplied == 0 && !bNewProfile )
+				s = "Nothing changed in '" + sDest + "'";
+			else
+				s = std::string( bNewProfile ? "Imported as '" : "Imported into '" ) + sDest + "': " +
+					std::to_string( nApplied ) + ( nApplied == 1 ? " setting" : " settings" );
+			if ( nSkipped > 0 )
+				s += ", " + std::to_string( nSkipped ) + " skipped";
+			return s;
+		}
+
+		// ---- Changes lines ---------------------------------------------------
+		// A row's label: what the lookup (the registry) calls its key, else the
+		// key itself.
+		template <typename Fn>
+		inline std::string DiffLabel( const std::string &sKey, Fn &&fnLookup )
+		{
+			const std::string s = fnLookup( sKey );
+			return s.empty() ? sKey : s;
+		}
+
+		// A value cut for one line; the atlas is Latin-1, so only plain ASCII
+		// is added ("...").
+		inline std::string ShortValue( const std::string &sJson, size_t nMax = 28 )
+		{
+			if ( sJson.size() <= nMax || nMax < 4 )
+				return sJson;
+			return sJson.substr( 0, nMax - 3 ) + "...";
+		}
+
+		// "Frame generation / Target fps: 120 -> 240" -- plain ASCII arrow.
+		inline std::string DiffLine( const config::profile_export::DiffRow &r, const std::string &sLabel )
+		{
+			return r.group + " / " + sLabel + ": " + ShortValue( r.old_value ) + " -> " + ShortValue( r.new_value );
+		}
+
+		// Greedy word wrap for a monospace column count: a word longer than a
+		// line is split. Never returns an empty list (an empty string is one
+		// empty line). `sIndent` prefixes every line after the first.
+		inline std::vector<std::string> WrapWords( const std::string &s, size_t nCols, std::string sIndent = {} )
+		{
+			std::vector<std::string> out;
+			if ( nCols < 8 )
+				nCols = 8;
+			if ( sIndent.size() + 1 > nCols )
+				sIndent.clear();
+			std::string sCur;
+			auto Avail = [ & ] { return nCols - ( out.empty() ? 0 : sIndent.size() ); };
+			auto Emit = [ & ]
+			{
+				out.push_back( ( out.empty() ? std::string() : sIndent ) + sCur );
+				sCur.clear();
+			};
+			size_t i = 0;
+			while ( i < s.size() )
+			{
+				if ( s[ i ] == ' ' )
+				{
+					++i;
+					continue;
+				}
+				size_t j = i;
+				while ( j < s.size() && s[ j ] != ' ' )
+					++j;
+				std::string sWord = s.substr( i, j - i );
+				i = j;
+				while ( sWord.size() > Avail() )
+				{
+					if ( !sCur.empty() )
+						Emit();
+					const size_t nTake = Avail();
+					sCur = sWord.substr( 0, nTake );
+					sWord.erase( 0, nTake );
+					Emit();
+				}
+				if ( !sCur.empty() && sCur.size() + 1 + sWord.size() > Avail() )
+					Emit();
+				if ( !sCur.empty() )
+					sCur += ' ';
+				sCur += sWord;
+			}
+			if ( !sCur.empty() || out.empty() )
+				Emit();
+			return out;
 		}
 	}
 }

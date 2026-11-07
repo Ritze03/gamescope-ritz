@@ -109,6 +109,8 @@ indented under it.
   migrations.
 - [Profiles](features/profiles.md) — general vs game profiles, diff-based inheritance, the
   Profiles area, `--profile` / `ritz_profile`, the schema 2 -> 3 migration.
+- [Settings export / import](features/profile-export.md) — share chosen settings as JSON text
+  through the clipboard: format, groups, exclusions, the Export and Import dialogs, backup.
 - [Keybinds](features/keybinds.md) — the editable hotkeys: chord grammar, tap-vs-press
   rules, `overlay.keybinds`, the conflict rule and the ways back from a lock-out.
 

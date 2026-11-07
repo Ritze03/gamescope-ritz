@@ -16,11 +16,8 @@
 // (tests/test_profile_export.cpp) fails on a leaf in neither, so a new
 // setting is always a conscious choice.
 //
-// Section (de)serialisation is ConfigManager's, reused through its public
-// API only: a Settings struct becomes sections by SaveProfile()-ing it under a
-// throwaway profile name and reading the file back; sections become a Settings
-// by writing such a file and LoadProfile()-ing it. The throwaway file exists
-// for a few milliseconds and is removed again.
+// Section (de)serialisation is ConfigManager's, through the pure
+// SettingsToSectionsJson / SettingsFromSectionsJson: no file is written for it.
 namespace gamescope::config::profile_export
 {
     // One selectable group (a child in the tree; `parent` is its rail group).

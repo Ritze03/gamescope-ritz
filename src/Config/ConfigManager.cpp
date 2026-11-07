@@ -2718,6 +2718,16 @@ namespace gamescope::config
         EnqueueProfileWrite( s_SessionMeta, merged );
     }
 
+    nlohmann::json SettingsToSectionsJson( const Settings &s )
+    {
+        return SectionsToJson( s );
+    }
+
+    Settings SettingsFromSectionsJson( const nlohmann::json &jSections )
+    {
+        return SettingsFromJson( jSections );
+    }
+
     uint64_t ConfigGeneration()
     {
         return s_ulConfigGeneration;

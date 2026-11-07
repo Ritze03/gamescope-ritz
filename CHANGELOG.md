@@ -22,6 +22,9 @@ The newest version below is the one this build reports.
   the host from putting the window straight on the screen; off by default.
 - **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row
   mutes its startup toast and rail dot while the area still shows the true state.
+- **Export and import settings**: The Profiles area has Export and Import buttons that
+  share chosen settings as text through the clipboard, for friends or between your own
+  profiles; Import previews every change and keeps a backup of the profile it changes.
 - **Environment variables in `--help`**: `--help` now lists the environment variables
   gamescope-ritz reads, such as `GS_RITZ_PROFILE` and `RITZ_GS_APPID`.
 

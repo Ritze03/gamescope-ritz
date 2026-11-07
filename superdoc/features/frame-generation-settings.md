@@ -64,19 +64,23 @@ Crosshair box size). Column 1: "Learned motion" (Learned net, Learned precision,
 Static guard), "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
 GPU speed), "Status". Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
 against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
-falls back to a dropdown. `Why:` the user arranged this on a visual workbench. The paragraph below
-lists the rows in their older single-group order.
+falls back to a dropdown. `Why:` the user arranged this on a visual workbench.
 
-Rows, in order: **Frame generation** (a switch, `framegen.enabled`; help *Generates extra
-frames between the game's own frames. Adds delay, so it is not suited to twitch
-shooters.*), **Multiplier** (2x / 3x / 4x / 5x / 6x / 7x / 8x / Target fps; it sets `mode`,
-and `multiplier` for a fixed choice, and is keyed to `framegen.mode` -- the Shell's
-overridden-dot follows one key per row; disabled while the switch is off), **Target fps**
-(a slider, 0 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag
-into 1..29 snaps to 0 or 30), **Priority** (Low latency / Smoothness), **Pause at refresh
-rate** (a switch; help: stops at the refresh rate or the Target fps, whichever is lower), Quality, Motion version (V1 / V2 / Learned) with Learned net, Learned precision, Zero-motion test and Static guard below it, Artifact safety (Off / Very low / Low / Default / High), Static HUD
-protection, UI protection (Off / Crosshair / Crosshair V2 / Whole screen), Crosshair box size (a slider, `2.5% · 24 px`, disabled while UI protection is Off), Status. Multiplier and the rows after it are disabled while the switch is off. The rail summary reads
-"off", "N×" or "target N". Priority help: *Low latency adds the least
+Rows, in the order they appear (column 0, then column 1). **Frame generation** group: **Frame
+generation** (a switch, `framegen.enabled`; help *Generates extra frames between the game's own
+frames. Adds delay, so it is not suited to twitch shooters.*), **Multiplier** (2x / 3x / 4x / 5x /
+6x / 7x / 8x / Target fps; it sets `mode`, and `multiplier` for a fixed choice, and is keyed to
+`framegen.mode` -- the Shell's overridden-dot follows one key per row), **Target fps** (a slider, 0
+shown as "Display refresh", disabled unless Multiplier is Target fps; a drag into 1..29 snaps to 0
+or 30), **Priority** (Low latency / Smoothness), **Motion version** (V1 / V2 / Learned), **Quality**.
+**Artifact protection** group: **Artifact safety** (Off / Very low / Low / Default / High),
+**Static HUD protection**, **UI protection** (Off / Crosshair / Crosshair V2 / Whole screen),
+**Crosshair box size** (a slider, `2.5% · 24 px`, disabled while UI protection is Off). Column 1,
+**Learned motion** group: **Learned net**, **Learned precision**, **Zero-motion test**, **Static
+guard**. **Pausing and limits** group: **Pause at refresh rate** (a switch; help: stops at the
+refresh rate or the Target fps, whichever is lower), **Pause while cursor visible**, **Limit to GPU
+speed**. **Status** group: the status line. Multiplier and the rows after it are disabled while the
+switch is off. The rail summary reads "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*
 
