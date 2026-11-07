@@ -1,19 +1,27 @@
 # gamescope-ritz — Documentation
 
-A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
-[architecture/overview.md](architecture/overview.md) as the start-here page.
+A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Start with
+[architecture/overview.md](architecture/overview.md); it maps the code and links into the
+pages below.
 
 - [`CHANGELOG.md`](../CHANGELOG.md) (repo root) — the user-facing list of this fork's own
   changes, newest version first. Written to the strict shape in
   [claude-instructions/changelog.md](claude-instructions/changelog.md), because the
-  settings overlay parses it — and because the build reads its newest block's version as
-  the project's own, this file **is** the version marker; there is no other.
+  settings overlay parses it; the build reads its newest block's version as the project's
+  own, so this file **is** the version marker.
+
+Which docs describe current behaviour: `architecture/`, `features/`, `ui/` and `meta/`.
+`planning/` is historical (see its section). The code is the source of truth.
 
 ## architecture/ — how the code fits together
 
-- [Overview](architecture/overview.md) — module map, data flow, "where to look for X". **Start here.**
+- [Overview](architecture/overview.md) — module map, threading, data flow, "where to look
+  for X". **Start here.**
 
 ## features/ — what the project does
+
+Split topics have a **hub** page that stays short and lists its sub-pages; sub-pages are
+indented under it.
 
 ### Backends
 
@@ -26,8 +34,14 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 ### Window management
 
 - [steamcompmgr focus](features/steamcompmgr-focus.md) — X11 window manager focus handling.
-- [Cursor pipeline](features/cursor-pipeline.md) — the three cursor sources, the
+- [Cursor pipeline](features/cursor-pipeline.md) — hub: the three cursor sources, the
   pointer-lock invariant, and the thread that owns `MouseCursor`.
+  - [Sources and threading](features/cursor-pipeline-sources-and-threading.md)
+  - [The overlay pointer and "Use everywhere"](features/cursor-pipeline-overlay-pointer.md)
+  - [The overlay freeze](features/cursor-pipeline-freeze.md)
+  - [Locked pointer and the SDL3 device](features/cursor-pipeline-locked-pointer.md)
+  - [Hotspot, stretched resolution and oversized windows](features/cursor-pipeline-hotspot-and-geometry.md)
+  - [Doubled pointer speed and the absolute notify](features/cursor-pipeline-pointer-speed.md)
 
 ### Rendering
 
@@ -35,178 +49,197 @@ A fork of Valve's gamescope, a Wayland micro-compositor for gaming. Point to
 - [Scaling filters](features/scaling-filters.md) — FSR (EASU/RCAS) and NIS upscaling.
 - [HDR color management](features/hdr-color-management.md) — PQ conversion and color management.
 - [Resolution and refresh](features/resolution-and-refresh.md) — runtime nested game
-  resolution, paced refresh and window-size request (the Display > Resolution area); what
-  is live, what is only a request, and the SDL focus-refresh gotcha.
+  resolution, paced refresh, the frame limiter and low-latency wake-up (the Display areas).
+- [Reshade effects](features/reshade-effects.md) — the ReShade-compatible post-process
+  pipeline, for users' own `.fx` files.
+- [Shader effects (Shaders area)](features/shader-effects.md) — hub: the native build-time
+  compute pre-pass and the panel that drives it.
+  - [Pre-pass, uniforms and panel budget](features/shader-effects-pipeline.md)
+  - [Colour, shadow and sharpen effects](features/shader-effects-color.md)
+  - [Bloom and the Brightness Map history](features/shader-effects-bloom.md)
+  - [Adaptive Brightness: modes, ceiling](features/shader-effects-adaptive-brightness.md)
+  - [Adaptive Brightness: local adaptation, preview, pulse](features/shader-effects-adaptive-brightness-local.md)
+  - [Adaptive Gamma and Leave dark scenes alone](features/shader-effects-adaptive-gamma.md)
+  - [Adaptive Brightness V2](features/shader-effects-adaptive-brightness-v2.md)
+  - [Adaptive Brightness V2 Darkening](features/shader-effects-darkening.md)
 
-### HUD
+### Motion (frame pacing)
 
-- [Diagnostics](features/diagnostics.md) -- the OTHER > Diagnostics tab: whether Hyprland has
-  direct scanout on (read with `hyprctl`, off the paint thread), its warnings (switched off
-  2026-11-06: scanout on can crash the GPU), the Recheck button and the browser link; why the check only applies to the Wayland
-  backend and why "could not check" never warns.
-- [Notifications](features/notifications.md) — toasts: the independent-context shape, the lazy glyph-bake/QueueWaitIdle hazard, the launch warm-up and why it never pushes a layer, the HUD seam.
-- [FPS display](features/fps-display.md) — the single-integer FPS HUD: update modes,
-  hide-above-X, text-colour modes (with the Inverted-mode limitation stated plainly),
-  the outline, the margin rule, and the lag-spike heuristic.
-- [Crosshair](features/crosshair.md) — the compositor-drawn crosshair (line / dot /
-  outline / right-click auto-hide / Apply Scaling): why it lives in the HUD's layer, the
-  centre and 1px snapping rules, the hide modes' maths, and the `BTN_RIGHT` hook's gating.
-- [Zoom](features/zoom.md) — the hold-or-toggle magnifier (circle / rectangle / square,
-  1 px outline, 1.5–5× level, match-mouse-speed): why it is built inside
-  `vulkan_composite()` as layer 1 after the effects and before the upscaler, and the
-  held-action / mouse-button rules it added to the keybind engine.
-- [Autoclicker](features/autoclicker.md) — the
-  hold-or-toggle synthetic click train
-  (1–1000 CPS, left / right / middle, `Mouse4` by default): why the pacing is its own
-  absolute-deadline worker thread rather than the frame loop or a Wayland timer, the
-  feedback-loop guard that keeps a synthetic click out of the keybind engine, and the
-  RAII release that makes a stuck button unreachable.
-- [Null binds](features/null-binds.md) — the WASD SOCD-cleaning module (A/D, W/S,
-  independently switchable, last-input priority, Delay + Randomize jitter between a
-  real switch's synthetic release and press): the pure engine, the two call sites in
-  `wlserver_key()`/`wlserver_handle_key()`, the settings-overlay keyboard-capture
-  guard, and the per-frame `NullBinds_Tick()` that keeps a profile's setting live
-  without ever opening the Shell.
+- [Frame generation](features/frame-generation.md) — hub: optical-flow frame
+  interpolation (fixed 2x-8x or Target fps), paced per vblank; the `fghost` renderer glue
+  and the library's pacer.
+  - [Settings and status](features/frame-generation-settings.md)
+  - [Pacing](features/frame-generation-pacing.md)
+  - [Renderer and HDR / 10-bit](features/frame-generation-renderer.md)
+  - [Backends, host frames and direct scanout](features/frame-generation-host-scanout.md)
+  - [UI protection (Crosshair box, Crosshair V2)](features/frame-generation-ui-protection.md)
+  - [Motion version 2](features/frame-generation-motion-v2.md)
+  - [Learned motion](features/frame-generation-learned.md)
+  - [Pass-through, costs, limitations, build and testing](features/frame-generation-limits.md)
+- [Motion blur](features/motion-blur.md) — interpolation-based blur, with or without frame
+  generation; the shared-timeline composition model.
+- [Lag spike buffer](features/lag-spike-buffer.md) — bridges frame-time spikes by running
+  slightly behind real time; independent of frame generation.
+
+### Settings overlay (UI framework)
+
+- [Overlay shell](features/overlay-shell.md) — the Shell: slab, rail groups, sheet,
+  Inspector, rows and controls under `src/Overlay/UI/`, and how to register an area.
+- [Command palette and Launcher](features/command-palette.md) — the ranked search over
+  every setting, drawn over the Shell or alone as the Launcher.
+- [Launch-option lock](features/launch-option-lock.md) — rows pinned by a `gamescope`
+  command-line flag go read-only with a "LAUNCH OPTION" tag.
+- [Notifications](features/notifications.md) — toasts: the independent-context shape, the
+  lazy glyph-bake hazard, the launch warm-up and why it never pushes a layer.
+- [Log and About](features/log-and-about.md) — the two read-only areas at the end of the
+  rail: captured log, version identity, compiled-in changelog and licences.
+- [System and Appearance](features/system-and-appearance.md) — the two small areas of the
+  SETTINGS rail group.
+- [Diagnostics](features/diagnostics.md) — the OTHER > Diagnostics area: Hyprland direct
+  scanout check, why its warnings are switched off, the Recheck button.
 
 ### Settings & config
 
-- [Profiles](features/profiles.md) -- Profiles v2: a profile is the file you edit,
-  general vs game profiles, live diff-based inheritance and its ceiling, the file
-  formats, the resolution order, the Profiles area (the list, the four modals, the
-  inherited/overridden markers, the session badge), the API it calls, `--profile` /
-  `ritz_profile`, and the schema 2 -> 3 migration table (the v1 model as history).
-- [Keybinds](features/keybinds.md) -- the editable compositor hotkeys: the inventory of
-  what this fork binds (and what it deliberately leaves alone), the chord grammar, the
-  tap-vs-press firing rules and the peak set behind them, `overlay.keybinds` in
-  `global.json`, the conflict rule, the two ways back from a binding that made the
-  settings unreachable, and the capture chip.
+- [Config system](features/config-system.md) — JSON settings files, schema versioning and
+  migrations.
+- [Profiles](features/profiles.md) — general vs game profiles, diff-based inheritance, the
+  Profiles area, `--profile` / `ritz_profile`, the schema 2 -> 3 migration.
+- [Keybinds](features/keybinds.md) — the editable hotkeys: chord grammar, tap-vs-press
+  rules, `overlay.keybinds`, the conflict rule and the ways back from a lock-out.
 
-### Steam surfaces
+### Drawn over the game
 
-- [Steam friends you can join](features/steam-friends.md) -- `Ctrl+Shift+Tab` lists the
-  friends who are in **this** game and can be joined, read from the running Steam
-  client with no sign-in, and joins one with a `steam://joinlobby` URL: what is proven
-  and what is not (the lobby offset), why the Status row carries two counts, why the
-  area hides itself when this is not a Steam game, the background poller that keeps
-  Steam off the frame path, and the privacy rule -- including that this compositor now
-  makes no outbound network request at all.
-
-### External surfaces
-
-- [Vulkan WSI layer](features/vk-wsi-layer.md) — `VkLayer_FROG_gamescope_wsi` swapchain redirection.
-- [Wayland protocols](features/wayland-protocols.md) — custom protocol surface, including `gamescope_control`.
-- [Ritz extension](features/ritz-extension.md) — the `extensions/gamescope-ritz.json` Ritz
-  launcher module: fields, the `--profile` shell-split quoting, and the manual `cp` into
-  `~/.config/ritz/extensions/`.
-- [Control / IPC](features/control-ipc.md) — external control and IPC (e.g. `gamescopectl`).
-
-### Clipboard
-
-- [Clipboard sync](features/clipboard-sync.md) — one CLIPBOARD across Xwayland, gamescope's
-  own Wayland clients and the host session: the data-control event hook and its fallback
-  chain, the loop guard, and why every pipe transfer runs on a worker thread.
-
-### Audio
-
-- [Mixer](features/audio-mixer.md) — per-app PipeWire volume: detection strategies, the
-  dynamic volume row title, the Mixer hotkey; also the Effects area (the compressor).
-- [Game audio capture](features/audio-capture.md) — a private per-session PipeWire sink
-  the game's streams are tagged and moved into (no stream guessing): the loopback pair, the
-  env tag, the mover, volume/mute on the sink, why the playback copy is clamped, and the
-  Dynamics (compressor/limiter) stage: threading, latency, click-free toggling.
+- [FPS display (HUD)](features/fps-display.md) — hub: the single-integer FPS HUD.
+  - [Readout behaviour](features/fps-display-readout.md)
+  - [Text colour (Fixed vs. Inverted)](features/fps-display-text-colour.md)
+  - [Margin](features/fps-display-margin.md)
+- [Crosshair](features/crosshair.md) — the compositor-drawn crosshair; why it lives in the
+  HUD's layer.
+- [Zoom](features/zoom.md) — the hold-or-toggle magnifier, built inside
+  `vulkan_composite()` as layer 1; held-action and mouse-button rules.
 
 ### Input
 
-- [Input emulation](features/input-emulation.md) — synthetic input injection.
+- [Autoclicker](features/autoclicker.md) — the paced synthetic click train and its
+  feedback-loop guard.
+- [Null binds](features/null-binds.md) — WASD SOCD cleaning with delay and jitter.
+- [Input › General](features/input-general.md) — force grab cursor and keyboard.
+- [Input emulation](features/input-emulation.md) — synthetic input injection (libei).
 - [Input method / IME](features/input-method-ime.md) — input method editor support.
-- [Input › General](features/input-general.md) — force grab cursor and force grab
-  keyboard: per-backend behaviour and why neither can lock you out of gamescope's own
-  hotkeys.
 
-### Effects & capture
+### Audio
 
-- [Reshade effects](features/reshade-effects.md) — the ReShade-compatible post-process
-  pipeline, for users' own `.fx` files.
-- [Shader effects (Shaders settings area)](features/shader-effects.md) — Saturation,
-  Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma and
-  Adaptive Brightness V2: the settings panel and the native build-time compute pre-pass
-  that implements them.
-- [Frame generation (Frame generation settings area)](features/frame-generation.md) —
-  optical-flow frame interpolation, a fixed 2x-8x or a Target fps, paced per vblank (Low
-  latency / Smoothness, Pause at refresh rate): the `fghost` renderer, the library's
-  `framegen::pacing` pacer (gamescope only feeds it), settings, costs, limits.
-- [Motion blur (Motion blur settings area)](features/motion-blur.md) — interpolation-based
-  motion blur, with or without frame generation: the composition model (buffer = delay,
-  frame generation = cadence, blur = shutter window), the five settings, costs, limits.
-- [Lag spike buffer (Lag spike buffer settings area)](features/lag-spike-buffer.md) —
-  detects the game's frame-time spikes and runs slightly behind so a repeat is bridged with
-  generated frames: independent of frame generation, the settings, the host ring that follows
-  the library's history depth, the memory and audio caveats.
-- [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — screen capture via PipeWire.
+- [Mixer](features/audio-mixer.md) — per-app PipeWire volume, detection strategies, the
+  Mixer hotkey; also the Effects area.
+- [Game audio capture](features/audio-capture.md) — the private per-session sink, the env
+  tag, the mover, and the Dynamics (compressor/limiter) stage.
+
+### Steam surfaces
+
+- [Steam friends you can join](features/steam-friends.md) — the joinable-friends list read
+  from the running Steam client, and the privacy rule.
+
+### External surfaces
+
+- [Vulkan WSI layer](features/vk-wsi-layer.md) — swapchain redirection layer.
+- [Wayland protocols](features/wayland-protocols.md) — custom protocol surface, including
+  `gamescope_control`.
+- [Control / IPC](features/control-ipc.md) — `gamescopectl` and external control.
+- [Ritz extension](features/ritz-extension.md) — the `extensions/gamescope-ritz.json`
+  launcher module.
+- [Screen capture (PipeWire)](features/screen-capture-pipewire.md) — streaming export of
+  the composited output.
+- [Clipboard sync](features/clipboard-sync.md) — one CLIPBOARD across Xwayland, gamescope's
+  Wayland clients and the host.
 
 ### Tooling & runtime
 
-- [Scripting / ConVars](features/scripting-convars.md) — the runtime tunable-variable and debug-command system.
-- [Build and tooling](features/build-and-tooling.md) — Meson build, dev tooling.
-- [Process management](features/process-management.md) — process/Xwayland lifecycle management.
+- [Scripting / ConVars](features/scripting-convars.md) — the runtime tunable-variable and
+  debug-command system.
+- [Build and tooling](features/build-and-tooling.md) — Meson build, agent build scripts.
+- [Process management](features/process-management.md) — child-process and Xwayland
+  lifecycle.
 
-## planning/ — overlay UI implementation notes
+## ui/ — styling rules
 
-- [TODO](planning/TODO.md) — open work with no feature doc yet: the `RADV_DEBUG=allbos` test for the direct scanout crash, and the audio capture shutdown crash.
-- Frame-generation studies — [FidelityFX OpticalFlow / Frame Interpolation](planning/fidelityfx-opticalflow-framegen.md) (2026-09-05: feasible but not sensible — FI needs game depth and motion vectors a compositor never has) and the earlier [external-layer in-tree port](planning/external-framegen-in-tree-port.md) (GPLv3 blocker). Both conclude: run the external layer as a layer under gamescope instead.
-- [UI mockup — pixel-exact spec](planning/ui-mockup-precise-spec.md) — the settings
-  overlay's full chrome/color/typography/control spec, measured from the original design
-  mockup.
-- [Slider widget spec](planning/slider-widget-spec.md) — the shared `widgets::SliderControl()`
-  slider, measured from a real render (supersedes the mockup spec's own §7 for anything the
-  two disagree on).
-- [Overlay redesign proposals](planning/redesign/) — three preserved design directions (A
-  console, B command palette, E inspector rail) with interactive mockups, specs, proposed
-  helper APIs and feasibility. Kept so a regression can be rolled back against stated
-  design intent.
-- [E2 "Inspector Rail, deepened"](planning/redesign/round-2/e2-inspector-plus/) — the
-  direction being implemented. `SPEC.md` and `API.md` are the contract, `index.html` the
-  tiebreaker mockup, and [`IMPLEMENTATION.md`](planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md)
-  the phase-by-phase log of what exists in C++ (`src/Overlay/UI/`) and where it departed
-  from the spec.
-  [`SHELL-TEST-REPORT.md`](planning/redesign/round-2/e2-inspector-plus/SHELL-TEST-REPORT.md)
-  is the exhaustive pre-P5 test pass — what was exercised, with counts; what failed and
-  was fixed; what was left and why; and what could not be tested at all. Read it before
-  deleting the legacy UI.
-  [`CONFORMANCE-AUDIT.md`](planning/redesign/round-2/e2-inspector-plus/CONFORMANCE-AUDIT.md)
-  is the first side-by-side comparison of the built shell against the approved mockup —
-  24 divergences with paired screenshots in `audit-shots/`, each marked as explained by a
-  recorded decision or as unexplained drift. Read it before trusting a phase report's
-  claim of conformance.
-- [Profiles concept](planning/profiles-concept.md) — v2 (2026-09-06, file layer implemented): a profile is the file you edit, general and game profiles, live inheritance, `--profile <name>` for the session; why each decision, what it deleted, the UI still to build.
-- [Feature ideas 2026-09-05](planning/feature-ideas-2026-09-05.md) — prioritised filters (native pre-pass and colour management) and features, with a Top 5.
-- [Steam's Friends window inside gamescope](planning/steam-friends-window.md) — 2026-09-08:
-  the real Friends window belongs to the host's Xwayland and cannot be moved, captured
-  usefully, or clicked from a nested compositor; what *does* work (an interactive overlay
-  on gamescope's own Xwayland, proven end to end) and why Shift+Tab may cover it already.
-- [Joining friends from inside the game](planning/steam-friends-join.md) — 2026-09-08:
-  the real goal was never the Friends window but *joining* a friend; why moving a window
-  between X servers, a child session, a second Steam client and Steam's CEF debugging
-  endpoint were each rejected (with the measurements), and the approach that wins — a
-  native join list reading the joinable lobby id out of the running client's own
-  `steamclient.so`, with no API key, no browser and no app id.
-- [Inviting a friend, and the vtable layout that decides it](planning/steam-invite-and-vtable-layout.md)
-  — 2026-09-09: `InviteUserToGame` pinned to a **named** vtable slot four independent
-  ways (Proton's own bridge, CS2's shipped SDK, the live vtable lengths, and the live
-  client's own thunks), which corrects the join page's "uniform one-slot shift" and its
-  "no app id anywhere"; why no `steam://` invite URL exists; the one read the user must
-  take; and why *receiving* invites is still a no.
-- [Adaptive Brightness v2 plan](planning/adaptive-brightness-v2-plan.md) — 2026-09-14: research survey, the diagnosis of why every `x^g` lift binarises a near-black frame, and the bounded-slope toe-gamma + guided-filter base/detail operator, now implemented ALONGSIDE Adaptive Brightness and Adaptive Gamma (not replacing them — see the plan's own "Decisions" section) as `image.shaders.adaptive_brightness_v2`; see [shader-effects.md](features/shader-effects.md#adaptive-brightness-v2-imageshadersadaptive_brightness_v2--new-2026-09-14) for what shipped.
-- [Decisions taken without the user](planning/redesign/AUTONOMOUS-DECISIONS.md) — every
-  call made while the user was away, with its alternative and its reasoning, so
-  disagreeing is cheap.
+- [Styling guide](ui/STYLING-GUIDE.md) — the rules and snippets for settings-overlay
+  controls. **Authoritative** (with the code tokens in `src/Overlay/UI/Tokens.cpp` and
+  `Colors.cpp`) over `planning/ui-design-guide.md`, which is partly behind the code.
 
 ## claude-instructions/ — mandatory rules for agents
 
-- [Working with the Docs](claude-instructions/documentation.md) — read before you touch, update after you change.
-- [Documentation version policy](claude-instructions/documentation-version-policy.md) — one semver bump per dated block, sized to that day's user-facing magnitude.
-- [Changelog maintenance](claude-instructions/changelog.md) — the strict `CHANGELOG.md` format, its four categories, and why that file is the project's version marker.
+- [Working with the Docs](claude-instructions/documentation.md) — read before you touch,
+  update after you change.
+- [Documentation version policy](claude-instructions/documentation-version-policy.md) — one
+  semver bump per dated block, sized to that day's user-facing magnitude.
+- [Changelog maintenance](claude-instructions/changelog.md) — the strict `CHANGELOG.md`
+  format and why that file is the version marker.
 
 ## meta/
 
 - [Terminology](meta/TERMINOLOGY.md) — project vocabulary glossary.
+
+## planning/ — historical design notes, not current behaviour
+
+110 files, about 11.8 MB. These are scouting reports, research, specs and decision logs
+written while the overlay was designed; many carry a RESOLVED banner or describe a path
+not taken. **Read them for the why behind a decision, never for what the code does now.**
+About 8.6 MB of the total is 29 audit screenshots in
+`planning/redesign/round-2/e2-inspector-plus/audit-shots/`; do not open that folder
+casually. `planning/ui-design-guide.md` is partly behind the code: use
+[ui/STYLING-GUIDE.md](ui/STYLING-GUIDE.md) and the code tokens instead.
+
+- [TODO](planning/TODO.md) — open work with no feature doc yet.
+- [SPEC](planning/SPEC.md), [DECISIONS](planning/DECISIONS.md),
+  [ISSUES](planning/ISSUES.md) — the original overlay master spec, decision record and issue
+  breakdown (2026-08-21).
+- [Overlay presentation architecture](planning/overlay-presentation-architecture.md) —
+  how the overlay is presented to the compositor; the fullscreen-VRR "mystery" is resolved
+  in it.
+- [ImGui overlay feasibility](planning/imgui-overlay-feasibility.md) — the first verdict.
+- [Config system](planning/config-system.md), [Profiles concept](planning/profiles-concept.md),
+  [App-ID detection](planning/appid-detection.md) — scouting for the config layer and
+  profiles (current behaviour: [config-system](features/config-system.md),
+  [profiles](features/profiles.md)).
+- [Config-UI research](planning/config-ui-research.md),
+  [UI design guide](planning/ui-design-guide.md) (partly stale),
+  [UI mockup precise spec](planning/ui-mockup-precise-spec.md),
+  [Slider widget spec](planning/slider-widget-spec.md) — UI design notes.
+- [Runtime knobs and FPS](planning/runtime-knobs-and-fps.md),
+  [PipeWire loudness](planning/pipewire-loudness.md),
+  [ReShade shaders](planning/reshade-shaders.md) — feature scouting.
+- [Feature ideas](planning/feature-ideas-research.md) and
+  [Feature ideas 2026-09-05](planning/feature-ideas-2026-09-05.md) — prioritised ideas.
+- [Requests 2026-09-04](planning/requests-2026-09-04.md),
+  [2026-09-05](planning/requests-2026-09-05.md),
+  [2026-09-05 round 2](planning/requests-2026-09-05-round2.md),
+  [2026-09-06](planning/requests-2026-09-06.md),
+  [2026-09-07](planning/requests-2026-09-07.md),
+  [2026-09-08](planning/requests-2026-09-08.md) — dated user request batches.
+- Steam friends: [window study](planning/steam-friends-window.md),
+  [joining](planning/steam-friends-join.md),
+  [invite and vtable layout](planning/steam-invite-and-vtable-layout.md).
+- Frame generation: [FidelityFX optical flow](planning/fidelityfx-opticalflow-framegen.md),
+  [external-layer in-tree port](planning/external-framegen-in-tree-port.md),
+  [external-layer integration](planning/external-framegen-layer-integration.md) (the
+  external layer is not used in-tree).
+- [Adaptive Brightness v2 plan](planning/adaptive-brightness-v2-plan.md) — research and the
+  operator design, implemented alongside the older effects.
+- Flicker investigation (all RESOLVED, the backend was the cause):
+  [client variation test](planning/client-variation-test.md),
+  [A/B test plan](planning/flicker-ab-test-plan.md),
+  [upstream regression bisection](planning/upstream-flicker-regression.md),
+  [SDL backend report draft](planning/upstream-sdl-backend-flicker-report.md),
+  [Wayland VRR buffer lifetime](planning/wayland-vrr-buffer-lifetime.md).
+- [Overlay redesign](planning/redesign/README.md) — three preserved directions (A console,
+  B command palette, E inspector rail) with mockups and specs, then round 2 under
+  `planning/redesign/round-2/`. The chosen E2 direction's implementation log,
+  [IMPLEMENTATION.md](planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md), plus
+  its [SPEC](planning/redesign/round-2/e2-inspector-plus/SPEC.md),
+  [API](planning/redesign/round-2/e2-inspector-plus/API.md),
+  [SHELL-TEST-REPORT](planning/redesign/round-2/e2-inspector-plus/SHELL-TEST-REPORT.md) and
+  [CONFORMANCE-AUDIT](planning/redesign/round-2/e2-inspector-plus/CONFORMANCE-AUDIT.md),
+  sit next to the screenshots. For current behaviour read
+  [overlay-shell](features/overlay-shell.md) instead.
+- [Autonomous decisions](planning/redesign/AUTONOMOUS-DECISIONS.md) — every call made
+  without the user, with its alternative and reasoning, so disagreeing is cheap.
