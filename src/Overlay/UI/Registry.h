@@ -408,6 +408,15 @@ namespace gamescope::ui
 		Entry &ZeroMeans( const char *pszWord );
 		Entry &Keywords( const char *pszKeywords );
 
+		// Row-level visibility (2026-11-07): the row exists only while `fn` is true.
+		// Area::EntryCount()/EntryAt() skip a hidden row, so the sheet, the column
+		// count, keyboard navigation and the command palette all behave as if it
+		// were not declared. `fn` must be cheap and read already-known state; the
+		// answer may change at run time. Why: "Block direct scanout" is only for the
+		// Wayland backend and must be neither shown nor findable on the others.
+		Entry &ShownWhen( std::function<bool()> fn );
+		bool   Shown() const { return !m_Shown || m_Shown(); }
+
 		// The value text of a row whose number alone says too little (2026-10-05:
 		// the Crosshair box size's "2.5% . 24 px", the pixel figure depending on the
 		// game's resolution). Replaces FormatDeclValue()'s "value + unit" for this
@@ -519,18 +528,12 @@ namespace gamescope::ui
 		// Why: the Diagnostics area's "Silence warning" belongs on the Direct
 		// scanout row's Inspector, not as a sheet row of its own (the user marked
 		// the spot on a screenshot).
-		// May be called more than once: the switches draw in call order. fnShown
-		// (optional) hides one where it does not apply (Block direct scanout is only
-		// for a Wayland host).
 		Entry &InspectorSwitch( const char *pszLabel, std::function<bool()> fnGet,
-		                        std::function<void( bool )> fnSet,
-		                        std::function<bool()> fnShown = nullptr );
-		bool  HasInspectorSwitch() const { return !m_InspSwitches.empty(); }
-		size_t InspectorSwitchCount() const { return m_InspSwitches.size(); }
-		bool  InspectorSwitchShown( size_t i ) const { return !m_InspSwitches[ i ].fnShown || m_InspSwitches[ i ].fnShown(); }
-		const std::string &InspectorSwitchLabel( size_t i ) const { return m_InspSwitches[ i ].sLabel; }
-		bool  InspectorSwitchValue( size_t i ) const { return m_InspSwitches[ i ].fnGet && m_InspSwitches[ i ].fnGet(); }
-		void  SetInspectorSwitch( size_t i, bool b ) const { if ( m_InspSwitches[ i ].fnSet ) m_InspSwitches[ i ].fnSet( b ); }
+		                        std::function<void( bool )> fnSet );
+		bool  HasInspectorSwitch() const { return (bool)m_InspSwitchGet; }
+		const std::string &InspectorSwitchLabel() const { return m_sInspSwitchLabel; }
+		bool  InspectorSwitchValue() const { return m_InspSwitchGet && m_InspSwitchGet(); }
+		void  SetInspectorSwitch( bool b ) const { if ( m_InspSwitchSet ) m_InspSwitchSet( b ); }
 
 		// ---- presentation flag: dropdown instead of segmented (2026-09-06) --
 		// A Kind::Choice presents as a segmented strip when it fits and as
@@ -767,20 +770,16 @@ namespace gamescope::ui
 
 		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason, m_sKey;
 		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
+		std::function<bool()> m_Shown;   // ShownWhen()
 		std::function<std::vector<ListItem>()> m_Items;        // Composite(List)
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
 		std::string m_sInspVerbLabel, m_sInspVerbVerb;           // InspectorVerb()
 		std::function<void()> m_InspVerbFn;
 		std::function<bool()> m_InspVerbShown;
-		struct InspSwitch                                        // InspectorSwitch()
-		{
-			std::string sLabel;
-			std::function<bool()> fnGet;
-			std::function<void( bool )> fnSet;
-			std::function<bool()> fnShown;
-		};
-		std::vector<InspSwitch> m_InspSwitches;
+		std::string m_sInspSwitchLabel;                          // InspectorSwitch()
+		std::function<bool()> m_InspSwitchGet;
+		std::function<void( bool )> m_InspSwitchSet;
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
@@ -1074,8 +1073,18 @@ namespace gamescope::ui
 		const std::string &Id() const    { return m_sId; }
 		const std::string &Title() const { return m_sTitle; }
 		Section GetSection() const       { return m_eSection; }
-		size_t  EntryCount() const       { return m_Entries.size(); }
-		const Entry &EntryAt( size_t i ) const { return *m_Entries[ i ]; }
+		// The SHOWN entries only (Entry::ShownWhen): EntryAt( i ) is the i-th shown
+		// one, so every loop over 0..EntryCount() skips a hidden row for free.
+		size_t  EntryCount() const
+		{
+			if ( !m_bAnyShownWhen )
+				return m_Entries.size();
+			size_t n = 0;
+			for ( const auto &p : m_Entries )
+				n += p->Shown() ? 1 : 0;
+			return n;
+		}
+		const Entry &EntryAt( size_t i ) const { return *m_Entries[ RawIndex( i ) ]; }
 
 		// Whether this area is currently offerable at all (SPEC's rail hides
 		// what a machine cannot do). No predicate means always available.
@@ -1093,12 +1102,24 @@ namespace gamescope::ui
 		// -- rather than re-derived from nFirstEntry ranges at draw time. The
 		// two would agree today; only one of them stays right if a band is
 		// ever declared with no entries under it.
-		size_t GroupOf( size_t i ) const { return m_Entries[ i ]->m_nGroup; }
+		size_t GroupOf( size_t i ) const { return m_Entries[ RawIndex( i ) ]->m_nGroup; }
 
 	private:
 		friend class Registry;
+		friend class Entry;
 
 		Entry &Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind );
+
+		// Index into m_Entries of the i-th shown entry.
+		size_t RawIndex( size_t i ) const
+		{
+			if ( !m_bAnyShownWhen )
+				return i;
+			for ( size_t r = 0; r < m_Entries.size(); ++r )
+				if ( m_Entries[ r ]->Shown() && i-- == 0 )
+					return r;
+			return m_Entries.size();   // out of range, like the unfiltered case
+		}
 
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
@@ -1114,6 +1135,7 @@ namespace gamescope::ui
 		uint64_t                     m_ulGeneration = 0;
 		bool                         m_bBuilt = false;
 		std::vector<std::unique_ptr<Entry>> m_Entries;
+		bool                         m_bAnyShownWhen = false;   // an entry has ShownWhen()
 		std::vector<GroupBand>       m_Groups;
 		Registry   *m_pRegistry = nullptr;
 	};

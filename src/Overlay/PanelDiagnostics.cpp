@@ -70,7 +70,7 @@ namespace gamescope
 
 		a.Keywords( "diagnostics check hyprland direct scanout direct_scanout hyprctl frames "
 		            "lost frame generation host nested wayland problem warning fix "
-		            "wiki docs documentation render options browser link open block gnome mutter plane" );
+		            "wiki docs documentation render options browser link open" );
 		a.Summary( []{ return Headline( Diagnostics_View() ); } );
 		a.WarnWhen( []{ return Diagnostics_HasWarning(); } );
 
@@ -80,8 +80,7 @@ namespace gamescope
 			[]{ return Headline( Diagnostics_View() ); } )
 			.Help( "Whether the host lets gamescope's window go straight to the screen. Without it "
 			       "the host draws every frame itself, and frames that Frame generation makes are "
-			       "lost. Read from Hyprland's settings when gamescope runs nested under Hyprland. "
-			       "On any Wayland host the Inspector can block direct scanout from gamescope's side." )
+			       "lost. Read from Hyprland's settings when gamescope runs nested under Hyprland." )
 			.Keywords( "direct scanout hyprland render direct_scanout frames lost" )
 			// The docs button lives in the Inspector only (Entry::InspectorVerb): on
 			// this row's page and on the area's Overview. Shown whenever the check
@@ -95,12 +94,6 @@ namespace gamescope
 			// Global, never per profile: the host setup belongs to the machine, not to a game.
 			.InspectorSwitch( "Silence warning", []{ return Diagnostics_Silenced(); },
 			                  []( bool b ){ Diagnostics_SetSilenced( b ); } )
-			// Global too. Shown on every host that can scan out (any Wayland host, not
-			// only Hyprland); the SDL, DRM, headless and OpenVR backends have nothing
-			// to block, so it is hidden there.
-			.InspectorSwitch( "Block direct scanout", []{ return Diagnostics_BlockScanout(); },
-			                  []( bool b ){ Diagnostics_SetBlockScanout( b ); },
-			                  []{ return Diagnostics_ScanoutApplicable(); } )
 			.Live( "render:direct_scanout", []
 			{
 				const diagnostics::ScanoutResult r = Diagnostics_View().scanout;

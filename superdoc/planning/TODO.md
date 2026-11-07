@@ -17,7 +17,7 @@ unfixable on the gamescope side.
 Separately, a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine
 block noise after tabbing out and back in. Cause unknown; candidates are host direct scanout, that
 user's amdgpu VM setting, or a GPU or Mesa difference. The "Block direct scanout" switch
-([diagnostics.md](../features/diagnostics.md#block-direct-scanout)) is the test for the first one:
+([display-general.md](../features/display-general.md#block-direct-scanout-displayblock_direct_scanout)) is the test for the first one:
 if the noise goes away with it on, scanout is involved. Whether the hosts actually refuse scanout
 with it is untested.
 

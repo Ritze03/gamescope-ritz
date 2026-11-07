@@ -419,6 +419,13 @@ namespace gamescope::ui
 	Entry &Entry::Unit( const char *psz )            { m_sUnit = psz ? psz : ""; return *this; }
 	Entry &Entry::ZeroMeans( const char *psz )       { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
+	Entry &Entry::ShownWhen( std::function<bool()> fn )
+	{
+		m_Shown = std::move( fn );
+		if ( m_pArea )
+			m_pArea->m_bAnyShownWhen = true;
+		return *this;
+	}
 	Entry &Entry::Key( const char *psz )             { m_sKey = psz ? psz : ""; return *this; }
 	Entry &Entry::Items( std::function<std::vector<ListItem>()> fn ) { m_Items = std::move( fn ); return *this; }
 	Entry &Entry::ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger,
@@ -548,9 +555,11 @@ namespace gamescope::ui
 	}
 
 	Entry &Entry::InspectorSwitch( const char *pszLabel, std::function<bool()> fnGet,
-	                               std::function<void( bool )> fnSet, std::function<bool()> fnShown )
+	                               std::function<void( bool )> fnSet )
 	{
-		m_InspSwitches.push_back( { pszLabel ? pszLabel : "", std::move( fnGet ), std::move( fnSet ), std::move( fnShown ) } );
+		m_sInspSwitchLabel = pszLabel ? pszLabel : "";
+		m_InspSwitchGet    = std::move( fnGet );
+		m_InspSwitchSet    = std::move( fnSet );
 		return *this;
 	}
 
@@ -778,6 +787,7 @@ namespace gamescope::ui
 		}
 
 		m_Entries.clear();
+		m_bAnyShownWhen = false;
 		m_Groups.clear();
 
 		m_Build( *this );

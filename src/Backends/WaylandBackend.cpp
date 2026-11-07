@@ -1271,7 +1271,8 @@ namespace gamescope
         }
     }
 
-    // "Block direct scanout" (Diagnostics area, global.json). Hosts only scan out a
+    // "Block direct scanout" (Display > General, global.json
+    // overlay.diagnostics_block_scanout). Hosts only scan out a
     // window that is a single surface, so one more surface on top, with nothing to
     // see in it, makes them composite instead. Read per frame from an atomic. Without
     // wp_single_pixel_buffer_manager_v1 there is no cheap buffer: the switch does

@@ -65,6 +65,7 @@
 #include "Config/AppId.h"
 #include "Config/NestedDefault.h"
 #include "LaunchOptions.h"
+#include "Diagnostics.h"
 #include "FpsLimitApply.h"
 #include "Fonts.h"
 #include "Widgets.h"
@@ -646,11 +647,13 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
 		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing "
-		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead" );
+		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead "
+		            "block direct scanout wayland host" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
 			s += steamcompmgr_get_force_windows_fullscreen() ? " · nested windows maximized" : "";
+			s += Diagnostics_ScanoutApplicable() && Diagnostics_BlockScanout() ? " · direct scanout blocked" : "";
 			return s;
 		} );
 
@@ -760,6 +763,27 @@ namespace gamescope
 			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ForceWindowsFullscreen ); },
 				LaunchLockReason( LaunchOptions::Opt::ForceWindowsFullscreen ).c_str() );
+
+		// Block direct scanout (2026-11-07): GLOBAL, not per profile -- the host setup
+		// belongs to the machine, not to a game -- so it carries the config key of its
+		// global.json field (overlay.*, like Filter game profiles): the per-profile dot
+		// and "Reset to inherited" only know settings keys and leave it Plain. Shown
+		// only on the Wayland backend (Diagnostics_ScanoutApplicable()): the blocker
+		// lives in CWaylandConnector::Present(), so no other backend has anything to
+		// block. See superdoc/features/display-general.md.
+		a.Switch( "display.block_direct_scanout", "Block direct scanout",
+			ui::AnyBind::Of<bool>(
+				[]{ return Diagnostics_BlockScanout(); },
+				[]( bool b ) { Diagnostics_SetBlockScanout( b ); } ) )
+			.Key( "overlay.diagnostics_block_scanout" )
+			.ShownWhen( []{ return Diagnostics_ScanoutApplicable(); } )
+			.Help( "Stops the host from putting gamescope's window straight on the screen. This may "
+			       "help with picture corruption or artifacts. It costs frames with Frame generation, "
+			       "because the host then draws every frame again. Not verified to work on every "
+			       "host." )
+			.Default( false )
+			.Keywords( "scanout direct wayland host gnome mutter hyprland artifacts corruption "
+			           "block noise glitch plane" );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )

@@ -35,39 +35,13 @@ as On.
 
 ## Block direct scanout
 
-A second switch under **Silence warning** on the same Inspector page (Configure) of the Direct
-scanout row: **Block direct scanout**, config `overlay.diagnostics_block_scanout` in `global.json`,
-default **off**, so nothing changes unless the user turns it on. On, gamescope itself keeps a
-nested Wayland host from putting its window on a display plane. It applies live: the setter
-(`Diagnostics_SetBlockScanout()`) stores an atomic, writes `global.json` and calls `force_repaint()`;
-the Wayland present path reads only `Diagnostics_BlockScanout()` (an atomic) every frame, and
-turning it off detaches the buffer on the next frame.
-
-`Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block
-noise after tabbing out and back in, and we suspect (unproven) host direct scanout is involved;
-GNOME has no reliable user switch for scanout, so the switch has to be on gamescope's side, both as
-a test and as a workaround. The brief artifacts on entering and leaving fullscreen under Hyprland
-and GNOME are the other reason ([TODO](../planning/TODO.md)). `Why global:` the host setup belongs
-to the machine, not to a game, like Silence warning.
-
-Mechanism: [backend-wayland.md](backend-wayland.md#block-direct-scanout-from-gamescope).
-Shown wherever `HostMayScanOutOutputImages()` is true (`Diagnostics_ScanoutApplicable()`: every
-Wayland host, not only Hyprland); hidden on SDL, DRM, headless and OpenVR, where there is nothing
-to block. The row is not Hyprland-only: its group is "Host", and under GNOME it reads "Hyprland not
-detected" with the switch on its Configure page.
-
+The switch lives in Display > General, not here: [display-general.md](display-general.md#block-direct-scanout-displayblock_direct_scanout).
 While it is on, `WithBlock()` (pure, `DiagnosticsLogic.h`, `tests/test_diagnostics.cpp`) turns any
 applicable result into state **Blocked** ("Blocked by gamescope", the host's own value still shown
-in Details) when the result is read, so toggling needs no recheck. Blocked never warns: no toast and
-no rail dot, since "scanout is off, turn it on" would be wrong. Not applicable and Pending are left
-alone.
-
-**Cost:** with scanout blocked the host composites again, so with Frame generation the shown rate
-falls back (about 160 uncapped against 261-272 with scanout, see below).
-
-**Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
-live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
-single-surface requirement is from memory, not checked.
+in Details) when the result is *read*, so toggling needs no recheck. Blocked never warns: no
+toast (`Diagnostics_Tick()`) and no rail dot (`Diagnostics_HasWarning()`), since "scanout is off,
+turn it on" would be wrong; the area still states the truth. Switching it off brings the warning
+back only if the state is Off. Not applicable and Pending are left alone.
 
 ## Hyprland direct scanout
 

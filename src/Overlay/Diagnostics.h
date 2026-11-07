@@ -42,8 +42,8 @@ namespace gamescope
 	bool Diagnostics_Silenced();
 	void Diagnostics_SetSilenced( bool bSilenced );
 
-	// The "Block direct scanout" setting (global.json overlay.diagnostics_block_scanout,
-	// default false): the Wayland connector keeps a transparent 1x1 subsurface on its
+	// The "Block direct scanout" setting (Display > General; global.json
+	// overlay.diagnostics_block_scanout, default false): the Wayland connector keeps a transparent 1x1 subsurface on its
 	// top plane so a nested host cannot scan the window out (WaylandBackend.cpp). Any
 	// thread; the getter is an atomic read, safe on the present path. The setter
 	// persists, then repaints so the plane appears or goes on the next frame.

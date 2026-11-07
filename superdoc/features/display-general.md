@@ -3,8 +3,9 @@
 The Display > **General** area (`display.general`, `src/Overlay/PanelDisplay.cpp`,
 `RegisterGeneral()`) holds the switches a user flips mid-game, so it is registered first and sits above
 the other Display areas. Its Summary line reads like `VRR off · tearing off`, plus
-` · nested windows maximized` when that switch is on. Four switches, each persisted per profile in the
-`gamescope.*` config block and mirrored into a live global:
+` · nested windows maximized` when that switch is on and ` · direct scanout blocked` when Block direct
+scanout is on. Four switches persisted per profile in the `gamescope.*` config block and mirrored into a
+live global, plus one global, Wayland-only switch (last row):
 
 | Row id | Label | Config key | Live target | Launch flag (locks the row) |
 |---|---|---|---|---|
@@ -12,6 +13,7 @@ the other Display areas. Its Summary line reads like `VRR off · tearing off`, p
 | `display.allow_tearing` | Allow tearing | `gamescope.tearing_enabled` | `cv_tearing_enabled` | `--immediate-flips` |
 | `display.low_latency_wakeup` | Low-latency wake-up | `gamescope.low_latency_wakeup` | `vblank_measured_lead` | none |
 | `display.force_windows_fullscreen` | Force maximize nested window | `gamescope.force_windows_fullscreen` | `steamcompmgr_set_force_windows_fullscreen()` | `--force-windows-fullscreen` |
+| `display.block_direct_scanout` | Block direct scanout | `overlay.diagnostics_block_scanout` in `global.json` (global, not per profile) | `Diagnostics_BlockScanout()` | none; shown on the Wayland backend only |
 
 The locks are the `Adaptive sync`, `Allow tearing` and `Force maximize` rows of the flag table in
 [launch-option-lock.md](launch-option-lock.md). `Force grab cursor` used to be a fifth switch here; it
@@ -168,6 +170,46 @@ late (see [frame-generation.md](frame-generation.md)'s Latency section for the h
 numbers: 4.05 -> about 1.9 ms). A read-only **Wake-up lead** Facts row under the switch shows the
 current lead and the recent max draw; the frame-generation debug status line carries the same
 text.
+
+## Block direct scanout (`display.block_direct_scanout`)
+
+Default Off. Config `overlay.diagnostics_block_scanout` in `global.json` (the key kept its early name
+from when the switch sat in Diagnostics). On, gamescope itself keeps a nested Wayland host from
+putting its window on a display plane. It applies live: the setter (`Diagnostics_SetBlockScanout()`,
+`src/Overlay/Diagnostics.cpp`) stores an atomic, writes `global.json` and calls `force_repaint()`;
+the Wayland present path reads only `Diagnostics_BlockScanout()` (an atomic) every frame, and turning
+it off detaches the buffer on the next frame. Mechanism:
+[backend-wayland.md](backend-wayland.md#block-direct-scanout-from-gamescope).
+
+**Global, not per profile.** `Why:` the host setup belongs to the machine, not to a game. The row
+carries the global config key via `.Key( "overlay.diagnostics_block_scanout" )` (like Filter game
+profiles); the Shell's per-profile dot and "Reset to inherited" only know settings keys, so the row
+shows neither.
+
+**Wayland only.** The row has `.ShownWhen( Diagnostics_ScanoutApplicable() )` (the Wayland backend,
+`HostMayScanOutOutputImages()`; `GS_RITZ_DIAGNOSTICS_ASSUME_WAYLAND=1` forces it for tests). On SDL,
+DRM, headless and OpenVR it is neither on the sheet nor in the command palette. An SDL window on a
+Wayland desktop gets no row either: the blocker exists only in `CWaylandConnector::Present()`, so
+there is nothing to block ([overlay-shell.md](overlay-shell.md#inspector-only-switch)'s row-level hide).
+
+`Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block noise
+after tabbing out and back in, and we suspect (unproven) host direct scanout is involved; GNOME has no
+reliable user switch for scanout, so the switch has to be on gamescope's side, both as a test and as a
+workaround. The brief artifacts on entering and leaving fullscreen under Hyprland and GNOME are the
+other reason ([TODO](../planning/TODO.md)). `Why Display > General:` the user asked for a normal GUI
+feature rather than a Diagnostics extra; it first lived in the Inspector of Diagnostics' Direct scanout
+row.
+
+Diagnostics: while it is on the Direct scanout row reads "Blocked by gamescope" and nothing nags (no
+toast, no yellow dot); see [diagnostics.md](diagnostics.md#block-direct-scanout).
+
+**Cost:** with scanout blocked the host composites again, so with Frame generation the shown rate falls
+back (about 160 uncapped against 261-272 with scanout). The host must offer
+`wp_single_pixel_buffer_manager_v1`; without it the switch does nothing and logs once.
+
+**Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
+live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
+single-surface requirement is from memory, not checked.
 
 ## Related
 

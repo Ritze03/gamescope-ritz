@@ -5016,26 +5016,20 @@ namespace gamescope::ui::shell
 		// it, or `y` unchanged when the entry has none.
 		float DrawInspectorSwitchRow( const Rect &rcIn, float y, const Entry &entry )
 		{
-			for ( size_t i = 0; i < entry.InspectorSwitchCount(); ++i )
-			{
-				if ( !entry.InspectorSwitchShown( i ) )
-					continue;
-				const Lane   lane = Lane::ForColumn( rcIn.Width() / Scale() );
-				const RowCtx row  = RowCtx::ForRow( lane, rcIn.x0, y );
-				ImRect rcLabel, rcValue;
-				row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
-				Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
-				       TypeRole::Label, Col( Role::TextLabel ), entry.InspectorSwitchLabel( i ).c_str() );
-				bool b = entry.InspectorSwitchValue( i );
-				ImGui::PushID( entry.Id().c_str() );
-				ImGui::PushID( (int)i );
-				if ( controls::Switch( row, "inspswitch", &b ) )
-					entry.SetInspectorSwitch( i, b );
-				ImGui::PopID();
-				ImGui::PopID();
-				y += Px( tok::kRowH );
-			}
-			return y;
+			if ( !entry.HasInspectorSwitch() )
+				return y;
+			const Lane   lane = Lane::ForColumn( rcIn.Width() / Scale() );
+			const RowCtx row  = RowCtx::ForRow( lane, rcIn.x0, y );
+			ImRect rcLabel, rcValue;
+			row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+			       TypeRole::Label, Col( Role::TextLabel ), entry.InspectorSwitchLabel().c_str() );
+			bool b = entry.InspectorSwitchValue();
+			ImGui::PushID( entry.Id().c_str() );
+			if ( controls::Switch( row, "inspswitch", &b ) )
+				entry.SetInspectorSwitch( b );
+			ImGui::PopID();
+			return y + Px( tok::kRowH );
 		}
 
 		// ---- CONFIGURE (SPEC §5.1, §5.3) ---------------------------------

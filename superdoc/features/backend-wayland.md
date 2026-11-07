@@ -237,7 +237,7 @@ is back since the crash fix ([diagnostics.md](diagnostics.md)).
 
 ### Block direct scanout from gamescope
 
-User switch "Block direct scanout" ([diagnostics.md](diagnostics.md#block-direct-scanout), default
+User switch "Block direct scanout" ([display-general.md](display-general.md#block-direct-scanout-displayblock_direct_scanout), default
 off). Hosts only scan out a window that is a single surface (Hyprland reports `solitaryBlockedBy`
 `OPAQUE, SURFACES` when it is not; Mutter's scanout candidate check needing a single surface too is
 from memory and **unverified until tested**). `m_Planes` are subsurfaces of plane 0, so when the
