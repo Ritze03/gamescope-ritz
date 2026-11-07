@@ -161,8 +161,19 @@ namespace gamescope::ui
 	// is the point: the computed column count and the drawn one must be the
 	// SAME number, so deciding it anywhere else risks the exact
 	// disagreement D20.2 exists to remove.
+	// nWantedColumns > 0 (Area::WantedColumns()) replaces the rows rule:
+	// nColumns = min( nWidthColumns, nWantedColumns ). Unsplittable still wins.
 	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea,
-	                    bool bUnsplittable = false );
+	                    bool bUnsplittable = false, int nWantedColumns = 0 );
+
+	// The sheet's block placement, pure so it can be tested. nLines[ b ] is
+	// block b's row-line count, nPin[ b ] its pinned column or -1 (an empty or
+	// short nPin means no pins). Pinned blocks go first (weight nLines + 1,
+	// column clamped to the last), then unpinned blocks greedily in declaration
+	// order, each to the lightest column, ties to column 0. With no pins this is
+	// exactly the original greedy pack. Returns a column per block.
+	std::vector<int> PackBlocks( const std::vector<int> &nLines, const std::vector<int> &nPin,
+	                             int nColumns );
 
 	// SPEC §8.3's three-column ceiling.
 	inline constexpr int kMaxSheetColumns = 3;

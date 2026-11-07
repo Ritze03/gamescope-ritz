@@ -132,6 +132,18 @@ below) exercised daily rather than only on a 2.0x machine. Sheet columns (1 to 3
 `LayOutSheetColumns()`) follow width and a rows-per-column cap; an area with a `Content()` body is
 forced to one column.
 
+An area can override both automatic rules. `Area::Columns( n )` states the wanted column count
+instead of the rows rule (width still caps it, so a narrow sheet drops to 1);
+`Area::WantedColumns()` collapses it to the columns that hold a *shown* row, so an area whose
+second-column group is entirely `ShownWhen`-hidden lays out as one column. `Area::GroupColumn( c )`
+pins the group just declared to column `c` (0-based; beyond the real count it falls back to the last
+column); unpinned groups stay greedy and count the pinned weight. The pure placement is
+`PackBlocks()` in `Layout.cpp`, with no pins identical to the old inline greedy pack. `Why:` greedy
+packing alone cannot give an area under 13 rows a two-column layout, or keep Status in the right
+column, which the user laid out on a visual workbench. Nothing uses these yet; panels opt in.
+Likewise `Entry::Segmented()` lifts only the 8-character label rule of a Choice: the 5-option cap
+and the `MeasureCells()` fit test stay, so a row too wide for its lane still becomes a dropdown.
+
 The **Inspector** is one region in three hosts (`InspectorHost`) and shows the selected row in
 one of two modes (`InspectorMode`): **Configure** (the row's own control, then its Params as
 ordinary rows) and **Details** (a binding grid and the `.Live()` readouts). `ModeFor( Kind,

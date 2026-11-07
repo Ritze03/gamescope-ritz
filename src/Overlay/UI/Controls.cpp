@@ -1201,7 +1201,8 @@ namespace gamescope::ui
 		//  Choice -- segmented (SPEC §3.2) or dropdown (§3.3)
 		// =================================================================
 		ChoiceResult Choice( const RowCtx &row, const char *pszId, int *pnValue,
-		                     const Option *pOptions, size_t nOptions, bool bPopupOpen )
+		                     const Option *pOptions, size_t nOptions, bool bPopupOpen,
+		                     bool bLiftCharRule )
 		{
 			ChoiceResult res;
 			if ( !pOptions || nOptions == 0 )
@@ -1216,7 +1217,8 @@ namespace gamescope::ui
 
 			bool bSeg = nOptions <= kSegMaxOptions;
 			for ( size_t i = 0; bSeg && i < nOptions; ++i )
-				bSeg = pOptions[ i ].pszLabel && strlen( pOptions[ i ].pszLabel ) <= kSegMaxChars;
+				bSeg = pOptions[ i ].pszLabel &&
+				       ( bLiftCharRule || strlen( pOptions[ i ].pszLabel ) <= kSegMaxChars );
 
 			CellRun run;
 			if ( bSeg )

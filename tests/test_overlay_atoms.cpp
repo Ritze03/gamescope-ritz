@@ -650,6 +650,42 @@ TEST_CASE( "atoms: Choice downgrades to a dropdown when segmented will not fit",
 	h.EndFrame();
 }
 
+TEST_CASE( "atoms: Segmented lifts the 8-character rule but keeps the fit test", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.BeginFrame();
+
+	int nValue = 0;
+	static constexpr ui::Option kLong[] = { { 0, "auto" }, { 1, "nearest-neighbour" } };
+
+	SECTION( "long labels segment when the char rule is lifted" )
+	{
+		const auto res = ui::controls::Choice( MakeRow(), "lift", &nValue, kLong,
+		                                       IM_ARRAYSIZE( kLong ), false, true );
+		REQUIRE( res.bSegmented );
+	}
+	SECTION( "the option-count cap still applies" )
+	{
+		static constexpr ui::Option kMany[] = {
+			{ 0, "a" }, { 1, "b" }, { 2, "c" }, { 3, "d" }, { 4, "e" }, { 5, "f" },
+		};
+		const auto res = ui::controls::Choice( MakeRow(), "many2", &nValue, kMany,
+		                                       IM_ARRAYSIZE( kMany ), false, true );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+	SECTION( "a lane too narrow still falls back to a dropdown" )
+	{
+		const ui::RowCtx narrow = ui::RowCtx::ForRow( ui::Lane::ForColumn( 420.0f ), 40.0f, 300.0f );
+		ScopedScale big( 2.0f );
+		const auto res = ui::controls::Choice( narrow, "narrow2", &nValue, kLong,
+		                                       IM_ARRAYSIZE( kLong ), false, true );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+
+	h.EndFrame();
+}
+
 TEST_CASE( "atoms: a segmented group's cells are right-bound and never overlap", "[overlay_atoms]" )
 {
 	// The measured atoms are the ones where a fit test and a layout could

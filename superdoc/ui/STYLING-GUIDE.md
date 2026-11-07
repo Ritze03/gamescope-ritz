@@ -167,7 +167,9 @@ geometry cannot diverge (the slider-grab bug class).
   the user: *"the dragger is wrong compared to where the line actually fills to"*). The handle is a
   constant `kHandleW` wide whatever the range. Do NOT make a slider's width depend on its range.
 - **Segmented vs dropdown**: `MeasureCells()` decides how wide a segmented group is, and both the
-  fit test and the layout read it. Do NOT hand-measure a Choice.
+  fit test and the layout read it. Do NOT hand-measure a Choice. `Entry::Segmented()` lifts only the
+  8-character label rule; the 5-option cap and the fit test stay, so a too-wide row is still a
+  dropdown.
 - **Stepper** is borderless `- +` glyphs; the number is in the value column and can be typed.
 - **Settings that resize the UI** (`overlay.display_scale`) must hand the reflowing half of their
   write to `controls::DeferToRelease()` while `ui::IsPointerDragActive()` is true. `Why:` the track is

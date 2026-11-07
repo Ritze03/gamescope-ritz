@@ -824,3 +824,109 @@ TEST_CASE( "a scroll view's content height is what ImGui needs", "[overlay_shell
 	// scrolled past.
 	REQUIRE_THAT( top.ContentHeight( 400.0f, 0.0f ), WithinAbs( 400.0f, 0.001f ) );
 }
+
+// =========================================================================
+//  Area::Columns(), Area::GroupColumn(), PackBlocks()
+// =========================================================================
+TEST_CASE( "an area can state its column count", "[overlay_shell]" )
+{
+	const ui::Slab slab = ui::Slab::For( kSurfW, kSurfH, 0.50f );   // three columns by width
+	const auto Cols = [ & ]( int nRows, int nWanted, bool bUnsplittable = false ) {
+		return ui::Solve( slab, ui::InspectorHost::Column, nRows, bUnsplittable, nWanted ).nColumns;
+	};
+
+	SECTION( "it replaces the rows rule, both ways" )
+	{
+		REQUIRE( Cols( 5, 2 ) == 2 );    // under 13 rows still gets two
+		REQUIRE( Cols( 40, 1 ) == 1 );   // 40 rows would be 3 by the rule
+		REQUIRE( Cols( 5, 0 ) == 1 );    // 0 = no request, the rule applies
+	}
+	SECTION( "width still caps it" )
+	{
+		REQUIRE( Cols( 5, 3 ) == 3 );
+		const ui::Slab narrow = ui::Slab::For( kSurfW, kSurfH, 1.25f );
+		REQUIRE( ui::Solve( narrow, ui::InspectorHost::Column, 5, false, 2 ).nColumns == 1 );
+	}
+	SECTION( "an unsplittable area stays one column" )
+	{
+		REQUIRE( Cols( 5, 2, true ) == 1 );
+	}
+}
+
+TEST_CASE( "a requested column count collapses over hidden groups", "[overlay_shell]" )
+{
+	bool bB = true, bV = false;
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "t", "T", ui::Section::Display );
+	area.Columns( 2 );
+
+	area.Group( "left" );
+	area.GroupColumn( 0 );
+	area.Switch( "t.a", "A", ui::Bind( &bB ) );
+	area.Group( "right" );
+	area.GroupColumn( 1 );
+	area.Switch( "t.b", "B", ui::Bind( &bV ) ).ShownWhen( [ & ] { return bV; } );
+
+	SECTION( "the second column's group is hidden -> one column" )
+	{
+		REQUIRE( area.WantedColumns() == 1 );
+		REQUIRE( ui::Solve( ui::Slab::For( kSurfW, kSurfH, 0.50f ), ui::InspectorHost::Column,
+		                    (int)area.EntryCount(), false, area.WantedColumns() ).nColumns == 1 );
+	}
+	SECTION( "shown again -> two" )
+	{
+		bV = true;
+		REQUIRE( area.WantedColumns() == 2 );
+	}
+	SECTION( "no request means no override" )
+	{
+		ui::Area &plain = reg.Add( "p", "P", ui::Section::Display );
+		plain.Switch( "p.a", "A", ui::Bind( &bB ) );
+		REQUIRE( plain.WantedColumns() == 0 );
+	}
+}
+
+TEST_CASE( "a group can be pinned to a column", "[overlay_shell]" )
+{
+	bool b = true;
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "t", "T", ui::Section::Display );
+	area.Group( "free" );
+	area.Switch( "t.a", "A", ui::Bind( &b ) );
+	area.Group( "pinned" );
+	area.GroupColumn( 1 );
+	area.Switch( "t.b", "B", ui::Bind( &b ) );
+	REQUIRE( area.GroupPin( area.GroupOf( 0 ) ) == -1 );
+	REQUIRE( area.GroupPin( area.GroupOf( 1 ) ) == 1 );
+
+	SECTION( "pinned blocks land in their column, the free one fills the lighter" )
+	{
+		REQUIRE( ui::PackBlocks( { 3, 3 }, { -1, 1 }, 2 ) == std::vector<int>{ 0, 1 } );
+		// Pinned weight counts even when declared later: column 0 is heavy,
+		// so both free blocks go to column 1.
+		REQUIRE( ui::PackBlocks( { 1, 1, 9 }, { -1, -1, 0 }, 2 ) == std::vector<int>{ 1, 1, 0 } );
+	}
+	SECTION( "a pin beyond the column count falls back to the last column" )
+	{
+		REQUIRE( ui::PackBlocks( { 2, 2 }, { 5, -1 }, 2 ) == std::vector<int>{ 1, 0 } );
+		REQUIRE( ui::PackBlocks( { 2, 2 }, { 1, 1 }, 1 ) == std::vector<int>{ 0, 0 } );
+	}
+}
+
+TEST_CASE( "PackBlocks without pins is the original greedy pack", "[overlay_shell]" )
+{
+	// Reference: weight nLines + 1, lightest column, ties to column 0.
+	const std::vector<int> lines = { 4, 2, 6, 1, 3, 3, 5 };
+	std::vector<int> expect;
+	float w[ 3 ] = {};
+	for ( int l : lines )
+	{
+		int best = 0;
+		for ( int c = 1; c < 3; ++c ) if ( w[ c ] < w[ best ] ) best = c;
+		expect.push_back( best );
+		w[ best ] += (float)l + 1.0f;
+	}
+	REQUIRE( ui::PackBlocks( lines, {}, 3 ) == expect );
+	REQUIRE( ui::PackBlocks( lines, std::vector<int>( lines.size(), -1 ), 3 ) == expect );
+	REQUIRE( ui::PackBlocks( { 5 }, {}, 1 ) == std::vector<int>{ 0 } );
+}

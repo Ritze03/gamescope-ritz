@@ -815,6 +815,42 @@ namespace gamescope::ui
 		m_Groups.push_back( { pszName ? pszName : "", true, m_Entries.size() } );
 	}
 
+	void Area::GroupColumn( int nColumn )
+	{
+		if ( !m_Groups.empty() )
+			m_Groups.back().nColumn = nColumn < 0 ? -1 : nColumn;
+	}
+
+	// The wanted count, collapsed to the columns that have a shown row: each
+	// distinct pinned column with a shown group counts once, and every shown
+	// unpinned group may fill one more. Capped at the request, floor 1.
+	int Area::WantedColumns() const
+	{
+		if ( m_nWantedColumns <= 0 )
+			return 0;
+		const int nWant = std::min( m_nWantedColumns, 8 );
+		bool bPinned[ 8 ] = {};
+		int  nPinned = 0, nFree = 0;
+		size_t nLastFree = (size_t)-1;
+		for ( const auto &p : m_Entries )
+		{
+			if ( !p->Shown() )
+				continue;
+			const int nPin = GroupPin( p->m_nGroup );
+			if ( nPin >= 0 )
+			{
+				const int c = std::min( nPin, nWant - 1 );
+				if ( !bPinned[ c ] ) { bPinned[ c ] = true; ++nPinned; }
+			}
+			else if ( p->m_nGroup != nLastFree )
+			{
+				nLastFree = p->m_nGroup;
+				++nFree;
+			}
+		}
+		return std::max( 1, std::min( nWant, nPinned + nFree ) );
+	}
+
 	Entry &Area::Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind )
 	{
 		const std::string sId = pszId ? pszId : "";
