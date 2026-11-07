@@ -154,6 +154,13 @@ one related action does not deserve a sheet row. Not in the palette (read-only r
 *"It should only show this button on the inspector rail on the right side"*. Used by
 `PanelDiagnostics.cpp`.
 
+**Inspector-only switch** — `Entry::InspectorSwitch( label, fnGet, fnSet )` (2026-11-07): one bool
+switch on the row's CONFIGURE page, directly under the Inspector verb, drawn by
+`DrawInspectorSwitchRow()` in `Shell.cpp` in the Row grammar's lane with `controls::Switch`. The
+row stays a readout, so the "nothing here to set" sentence is skipped for it. Not in the sheet or
+the palette; the setter persists itself. `Why:` Diagnostics' "Silence warning" belongs on the Direct
+scanout row's Inspector (the user marked the spot on a screenshot).
+
 **Warning marker** — `Area::WarnWhen( fn )` (2026-11-05) draws a plain filled yellow dot
 (`glyph::WarnDot()`, `glyph::kWarnDotColor`) on the area's rail row **and** on its group heading,
 so a problem shows with the group closed or the rail collapsed (a badge on the icon's top-right in

@@ -48,10 +48,11 @@ namespace gamescope
 				out.push_back( Line( K::Plain, "Hyprland draws every frame itself, and that draw waits behind the game's GPU work," ) );
 				out.push_back( Line( K::Plain, "so frames made by Frame generation are lost before they reach the screen." ) );
 				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "Set render:direct_scanout = 2 (games only; 1 is every fullscreen window) and reload:" ) );
+				out.push_back( Line( K::Plain, "Set render:direct_scanout to 1 or 2 and reload. 1 is on for a fullscreen window," ) );
+				out.push_back( Line( K::Plain, "2 is on only for windows with the game content type. Your choice." ) );
 				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "    Lua config:       render = { direct_scanout = 2 }" ) );
-				out.push_back( Line( K::Plain, "    hyprlang config:  render { direct_scanout = 2 }" ) );
+				out.push_back( Line( K::Plain, "    Lua config:       render = { direct_scanout = 1 }  (or 2)" ) );
+				out.push_back( Line( K::Plain, "    hyprlang config:  render { direct_scanout = 1 }    (or 2)" ) );
 				out.push_back( Line( K::Plain, "" ) );
 				out.push_back( Line( K::Plain, "Screen capture turns scanout off again while it runs." ) );
 			}
@@ -90,6 +91,9 @@ namespace gamescope
 				const ScanoutState e = Diagnostics_View().scanout.eState;
 				return e == ScanoutState::On || e == ScanoutState::Off || e == ScanoutState::Unknown;
 			} )
+			// Global, never per profile: the host setup belongs to the machine, not to a game.
+			.InspectorSwitch( "Silence warning", []{ return Diagnostics_Silenced(); },
+			                  []( bool b ){ Diagnostics_SetSilenced( b ); } )
 			.Live( "render:direct_scanout", []
 			{
 				const diagnostics::ScanoutResult r = Diagnostics_View().scanout;
@@ -100,18 +104,6 @@ namespace gamescope
 				const DiagnosticsView v = Diagnostics_View();
 				return ui::Fact{ "detail", v.scanout.sReason.empty() ? "none" : v.scanout.sReason };
 			} );
-
-		a.Group( "Warning" );
-
-		// Global, never per profile: the host setup belongs to the machine, not to a game.
-		a.Switch( "diagnostics.silence_warning", "Silence warning",
-			ui::AnyBind::Of<bool>( []{ return Diagnostics_Silenced(); },
-			                       []( bool b ){ Diagnostics_SetSilenced( b ); } ) )
-			.Help( "Turns off the startup toast and the yellow dot on the rail for these checks. "
-			       "This area still shows the true state and what to change. Always global." )
-			.Key( "overlay.diagnostics_silence_warning" )
-			.Default( false )
-			.Keywords( "silence mute warning toast dot hide diagnostics" );
 
 		a.Group( "Actions" );
 

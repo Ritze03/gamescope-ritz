@@ -5011,6 +5011,27 @@ namespace gamescope::ui::shell
 			return y + Px( tok::kControlH ) + Px( tok::kS );
 		}
 
+		// ---- an entry's Inspector-only switch (Entry::InspectorSwitch) -----
+		// One labelled switch row in the Row grammar's lane. Returns the y below
+		// it, or `y` unchanged when the entry has none.
+		float DrawInspectorSwitchRow( const Rect &rcIn, float y, const Entry &entry )
+		{
+			if ( !entry.HasInspectorSwitch() )
+				return y;
+			const Lane   lane = Lane::ForColumn( rcIn.Width() / Scale() );
+			const RowCtx row  = RowCtx::ForRow( lane, rcIn.x0, y );
+			ImRect rcLabel, rcValue;
+			row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
+			       TypeRole::Label, Col( Role::TextLabel ), entry.InspectorSwitchLabel().c_str() );
+			bool b = entry.InspectorSwitchValue();
+			ImGui::PushID( entry.Id().c_str() );
+			if ( controls::Switch( row, "inspswitch", &b ) )
+				entry.SetInspectorSwitch( b );
+			ImGui::PopID();
+			return y + Px( tok::kRowH );
+		}
+
 		// ---- CONFIGURE (SPEC §5.1, §5.3) ---------------------------------
 		// Returns the y of the content's bottom edge. Every Inspector body
 		// returns it, and DrawInspector turns the total into the child's
@@ -5131,11 +5152,14 @@ namespace gamescope::ui::shell
 			y = DrawInspectorVerbRow( rcIn, y, entry,
 				s_eFocusRegion == Region::Inspector && s_nInspectorFocus == 0 && entry.ReadOnly() );
 
-			if ( entry.ReadOnly() )
+			y = DrawInspectorSwitchRow( rcIn, y, entry );
+
+			if ( entry.ReadOnly() && !entry.HasInspectorSwitch() )
 			{
 				// SPEC §5.1: "For a read-only row the values block is
 				// replaced by one sentence saying so and pointing at
-				// Details."
+				// Details." (A row with an Inspector switch has something
+				// to set, so it skips the sentence.)
 				return DrawWrapped( rcIn, TypeRole::Body, Col( Role::TextMeta ),
 					"This row is a readout -- there is nothing here to set. Its live values are in DETAILS.", y );
 			}

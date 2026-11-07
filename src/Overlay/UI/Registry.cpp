@@ -547,6 +547,15 @@ namespace gamescope::ui
 		return *this;
 	}
 
+	Entry &Entry::InspectorSwitch( const char *pszLabel, std::function<bool()> fnGet,
+	                               std::function<void( bool )> fnSet )
+	{
+		m_sInspSwitchLabel = pszLabel ? pszLabel : "";
+		m_InspSwitchGet    = std::move( fnGet );
+		m_InspSwitchSet    = std::move( fnSet );
+		return *this;
+	}
+
 	Entry &Entry::Help( const char *pszHelp )
 	{
 		if ( !pszHelp || !*pszHelp )

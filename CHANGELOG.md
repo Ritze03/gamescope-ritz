@@ -12,8 +12,8 @@ The newest version below is the one this build reports.
 ## [0.14.12] – 2026-11-07
 
 ### Added
-- **Silence warning**: Diagnostics has a switch that mutes its startup toast and rail
-  dot while the area still shows the true state.
+- **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row
+  mutes its startup toast and rail dot while the area still shows the true state.
 
 ### Fixed
 - **Direct scanout crash**: Fixed the GPU crash that could happen when entering

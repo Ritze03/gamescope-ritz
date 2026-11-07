@@ -234,7 +234,8 @@ flAnim = ui::Approach( flAnim, flTarget, ui::tok::kDurRegion, ImGui::GetIO().Del
   (`IconFor()`) so the area-to-icon bijection test stays true.
 - Warnings on the rail are `Area::WarnWhen()`'s plain filled dot; the predicate must be a cheap
   read of published state (it runs every frame on the paint thread).
-- A button that belongs only in the Inspector is `Entry::InspectorVerb()`, not a sheet row.
+- A button that belongs only in the Inspector is `Entry::InspectorVerb()`, not a sheet row; a
+  switch that does is `Entry::InspectorSwitch()`.
 - Launch-flag lock tag ("LAUNCH OPTION"): drawn under `ScopedUndim` so the explanation does not fade
   with the dim row it explains.
 

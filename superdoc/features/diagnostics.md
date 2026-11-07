@@ -9,8 +9,10 @@ set, and has a **Recheck all** button. The warning can be silenced
 
 ## Silence warning
 
-Sheet row **Silence warning** (group Warning, `diagnostics.silence_warning`; config
-`overlay.diagnostics_silence_warning` in `global.json`, default off). On: no startup toast and no
+The **Silence warning** switch sits in the Inspector's CONFIGURE page of the Direct scanout row,
+under the "Hyprland render options" button (`Entry::InspectorSwitch()`, not a sheet row;
+`Why:` the user marked that spot on a screenshot). Config
+`overlay.diagnostics_silence_warning` in `global.json`, default off. On: no startup toast and no
 yellow rail dot; the area still shows the true state and the fix text. `Why global:` the host
 setup belongs to the machine, not to a game, so it is never in a profile. The decision is pure
 (`Alerts( state, bSilenced )` and `AnyWarns( b, e, bSilenced )` in `DiagnosticsLogic.h`, tested in
@@ -25,9 +27,11 @@ off). The crash was fixed 2026-11-07 (no WSI memory chain on output images under
 users who deliberately keep scanout off can mute it. Picture artifacts on entering and leaving
 fullscreen with scanout on are still open there.
 
-`Why fix text says 2:` games only keeps the exposure narrow, and the earlier zero-copy
-measurements used 2; the crash test ran with 1 (every fullscreen window), which also engages
-scanout, so both are known to work.
+`Why the fix text offers 1 or 2:` the choice is the user's. Hyprland's own wiki: 1 is enabled
+("when there is only one fullscreen application on a screen"), 2 is auto, enabled with content type
+'game'; it also advises turning it off if the fullscreen application shows graphical glitches. The
+crash test ran with 1 only, and earlier zero-copy measurements used 2; the state check treats both
+as On.
 
 ## Hyprland direct scanout
 
@@ -85,8 +89,7 @@ and the fix text stay until a recheck reads On.
 
 ### The area
 
-Sheet rows: **Direct scanout** (status; Details: the value read and the reason), **Silence
-warning** (switch) and **Recheck
+Sheet rows: **Direct scanout** (status; Details: the value read and the reason) and **Recheck
 all** (disabled while a run is going). The docs button is **not a sheet row**: it is the
 Inspector-only verb `Entry::InspectorVerb()` of the Direct scanout row ("Hyprland render options",
 chip **Open**, `https://wiki.hypr.land/configuring/core/config-options/#render`). It is drawn
@@ -98,7 +101,7 @@ Not applicable or Hyprland not detected. It is not a palette row (like every rea
 searching "diagnostics", "hyprland", "wiki" or "docs" finds the area, whose Overview carries it.
 `Why:` the user, on the first version with the button in the sheet: *"It should only show this
 button on the inspector rail on the right side"*. Below the rows, when Off: what is lost and the fix
-(`render:direct_scanout = 2` with Lua and hyprlang snippets). For the other states the area shows the one-sentence
+(set `render:direct_scanout` to 1 or 2, with Lua and hyprlang snippets). For the other states the area shows the one-sentence
 reason.
 
 The link runs `xdg-open <url>` the same way (fixed argv, no shell, the host environment above,
