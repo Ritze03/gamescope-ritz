@@ -3165,7 +3165,8 @@ namespace gamescope::ui::shell
 					const bool bOpen = ( s_sOpenDropdown == sPopupKey &&
 					                     s_eOpenDropdownRegion == eRegion );
 					const controls::ChoiceResult res = controls::Choice(
-						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen );
+						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen,
+						decl.SegmentedStyle() );
 
 					if ( res.bChanged )
 					{
@@ -4771,20 +4772,16 @@ namespace gamescope::ui::shell
 				// Greedy: each group goes to the column that is shortest so
 				// far. index.html's algorithm, kept identical so the mockup
 				// stays the tiebreaker it is declared to be.
-				std::vector<int> colOf( blocks.size(), 0 );
-				float flWeight[ kMaxSheetColumns ] = {};
-				for ( size_t b = 0; b < blocks.size(); ++b )
+				// The pure placement is PackBlocks() (Layout.cpp): the band's
+				// own height counts too, and a group pinned with
+				// Area::GroupColumn() is placed before the greedy pass.
+				std::vector<int> blkLines, blkPin;
+				for ( const Block &blk : blocks )
 				{
-					int nBest = 0;
-					for ( int c = 1; c < cols.nColumns; ++c )
-						if ( flWeight[ c ] < flWeight[ nBest ] )
-							nBest = c;
-
-					colOf[ b ] = nBest;
-					// The band's own height counts too, or a column of many
-					// small groups packs short against one of few big ones.
-					flWeight[ nBest ] += (float)blocks[ b ].nLines + 1.0f;
+					blkLines.push_back( blk.nLines );
+					blkPin.push_back( pArea->GroupPin( blk.nGroup ) );
 				}
+				const std::vector<int> colOf = PackBlocks( blkLines, blkPin, cols.nColumns );
 
 				// ---- draw ------------------------------------------------
 				float yOf[ kMaxSheetColumns ];
@@ -8276,7 +8273,8 @@ namespace gamescope::ui::shell
 			std::memory_order_release );
 
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
-		                             AreaIsUnsplittable( pArea ) );
+		                             AreaIsUnsplittable( pArea ),
+		                             pArea ? pArea->WantedColumns() : 0 );
 
 		// SPEC §8.4's 160 ms region duration, applied to the ONE region
 		// dimension that changes without the surface changing. Note the

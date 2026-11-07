@@ -471,7 +471,8 @@ namespace gamescope::ui
 			bool bSegmented  = false;  // which form was drawn, for the shell's popup anchor
 		};
 		ChoiceResult Choice( const RowCtx &row, const char *pszId, int *pnValue,
-		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false );
+		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false,
+		                     bool bLiftCharRule = false );
 
 		// ---- Dropdown -- ui-design-guide.md's Dropdown entry ---------------
 		// A Choice FORCED to present as a dropdown, regardless of whether it
