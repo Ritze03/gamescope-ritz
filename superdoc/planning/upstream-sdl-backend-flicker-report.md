@@ -60,7 +60,7 @@ optimisation-level artifact.
 
 - **GPU:** AMD Radeon GPU (RADV), Mesa/RADV driver stack.
 - **Host compositor:** Hyprland.
-- **Display:** `DP-1`, 1920×1080 @ 280 Hz, with VRR enabled on the output
+- **Display:** `<connector>`, 1920×1080 @ <max-refresh>, with VRR enabled on the output
   (Hyprland `vrr = 3`, i.e. "VRR on for a fullscreen window whose content type is
   game/video" — engages automatically for any fullscreen gamescope window regardless of
   gamescope's own `--adaptive-sync` flag).
@@ -82,14 +82,14 @@ reference:
 
 ```
 DISABLE_EXTLAYER=1 ./build/src/gamescope --backend sdl -W 1920 -H 1080 -w 1920 -h 1080 \
-  -r 280 -O DP-1 -f --adaptive-sync -- vkcube
+  -r <max-refresh> -O <connector> -f --adaptive-sync -- vkcube
 ```
 
 **The clean control, same binary:**
 
 ```
 DISABLE_EXTLAYER=1 ./build/src/gamescope -W 1920 -H 1080 -w 1920 -h 1080 \
-  -r 280 -O DP-1 -f --adaptive-sync -- vkcube
+  -r <max-refresh> -O <connector> -f --adaptive-sync -- vkcube
 ```
 
 (No `--backend` flag — `auto_select_backend()` in `src/main.cpp` picks Wayland when

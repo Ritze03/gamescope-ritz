@@ -21,7 +21,7 @@
 **2026-08-21.** Written for a ten-minute testing session, not an hour. You are the
 instrument here — nothing available in this repo can measure the artifact, only your
 eyes on real hardware can. Ground truth so far: stock `/usr/bin/gamescope
---adaptive-sync`, fullscreen on DP-1 at 280 Hz, is clean; our build in the same
+--adaptive-sync`, fullscreen on <connector> at <max-refresh>, is clean; our build in the same
 conditions flickers, independent of the settings overlay, the FPS HUD, and the filter.
 So the cause is somewhere in our diff against upstream (base commit `fcc1341`, which is
 exactly upstream `ValveSoftware/gamescope` HEAD).
@@ -53,11 +53,11 @@ tests. Run each with `scripts/flicker-ab-test.sh`; it handles fullscreen, VRR,
    binary itself.) If you built it somewhere other than `../gamescope-upstream-fcc1341`
    relative to this repo, point the script at it with
    `GAMESCOPE_RITZ_AB_UPSTREAM_BIN=/path/to/it/build/src/gamescope`.
-3. Make sure DP-1 is your **focused** monitor before each run (click on it, or move
+3. Make sure <connector> is your **focused** monitor before each run (click on it, or move
    your mouse there) — the script uses gamescope's own `-f` flag to fullscreen on
    whichever monitor the window opens on, and deliberately does **not** drive Hyprland
    to move it there for you (a previous automated attempt at that closed one of your
-   windows). It prints a clear warning if DP-1 wasn't focused, and after launch it
+   windows). It prints a clear warning if <connector> wasn't focused, and after launch it
    tells you plainly whether fullscreen actually happened.
 
 Every run below uses `vkcube` as the test client by default (`--client CMD` to change
@@ -65,7 +65,7 @@ it) and never touches `~/.config/hypr` or your real gamescope config.
 
 ## The runs, in order
 
-Watch DP-1 for a few seconds after each launch, note flicker/clean, then `Ctrl+C` in
+Watch <connector> for a few seconds after each launch, note flicker/clean, then `Ctrl+C` in
 the terminal to tear down cleanly before the next run.
 
 ### 1. Overlay fully inert — the most informative single test
@@ -183,7 +183,7 @@ it still flickers without VRR, it isn't.
 
 `scripts/flicker-ab-test.sh <variant> [options]` — `--help` for the full option list.
 Variants: `overlay-inert`, `no-dynamic-rendering-ext`, `no-convar-seed`, `normal`,
-`upstream`. Useful options: `--no-vrr`, `--output NAME` (default `DP-1`), `--client
+`upstream`. Useful options: `--no-vrr`, `--output NAME` (default `<connector>`), `--client
 CMD` (default `vkcube`), `--backend NAME` (default: none passed — gamescope
 auto-selects, same as a real user's session; **no longer `sdl`**, see the resolution
 note at the top of this doc — SDL is the confirmed bug).

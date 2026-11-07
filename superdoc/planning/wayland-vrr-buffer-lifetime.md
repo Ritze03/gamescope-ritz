@@ -32,10 +32,10 @@ it. Written so the next agent does not re-run any of this.
 
 ## Test rig (reproduce these conditions or the results mean nothing)
 
-Host Hyprland, DP-1 1920x1080@280Hz, `vrr = 3`. gamescope nested, `--backend wayland`,
+Host Hyprland, <connector> 1920x1080@<max-refresh>, `vrr = 3`. gamescope nested, `--backend wayland`,
 `-f`, client `vkcube`, `DISABLE_EXTLAYER=1`. Every run verified **read-only** with
 `hyprctl clients -j` (gamescope window `fullscreen: 2`) and `hyprctl monitors -j`
-(DP-1 `vrr: true`) *while the run was live* — not before or after, which reports
+(<connector> `vrr: true`) *while the run was live* — not before or after, which reports
 `vrr: false` because nothing is fullscreen then.
 
 **Always record the achieved frame rate and the build type.** Both have already
@@ -52,7 +52,7 @@ Frame rate was measured two ways, both binary-agnostic:
 
 See the banner at the top of `upstream-flicker-regression.md`. 3.16.24 built debug/`-O0`
 runs at **231 fps**; the same source as a packaged release build runs at **282 fps**.
-The 280Hz panel maximum sits between them, so optimisation level alone decides whether
+The panel maximum sits between them, so optimisation level alone decides whether
 VRR engages. The "stock gamescope is clean" comparison that started the 83-commit
 bisection very likely measured optimisation level, not source version.
 
@@ -70,7 +70,7 @@ Instrumented with a shadow count of outstanding host references, logging every a
 and release with the refcount, the backing `wlr_buffer`, and the explicit-sync release
 point. Three independent results kill it:
 
-1. **In the exact failing regime it never fires.** Fullscreen, DP-1 `vrr: true`,
+1. **In the exact failing regime it never fires.** Fullscreen, <connector> `vrr: true`,
    `--framerate-limit 140` giving a *measured* 152.6 presents/s (well below 280, so VRR
    genuinely varies), debug `-O0`: **0 double-acquires, 0 early releases, max outstanding
    references = 1**, over 3025 presents in 20s.
