@@ -20,7 +20,7 @@
 >   `vrr = 3` engages the host VRR layer for *any* fullscreen game/video-content
 >   window regardless of which gamescope backend is running underneath, yet only the
 >   SDL backend flickers — so double VRR stacking alone is not sufficient to cause
->   the symptom. Don't chase "set DP-1's `vrr` to `0`" as the next test; the SDL vs.
+>   the symptom. Don't chase "set <connector>'s `vrr` to `0`" as the next test; the SDL vs.
 >   no-`--backend` A/B already is the decisive test, and it's done.
 > - **Section 0's queue-family `CONCURRENT` fix and the wait-stage-mask sync-validation
 >   fix remain correct, worthwhile fixes on their own merits** — they just were never
@@ -115,7 +115,7 @@ changed *when* the texture was written, not *whether the write was legal*.
   (`src/steamcompmgr.cpp:7766-7800`) — a second cross-family read of the same
   illegally-shared image each frame. "Linear sometimes flickers, the others are
   really bad" is exactly the shape this predicts.
-- **Only fullscreen, only VRR, only at 280 Hz.** These raise the transition
+- **Only fullscreen, only VRR, only at a high refresh rate.** These raise the transition
   rate and remove the idle gaps that would otherwise let caches and DCC
   metadata settle incidentally. The bug is timing-sensitive undefined
   behaviour, not a deterministic fault — which is precisely why a previous
@@ -148,7 +148,7 @@ the graphics write and the compute read makes the ownership question moot.
 So **there is no proven Valve pattern for doing this asynchronously to copy.**
 Our overlay is the first thing in this codebase to hand general-queue-rendered
 content to the compute queue without a full stall — deliberately, because a
-`waitIdle()` per frame at 280 Hz would serialise CPU and GPU and destroy frame
+`waitIdle()` per frame at a high refresh rate would serialise CPU and GPU and destroy frame
 pacing. Copying upstream's pattern here would be a correctness fix that trades
 one visible defect for another.
 
@@ -357,7 +357,7 @@ Verified:
 
 - Queue families genuinely differ on this GPU (family 1 vs 0), from gamescope's
   own startup log on the user's hardware.
-- The exact failing configuration was reached — fullscreen 1920x1080 on **DP-1**
+- The exact failing configuration was reached — fullscreen 1920x1080 on **<connector>**
   (`fullscreen=2`, `monitor=0`), with `vrr=True` and Hyprland in **solitary**
   mode, confirmed via `hyprctl monitors`/`clients` while gamescope was running.
   This is the configuration a previous attempt failed to reach.
@@ -383,7 +383,7 @@ Verified:
 The root cause is a spec violation that is certain from reading the code and
 confirmed against this GPU's actual queue-family configuration. That it
 *explains* every reported symptom is strong but circumstantial. The user's own
-eyes on DP-1 remain the confirming test.
+eyes on <connector> remain the confirming test.
 
 > **Superseded 2026-08-21.** The user has now run that confirming test and the
 > artifacting is still present. The claim that this spec violation explained the
@@ -410,15 +410,15 @@ overlay state and filter.
 ### Stock-vs-ours comparison (the experiment that partitions the problem)
 
 Both binaries run identically: `--backend sdl -f -W 1920 -H 1080 -r 280
---adaptive-sync -- vkcube`, then moved to DP-1 and fullscreened, with the
+--adaptive-sync -- vkcube`, then moved to <connector> and fullscreened, with the
 fullscreen state **asserted** (`fullscreen=2`) rather than assumed.
 
 | | stock `/usr/bin/gamescope` 3.16.24 | ours (`4f027b6`) |
 |---|---|---|
-| fullscreen on DP-1 | `fullscreen=2` | `fullscreen=2` |
-| DP-1 `vrr` | `true` | `true` |
-| DP-1 `solitary` (direct scanout) | our window | our window |
-| DP-1 `activelyTearing` | `false` | `false` |
+| fullscreen on <connector> | `fullscreen=2` | `fullscreen=2` |
+| <connector> `vrr` | `true` | `true` |
+| <connector> `solitary` (direct scanout) | our window | our window |
+| <connector> `activelyTearing` | `false` | `false` |
 | refresh cycle reported | 3.57 ms | 3.57 ms |
 | GPUVM / device-loss markers | 0 | 0 |
 | abort on SIGTERM shutdown | **yes** (`Aborted`, core dumped) | intermittently yes |
@@ -426,25 +426,25 @@ fullscreen state **asserted** (`fullscreen=2`) rather than assumed.
 On every host-observable axis the two are **indistinguishable**. That is
 consistent with "the tearing is not our defect", but it is not proof: tearing is
 a scanout-level visual artifact and no instrument available here can see it.
-**The user's own A/B on DP-1 is still the confirming test.**
+**The user's own A/B on <connector> is still the confirming test.**
 
 The shutdown abort is **upstream behaviour**, reproduced on stock. Our overlay
 work did not introduce it.
 
 ### Environmental finding: two stacked adaptive-sync layers, always on
 
-`~/.config/hypr/subcfgs/monitors.lua` sets **`vrr = 3`** on DP-1. Hyprland's
+The host compositor config sets **`vrr = 3`** on <connector>. Hyprland's
 mode 3 means "VRR on for a fullscreen window whose content type is game/video".
 Measured consequence:
 
 - gamescope's window reports `contentType: game`.
-- Running gamescope fullscreen on DP-1 **with `--adaptive-sync` omitted
-  entirely** still drives DP-1 to `vrr=true`.
+- Running gamescope fullscreen on <connector> **with `--adaptive-sync` omitted
+  entirely** still drives <connector> to `vrr=true`.
 
 So the host VRR layer engages **unconditionally** whenever gamescope is
-fullscreen on DP-1 — regardless of gamescope's own adaptive-sync setting, and
+fullscreen on <connector> — regardless of gamescope's own adaptive-sync setting, and
 regardless of the overlay's "VRR / Adaptive Sync" toggle. Whenever gamescope's
-own adaptive sync is also on, two adaptive-sync layers are stacked on a 280 Hz
+own adaptive sync is also on, two adaptive-sync layers are stacked on a high-refresh
 panel. This is true for stock gamescope too.
 
 **Why this matters:** it explains the one thing the overlay hypothesis never
@@ -452,8 +452,8 @@ could — why the symptom is independent of the overlay, the FPS HUD and the
 filter. It is also the only mechanism found so far that is gated on *fullscreen*
 specifically, which is the user's stated trigger.
 
-**Highest-value next test, and it is one line:** set DP-1's `vrr` to `0` in that
-file, reload Hyprland, and see whether the artifacting stops.
+**Highest-value next test, and it is one line:** set <connector>'s `vrr` to `0` in the
+host compositor config, reload it, and see whether the artifacting stops.
 
 `cv_tearing_enabled` is **not** the mechanism: it defaults false, and `bTearing`
 additionally requires `GetBackend()->SupportsTearing()`, which the Wayland

@@ -151,10 +151,10 @@ whether corruption appears. The script's banner line now prints `nested (-w/-h)`
 whether it's `(1:1, no scaling)` or `(SCALED to output)` so this is visible at a
 glance in the log, no separate note-taking needed.
 
-## One live measurement already taken (packaged 3.16.24, `--backend sdl`, 1:1, `vkcube --present_mode 2`, DP-1 @ 280Hz, `--adaptive-sync`)
+## One live measurement already taken (packaged 3.16.24, `--backend sdl`, 1:1, `vkcube --present_mode 2`, <connector> @ <max-refresh>, `--adaptive-sync`)
 
 Via gamescope's `-T`/`--stats-path` FIFO (`fps=` lines), two short runs: **~272 fps**
-and **~282 fps** — i.e. right at or just under the 280Hz cap either way, meaning VRR
+and **~282 fps** — i.e. right at or just under the <max-refresh> cap either way, meaning VRR
 barely engages (if at all) even at FIFO in the 1:1/sdl case. Note: `-T` made the
 packaged binary abort on `SIGTERM` teardown in both runs (after already having written
 useful data) — treat `-T` as informational-only on this build, not something to lean

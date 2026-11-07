@@ -28,16 +28,16 @@
 > This plan rests on "pure upstream `fcc1341` flickers, packaged `3.16.24` does not, so
 > it is one of the 83 commits between them". **That comparison was confounded**: every
 > control we built is `buildtype=debug, optimization=0`; the packaged binary is an
-> optimised release build. Measured on DP-1 (1920x1080@280Hz, `--backend wayland`,
+> optimised release build. Measured on <connector> (1920x1080@<max-refresh>, `--backend wayland`,
 > fullscreen, vkcube):
 >
 > | binary | source | build | measured fps | VRR actually engaged? |
 > |---|---|---|---|---|
-> | `../gamescope-upstream-3.16.24/build/src/gamescope` | 3.16.24 | debug `-O0` | **231.2** | yes -- below the 280Hz cap |
+> | `../gamescope-upstream-3.16.24/build/src/gamescope` | 3.16.24 | debug `-O0` | **231.2** | yes -- below the <max-refresh> cap |
 > | `/usr/bin/gamescope` (CachyOS) | 3.16.24 | release | **281.6** | no -- pinned at the cap |
 >
 > Same source, same host, same client, same arguments. **Optimisation level alone moves
-> the frame rate across the 280Hz threshold**, and a panel only varies its refresh below
+> the frame rate across the <max-refresh> threshold**, and a panel only varies its refresh below
 > its maximum -- above it, it pins at max, which is fixed-refresh behaviour. So the
 > debug build exercises the VRR path and the packaged one does not.
 >
@@ -54,7 +54,7 @@
 > `superdoc/planning/wayland-vrr-buffer-lifetime.md` for the instrumented findings.
 
 **2026-08-21.** Written after `superdoc/planning/flicker-ab-test-plan.md` fully cleared
-our own diff: **pure upstream `fcc1341`, built by us, flickers on DP-1 1920x1080@280Hz**,
+our own diff: **pure upstream `fcc1341`, built by us, flickers on <connector> 1920x1080@<max-refresh>**,
 and the user's packaged `/usr/bin/gamescope` `3.16.24` does not. So the regression is one
 (or more) of the **83 commits** between the `3.16.24` tag and `fcc1341` in
 `ValveSoftware/gamescope` — none of it is ours. This doc is the plan for finding which

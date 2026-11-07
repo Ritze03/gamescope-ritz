@@ -63,7 +63,7 @@ client updates without notice.
 
 `steam://joinlobby/<appid>/<lobbyid>/<inviter-steamid>` is a real, documented-by-community
 protocol handler Steam's client registers with the desktop (xdg mime handler on Linux),
-e.g. `steam://joinlobby/871200/109775241003709890/76561198017227219`. Firing it (e.g.
+e.g. `steam://joinlobby/871200/<lobbyid>/<steamid64>`. Firing it (e.g.
 `xdg-open "steam://joinlobby/…"` or Linux's raw exec of `steam` with a `steam://` arg)
 just hands off to the already-running Steam client, which does its own auth, ownership
 check, and game launch. *(external, checked 2026-08-21 —*
