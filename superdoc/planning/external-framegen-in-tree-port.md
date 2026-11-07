@@ -87,7 +87,7 @@ relicensing problem this section was written to route around.)*
 
 **the external layer is GPLv3** (`LICENSE.md`, full GPLv3 text; every source file carries
 `SPDX-License-Identifier: GPL-3.0-or-later`; GitHub's own detection reports
-`GPL-3.0`). **gamescope-ritz is BSD-2-Clause** (`/home/mo/GitHubProjects/gamescope-ritz/LICENSE`,
+`GPL-3.0`). **gamescope-ritz is BSD-2-Clause** (`LICENSE`,
 confirmed: "BSD 2-Clause License, Copyright (c) 2013-2022 Valve Corporation..."; a
 bundled OpenColorIO LUT file carries BSD-3-Clause, immaterial here).
 
@@ -131,7 +131,7 @@ bundled OpenColorIO LUT file carries BSD-3-Clause, immaterial here).
 Sources: LICENSE.md
 (checked 2026-08-21, `develop` branch), GitHub repo metadata (`gh api
 repos/PancakeTAS/the external layer`, `license.spdx_id: GPL-3.0`, checked 2026-08-21),
-`/home/mo/GitHubProjects/gamescope-ritz/LICENSE` (read directly, checked 2026-08-21).
+`LICENSE` (read directly, checked 2026-08-21).
 
 ## 1. Separating layer plumbing from the algorithm
 

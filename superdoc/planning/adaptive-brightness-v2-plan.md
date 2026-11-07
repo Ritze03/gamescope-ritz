@@ -108,7 +108,7 @@ able to see enemies in pvp games."*
 This page is meant to be actionable by a worker without re-researching: every formula,
 parameter, pass, texture, test and pass criterion is stated. The prototype used for the
 numbers below is a ~120-line numpy script run on the user's own capture
-(`/home/mo/Pictures/Screenshots/2026-09-14-053516_hyprshot.png`, CS2, a zombie-escape
+(`<screenshot>.png`, CS2, a zombie-escape
 map) and on synthetic scenes; the numbers are reproducible from the formulas in §4 and
 should be re-measured on the GPU by the harness in §7 before anything is claimed.
 

@@ -398,7 +398,7 @@ process doing so concurrently.
   Result, in `results-steamclient.txt`:
 
   ```
-  RESULT dlopen: PASS (/home/mo/.steam/steam/linux64/steamclient.so)
+  RESULT dlopen: PASS ($HOME/.steam/steam/linux64/steamclient.so)
     CreateInterface              resolved
     Steam_CreateSteamPipe        resolved
     Steam_ConnectToGlobalUser    resolved
