@@ -20,10 +20,8 @@ the status wording, the row order), `src/Overlay/PanelFriends.{h,cpp}` (the
 `RequestArea`/`AreaActive` and the per-frame `PanelFriends_Tick()`.
 Tests: `tests/test_steam_friends.cpp`, `tests/steamclient_stub.cpp`.
 Live check: `tests/steam_friends_live_probe.cpp`.
-Captures: `build-release/verify-shots/friends-simplify-2026-09-09/` (the
-narrowed list, every empty state and the hidden area),
-`…/steam-friends-phase345-2026-09-08/` (phase 3–5) and
-`…/steam-friends-phase12-2026-09-08/` (the read path).
+Captures (not kept in the repo): the narrowed list, every empty state and the hidden area
+(2026-09-09), phase 3–5 (2026-09-08) and the read path, phase 1–2 (2026-09-08).
 The investigation that settled the whole design:
 [`../planning/steam-friends-join.md`](../planning/steam-friends-join.md).
 
@@ -163,8 +161,9 @@ secondary line.
 
 `PanelFriends.cpp` declares
 `a.AvailableWhen([]{ return steamfriends::SessionAppId() != 0; })`, using the
-registry's existing area-level gate — the same one `system.display`'s
-nested-only rows use. `Registry::RailAreas()`, `CommandPalette.cpp`'s two index
+registry's existing area-level gate — the same one the
+`display.resolution` area's nested-only gate uses (`a.AvailableWhen( NestedModeAvailable )`
+in `src/Overlay/PanelDisplay.cpp`). `Registry::RailAreas()`, `CommandPalette.cpp`'s two index
 walks and `Shell.cpp`'s `SelectedArea()` all skip an area that is not
 `Available()`, so one predicate removes the rail entry, the palette rows and
 the sheet together.
@@ -326,8 +325,7 @@ asks for it, are byte-for-byte unaffected.
 
 Verified headlessly (private sway + a stub `steamclient.so`, real
 `overlay_e2_pointer` clicks — not `overlay_e2_set`, which bypasses the widget
-entirely) in
-`build-release/verify-shots/friends-click-2026-09-14/`: a single click selects
+entirely, 2026-09-14): a single click selects
 the row and leaves the sheet open (`02-single-click-selects-does-not-join.png`),
 a double-click on that row fires the join and leaves nothing on screen but the
 game and a toast (`03-double-click-joins-and-closes-overlay.png`), and the Join
@@ -503,8 +501,7 @@ So:
 ### How that was proven
 
 `tests/steamclient_stub.cpp` grew a **`slow` mode** that sleeps 1.5 s inside
-the snapshot. Two measurements, both in
-`build-release/verify-shots/steam-friends-phase345-2026-09-08/`:
+the snapshot. Two measurements (2026-09-08):
 
 - **A unit test** measures the worst `CurrentView()` call while such a poll is
   in flight: **under 15 ms**, against the ~1 500 000 µs a blocking

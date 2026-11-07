@@ -11,9 +11,8 @@ Code: `src/Keybinds.{h,cpp}` (grammar, store, gesture engine, capture),
 `src/Overlay/PanelKeybinds.cpp` (the rows), `src/wlserver.cpp`'s
 `wlserver_check_ritz_keybinds()` (what an action *does*),
 `src/Overlay/UI/Controls.cpp`'s `controls::Chord()` (the capture chip).
-Tests: `tests/test_keybinds.cpp`. Live proof:
-`build-release/verify-shots/keybinds-2026-09-08/` (33 checks on a real
-compositor).
+Tests: `tests/test_keybinds.cpp`. Live proof: 33 checks on a real
+compositor (2026-09-08).
 
 ## What was bound before this, and what still is
 
@@ -435,7 +434,7 @@ that ConCommand's own comment in `wlserver.cpp`.
   conflict refusal, and the gesture engine driven exactly as wlserver drives
   it, including the historical "longer chord eaten by its own prefix" case and
   every capture path.
-- `build-release/verify-shots/keybinds-2026-09-08/` — `verify_keybinds.py`,
+- Live verification (2026-09-08) —
   33 checks on a real gamescope against a private headless sway and an isolated
   `XDG_CONFIG_HOME`: the defaults fire, a rebind takes effect live and the old
   chord dies, conflicts are refused, the reserved chord recovers a deliberately

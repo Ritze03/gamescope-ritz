@@ -23,6 +23,8 @@ the library owns all three dimensions of the content timeline (buffer = how far 
 frame generation = which instants, blur = the shutter window), so gamescope has no feature
 logic of its own to keep consistent. See [motion-blur](motion-blur.md).
 
+## What gamescope does with the pacer
+
 **What gamescope does** (`src/steamcompmgr.cpp`, the "Frame generation / motion blur pacing"
 block; vocabulary per the library: `presentNs`, `FrameFormat`, `OnPaint( in, newestId,
 bPresentTick, bSkippable )`):
@@ -66,6 +68,8 @@ bPresentTick, bSkippable )`):
   on every such vblank made a 30 fps game at 2x commit 83 times a second instead of 60 (host
   and GPU work for an identical image).
 
+## The dynamic mode and the two priorities (the user's spec)
+
 **The user's spec for the dynamic mode and the two priorities** (the origin of the
 pacer's shape, kept as rationale):
 
@@ -82,6 +86,8 @@ pacer's shape, kept as rationale):
 my refresh rate?"* -- yes (generation stops only once the game reaches the output rate, with a
 ratio band). *"Also let me change the multiplier to up to 8x."* *"It's fine if we generate way
 too many frames on a fixed multiplier, this system should handle that as I told you earlier."*
+
+## Cost guard and its switch
 
 **Cost guard, and its switch (2026-10-04, `framegen.gpu_limit`, row "Limit to GPU speed").**
 The guard's mechanics are the library's (`Inputs::costGuard`; the budget is the estimate plus
@@ -102,7 +108,7 @@ and it being generated up to 280."* In short: a steady generated output beats pr
 game's own frame rate, because toggling generation on and off looks worse than a lower real
 rate that is always generated. (The library's `Inputs::costGuard` itself defaults to true.)
 
-### VRR and tearing: timer-paced while generating
+## VRR and tearing: timer-paced while generating
 
 While FG is **generating**, gamescope paces its own output frames on the **vblank timer**,
 exactly as on a fixed-refresh display, even with VRR or tearing enabled -- the main loop's
@@ -125,7 +131,7 @@ There is no `VariableRefresh` pass reason any more -- nothing passes through for
 timer ever stopped ticking under VRR, generation would stall; it does not: the main loop
 re-arms it after every tick (`ArmNextVBlank( true )` at the end of a timer iteration).
 
-### Latency: Low latency, the wake-up lead and tearing (2026-10-04)
+## Latency: Low latency, the wake-up lead and tearing (2026-10-04)
 
 The user's complaint: input latency got *worse* with frame generation on, even with blur and
 the lag buffer off (nested in Hyprland, ~280 Hz, CS2 at 123-208 fps, target = refresh: Low
@@ -242,7 +248,7 @@ the game rate (30.08 commits/s at a 30 fps game, identical before and after).
 of [Pause at refresh rate](#pause-at-refresh-rate-framegenpause_at_refresh): `tau = V - D`
 generalised unchanged, `V` being that timer's target time.
 
-### A steadier generate / pass decision (2026-10-05, library PR #15)
+## A steadier generate / pass decision (2026-10-05, library PR #15)
 
 A game near the target (CS2 at 210-330 fps on 280 Hz, Target = refresh, Smoothness, Pause at
 refresh off) used to switch between generating and passing through about once a second, so the
@@ -260,7 +266,7 @@ passed through (it had to be about 9% under), and about a quarter of simulated s
 stranded on a premature first decision. After the fix 262-275 fps games generate 100% and
 present 280. No host code changed.
 
-### Pacing fixes (2026-10-05, library PR #16)
+## Pacing fixes (2026-10-05, library PR #16)
 
 Pinned at `981c844` (the library's local-only `ml-fg-testing` branch; main was `b77d058` with PRs #15-#19 merged; #19 is the Target start band, below; `0015453` was PRs #15-#18, #18 being the crosshair box margin below; `fb34454` was PRs #15-#17; same tree as the former PR-branch head `98292d8`, which was `c60e199` plus PR #17: `kExtraLeave` 1.02 to 0.995, so the output timer no longer stays on once the target is back at the display refresh). Three things: the Lag spike buffer grows at once after a stall bigger
 than the applied delay, and its spike threshold is 1.3x the median interval with at least 2 ms
@@ -269,7 +275,7 @@ docs; and `Report::generating` is now just "Generate state and a generated frame
 within 1 s", with no 1.2 / 1.1 multiplier gate (see [fps-display](fps-display.md)). The host
 changes are help-text and comment wording only.
 
-### Pause while cursor visible (`framegen.pause_when_cursor_visible`)
+## Pause while cursor visible (`framegen.pause_when_cursor_visible`)
 
 Row **Pause while cursor visible**, per profile, default **Off**, right after Pause at
 refresh rate. While on and the game's cursor is visible, `FrameGen_PrePaint` feeds the pacer
@@ -284,7 +290,7 @@ switches). `Why:` menus and settings screens show the cursor, and interpolating 
 smears it; the user asked for *"a setting to framegen, that allows the user to turn it
 off, while the mouse cursor is visible. (To avoid artifacting in settings menus)"*.
 
-### Paints behind the game's GPU burst (2026-11-04)
+## Paints behind the game's GPU burst (2026-11-04)
 
 For two days of measurements the paints that showed a generated frame lost their deadline while
 the GPU had room: `exec` stayed about 0.5 ms and `wait` ran up to the length of the game's frame.
@@ -336,7 +342,7 @@ nothing and realtime queue priority barely helped, because neither is what the p
 Early pair, tried the same day, moved the estimate out of the paint and the wait rose by the same
 amount, and was reverted: on the new limiter, output 242-244 with it, 246-249 without.
 
-### Hold game while generating (removed 2026-11-04)
+## Hold game while generating (removed 2026-11-04)
 
 From 2026-11-03 to 2026-11-04 a per-profile switch, `framegen.hold_game`, held the game in the
 WSI layer after each present and released it on a schedule from an AIMD rate controller
@@ -353,11 +359,11 @@ The first design, releasing at the end of the pair, collapsed the game to its 50
 fps unheld, 20-25 fps held). `Why` nothing replaced it: with the stall gone, the uncapped game
 and Frame generation share the GPU without a cap, and a fixed limit is the Frame limiter's job.
 
-### Paint split readout (diagnostic, 2026-11-04)
+## Paint split readout (diagnostic, 2026-11-04)
 
 The status line carries `paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 miss=20 cpu ... ms` (mean/max over the line's period, two buckets: paints that consumed a new real frame, and all others; no behaviour change). `Why:` Minecraft on 280 Hz lost about one paint per real frame while the GPU was only half busy, and two causes look identical in `draw max`: gamescope's own work is long (the pair's flow estimate runs in the paint that first sees the frame), or the composite is submitted on time but queues behind the game's GPU burst. `exec` is GPU execution of frame generation's command buffer plus the composite's (timestamp pairs, `vulkan_paint_split_*` in `rendervulkan.cpp`, read a paint later, never blocking); `wait` is first submit to GPU-finished minus `exec`, so high `exec` means suspect 1 and high `wait` with low `exec` means suspect 2. `cpu` is vblank wake to the composite's submit. Caveats: "GPU finished" is the CPU time `vulkan_wait()` returned (every backend waits right after the composite; a late wait would inflate `wait`); `miss` is wake to GPU-finished past the wake-up lead, so it can undercount versus the timer's draw time (Present's tail is not in it); `cpu` is long for a paint not woken by the vblank timer.
 
-### Pause at refresh rate (`framegen.pause_at_refresh`)
+## Pause at refresh rate (`framegen.pause_at_refresh`)
 
 The user, after the pacing rewrite had fixed "it should only turn off when my raw FPS is
 equal to my refresh rate": *"So instead of just taking that decision for the user, whether

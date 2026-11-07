@@ -62,7 +62,6 @@ master switch itself.
 Both fields existed in the schema and were already read by the renderer
 (`color_fps` since issue #29, `text_opacity` since Phase 2) but had no row
 of their own — a static cross-check
-(`build-release/verify-shots/settings-audit-2026-09-07/static-crosscheck.md`)
 caught this. They now sit right below "Text colour", in the shape their
 siblings use:
 
@@ -91,7 +90,7 @@ would never be seen, and a partial alpha would only dilute the invert
 grey out the moment Inverted is selected, the way every other conditionally-
 irrelevant row in this codebase does.
 
-Rendered proof (`build-release/verify-shots/hud-missing-rows-2026-09-07/`):
+Rendered proof (2026-09-07):
 against a flat `#202020` background, `color_fps` unset measured the digit
 fill at `(120, 219, 246)` (the UI accent); setting it to `0xFF3B30` over the
 real `overlay_e2_set` path measured `(255, 70, 48)`, matching within
