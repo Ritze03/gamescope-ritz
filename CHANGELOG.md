@@ -14,6 +14,8 @@ The newest version below is the one this build reports.
 ### Added
 - **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row
   mutes its startup toast and rail dot while the area still shows the true state.
+- **Environment variables in `--help`**: `--help` now lists the environment variables
+  gamescope-ritz reads, such as `GS_RITZ_PROFILE` and `RITZ_GS_APPID`.
 
 ### Fixed
 - **Direct scanout crash**: Fixed the GPU crash that could happen when entering
