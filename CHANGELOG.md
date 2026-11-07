@@ -11,9 +11,15 @@ The newest version below is the one this build reports.
 
 ## [0.14.12] – 2026-11-07
 
+### Added
+- **Silence warning**: Diagnostics has a switch that mutes its startup toast and rail dot
+  while the area still shows the true state.
+
 ### Fixed
 - **Direct scanout crash**: Fixed the GPU crash that could happen when entering fullscreen
   with the host's direct scanout on.
+- **Diagnostics direct-scanout warning**: Diagnostics warns again when Hyprland's direct
+  scanout is off, now that the crash is fixed.
 
 ## [0.14.11] – 2026-11-06
 

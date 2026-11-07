@@ -233,7 +233,7 @@ limit, scanout engaged on 298 of 300 each, 0 faults.
 **Still open:** the picture artifacts when entering and leaving fullscreen with scanout on, which
 sometimes show older frames. They persist with the fix and were reportedly absent under `allbos`;
 cause unknown ([TODO](../planning/TODO.md)). The Diagnostics area's warning about scanout being off
-stays switched off for now ([diagnostics.md](diagnostics.md)).
+is back since the crash fix ([diagnostics.md](diagnostics.md)).
 
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:

@@ -613,6 +613,7 @@ namespace gamescope::config
                 s.overlay.background_darkening = JGetFloat( *pOverlay, "background_darkening", s.overlay.background_darkening );
 
                 s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
+                s.overlay.diagnostics_silence_warning = JGetBool( *pOverlay, "diagnostics_silence_warning", s.overlay.diagnostics_silence_warning );
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
                 s.overlay.profiles_filter_other_games = JGetBool( *pOverlay, "profiles_filter_other_games", s.overlay.profiles_filter_other_games );
@@ -1019,6 +1020,7 @@ namespace gamescope::config
             jOverlay[ "background_darkening" ] = o.background_darkening;
 
             jOverlay[ "startup_announce_enabled" ] = o.startup_announce_enabled;
+            jOverlay[ "diagnostics_silence_warning" ] = o.diagnostics_silence_warning;
             jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
             jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
             jOverlay[ "profiles_filter_other_games" ] = o.profiles_filter_other_games;

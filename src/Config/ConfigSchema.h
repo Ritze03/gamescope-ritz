@@ -1193,6 +1193,10 @@ namespace gamescope::config
         // (and so this row) can ever be opened.
         bool startup_announce_enabled = true;
 
+        // Diagnostics area's "Silence warning": no startup toast and no rail dot for
+        // its checks. Global (the host setup is per machine); default off.
+        bool diagnostics_silence_warning = false;
+
         // Keyboard-control toggles for the overlay's own input capture (M2)
         // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
         // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also

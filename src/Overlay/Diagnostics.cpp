@@ -26,6 +26,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "Config/ConfigManager.h"
 #include "Notifications.h"
 #include "backend.h"
 #include "log.hpp"
@@ -334,8 +335,11 @@ namespace gamescope
 		if ( bToast )
 		{
 			g_bToasted = true;
+			if ( Diagnostics_Silenced() )
+				return;
 			Notifications::Show(
-				"Hyprland has direct scanout off. Details: Diagnostics.",
+				"Hyprland has direct scanout off, so frames gamescope makes are lost. "
+				"Set render:direct_scanout = 2. Details: Diagnostics.",
 				Notifications::Kind::Warning, 12.0f );
 		}
 	}
@@ -358,7 +362,32 @@ namespace gamescope
 	bool Diagnostics_HasWarning()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );
-		return AnyWarns( &g_Pub.scanout, &g_Pub.scanout + 1 );
+		return AnyWarns( &g_Pub.scanout, &g_Pub.scanout + 1, Diagnostics_Silenced() );
+	}
+
+	namespace
+	{
+		std::atomic<int> g_nSilenced{ -1 };   // -1: not read from global.json yet
+	}
+
+	bool Diagnostics_Silenced()
+	{
+		int n = g_nSilenced.load();
+		if ( n < 0 )
+		{
+			n = config::LoadGlobal().overlay.diagnostics_silence_warning ? 1 : 0;
+			g_nSilenced.store( n );
+		}
+		return n == 1;
+	}
+
+	void Diagnostics_SetSilenced( bool bSilenced )
+	{
+		g_nSilenced.store( bSilenced ? 1 : 0 );
+		config::Settings s = config::LoadGlobal();
+		s.overlay.diagnostics_silence_warning = bSilenced;
+		config::EnqueueGlobalWrite( s );
+		force_repaint();
 	}
 
 	DiagnosticsView Diagnostics_View()

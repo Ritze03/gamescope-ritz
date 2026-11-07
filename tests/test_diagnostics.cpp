@@ -37,14 +37,13 @@ TEST_CASE( "diagnostics: direct_scanout JSON parses, garbage does not", "[diagno
 	REQUIRE( !ParseDirectScanout( R"({"int": 1)" ) );   // truncated
 }
 
-TEST_CASE( "diagnostics: 0 is off and no longer warns; 1 and 2 are on", "[diagnostics]" )
+TEST_CASE( "diagnostics: 0 is off and warns; 1 and 2 are on", "[diagnostics]" )
 {
 	ScanoutResult off = DecideDirectScanout( Nested(), Ok( R"({"int": 0, "set": false})" ) );
 	REQUIRE( off.eState == ScanoutState::Off );
 	REQUIRE( off.nValue == 0 );
-	REQUIRE( !WarnsAbout( off.eState ) );   // switched off 2026-11-06, see WarnsAbout()
-	REQUIRE( off.sHeadline == "Off (0)" );
-	REQUIRE( off.sReason.find( "crash" ) != std::string::npos );
+	REQUIRE( WarnsAbout( off.eState ) );
+	REQUIRE( off.sHeadline == "Off (0): generated frames are lost" );
 
 	for ( const char *psz : { R"({"int": 1})", R"({"int": 2})" } )
 	{
@@ -99,7 +98,7 @@ TEST_CASE( "diagnostics: not applicable and not Hyprland say so and never warn",
 	REQUIRE( !WarnsAbout( r.eState ) );
 }
 
-TEST_CASE( "diagnostics: nothing warns, not even Off (switched off 2026-11-06)", "[diagnostics]" )
+TEST_CASE( "diagnostics: the rail dot is on for Off alone, unless silenced", "[diagnostics]" )
 {
 	const auto Warns = []( const Facts &f, const RunResult &run )
 	{
@@ -110,7 +109,7 @@ TEST_CASE( "diagnostics: nothing warns, not even Off (switched off 2026-11-06)",
 	Facts noHypr = Nested();
 	noHypr.bHyprland = false;
 
-	REQUIRE( !Warns( Nested(), Ok( R"({"int": 0})" ) ) );                 // Off
+	REQUIRE(  Warns( Nested(), Ok( R"({"int": 0})" ) ) );                 // Off
 	REQUIRE( !Warns( Nested(), Ok( R"({"int": 1})" ) ) );                 // On
 	REQUIRE( !Warns( Nested(), Ok( R"({"int": 2})" ) ) );
 	REQUIRE( !Warns( Nested(), Out( RunOutcome::TimedOut ) ) );           // Could not check
@@ -118,10 +117,21 @@ TEST_CASE( "diagnostics: nothing warns, not even Off (switched off 2026-11-06)",
 	REQUIRE( !Warns( sdl, Ok( R"({"int": 0})" ) ) );                      // Not applicable
 	REQUIRE( !Warns( noHypr, Ok( R"({"int": 0})" ) ) );                   // Hyprland not detected
 
-	// AnyWarns itself still works over a range; with WarnsAbout() off it is always false.
+	// A recheck that finds it fixed clears the dot; with several results, any one warns.
 	const ScanoutResult both[] = { DecideDirectScanout( Nested(), Ok( R"({"int": 2})" ) ),
 	                               DecideDirectScanout( Nested(), Ok( R"({"int": 0})" ) ) };
-	REQUIRE( !AnyWarns( both, both + 2 ) );
+	REQUIRE( AnyWarns( both, both + 2 ) );
 	REQUIRE( !AnyWarns( both, both + 1 ) );
 	REQUIRE( !AnyWarns( both, both ) );
+}
+
+TEST_CASE( "diagnostics: Silence warning mutes the alerts but not the state", "[diagnostics]" )
+{
+	const ScanoutResult off = DecideDirectScanout( Nested(), Ok( R"({"int": 0})" ) );
+	REQUIRE( off.eState == ScanoutState::Off );          // the true state is unchanged
+	REQUIRE( Alerts( off.eState, false ) );
+	REQUIRE( !Alerts( off.eState, true ) );
+	REQUIRE( !Alerts( ScanoutState::On, false ) );
+	REQUIRE( AnyWarns( &off, &off + 1, false ) );
+	REQUIRE( !AnyWarns( &off, &off + 1, true ) );
 }

@@ -36,6 +36,12 @@ namespace gamescope
 	// nothing. A recheck in flight keeps the previous answer until it lands.
 	bool Diagnostics_HasWarning();
 
+	// The "Silence warning" setting (global.json overlay.diagnostics_silence_warning,
+	// default false): no startup toast and no rail dot. Any thread. The setter
+	// persists to global.json and takes effect for the dot at once.
+	bool Diagnostics_Silenced();
+	void Diagnostics_SetSilenced( bool bSilenced );
+
 	struct DiagnosticsView
 	{
 		bool                          bRunning = false;

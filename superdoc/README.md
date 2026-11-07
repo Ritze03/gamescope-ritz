@@ -101,7 +101,7 @@ indented under it.
 - [System](features/system-general.md) — the SETTINGS > System area (clipboard-sync switch).
 - [Appearance](features/appearance.md) — the SETTINGS > Appearance area (global, not per profile).
 - [Diagnostics](features/diagnostics.md) — the OTHER > Diagnostics area: Hyprland direct
-  scanout check, why its warnings are switched off, the Recheck button.
+  scanout check, the Silence warning switch, the Recheck button.
 
 ### Settings & config
 

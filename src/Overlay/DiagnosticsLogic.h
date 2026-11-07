@@ -19,7 +19,7 @@ namespace gamescope::diagnostics
 		NotApplicable,  // this backend has no host to scan out to: no warning
 		NoHyprland,     // not under Hyprland: no warning
 		On,             // render:direct_scanout is 1 or 2
-		Off,            // render:direct_scanout is 0 (warned until 2026-11-06, see WarnsAbout)
+		Off,            // render:direct_scanout is 0: the one state that warns
 		Unknown,        // could not be read: said plainly, never warned about as if Off
 	};
 
@@ -130,10 +130,9 @@ namespace gamescope::diagnostics
 		else if ( *oValue == 0 )
 		{
 			r.eState = ScanoutState::Off;
-			r.sHeadline = "Off (0)";
-			r.sReason = "Hyprland draws every frame itself, which costs some generated frames. "
-			            "Leaving it off is the safe setting: direct scanout can currently crash "
-			            "the GPU when entering fullscreen.";
+			r.sHeadline = "Off (0): generated frames are lost";
+			r.sReason = "Hyprland draws every frame itself and that draw waits behind the "
+			            "game's GPU work.";
 		}
 		else
 		{
@@ -143,21 +142,23 @@ namespace gamescope::diagnostics
 		return r;
 	}
 
-	// No state warns since 2026-11-06: direct scanout on crashed the GPU in testing,
-	// so telling the user to turn it on would be harmful. This one point drives both
-	// the startup toast and the rail's yellow dot.
-	// ponytail: to restore the warning once the crash is fixed, make this
-	// `return e == ScanoutState::Off;` (and update tests/test_diagnostics.cpp).
-	inline bool WarnsAbout( [[maybe_unused]] ScanoutState e ) { return false; }
+	// The only state that warns. It was switched off 2026-11-06 to 2026-11-07 while
+	// direct scanout on could crash the GPU; that crash is fixed.
+	inline bool WarnsAbout( ScanoutState e ) { return e == ScanoutState::Off; }
+
+	// Whether a state raises the toast and the rail's yellow dot: it warns and the
+	// user has not silenced the warning (global.json overlay.diagnostics_silence_warning).
+	// The area itself always shows the true state; only the alerts are silenced.
+	inline bool Alerts( ScanoutState e, bool bSilenced ) { return !bSilenced && WarnsAbout( e ); }
 
 	// Whether any published check result warns. Derived from the results, not a
 	// flag kept beside them, so a future check counts the moment its result is
 	// in the range. "Could not check" is not a warning (same rule as the toast).
 	template <class It>
-	inline bool AnyWarns( It itBegin, It itEnd )
+	inline bool AnyWarns( It itBegin, It itEnd, bool bSilenced = false )
 	{
 		for ( ; itBegin != itEnd; ++itBegin )
-			if ( WarnsAbout( itBegin->eState ) )
+			if ( Alerts( itBegin->eState, bSilenced ) )
 				return true;
 		return false;
 	}

@@ -10,8 +10,9 @@ remains: with the host's direct scanout on, the picture shows artifacts when ent
 leaving fullscreen, sometimes older frames. They persist with the crash fix and look the same
 with matching `XR30` formats, so the format switch is not the cause. Reportedly absent under
 `RADV_DEBUG=allbos` on gamescope, which suggests a similar buffer-lifetime or listing problem on
-the read side; unconfirmed. Once solved, decide whether Diagnostics may warn again about scanout
-being off ([diagnostics.md](../features/diagnostics.md)).
+the read side; unconfirmed. The Diagnostics warning about scanout being off is back and can be silenced
+([diagnostics.md](../features/diagnostics.md)); reconsider it if the artifacts prove to be
+unfixable on the gamescope side.
 
 ## Audio capture: crash on shutdown
 

@@ -2,31 +2,32 @@
 
 The Shell's **Diagnostics** area (`system.diagnostics`, OTHER rail group, last) checks setup
 outside gamescope that costs frames without printing an error, says what is wrong and what to
-set, and has a **Recheck all** button. **Since 2026-11-06 nothing warns** (see
-[Warnings are switched off](#warnings-are-switched-off-2026-11-06)). Code: `src/Overlay/Diagnostics.{h,cpp}` (runtime),
+set, and has a **Recheck all** button. The warning can be silenced
+(see [Silence warning](#silence-warning)). Code: `src/Overlay/Diagnostics.{h,cpp}` (runtime),
 `src/Overlay/DiagnosticsLogic.h` (pure: parsing and state decisions,
 `tests/test_diagnostics.cpp`), `src/Overlay/PanelDiagnostics.cpp` (area). One check today.
 
-## Warnings are switched off (2026-11-06)
+## Silence warning
 
-`WarnsAbout()` in `DiagnosticsLogic.h` returns false for every state, so there is no startup
-toast and no yellow rail dot. `Why:` on 2026-11-06, gamescope nested on Hyprland with direct
-scanout on and a game running crashed the GPU 4 times in about 285 fullscreen entries (a gfxhub
-write page fault from gamescope, then a cs2 gfx ring timeout, a failed ring reset and a full GPU
-reset that killed the desktop). With `direct_scanout = 0` there were 0 crashes in 183 entries.
-Giving the output image the screen's own format, so no format-change modeset happens, did not
-stop it. The crash was fixed on 2026-11-07 (output images no longer carry the WSI memory chain under a
-host); the warnings stay off while scanout's picture artifacts are open. Telling users to turn the
-option on is therefore harmful. The user: *"Yeah, turn off the warning for now."*
+Sheet row **Silence warning** (group Warning, `diagnostics.silence_warning`; config
+`overlay.diagnostics_silence_warning` in `global.json`, default off). On: no startup toast and no
+yellow rail dot; the area still shows the true state and the fix text. `Why global:` the host
+setup belongs to the machine, not to a game, so it is never in a profile. The decision is pure
+(`Alerts( state, bSilenced )` and `AnyWarns( b, e, bSilenced )` in `DiagnosticsLogic.h`, tested in
+`tests/test_diagnostics.cpp`); `Diagnostics_Silenced()` caches the setting in an atomic, and the
+setter writes `global.json` and repaints, so the dot follows at once. The toast is decided when
+it is shown, so silencing before it appears also suppresses it.
 
-The toast, the dot (`Area::WarnWhen`, `Diagnostics_HasWarning()`), `AnyWarns()` and the check
-itself are all kept. **To restore:** make `WarnsAbout()` `return e == ScanoutState::Off;` again,
-restore the fix text in `PanelDiagnostics.cpp` (set `render:direct_scanout = 2`) and the toast
-text in `Diagnostics.cpp`, and flip the assertions in `tests/test_diagnostics.cpp`. Do that only
-once the picture artifacts with scanout on are solved too (the crash itself was fixed 2026-11-07, see
-[backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)). The area now says: Off is the safe setting (costs some generated
-frames), and On carries a caution that it can currently crash the GPU. Both are plain text, not
-a warning.
+`Why a switch at all:` the warning was switched off 2026-11-06 to 2026-11-07 because direct
+scanout on could crash the GPU (4 crashes in about 285 fullscreen entries, 0 in 183 with scanout
+off). The crash was fixed 2026-11-07 (no WSI memory chain on output images under a host, see
+[backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)), so the warning is back, and
+users who deliberately keep scanout off can mute it. Picture artifacts on entering and leaving
+fullscreen with scanout on are still open there.
+
+`Why fix text says 2:` games only keeps the exposure narrow, and the earlier zero-copy
+measurements used 2; the crash test ran with 1 (every fullscreen window), which also engages
+scanout, so both are known to work.
 
 ## Hyprland direct scanout
 
@@ -43,7 +44,7 @@ States (`ScanoutState`):
 | Not applicable | the backend cannot be scanned out by a host (`HostMayScanOutOutputImages()` false: DRM, headless, OpenVR, **SDL**) | no |
 | Hyprland not detected | `HYPRLAND_INSTANCE_SIGNATURE` was not set when gamescope started | no |
 | On | `render:direct_scanout` is 1 or 2 | no |
-| Off | it is 0 | no (until 2026-11-06 **yes**; see above) |
+| Off | it is 0 | **yes**, unless silenced |
 | Could not check | no `hyprctl`, no answer in 1 s, non-zero exit, no such option, unparsable output, a value other than 0/1/2 | no |
 
 The backend decides before Hyprland does, so headless under a Hyprland session says "Not
@@ -72,22 +73,20 @@ with it. For the browser it also drops what only makes sense for the game: `LD_P
 `LD_LIBRARY_PATH`, `ENABLE_GAMESCOPE*`, `GAMESCOPE_*`, `SDL_VIDEODRIVER`, `STEAM_GAMESCOPE_*`,
 `PRESSURE_VESSEL*`, and so on (`DropForBrowser()`).
 
-### Warning (switched off 2026-11-06)
-
-The text below describes the machinery, which is intact but never fires while `WarnsAbout()`
-is false.
+### Warning
 
 The check starts on the first paint with a sized output (`Diagnostics_Tick()`, called every frame
 from `SettingsOverlay_AddLayer()`). When it finishes with **Off**, `Tick()` raises one warning
 toast (`Notifications::Show()` is paint-thread only, so the worker only sets a flag):
 `Why one per session:` a repeating toast under a game is worse than the loss, and the Diagnostics
-row stays as the record. There is no "don't show again" setting; the notification system has none
-(it has a global mute, which also silences this). A manual **Recheck all** never toasts. The row
+row stays as the record. The **Silence warning** switch (above) mutes it; the
+notification system's global mute also silences it. A manual **Recheck all** never toasts. The row
 and the fix text stay until a recheck reads On.
 
 ### The area
 
-Sheet rows: **Direct scanout** (status; Details: the value read and the reason) and **Recheck
+Sheet rows: **Direct scanout** (status; Details: the value read and the reason), **Silence
+warning** (switch) and **Recheck
 all** (disabled while a run is going). The docs button is **not a sheet row**: it is the
 Inspector-only verb `Entry::InspectorVerb()` of the Direct scanout row ("Hyprland render options",
 chip **Open**, `https://wiki.hypr.land/configuring/core/config-options/#render`). It is drawn
@@ -98,10 +97,8 @@ verb). Shown while the check applies (state On, Off or Could not check); hidden 
 Not applicable or Hyprland not detected. It is not a palette row (like every read-only row);
 searching "diagnostics", "hyprland", "wiki" or "docs" finds the area, whose Overview carries it.
 `Why:` the user, on the first version with the button in the sheet: *"It should only show this
-button on the inspector rail on the right side"*. Below the rows, when Off: leave it off for now, what that costs (some generated
-frames), and that scanout on can show picture artifacts when entering or leaving fullscreen (it could
-crash the GPU until 2026-11-07; until 2026-11-06 this was the fix `render:direct_scanout = 2` with config snippets). When
-On: a short caution about the artifacts. For the other states the area shows the one-sentence
+button on the inspector rail on the right side"*. Below the rows, when Off: what is lost and the fix
+(`render:direct_scanout = 2` with Lua and hyprlang snippets). For the other states the area shows the one-sentence
 reason.
 
 The link runs `xdg-open <url>` the same way (fixed argv, no shell, the host environment above,
@@ -109,9 +106,9 @@ detached in its own session). Gamescope is a subreaper, so the child is reaped w
 non-blocking `waitpid` on later ticks. Opening a browser over a fullscreen game may take focus
 from it; nothing opens by itself.
 
-### The warning dot on the rail (switched off 2026-11-06)
+### The warning dot on the rail
 
-Nothing warns now, so the dot is never shown; the machinery stays. While any diagnostic warns, the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
+While any diagnostic warns (and Silence warning is off), the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
 `glyph::kWarnDotColor`, antialiased, no "!") on the **OTHER** group heading and on the
 **Diagnostics** row. `Why:` the first cut was a drawn warning triangle with a "!", which looked
 improvised; the user: *"The badge looks really bad. It doesnt look proper. Just make it a yellow
@@ -154,4 +151,4 @@ nothing else.
 
 ## History
 
-- **Diagnostics** (glossary detail): **Diagnostics** — the Shell's `system.diagnostics` area, last in the **OTHER** rail group (2026-11-05; `src/Overlay/PanelDiagnostics.cpp`, `Diagnostics.{h,cpp}`, pure half `DiagnosticsLogic.h`): checks of the setup *around* gamescope that cost the user frames without any error, each with a plain state and what to change, plus a **Recheck all** button. One check today: whether Hyprland has `render:direct_scanout` on, read with `hyprctl` off the paint thread and only when gamescope runs nested through the Wayland backend (anywhere else it says "Not applicable" and never warns). Its warnings (a once-per-session toast, and a yellow dot on the OTHER heading and the Diagnostics row of the rail, both added 2026-11-05) are **switched off since 2026-11-06** because direct scanout on can crash the GPU (`WarnsAbout()` returns false; the machinery is kept); the docs link is an Inspector-only button, not a sheet row. The user's own wording: *"Under the 'OTHER' category, add the tab 'Diagnostics'."* Distinct from the **Log** (what gamescope printed) and from the `Diagnostics` *group* inside the Log area (its buffer facts).
+- **Diagnostics** (glossary detail): **Diagnostics** — the Shell's `system.diagnostics` area, last in the **OTHER** rail group (2026-11-05; `src/Overlay/PanelDiagnostics.cpp`, `Diagnostics.{h,cpp}`, pure half `DiagnosticsLogic.h`): checks of the setup *around* gamescope that cost the user frames without any error, each with a plain state and what to change, plus a **Recheck all** button. One check today: whether Hyprland has `render:direct_scanout` on, read with `hyprctl` off the paint thread and only when gamescope runs nested through the Wayland backend (anywhere else it says "Not applicable" and never warns). Its warnings (a once-per-session toast, and a yellow dot on the OTHER heading and the Diagnostics row of the rail, both added 2026-11-05) were off 2026-11-06 to 2026-11-07 while scanout on could crash the GPU, and can be muted with the **Silence warning** switch (global); the docs link is an Inspector-only button, not a sheet row. The user's own wording: *"Under the 'OTHER' category, add the tab 'Diagnostics'."* Distinct from the **Log** (what gamescope printed) and from the `Diagnostics` *group* inside the Log area (its buffer facts).
