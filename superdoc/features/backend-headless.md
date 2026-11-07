@@ -9,43 +9,43 @@ margin.
 
 ## How it works
 
-- Implemented entirely in `src/Backends/HeadlessBackend.cpp:97 CHeadlessBackend` (a
+- Implemented entirely in `src/Backends/HeadlessBackend.cpp:CHeadlessBackend` (a
   `CBaseBackend` subclass) plus a matching stub connector,
-  `src/Backends/HeadlessBackend.cpp:11 CHeadlessConnector`. Both classes are compact
-  enough that nearly every virtual from `src/backend.h:312 IBackend` and
-  `src/backend.h:176 IBackendConnector` is a one-line stub.
-- `CHeadlessBackend::Init` (`src/Backends/HeadlessBackend.cpp:108`) only sets the output
+  `src/Backends/HeadlessBackend.cpp:CHeadlessConnector`. Both classes are compact
+  enough that nearly every virtual from `src/backend.h:IBackend` and
+  `src/backend.h:IBackendConnector` is a one-line stub.
+- `CHeadlessBackend::Init` (`src/Backends/HeadlessBackend.cpp:CHeadlessBackend::Init`) only sets the output
   size/refresh from the same `-W`/`-H`/`-r` globals every nested backend uses (defaulting
-  to a 720p, 16:9, 60 Hz virtual display — `src/Backends/HeadlessBackend.cpp:114`), calls
+  to a 720p, 16:9, 60 Hz virtual display — `src/Backends/HeadlessBackend.cpp:CHeadlessBackend::Init`), calls
   `vulkan_init`, and calls `wlsession_init()`. *Why:* even headless mode needs a working
   Wayland server (`wlserver`) because clients still connect to it and get composited —
   "headless" only means "no output sink", not "no compositor."
-- `CHeadlessBackend::ImportDmabufToBackend` (`src/Backends/HeadlessBackend.cpp:183`) just
+- `CHeadlessBackend::ImportDmabufToBackend` (`src/Backends/HeadlessBackend.cpp:CHeadlessBackend::ImportDmabufToBackend`) just
   wraps the client's dmabuf in a plain `CBaseBackendFb` — there is no real scanout object
   to import into, unlike DRM's KMS framebuffer or Wayland's `zwp_linux_dmabuf_v1` import.
-- `CHeadlessConnector::Present` (`src/Backends/HeadlessBackend.cpp:88`) is a no-op that
+- `CHeadlessConnector::Present` (`src/Backends/HeadlessBackend.cpp:CHeadlessConnector::Present`) is a no-op that
   returns `0` immediately — no compositing wait, no vblank, no presentation feedback.
   *Why:* there is nothing to present to; the composited frame is only observed by
   whatever reads it back out-of-band (capture/IPC), not by this backend.
 - `UsesVulkanSwapchain()` returns `false` and `IsSessionBased()` returns `false`
-  (`src/Backends/HeadlessBackend.cpp:219`, `:224`) — it needs neither a windowing
+  (`src/Backends/HeadlessBackend.cpp:CHeadlessBackend::UsesVulkanSwapchain`, `CHeadlessBackend::IsSessionBased`) — it needs neither a windowing
   swapchain nor a logind/DRM session, which is why it's the mode CI and server-side
   streaming setups use when there's no display hardware or desktop session available at
   all.
 - `GetSupportedModifiers`/`UsesModifiers` both report no modifier support
-  (`src/Backends/HeadlessBackend.cpp:188`, `:192`) — buffers are always treated as
+  (`src/Backends/HeadlessBackend.cpp:CHeadlessBackend::UsesModifiers`, `CHeadlessBackend::GetSupportedModifiers`) — buffers are always treated as
   linear/implicit since there's no real display controller with format/modifier
   constraints to negotiate against.
 
 ## Using it
 
 Select it explicitly with `--backend headless` (parsed in
-`src/main.cpp:427 parse_backend_name` and dispatched at `src/main.cpp:993`). Unlike DRM,
-SDL, and Wayland, headless is never chosen by `src/main.cpp:453 auto_select_backend` — it
+`src/main.cpp:parse_backend_name` and dispatched in `src/main.cpp:main`). Unlike DRM,
+SDL, and Wayland, headless is never chosen by `src/main.cpp:auto_select_backend` — it
 must be requested on the command line, since auto-detection only distinguishes
 "nested under Wayland" / "nested under X11" / "own the DRM device" (see
 [backend-drm.md](backend-drm.md#using-it)). There is no build-time flag gating it
-(unlike `drm_backend`/`sdl2_backend` in `meson_options.txt:3-4`) — it has no external
+(unlike `drm_backend`/`sdl2_backend` in `meson_options.txt` options) — it has no external
 library dependency, so it's always compiled in.
 
 ## Related links

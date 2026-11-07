@@ -8,26 +8,26 @@ image ready for presentation.
 
 ## How it works
 
-- The single entry point is `vulkan_composite()` at `src/rendervulkan.cpp:4030`
-  (declared `src/rendervulkan.hpp:453`). Callers (see below) fill in a `FrameInfo_t`
+- The single entry point is `vulkan_composite()` (`src/rendervulkan.cpp:vulkan_composite`,
+  declared in `src/rendervulkan.hpp:vulkan_composite`). Callers (see below) fill in a `FrameInfo_t`
   describing the frame, and get back an `std::optional<uint64_t>` submission sequence
   number to wait on.
-- **`FrameInfo_t`** (`src/rendervulkan.hpp:281`) is the per-frame layer stack: up to
+- **`FrameInfo_t`** (`src/rendervulkan.hpp:FrameInfo_t`) is the per-frame layer stack: up to
   `k_nMaxLayers` entries in its nested `FrameInfo_t::LayerStack_t layers` member, plus
   frame-wide flags (`useFSRLayer0`,
   `useNISLayer0`, `blurLayer0`, `outputEncodingEOTF`, per-EOTF `shaperLut`/`lut3D`
-  color-management LUTs). Each `FrameInfo_t::Layer_t` (`src/rendervulkan.hpp:296`)
+  color-management LUTs). Each `FrameInfo_t::Layer_t` (`src/rendervulkan.hpp:FrameInfo_t::Layer_t`)
   carries a texture, offset/scale, opacity, `zpos`, upscale `filter`, alpha-blend mode,
   colorspace, and optional `ctm`/`hdr_metadata_blob` — see
   [hdr-color-management.md](hdr-color-management.md) for how those two get populated.
   *Why a fixed-size array instead of a `vector`:* the layer count is bounded by real
-  DRM/hardware overlay-plane limits (`k_nMaxLayers` = 6, `src/rendervulkan.hpp:40`),
+  DRM/hardware overlay-plane limits (`k_nMaxLayers` = 6, `src/rendervulkan.hpp:k_nMaxLayers`),
   so a static array avoids per-frame heap churn on the hot path.
 - `vulkan_composite()` picks one of four compute paths per frame based on
   `frameInfo->useFSRLayer0` / `useNISLayer0` / `blurLayer0`, else falls through to a
   plain blit — see [scaling-filters.md](scaling-filters.md) for the FSR/NIS branches in
   detail. Every path ends by binding all layers with `bind_all_layers()`
-  (`src/rendervulkan.cpp:3949`), which also decides per-layer nearest-vs-linear
+  (`src/rendervulkan.cpp:bind_all_layers`), which also decides per-layer nearest-vs-linear
   sampling from `Layer_t::filter` and `isScreenSize()`.
 - Before any of that, two layer-0 pre-passes may run, in this order, each substituting
   its output for `layers[0].tex` in a *private copy* of the `FrameInfo_t` so the path
@@ -49,15 +49,15 @@ image ready for presentation.
   [shader-effects.md](shader-effects.md).
 - The composited result also gets an inline conversion/blit into an optional
   `pPipewireTexture` output texture in the same command buffer
-  (`src/rendervulkan.cpp:4209`-`4255`) when PipeWire streaming is active, reusing the
+  (`src/rendervulkan.cpp:vulkan_composite`, the `pPipewireTexture` block) when PipeWire streaming is active, reusing the
   BLIT/RGB_TO_NV12 pipelines. The PipeWire consumer side is
   [screen-capture-pipewire.md](screen-capture-pipewire.md); this page only notes that
   the tap is a second target bound in the same dispatch, not a separate composite pass.
 - Work is recorded on a `CVulkanCmdBuffer` obtained from `CVulkanDevice::commandBuffer()`
-  and handed to `CVulkanDevice::submit()` (`src/rendervulkan.hpp:818`-`819`); the device
-  (`class CVulkanDevice`, `src/rendervulkan.hpp:810`, global instance
-  `g_device` at `src/rendervulkan.hpp:1054`) prefers a compute-only queue family
-  (`VK_QUEUE_COMPUTE_BIT` search in `src/rendervulkan.cpp:365`) over a combined
+  and handed to `CVulkanDevice::submit()` (`src/rendervulkan.hpp:CVulkanDevice::submit`); the device
+  (`class CVulkanDevice`, `src/rendervulkan.hpp:CVulkanDevice`, global instance
+  `src/rendervulkan.hpp:g_device`) prefers a compute-only queue family
+  (`VK_QUEUE_COMPUTE_BIT` search in `src/rendervulkan.cpp:CVulkanDevice::selectPhysDev`) over a combined
   graphics+compute one when the driver offers one. *Why async compute instead of the
   graphics pipeline:* gamescope's job is small, latency-critical dispatches every
   frame (blit/upscale/blur/colorspace-convert), not a rasterization pipeline with
@@ -67,27 +67,27 @@ image ready for presentation.
 - Client buffer commits are turned into sampleable Vulkan textures by `src/commit.cpp`;
   textures created from a given `wlr_buffer` are cached so a buffer committed once but
   referenced by multiple frames (e.g. while paused) doesn't get re-imported — see
-  `CBufferMemo` (per-buffer cache entry, `src/BufferMemo.h:21`) and
-  `CBufferMemoizer` (owning lookup table, `src/BufferMemo.h:45`). *Why memoize:*
+  `CBufferMemo` (per-buffer cache entry, `src/BufferMemo.h:CBufferMemo`) and
+  `CBufferMemoizer` (owning lookup table, `src/BufferMemo.h:CBufferMemoizer`). *Why memoize:*
   DMA-BUF/wl_shm import has real driver-side cost; a still frame shouldn't pay it
   every vblank. How a committed buffer reaches the window stack that
   becomes `FrameInfo_t` layers is [steamcompmgr-focus.md](steamcompmgr-focus.md)'s
   territory.
 - Explicit GPU/DRM sync (rather than implicit fencing) is modeled by `CTimeline`
-  (`src/Timeline.h:25`), a thin wrapper over a DRM syncobj that can be turned into a
+  (`src/Timeline.h:CTimeline`), a thin wrapper over a DRM syncobj that can be turned into a
   Vulkan timeline semaphore via `ToVkSemaphore()`. This is what lets gamescope hand a
   DRM KMS commit a wait/signal point that a Vulkan submission also participates in,
   without a blocking CPU round-trip.
 - The composite result is not presented directly by this file: the caller passes the
   finished `FrameInfo_t` to the active backend's `IBackendConnector::Present()`
-  (`src/backend.h:205`), which itself calls back into `vulkan_composite()`/
-  `vulkan_present_to_window()` (`src/rendervulkan.cpp:3000`) depending on whether the
+  (`src/backend.h:IBackendConnector::Present`), which itself calls back into `vulkan_composite()`/
+  `vulkan_present_to_window()` (`src/rendervulkan.cpp:vulkan_present_to_window`) depending on whether the
   backend uses a Vulkan swapchain (`GetBackend()->UsesVulkanSwapchain()`) or a raw DRM
   KMS submit. See the relevant `features/backend-*.md` page for the per-backend half of
   that call.
 
 - Composite dispatch isn't free-running: `paint_all()` is paced by the vblank timer,
-  `class CVBlankTimer` (`src/vblankmanager.hpp:27`), which schedules the next repaint
+  `class CVBlankTimer` (`src/vblankmanager.hpp:CVBlankTimer`), which schedules the next repaint
   relative to the display's actual vblank interval rather than running flat-out. This
   page only notes the coupling; the full frame-pacing loop belongs to
   [../architecture/overview.md](../architecture/overview.md).
@@ -135,7 +135,7 @@ composite and direct scanout).
 
 There's no direct end-user control surface here — this is the render core other
 subsystems drive. The frame this page describes is assembled once per repaint by
-`paint_all()` in `src/steamcompmgr.cpp:2564`, which walks the focused window stack,
+`paint_all()` in `src/steamcompmgr.cpp:paint_all`, which walks the focused window stack,
 fills in a `FrameInfo_t`, and calls into a backend's `Present()`. See
 [steamcompmgr-focus.md](steamcompmgr-focus.md) for how the window/focus state feeding
 that assembly is decided.

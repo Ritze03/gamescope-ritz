@@ -8,16 +8,15 @@ one most useful for desktop development/testing of gamescope itself.
 
 ## How it works
 
-- Implemented in `src/Backends/SDLBackend.cpp`: `src/Backends/SDLBackend.cpp:132
-  CSDLBackend` (a `CBaseBackend`) owns one `src/Backends/SDLBackend.cpp:60 CSDLConnector`,
+- Implemented in `src/Backends/SDLBackend.cpp`: `src/Backends/SDLBackend.cpp:CSDLBackend` (a `CBaseBackend`) owns one `src/Backends/SDLBackend.cpp:CSDLConnector`,
   which doubles as the `INestedHints` implementation
-  (`src/Backends/SDLBackend.cpp:60 CSDLConnector : public CBaseBackendConnector, public INestedHints`) —
+  (`src/Backends/SDLBackend.cpp:CSDLConnector`, declared `public CBaseBackendConnector, public INestedHints`) —
   cursor image, window title/icon, relative-mouse mode, and clipboard/selection all route
-  through `INestedHints` (`src/backend.h:254`) back into SDL window/clipboard calls.
+  through `INestedHints` (`src/backend.h:INestedHints`) back into SDL window/clipboard calls.
   *Why:* nested backends need a way for `steamcompmgr` to push "OS-level" window hints
   (title, cursor shape, clipboard contents) down to the host window manager, which
   `IBackendConnector` alone doesn't model — `GetNestedHints()` is the hook
-  (`src/backend.h:211`).
+  (`src/backend.h:IBackendConnector::GetNestedHints`).
 - **Settings-overlay cursor** — `INestedHints::PresentOverlayCursor( bool ) -> bool`, driven
   every frame from `paint_all()`. While the overlay owns the pointer, SDL shows
   `SDL_GetDefaultCursor()` (the *system* cursor) rather than the game's cursor image, and
@@ -29,9 +28,9 @@ one most useful for desktop development/testing of gamescope itself.
   cursor stays — that fallback is what keeps **exactly one cursor visible, never zero**
   (`#69`, revised by D29). The shared rule lives in `src/CursorPolicy.h`.
 - SDL runs on its own dedicated thread: `m_SDLThread` is started in the
-  `CSDLBackend` constructor (`src/Backends/SDLBackend.cpp:398`) and joined on
-  destruction by pushing an `SDL_QUIT` event (`src/Backends/SDLBackend.cpp:402`).
-  `Init()` (`src/Backends/SDLBackend.cpp:409`) blocks on
+  `CSDLBackend` constructor (`src/Backends/SDLBackend.cpp:CSDLBackend::CSDLBackend`) and joined on
+  destruction by pushing an `SDL_QUIT` event (`src/Backends/SDLBackend.cpp:CSDLBackend::~CSDLBackend`).
+  `Init()` (`src/Backends/SDLBackend.cpp:CSDLBackend::Init`) blocks on
   `m_eSDLInit.wait(SDLInitState::SDLInit_Waiting)` until that thread finishes its own
   setup and flips `m_eSDLInit` to `Success`/`Failure`. *Why:* SDL's event pump and window
   APIs are expected to run from a single, consistent thread, but `IBackend::Init()` is
@@ -39,26 +38,26 @@ one most useful for desktop development/testing of gamescope itself.
   the two are reconciled.
 - Presentation is a real Vulkan swapchain, not a dmabuf hand-off:
   `CSDLBackend::UsesVulkanSwapchain()` returns `true`
-  (`src/Backends/SDLBackend.cpp:497`), the window surface is created with
-  `SDL_Vulkan_CreateSurface` (`src/Backends/SDLBackend.cpp:268`), and
+  (`src/Backends/SDLBackend.cpp:CSDLBackend::UsesVulkanSwapchain`), the window surface is created with
+  `SDL_Vulkan_CreateSurface` (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`), and
   `CSDLConnector::Present` calls `vulkan_composite` then `vulkan_present_to_window`
-  (`src/Backends/SDLBackend.cpp:342`). This is the key architectural contrast with the
+  (`src/Backends/SDLBackend.cpp:CSDLConnector::Present`). This is the key architectural contrast with the
   Wayland backend, which imports client buffers straight into the compositor via
   `zwp_linux_dmabuf_v1` and never touches a swapchain
   (see [backend-wayland.md](backend-wayland.md#how-it-works)).
-- `ImportDmabufToBackend` (`src/Backends/SDLBackend.cpp:460`) is a stub returning a bare
+- `ImportDmabufToBackend` (`src/Backends/SDLBackend.cpp:CSDLBackend::ImportDmabufToBackend`) is a stub returning a bare
   `CBaseBackendFb` — SDL has no scanout object of its own to import into (the
   composited result reaches the screen only via the swapchain present, not by handing
   a client dmabuf onward), so `UsesModifiers()` is `false` and
-  `GetSupportedModifiers()` is always empty (`src/Backends/SDLBackend.cpp:465`, `:469`).
-- `SupportsPlaneHardwareCursor()` is `false` (`src/Backends/SDLBackend.cpp:486`) — cursor
+  `GetSupportedModifiers()` is always empty (`src/Backends/SDLBackend.cpp:CSDLBackend::UsesModifiers`, `CSDLBackend::GetSupportedModifiers`).
+- `SupportsPlaneHardwareCursor()` is `false` (`src/Backends/SDLBackend.cpp:CSDLBackend::SupportsPlaneHardwareCursor`) — cursor
   rendering goes through the `INestedHints` cursor-image path instead of a hardware
   overlay plane, since there's no real display controller underneath to own a cursor
-  plane. `SupportsTearing()` is also `false` (`src/Backends/SDLBackend.cpp:493`) — a
+  plane. `SupportsTearing()` is also `false` (`src/Backends/SDLBackend.cpp:CSDLBackend::SupportsTearing`) — a
   desktop-hosted window can't do a tearing scanout the way a backend owning the CRTC can
   (contrast [backend-drm.md](backend-drm.md#how-it-works)'s `SupportsTearing()`, which is
   conditional on `g_bSupportsAsyncFlips`).
-- `IsSessionBased()` returns `false` (`src/Backends/SDLBackend.cpp:502`) — SDL doesn't
+- `IsSessionBased()` returns `false` (`src/Backends/SDLBackend.cpp:CSDLBackend::IsSessionBased`) — SDL doesn't
   need the logind/DRM-master session handling that `CDRMBackend` requires.
 - **Runtime window-size request** — `INestedHints::RequestOutputSize(w, h)` parks the size
   in two atomics and pushes `GAMESCOPE_SDL_EVENT_RESIZE`; the SDL thread leaves
@@ -72,30 +71,30 @@ one most useful for desktop development/testing of gamescope itself.
 ## Using it
 
 - Select explicitly with `--backend sdl`, gated at compile time behind
-  `meson_options.txt:4 sdl2_backend` and `#if HAVE_SDL2` in
-  `src/main.cpp:435-438 parse_backend_name` / `src/main.cpp:983-987`.
-  `src/main.cpp:453 auto_select_backend` falls back to `SDL` when `$DISPLAY` is set but
+  `meson_options.txt:sdl2_backend` and `#if HAVE_SDL2` in
+  `src/main.cpp:parse_backend_name` / the backend `switch` in `src/main.cpp:main`.
+  `src/main.cpp:auto_select_backend` falls back to `SDL` when `$DISPLAY` is set but
   `$WAYLAND_DISPLAY` isn't (i.e. a plain X11 session) — see
   [backend-wayland.md](backend-wayland.md#using-it) for the Wayland-preferred case.
 - Window behavior CLI flags (parsed in `src/main.cpp`, consumed in
-  `CSDLConnector::Init`, `src/Backends/SDLBackend.cpp:226`):
+  `src/Backends/SDLBackend.cpp:CSDLConnector::Init`):
   - `-b, --borderless` → `g_bBorderlessOutputWindow`, adds `SDL_WINDOW_BORDERLESS`
-    (`src/Backends/SDLBackend.cpp:248`).
+    (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`).
   - `-f, --fullscreen` → `g_bFullscreen`, adds `SDL_WINDOW_FULLSCREEN_DESKTOP`
-    (`src/Backends/SDLBackend.cpp:251`); also toggled live at runtime with a key binding
-    that calls `SDL_SetWindowFullscreen` (`src/Backends/SDLBackend.cpp:767`).
+    (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`); also toggled live at runtime with a key binding
+    that calls `SDL_SetWindowFullscreen` (`src/Backends/SDLBackend.cpp:CSDLBackend::SDLThreadFunc`).
   - `-g, --grab` → `g_bGrabbed`, adds `SDL_WINDOW_KEYBOARD_GRABBED`
-    (`src/Backends/SDLBackend.cpp:254`); also toggled live
-    (`src/Backends/SDLBackend.cpp:794`).
+    (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`; also set when Input > General's "Force grab keyboard" is on); also toggled live
+    (`src/Backends/SDLBackend.cpp:CSDLBackend::SDLThreadFunc`).
   - `--display-index` → `g_nNestedDisplayIndex`, picks which physical monitor the SDL
-    window opens on (`src/Backends/SDLBackend.cpp:259-260`).
+    window opens on (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`, `SDL_WINDOWPOS_UNDEFINED_DISPLAY`).
   - `-W`/`-H`/`-r` (nested width/height/refresh) size the window itself, same as every
     nested backend — defaults to 720p @ 60 Hz, 16:9, if unset
-    (`src/Backends/SDLBackend.cpp:232-244`).
+    (`src/Backends/SDLBackend.cpp:CSDLConnector::Init`).
 - On the auto-select Wayland path, if the Wayland backend's `Init()` fails (e.g. no
   Wayland compositor actually reachable despite `$WAYLAND_DISPLAY` being set), gamescope
   falls back to constructing `CSDLBackend` right there in the same switch case
-  (`src/main.cpp:997-1002`) — SDL is effectively the safety net under the Wayland
+  (the backend `switch` in `src/main.cpp:main`) — SDL is effectively the safety net under the Wayland
   backend, not just an independent selectable mode.
 
 ## Related links
