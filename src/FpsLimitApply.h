@@ -2,7 +2,7 @@
 
 // The Frame limiter's saved value, as the compositor applies it (startup and profile
 // switch). Pure, so tests/test_limiter_pace.cpp can pin it. See
-// superdoc/features/resolution-and-refresh.md's Frame limiter section.
+// superdoc/features/frame-limiter.md.
 
 #include <algorithm>
 

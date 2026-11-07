@@ -70,7 +70,7 @@ behaviour, producing the binary the user will actually run).
 
 **The knobs, and why each one is there** (full detail, including the user's own
 words and the measurements behind each choice, is in the script's own header comment —
-run `scripts/gentle-build.sh --help` — and in `superdoc/features/build-and-tooling.md`'s
+run `scripts/gentle-build.sh --help` — and in `superdoc/features/gentle-build.md`'s
 own section on this script; this is the quick-reference version):
 
 | knob | default | what it does | why |
@@ -97,7 +97,7 @@ CAT/resctrl to partition it (verified: no `cat_l3` in `/proc/cpuinfo`, no
 a compiler on core 7 still evicts the game's lines from the L3 every core shares.
 That's why the real levers here are concurrency (`--jobs`) and duty-cycle
 (`--cpu-quota`). The script sets no CPU affinity: the user enforces it system-wide
-(2026-10-07). See `superdoc/features/build-and-tooling.md`'s own section for the full
+(2026-10-07). See `superdoc/features/gentle-build.md` for the full
 reasoning and the measurements behind each kept/dropped flag.
 
 `--test` runs `<dir>/tests/gamescope_tests` under the identical gentle wrapper afterward.
@@ -110,7 +110,7 @@ alone and says so, rather than silently skipping the cgroup limits.
 ninja targets plus the full test suite took 14m43s wall at the defaults above, with all
 588 test cases passing; a second full build into a fresh directory with ccache warm from
 the first took 18s wall for the identical target set (533/533 compiler calls hit the
-cache). Full numbers and methodology: `superdoc/features/build-and-tooling.md`'s own
+cache). Full numbers and methodology: `superdoc/features/gentle-build.md`'s own
 section on this script.
 
 ## Testing on the remote laptop rig
@@ -119,7 +119,7 @@ section on this script.
 over SSH, and runs it there against a real compositor — so overlay work can be verified
 visually instead of only headlessly. See its own header comment for full usage
 (`sync`, `run`, `screenshot`, `env` subcommands) and
-`superdoc/features/build-and-tooling.md` for why it's built-here-ship-there rather than
+`superdoc/features/remote-test-rig.md` for why it's built-here-ship-there rather than
 building on the laptop.
 
 ```sh

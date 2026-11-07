@@ -691,7 +691,7 @@ namespace gamescope
 		// Low-latency wake-up (2026-10-04): a plain ConVar mirror of
 		// gamescope.low_latency_wakeup, the same shape as Allow tearing above.
 		// The help text names the trade-off on purpose -- see
-		// superdoc/features/resolution-and-refresh.md's "Low-latency wake-up".
+		// superdoc/features/display-general.md's "Low-latency wake-up".
 		a.Switch( "display.low_latency_wakeup", "Low-latency wake-up",
 			ui::AnyBind::Of<bool>(
 				[]{ return gamescope::vblank_measured_lead.Get(); },

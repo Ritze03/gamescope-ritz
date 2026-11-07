@@ -1,7 +1,7 @@
 #pragma once
 
 // The Frame limiter's pacing rules, shared by the compositor and the WSI layer. Pure, so
-// tests/test_limiter_pace.cpp can pin them. See superdoc/features/resolution-and-refresh.md.
+// tests/test_limiter_pace.cpp can pin them. See superdoc/features/frame-limiter.md.
 
 #include <cstdint>
 
