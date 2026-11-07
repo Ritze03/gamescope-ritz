@@ -6,13 +6,13 @@ actions (e.g. commit/close) on the client's behalf.
 
 ## How it works
 
-- `create_ime_manager(wlserver_t *wlserver)` (`src/ime.hpp:8`) installs the input-method
+- `create_ime_manager(wlserver_t *wlserver)` (`src/ime.hpp`) installs the input-method
   manager on the server, implementing the `gamescope_input_method` Wayland protocol
   defined in `protocol/gamescope-input-method.xml`.
 - `create_local_ime()` / `destroy_ime(...)` create and tear down a local input-method
   context; `type_text(ime, text)` pushes UTF-8 text through it.
 - `perform_action(wlserver_input_method *ime, enum gamescope_input_method_action action)`
-  (`src/ime.hpp:13`) issues a protocol-defined action (the `gamescope_input_method_action`
+  (`src/ime.hpp`) issues a protocol-defined action (the `gamescope_input_method_action`
   enum comes from the generated protocol header, `gamescope-input-method-protocol.h`).
   *Why:* text input and discrete actions are separate calls because the underlying
   protocol models them as distinct requests — typing is a stream, actions are one-shot

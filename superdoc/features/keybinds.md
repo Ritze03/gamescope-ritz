@@ -21,12 +21,12 @@ work started from (`a4ff805`):
 
 | Chord | What it did | Where | Whose |
 |---|---|---|---|
-| Right Shift (tap) | toggle the settings shell | `wlserver.cpp:468` `wlserver_check_shell_shortcuts` | **this fork** (D22) |
+| Right Shift (tap) | toggle the settings shell | `wlserver_check_shell_shortcuts` in `wlserver.cpp` (since moved into `src/Keybinds.cpp`) | **this fork** (D22) |
 | Left Ctrl + Right Shift | the launcher, and close it again | same function | **this fork** (D22 / D25 / issue #88) |
-| Ctrl+Shift+O | toggle the settings shell | `wlserver.cpp:345` `wlserver_check_settings_overlay_toggle` | **this fork** (M2, DECISIONS #6) |
-| whatever a client registered | `gamescope_action_binding` triggers (Steam's own bindings) | `wlserver.cpp:3496`, `WaylandServer/GamescopeActionBinding.h` | upstream |
-| Ctrl+Alt+F1..F12 (`XF86Switch_VT_*`) | VT switch | `wlserver.cpp:1131` | upstream |
-| Volume up/down, Power | routed to the root server, never to the game | `wlserver.cpp:1142` | upstream |
+| Ctrl+Shift+O | toggle the settings shell | `wlserver_check_settings_overlay_toggle` in `wlserver.cpp` (since moved into `src/Keybinds.cpp`) | **this fork** (M2, DECISIONS #6) |
+| whatever a client registered | `gamescope_action_binding` triggers (Steam's own bindings) | the `CGamescopeActionBinding::GetBindings()` loop in `wlserver.cpp`, `WaylandServer/GamescopeActionBinding.h` | upstream |
+| Ctrl+Alt+F1..F12 (`XF86Switch_VT_*`) | VT switch | the `XKB_KEY_XF86Switch_VT_1` branch in `wlserver.cpp` | upstream |
+| Volume up/down, Power | routed to the root server, never to the game | the `forbidden_key` branch in `wlserver.cpp` | upstream |
 
 **Only the first three are editable.** `Why:` the other three are not this
 fork's to change. The client binding table belongs to whatever registered it

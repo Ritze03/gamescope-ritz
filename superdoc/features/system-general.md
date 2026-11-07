@@ -8,7 +8,7 @@ the main thing this page records. Both were one page until 2026-11-07 (text move
 Code: `src/Overlay/PanelSystem.{h,cpp}`. The behaviour of clipboard sync itself is in
 [clipboard-sync.md](clipboard-sync.md); this area is its switch.
 
-#### How it works
+## How it works
 
 - **One switch, per profile.** *Clipboard sync* (`system.clipboard_sync`) is
   `config::SystemSettings::clipboard_sync` (default on), a normal profile field written

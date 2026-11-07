@@ -90,10 +90,10 @@ URIs, `bin/scopebuddy:393-420`); steamtinkerlaunch uses the env-var route with a
 
 Steam **is** installed and running on this machine (`~/.local/share/Steam`, `~/.steam` both
 present; `pgrep -a -f -i steam` shows a live `steam.sh`/`steamwebhelper`/pressure-vessel tree,
-PIDs 396061 etc., checked 2026-08-21). **No game is currently running**: `pgrep -a reaper` finds
+PIDs <pid> etc., checked 2026-08-21). **No game is currently running**: `pgrep -a reaper` finds
 only the kernel's unrelated `[oom_reaper]` thread, and `pgrep -a -f SteamLaunch` finds nothing —
 i.e. there is no `reaper AppId=... SteamLaunch ...` process tree alive to inspect via
-`/proc/<pid>/environ`. Per the task's read-only constraint, app id `3746030` was **not**
+`/proc/<pid>/environ`. Per the task's read-only constraint, app id `<appid>` was **not**
 launched to manufacture evidence. This section is therefore **documentary evidence only**
 (§1), not direct proof on this machine.
 

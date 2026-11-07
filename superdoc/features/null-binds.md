@@ -273,7 +273,7 @@ and never joined (`NullBinds_OnKey()` and the worker both need
 `wlserver_lock()`, so a join could deadlock against a worker waiting for the
 lock the joiner holds — same reasoning as Autoclicker's `EnsureThread()`).
 
-**The one lock order** (copied from `Autoclicker.cpp:43-49`): the wlserver
+**The one lock order** (copied from the `s_Mutex` comment in `Autoclicker.cpp`): the wlserver
 thread takes `wlserver_lock()` — already held by `wlserver_key()`'s own
 caller before `NullBinds_OnKey()` ever runs — and *then* `s_Mutex`, to touch
 the engine. Every other caller of the engine (the worker thread, and a

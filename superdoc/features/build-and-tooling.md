@@ -75,7 +75,7 @@ build). Split out on 2026-11-07, each with its own page: [gentle-build.md](gentl
     followed by `error in client communication`, and **dropped that client's
     connection**. From then on every surface failed with
     `[Gamescope WSI] Failed to get Wayland objects`, once per `xid`, forever. Diagnosed
-    on Nobara/Fedora 44 where *every* Vulkan client — vkcube and Rocket League alike —
+    on a Fedora-based distro where *every* Vulkan client — vkcube and Rocket League alike —
     started and instantly quit. It reproduced on stock gamescope built from source too,
     because the fault is the layer being old, not the compositor being this fork: the
     fork has never touched `protocol/gamescope-swapchain.xml` or `layer/`.

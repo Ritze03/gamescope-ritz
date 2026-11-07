@@ -4,8 +4,6 @@ The Display > **Frame limiter** area (`display.frame_limiter`, `src/Overlay/Pane
 `display.fps_limit` stepper) caps the *game's* frame rate. The compositor side lives in
 `src/FpsLimitApply.h` (what is pushed and when) and `g_uLimiterPaceFps`; for Vulkan games the pacing
 itself happens in the WSI layer through `src/LimiterPace.h` ([vk-wsi-layer.md](vk-wsi-layer.md)).
-Split out of [resolution-and-refresh.md](resolution-and-refresh.md) on 2026-11-07; the text below is
-moved verbatim.
 
 ## Frame generation and the Frame limiter
 
@@ -15,7 +13,7 @@ capped rate on screen, and never caps the game itself. refresh/N is the natural 
 nested refresh if set, else the output refresh, and steps N down when the game is too fast
 for it.
 
-### The saved limit is applied at launch and on a profile switch (2026-11-04)
+## The saved limit is applied at launch and on a profile switch (2026-11-04)
 
 Nothing used to apply `gamescope.fps_limit` outside the stepper's own edit: the startup config
 apply returns before the compositor exists, and the panel's reload push skipped it on purpose. So
@@ -35,7 +33,7 @@ the game may start before or after.
   through the same setter: the bare variable it used to set was zeroed by the first frame's
   `update_app_target_refresh_cycle()`.
 
-### The limiter holds every Vulkan game (2026-11-03)
+## The limiter holds every Vulkan game (2026-11-03)
 
 The compositor only holds commits flagged FIFO (`wlserver_surface_is_fifo()` from the
 `set_present_mode` the layer sends), and the layer always forces MAILBOX at the driver. The layer
@@ -49,7 +47,7 @@ only the compositor's pacing hint, not what the driver presents. Needs the layer
 `GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before. Since 2026-11-04 this applies only while the
 limiter is on the vblank grid; see the next section.
 
-### The limiter paces Vulkan games in the layer (2026-11-04)
+## The limiter paces Vulkan games in the layer (2026-11-04)
 
 The compositor's limiter works at its paints: without VRR it releases every Nth vblank (an integer
 divisor, so 120 on 280 Hz is really 140); with VRR a time schedule is only looked at when something

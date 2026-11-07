@@ -10,7 +10,7 @@ ImGui). Not to be confused with the *Diagnostics* group inside this area (the bu
 facts) or the separate Diagnostics area (checks of the setup around gamescope; see
 [diagnostics.md](diagnostics.md)).
 
-#### How it works
+## How it works
 
 - **Two sources, two rings.** `LogCapture::InitGamescopeCapture()` registers one global
   `LogScope` listener (`LogScope::AddGlobalLoggingListener`, `src/log.hpp`), so every `log()`
@@ -49,7 +49,7 @@ facts) or the separate Diagnostics area (checks of the setup around gamescope; s
   `LOG_INFO` and stderr `LOG_ERROR` purely so the existing colouring and severity filter
   work. This means a game that prints normal messages on stderr shows them as errors.
 
-#### Using it
+## Using it
 
 - **Filter group** (rows live in the Inspector, `RowsInInspector()`, so the sheet is the log
   itself): *Sources* (chip bank: gamescope, game), *Severity* (error, warn, info, debug),

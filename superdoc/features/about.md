@@ -34,7 +34,7 @@ It answers three questions on one page:
    (rename Changelog to About and add the licences); a twelfth rail item nobody reads would be
    a worse home for text that has to be reachable.
 
-#### The changelog is the version marker
+## The changelog is the version marker
 
 There is no other version marker in the repo (no tags, `project()` declares none).
 `embed_changelog.py` reads the first `## [x.y.z] – YYYY-MM-DD` heading with a strict regex,
@@ -48,7 +48,7 @@ with an embedded placeholder and the version shows "unknown". Format rules for a
 (an old process or a mismatched installed copy would lie), needs no path search or "not
 found" state, and costs no I/O on the render thread.
 
-#### The parser
+## The parser
 
 `ParseChangelog()` is deliberately not a Markdown renderer: it reads the one document shape
 the changelog policy fixes, five line kinds (`ContentKind`: Heading for `#`/`##`,

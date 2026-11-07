@@ -34,7 +34,7 @@
 > | binary | source | build | measured fps | VRR actually engaged? |
 > |---|---|---|---|---|
 > | `../gamescope-upstream-3.16.24/build/src/gamescope` | 3.16.24 | debug `-O0` | **231.2** | yes -- below the <max-refresh> cap |
-> | `/usr/bin/gamescope` (CachyOS) | 3.16.24 | release | **281.6** | no -- pinned at the cap |
+> | `/usr/bin/gamescope` (the distro package) | 3.16.24 | release | **281.6** | no -- pinned at the cap |
 >
 > Same source, same host, same client, same arguments. **Optimisation level alone moves
 > the frame rate across the <max-refresh> threshold**, and a panel only varies its refresh below

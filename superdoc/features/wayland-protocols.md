@@ -8,7 +8,7 @@ All protocols listed here are wired into the build via `protocol/meson.build:13`
 
 | Protocol | Server-side implementer | Who binds it as a client |
 | --- | --- | --- |
-| `gamescope-control.xml` | `src/wlserver.cpp:1331 gamescope_control_impl` | `gamescopectl`, the Steam client — see [control-ipc.md](control-ipc.md) |
+| `gamescope-control.xml` | `src/wlserver.cpp` (`gamescope_control_impl`) | `gamescopectl`, the Steam client — see [control-ipc.md](control-ipc.md) |
 | `gamescope-swapchain.xml` | gamescope's compositor (buffer/present path) | the Vulkan WSI bypass layer, per-game — see [vk-wsi-layer.md](vk-wsi-layer.md) |
 | `gamescope-xwayland.xml` | `src/wlserver.cpp` | superseded, see below |
 | `gamescope-pipewire.xml` | `src/wlserver.cpp` (`gamescope_pipewire_interface`) | PipeWire-consuming screen capture clients — see [screen-capture-pipewire.md](screen-capture-pipewire.md) |
@@ -19,7 +19,7 @@ All protocols listed here are wired into the build via `protocol/meson.build:13`
 | `color-management-v1.xml` | *(consumed, not served)* | gamescope itself, as a client of a host compositor — see below |
 | `frog-color-management-v1.xml` | *(consumed, not served)* | gamescope itself, as a client of a host compositor — see below |
 
-*Why the last two are inverted:* every other protocol here is one gamescope **serves** to its own client applications (games, IME clients, `gamescopectl`). `color-management-v1` and `frog-color-management-v1` are the opposite direction — gamescope's own [Wayland backend](backend-wayland.md) *binds* these off the **host** compositor's registry (`src/Backends/WaylandBackend.cpp:2540`, `frog_color_management_factory_v1_interface`) when gamescope itself runs nested inside another Wayland session, so it can negotiate its own output's color/HDR metadata with whatever's hosting it.
+*Why the last two are inverted:* every other protocol here is one gamescope **serves** to its own client applications (games, IME clients, `gamescopectl`). `color-management-v1` and `frog-color-management-v1` are the opposite direction — gamescope's own [Wayland backend](backend-wayland.md) *binds* these off the **host** compositor's registry (`src/Backends/WaylandBackend.cpp`, the registry handler binding `frog_color_management_factory_v1_interface`) when gamescope itself runs nested inside another Wayland session, so it can negotiate its own output's color/HDR metadata with whatever's hosting it.
 
 ## Per-protocol summaries
 
@@ -48,7 +48,7 @@ Lets a client point gamescope at a ReShade `.fx` effect file, enable/disable it,
 Deliberately unstable ("versioned with gamescope", no ABI guarantee) debug channel: a single `execute` request taking a convar name/value pair, a `log` event streaming gamescope's console output back to the client, and `command_executed` as an ack. This is what `gamescopectl`'s actual command-execution path uses (as opposed to `gamescope_control`, which it only uses for read-only info/feature queries) — see [control-ipc.md](control-ipc.md) and [scripting-convars.md](scripting-convars.md) for the convar system it drives.
 
 ### `color-management-v1.xml` / `frog-color-management-v1.xml`
-Upstream-style (`wp_color_manager_v1`, …) and Frog-authored (`frog_color_management_factory_v1`, `frog_color_managed_surface`) color-management protocols. gamescope binds these as a **client** of its host compositor when [nested](backend-wayland.md), and also underpins its own [HDR/color-management](hdr-color-management.md) pipeline — that page owns the color-space/EOTF semantics; this entry only notes the protocol surface exists and where gamescope binds it (`src/Backends/WaylandBackend.cpp:2540`).
+Upstream-style (`wp_color_manager_v1`, …) and Frog-authored (`frog_color_management_factory_v1`, `frog_color_managed_surface`) color-management protocols. gamescope binds these as a **client** of its host compositor when [nested](backend-wayland.md), and also underpins its own [HDR/color-management](hdr-color-management.md) pipeline — that page owns the color-space/EOTF semantics; this entry only notes the protocol surface exists and where gamescope binds it (the `wl_registry_bind` of `wp_color_manager_v1_interface` in `src/Backends/WaylandBackend.cpp`).
 
 ## Related links
 

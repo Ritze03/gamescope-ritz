@@ -9,12 +9,12 @@ the codebase to expose runtime-tunable state and debug commands, optionally boun
 
 - `ConCommand` (`src/convar.h`) is the base type: a named, described command backed by a
   `ConCommandFunc` callback taking `std::span<std::string_view>` args, registered in a
-  global `Dict<ConCommand*>` (`GetCommands()`). `ConVar<T>` (`src/convar.h:127 class ConVar`)
+  global `Dict<ConCommand*>` (`GetCommands()`). `ConVar<T>` (`class ConVar` in `src/convar.h`)
   extends it — a typed value (`T`) with an optional change callback
   (`ConVarCallbackFunc`), constructed with a name, default value, description, and flags
   for whether to run the callback at construction and whether to auto-register with the
   scripting layer.
-- Real usage example: `src/steamcompmgr.cpp:932 cc_focus_info` declares
+- Real usage example: `cc_focus_info` in `src/steamcompmgr.cpp` declares
   `static gamescope::ConCommand cc_focus_info( "focus_info", "Dump debug info about the
   focus state", ... )` whose lambda just flips an `std::atomic<bool>` flag
   (`g_bPendingFocusInfo`); the comment above it explains *why*: "The main loop dumps this
@@ -24,12 +24,12 @@ the codebase to expose runtime-tunable state and debug commands, optionally boun
 - When compiled with scripting support (`#if HAVE_SCRIPTING` in `src/convar.h` and
   `src/convar_script.cpp`), every `ConCommand`/`ConVar` can register itself into the Lua
   environment: `ConCommand::RegisterScript` / `ConVar<T>::RegisterScript`
-  (`src/convar_script.cpp:34`, `:40`) install a `sol::usertype` binding exposing `name`,
+  (`src/convar_script.cpp`) store the object in the Lua table `Convars.Base[name]`; the `sol::usertype` bindings (`ConVarScriptRegistrar::RegisterConCommand` / `RegisterConVarType`, same file) expose `name`,
   `description`, `call`, and (for `ConVar`) `value`, so Lua code can read/write the same
   variables the C++ console commands operate on. *Why:* one registration path keeps the
   Lua-visible surface and the native ConVar table in sync automatically instead of
   hand-maintaining a separate Lua API.
-- `CScriptManager` (`src/Script/Script.h:37`) owns the `sol::state`, a `GamescopeScript_t`
+- `CScriptManager` (`class CScriptManager` in `src/Script/Script.h`) owns the `sol::state`, a `GamescopeScript_t`
   struct caching frequently used Lua tables (`Base`, `Convars.Base`, `Config.Base`,
   `Config.KnownDisplays`), and a hook system: `CallHook<Args...>(name, args...)` invokes
   every Lua function registered under that hook name via `m_Hooks`, a `MultiDict<Hook_t>`

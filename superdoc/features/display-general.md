@@ -42,7 +42,7 @@ supports tearing (`IBackend::SupportsTearing()`) **and** the focused surface ask
 frame generation the host tearing hint has its own rules, in
 [backend-wayland.md](backend-wayland.md#tearing) and [frame-generation-pacing.md](frame-generation-pacing.md).
 
-#### Force maximize nested window (`display.force_windows_fullscreen`)
+## Force maximize nested window (`display.force_windows_fullscreen`)
 
 Tracker: `../planning/requests-2026-09-08.md` item 3. A Quick toggles switch in
 `display.general` (`src/Overlay/PanelDisplay.cpp`, alongside Adaptive sync / Allow
@@ -121,7 +121,7 @@ root, so a root-sized window sitting off the origin has an unreachable strip; a 
 `placed` stayed true and nothing corrected it (user: "the mouse cant reach all of the
 space"). Cause inferred from code, not reproduced live.
 
-#### Low-latency wake-up (`display.low_latency_wakeup`)
+## Low-latency wake-up (`display.low_latency_wakeup`)
 
 Added 2026-10-04. Display > General switch, **default On**, config key
 `gamescope.low_latency_wakeup` (per profile, like VRR / Allow tearing / Force maximize; additive,

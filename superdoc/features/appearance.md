@@ -9,7 +9,7 @@ Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
 `PanelConfig_RegisterAreas`; the Profiles area is in the same file, see
 [profiles.md](profiles.md)).
 
-#### How it works
+## How it works
 
 - **Always global.** Every row edits `OverlaySettings` (`ConfigSchema.h`), which exists only
   in `global.json` (see [config-system.md](config-system.md)). The area badge is fixed to
@@ -46,7 +46,7 @@ Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
   it twice would draw two identical headers; and `notification_scale` must stay bound here so
   there is a single writer of `overlay` per cached copy. See [notifications.md](notifications.md).
 
-#### Rows
+## Rows
 
 | Row id | Config key (global.json `overlay`) | Default | Meaning |
 | --- | --- | --- | --- |

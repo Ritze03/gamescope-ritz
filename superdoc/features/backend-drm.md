@@ -77,7 +77,7 @@ largest and most hardware-facing of the five backends (~4200 lines).
   the only one that negotiates VRR against a CRTC of its own; the SDL, OpenVR and headless
   backends hard-return `false` from `SupportsVRR()`, and the Wayland backend only reports
   whether the host compositor is currently presenting with VRR
-  (`CWaylandConnector::SupportsVRR()` returns `m_bHostCompositorIsCurrentlyVRR`).
+  (`CWaylandConnector::SupportsVRR()` returns `CurrentDisplaySupportsVRR()`, i.e. `m_bHostCompositorIsCurrentlyVRR`).
 - **Tearing / async flips.** `g_bSupportsAsyncFlips`
   (`src/Backends/DRMBackend.cpp:g_bSupportsAsyncFlips`) is probed once via
   `drmGetCap(DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP)` (`src/Backends/DRMBackend.cpp:init_drm`), and
