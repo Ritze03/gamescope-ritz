@@ -379,8 +379,7 @@ All in `Controls.{h,cpp}` unless stated.
 - **Backdrop and primary.** `bCloseOnBackdrop` (default false): a press outside the panel runs
   Cancel (`ModalBackdropCloses()`). `fnPrimaryEnabled` dims the primary and ignores click and
   Enter; `fnValidate` stays the press-time gate with an inline message. `Why:` Import must be
-  visibly unavailable until the pasted JSON parses, which a press-time check cannot show. No
-  third footer button: the plan listed one for the dropped Files mode.
+  visibly unavailable until the pasted JSON parses, which a press-time check cannot show.
 - **Checkbox.** `CheckState { Off, On, Mixed }`, `CheckboxAt( rc, id, &state, label, bDisabled,
   bKeyFocus )` for a tree row, `Checkbox( row, ... )` for an option in a row. Dialogs only (see the
   styling guide). The overlay never enables ImGui keyboard navigation, so the dialog owns a

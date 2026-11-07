@@ -76,6 +76,12 @@ confirms while the paste field has focus (the modal's own rule: no confirm with 
 - **Validated before anything changes.** The reference design applied first and complained later.
   `ParseExport()` rejects the whole text, and `ApplyImport()` re-validates, so nothing is touched
   on bad input.
+- **Pasted values are checked like ConfigManager reads them.** An integer setting takes only an
+  integer that fits an `int`, a float setting any finite number, bool and string their own type;
+  anything else is unreadable and skipped, and text over 1 MB or nested deeper than 16 levels is
+  refused before parsing (real exports nest 4). `Why:` the paste comes from other people, and a
+  value ConfigManager would drop to its default (`144.5` for an integer) would show in Changes
+  but write something else; deep nesting would cost the overlay thread on every keystroke.
 - **A backup.** An import overwrites a profile's file; `<Name>.json.bak` (one per profile, the
   older overwritten) is written first, so overwriting is not a danger action and needs no second
   dialog.

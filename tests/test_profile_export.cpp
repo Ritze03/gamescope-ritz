@@ -472,3 +472,88 @@ TEST_CASE( "apply: an inheriting game profile stays sparse", "[profile_export]" 
     CHECK( LoadProfile( "GameG" )->zoom.factor == 3.0f ); // still follows the parent
     CHECK( LoadProfileMeta( "GameG" )->app_id == meta.app_id );
 }
+
+TEST_CASE( "apply: pasted numbers must match what ConfigManager reads", "[profile_export]" )
+{
+    TempHome home;
+    MakeGeneral( "Dest", Modified() ); // fps_limit 90, zoom.factor 3.0
+    auto paste = []( const char *pszSettings )
+    {
+        return pe::ParseExport( std::string( R"({"gamescope_ritz_export":1,"settings":)" ) + pszSettings + "}" );
+    };
+
+    // A decimal into an integer setting: unreadable, skipped, the destination keeps 90.
+    pe::ParsedExport p = paste( R"({"gamescope":{"fps_limit":144.5}})" );
+    REQUIRE( p.valid );
+    CHECK( p.unknown_count == 1 );
+    pe::ApplyResult r = pe::ApplyImport( p, "Dest", false, AllGroups() );
+    REQUIRE( r.success );
+    CHECK( LoadProfile( "Dest" )->gamescope.fps_limit == 90 );
+
+    // Too big for an int, either sign.
+    for ( const char *psz : { R"({"gamescope":{"fps_limit":3000000000}})", R"({"gamescope":{"fps_limit":-3000000000}})" } )
+    {
+        p = paste( psz );
+        REQUIRE( p.valid );
+        CHECK( p.unknown_count == 1 );
+        REQUIRE( pe::ApplyImport( p, "Dest", false, AllGroups() ).success );
+        CHECK( LoadProfile( "Dest" )->gamescope.fps_limit == 90 );
+    }
+
+    // An integer into a float setting is read by ConfigManager, so it applies.
+    p = paste( R"({"zoom":{"factor":2}})" );
+    REQUIRE( p.valid );
+    CHECK( p.unknown_count == 0 );
+    REQUIRE( pe::ApplyImport( p, "Dest", false, AllGroups() ).success );
+    CHECK( LoadProfile( "Dest" )->zoom.factor == 2.0f );
+
+    // A plain integer into an integer setting applies.
+    p = paste( R"({"gamescope":{"fps_limit":144}})" );
+    CHECK( p.unknown_count == 0 );
+    REQUIRE( pe::ApplyImport( p, "Dest", false, AllGroups() ).success );
+    CHECK( LoadProfile( "Dest" )->gamescope.fps_limit == 144 );
+
+    // A bool or string where a number is expected stays unreadable.
+    p = paste( R"({"gamescope":{"fps_limit":true},"zoom":{"factor":"2"}})" );
+    CHECK( p.unknown_count == 2 );
+}
+
+TEST_CASE( "parse: size and nesting limits", "[profile_export]" )
+{
+    TempHome home;
+
+    // 100000 levels: refused up front, no crash.
+    std::string sDeep( 100000, '[' );
+    sDeep += std::string( 100000, ']' );
+    pe::ParsedExport p = pe::ParseExport( sDeep );
+    CHECK( !p.valid );
+    CHECK( p.error.find( "too large or too deeply nested" ) != std::string::npos );
+
+    std::string sObj;
+    for ( int i = 0; i < 100000; i++ )
+        sObj += R"({"a":)";
+    sObj += "1" + std::string( 100000, '}' );
+    CHECK( !pe::ParseExport( sObj ).valid );
+
+    // Over 1 MB.
+    std::string sBig = R"({"gamescope_ritz_export":1,"profile":")" + std::string( 1100000, 'x' ) + R"(","settings":{}})";
+    p = pe::ParseExport( sBig );
+    CHECK( !p.valid );
+    CHECK( p.error.find( "too large" ) != std::string::npos );
+
+    // Brackets inside strings do not count.
+    p = pe::ParseExport( R"({"gamescope_ritz_export":1,"profile":"[[[[[[[[[[[[[[[[[[[[\"[[","settings":{}})" );
+    CHECK( p.valid );
+
+    // A normal full export stays valid.
+    MakeGeneral( "Full", Modified() );
+    p = pe::ParseExport( ExportOf( "Full", AllGroups() ) );
+    CHECK( p.valid );
+
+    // The deepest real key nests this far (plus the export wrapper's two levels).
+    size_t nDots = 0;
+    for ( const std::string &s : pe::AllSettingsKeys() )
+        nDots = std::max<size_t>( nDots, size_t( std::count( s.begin(), s.end(), '.' ) ) );
+    WARN( "max dots in a settings key: " << nDots );
+    CHECK( nDots + 2 <= 16 );
+}

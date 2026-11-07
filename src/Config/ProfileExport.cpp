@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
 
@@ -139,9 +140,54 @@ namespace gamescope::config::profile_export
         {
             if ( def.is_null() )
                 return !v.is_object(); // optional value: its type is not in the default
-            if ( def.is_number() )
-                return v.is_number();
-            return def.type() == v.type();
+            if ( def.is_number_integer() ) // JGetInt: integers only, and it must fit an int
+            {
+                if ( v.is_number_unsigned() )
+                    return v.get<uint64_t>() <= uint64_t( std::numeric_limits<int>::max() );
+                if ( v.is_number_integer() )
+                {
+                    const int64_t n = v.get<int64_t>();
+                    return n >= std::numeric_limits<int>::min() && n <= std::numeric_limits<int>::max();
+                }
+                return false;
+            }
+            if ( def.is_number() ) // JGetFloat: any number, as long as it is a finite float
+                return v.is_number() && std::isfinite( v.get<float>() );
+            return def.type() == v.type(); // bool (JGetBool), string (JGetString)
+        }
+
+        // Pasted text comes from other people: refuse the oversize or deeply nested
+        // before parsing or flattening it. One linear scan of '{' / '[' outside strings.
+        constexpr size_t kMaxTextBytes = 1024 * 1024;
+        constexpr int kMaxNesting = 16;
+
+        bool TextWithinLimits( const std::string &sText )
+        {
+            if ( sText.size() > kMaxTextBytes )
+                return false;
+            int nDepth = 0;
+            bool bInString = false;
+            for ( size_t i = 0; i < sText.size(); i++ )
+            {
+                const char c = sText[ i ];
+                if ( bInString )
+                {
+                    if ( c == '\\' )
+                        i++;
+                    else if ( c == '"' )
+                        bInString = false;
+                }
+                else if ( c == '"' )
+                    bInString = true;
+                else if ( c == '{' || c == '[' )
+                {
+                    if ( ++nDepth > kMaxNesting )
+                        return false;
+                }
+                else if ( ( c == '}' || c == ']' ) && nDepth > 0 )
+                    nDepth--;
+            }
+            return true;
         }
 
         // ---- json helpers: sections come from ConfigManager ---------------------
@@ -191,6 +237,8 @@ namespace gamescope::config::profile_export
                 p.info.error = psz;
                 return p;
             };
+            if ( !TextWithinLimits( sText ) )
+                return fail( "This text is too large or too deeply nested to be a settings export." );
             json j = json::parse( sText, nullptr, false );
             if ( j.is_discarded() )
                 return fail( "That is not valid JSON." );
