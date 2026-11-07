@@ -1202,6 +1202,12 @@ namespace gamescope::config
         // Global (the host setup is per machine); default off.
         bool diagnostics_block_scanout = false;
 
+        // Display > General's "Compress output images": lets the driver pick an AMD DCC
+        // modifier for gamescope's output images under a nested Wayland host (Off
+        // filters them out). Global (the GPU and host are per machine); read once at
+        // startup, so a change applies on the next launch. Default on.
+        bool compress_output_images = true;
+
         // Keyboard-control toggles for the overlay's own input capture (M2)
         // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
         // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also

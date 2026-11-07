@@ -50,6 +50,14 @@ namespace gamescope
 	bool Diagnostics_BlockScanout();
 	void Diagnostics_SetBlockScanout( bool bBlock );
 
+	// The "Compress output images" setting (Display > General; global.json
+	// overlay.compress_output_images, default true): lets the driver pick an AMD DCC
+	// modifier for the output images under a nested Wayland host. The getter reads
+	// global.json lazily; rendervulkan.cpp latches it at the first output image, so a
+	// change applies on the next launch. Any thread.
+	bool Diagnostics_CompressOutputImages();
+	void Diagnostics_SetCompressOutputImages( bool bCompress );
+
 	// Whether this backend can be scanned out by a host at all (Wayland): where the
 	// Block switch is shown.
 	bool Diagnostics_ScanoutApplicable();

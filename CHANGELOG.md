@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.14.12] – 2026-11-07
 
 ### Added
+- **Compress output images**: A Display > General switch, shown on Wayland only, for
+  AMD's image compression (DCC) on gamescope's output images; it is on by default, so
+  output images are compressed again, and turning it off, on the next launch, avoids
+  display trouble with Hyprland's direct scanout on RDNA 3.
 - **Block direct scanout**: A Display > General switch, shown on Wayland only, that stops
   the host from putting the window straight on the screen; off by default.
 - **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row

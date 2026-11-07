@@ -5,7 +5,7 @@ The Display > **General** area (`display.general`, `src/Overlay/PanelDisplay.cpp
 the other Display areas. Its Summary line reads like `VRR off · tearing off`, plus
 ` · nested windows maximized` when that switch is on and ` · direct scanout blocked` when Block direct
 scanout is on. Four switches persisted per profile in the `gamescope.*` config block and mirrored into a
-live global, plus one global, Wayland-only switch (last row):
+live global, plus two global, Wayland-only switches (last two rows):
 
 | Row id | Label | Config key | Live target | Launch flag (locks the row) |
 |---|---|---|---|---|
@@ -14,6 +14,7 @@ live global, plus one global, Wayland-only switch (last row):
 | `display.low_latency_wakeup` | Low-latency wake-up | `gamescope.low_latency_wakeup` | `vblank_measured_lead` | none |
 | `display.force_windows_fullscreen` | Force maximize nested window | `gamescope.force_windows_fullscreen` | `steamcompmgr_set_force_windows_fullscreen()` | `--force-windows-fullscreen` |
 | `display.block_direct_scanout` | Block direct scanout | `overlay.diagnostics_block_scanout` in `global.json` (global, not per profile) | `Diagnostics_BlockScanout()` | none; shown on the Wayland backend only |
+| `display.compress_output_images` | Compress output images | `overlay.compress_output_images` in `global.json` (global, not per profile) | `Diagnostics_CompressOutputImages()` | none; shown on the Wayland backend only; applies on the next launch |
 
 The locks are the `Adaptive sync`, `Allow tearing` and `Force maximize` rows of the flag table in
 [launch-option-lock.md](launch-option-lock.md). `Force grab cursor` used to be a fifth switch here; it
@@ -210,6 +211,37 @@ back (about 160 uncapped against 261-272 with scanout). The host must offer
 **Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
 live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
 single-surface requirement is from memory, not checked.
+
+## Compress output images (`display.compress_output_images`)
+
+Default **On**. Config `overlay.compress_output_images` in `global.json` (a file without the key
+loads as On). `Why On:` the user: "DCC should be on by default since it is the default in GameScope."
+On, the driver may pick an AMD DCC modifier for gamescope's output images, as upstream does. Off
+restores the filter this fork added in fd24a76, in `CVulkanTexture::BInit()` (`src/rendervulkan.cpp`):
+output images then never use a DCC modifier ([backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)).
+
+**Applies on the next launch.** `vulkan_compress_output_images()` reads the setting once, at the
+first output image, and keeps that value. `Why:` output images are allocated at startup and again on
+a resize (`vulkan_remake_output_images()`); the host may still hold the old ones (see
+`vulkan_select_free_output_image()`), so a live switch would either do nothing until a random resize or
+reallocate images the host is scanning. The row says so. Config is loaded in `main()` long before
+Vulkan starts, so the lazy `global.json` read is safe there.
+
+**Global, Wayland only.** Same `.Key(...)` and `.ShownWhen( Diagnostics_ScanoutApplicable() )` as
+Block direct scanout. `Why global:` the GPU and host belong to the machine, not to a game.
+
+`Why the switch exists:` fd24a76 removed DCC from output images because, on RDNA 3 with Hyprland's
+direct scanout on, the driver's pick is a compression the screen refuses and Hyprland reconfigures
+the display on every frame (511 modesets in 6 s, shown frames down to 73-147). **Known cost of the
+On default:** that modeset loop returns on such a setup until the switch is turned Off. Separately, a
+user on an RDNA 4 GPU (GFX12 modifiers) under GNOME sees the picture scrambled into block noise while
+the host scans out gamescope's output image; screenshots stay clean and Block direct scanout cures
+it, so the image is intact and the plane's read of it is wrong. **Hypothesis, untested:** that DCC
+(this switch On) cures it; the old filter was only ever tested on RDNA 3.
+
+**Log line**, once at creation and again if a remake picks another modifier, switch On or Off:
+`output image: format 0x<fourcc> modifier 0x<16 hex digits>, compress output images on|off`
+(scope `vulkan`). The modifier is the number to ask an RDNA 4 user for.
 
 ## Related
 

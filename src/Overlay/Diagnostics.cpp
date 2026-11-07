@@ -420,6 +420,30 @@ namespace gamescope
 		force_repaint();
 	}
 
+	namespace
+	{
+		std::atomic<int> g_nCompressOutput{ -1 };   // -1: not read from global.json yet
+	}
+
+	bool Diagnostics_CompressOutputImages()
+	{
+		int n = g_nCompressOutput.load( std::memory_order_relaxed );
+		if ( n < 0 )
+		{
+			n = config::LoadGlobal().overlay.compress_output_images ? 1 : 0;
+			g_nCompressOutput.store( n, std::memory_order_relaxed );
+		}
+		return n == 1;
+	}
+
+	void Diagnostics_SetCompressOutputImages( bool bCompress )
+	{
+		g_nCompressOutput.store( bCompress ? 1 : 0, std::memory_order_relaxed );
+		config::Settings s = config::LoadGlobal();
+		s.overlay.compress_output_images = bCompress;
+		config::EnqueueGlobalWrite( s );
+	}
+
 	bool Diagnostics_ScanoutApplicable()
 	{
 		return BackendApplicable();

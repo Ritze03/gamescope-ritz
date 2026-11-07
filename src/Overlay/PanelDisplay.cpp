@@ -784,6 +784,24 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "scanout direct wayland host gnome mutter hyprland artifacts corruption "
 			           "block noise glitch plane" );
+
+		// Compress output images (2026-11-07): GLOBAL like the row above, Wayland only.
+		// Read once at startup (rendervulkan.cpp latches it), so it applies on the next
+		// launch. See superdoc/features/display-general.md.
+		a.Switch( "display.compress_output_images", "Compress output images",
+			ui::AnyBind::Of<bool>(
+				[]{ return Diagnostics_CompressOutputImages(); },
+				[]( bool b ) { Diagnostics_SetCompressOutputImages( b ); } ) )
+			.Key( "overlay.compress_output_images" )
+			.ShownWhen( []{ return Diagnostics_ScanoutApplicable(); } )
+			.Help( "On is gamescope's normal behaviour: the graphics driver may store the output "
+			       "images compressed (AMD DCC). Turn it Off if the host's direct scanout "
+			       "misbehaves: on RDNA 3 with Hyprland's direct scanout on, the driver picks a "
+			       "compression the screen refuses and Hyprland reconfigures the display on every "
+			       "frame. Applies on the next launch." )
+			.Default( true )
+			.Keywords( "dcc compress compression modifier amd rdna output images scanout wayland "
+			           "host gnome mutter scrambled noise corruption" );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )

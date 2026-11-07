@@ -43,6 +43,7 @@
 #include "SettingsOverlay.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Notifications.h"
+#include "Overlay/Diagnostics.h"
 #include "FrameGen/FrameGenHost.h"
 #include "convar.h"
 #include "vblankmanager.hpp"
@@ -165,6 +166,15 @@ std::span<const uint64_t> GetSupportedSampleModifiers( uint32_t uDrmFormat )
 }
 
 static LogScope vk_log("vulkan");
+
+// "Compress output images" (Display > General, global): read once, at the first output
+// image, so every later remake agrees with the images the host already holds. config is
+// loaded long before Vulkan starts (main.cpp), so global.json is readable here.
+static bool vulkan_compress_output_images()
+{
+	static const bool s_bCompress = gamescope::Diagnostics_CompressOutputImages();
+	return s_bCompress;
+}
 
 // Definitions for the layer budget stats declared in rendervulkan.hpp;
 // bumped inside LayerStack_t::push(), read by "layer_budget_stats" below.
@@ -2454,7 +2464,10 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 			// KMS refuses, so the host cannot scan the image out, and Hyprland retries with a
 			// modeset on every frame (superdoc/features/backend-wayland.md). Uncompressed
 			// images have no such limit and no metadata that a plane could read stale.
-			if ( flags.bOutputImage && GetBackend()->HostMayScanOutOutputImages() &&
+			// This is the Off case of "Compress output images" (default On, which skips the
+			// filter: the driver's own pick, as in upstream gamescope).
+			if ( flags.bOutputImage && !vulkan_compress_output_images() &&
+			     GetBackend()->HostMayScanOutOutputImages() &&
 			     IS_AMD_FMT_MOD( modifier ) && AMD_FMT_MOD_GET( DCC, modifier ) )
 				continue;
 
@@ -2766,6 +2779,17 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 		}
 
 		m_dmabuf = dmabuf;
+
+		// The chosen modifier is the number to report when a host shows the picture
+		// wrong. Logged when it changes (the first output image, and after a remake).
+		if ( flags.bOutputImage )
+		{
+			static std::atomic<uint64_t> s_uLoggedModifier{ UINT64_MAX - 1 };
+			if ( s_uLoggedModifier.exchange( dmabuf.modifier ) != dmabuf.modifier )
+				vk_log.infof( "output image: format 0x%08x modifier 0x%016llx, compress output images %s",
+					drmFormat, (unsigned long long) dmabuf.modifier,
+					vulkan_compress_output_images() ? "on" : "off" );
+		}
 	}
 
 	if ( flags.bFlippable == true )

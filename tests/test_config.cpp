@@ -453,6 +453,27 @@ TEST_CASE( "overlay.cursor_override_game round-trips", "[config]" )
     }
 }
 
+// "Compress output images" (Display > General) is On by default, so a global.json
+// from before the key existed must load as On.
+TEST_CASE( "overlay.compress_output_images defaults on and round-trips", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": {} }";
+        REQUIRE( LoadGlobal().overlay.compress_output_images );
+    }
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.overlay.compress_output_images = bValue;
+        REQUIRE( SaveGlobal( s ) );
+        REQUIRE( LoadGlobal().overlay.compress_output_images == bValue );
+    }
+}
+
 // The drop shadow the outline replaced (2026-09-03): an old config still
 // carrying shadow_strength must load cleanly and simply take
 // outline_strength's default, not error and not inherit the old value.
