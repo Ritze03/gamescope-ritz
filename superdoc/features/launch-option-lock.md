@@ -107,8 +107,8 @@ of this task's scope; flagged here so it isn't lost.
 
 ## What's gated against a live override
 
-`Why:` live QC (2026-09-29, `build-release/verify-launch-lock2.sh`'s first
-run, evidence under `build-release/verify-shots/launch-lock-2026-09-29/run2/`)
+`Why:` live QC (2026-09-29, the first run of the second
+launch-lock verification script)
 caught this lock failing exactly the case it exists for: launched with
 `-F fsr --force-grab-cursor --adaptive-sync --force-windows-fullscreen` on a
 profile holding the opposite values, the Shell's very first draw silently

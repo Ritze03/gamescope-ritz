@@ -205,7 +205,7 @@ setter added later inherits the rule. The `BumpConfigGeneration()` half of the c
 is pinned by `tests/test_config.cpp`'s "the live-apply hook fires synchronously on a
 generation bump" case; the panel itself is not unit-linkable (steamcompmgr globals,
 X11, the backend), so the end-to-end behaviour is measured headless instead --
-`build-release/verify-shots/setter-order-fix/`, where one scaler edit made as a
+headless, where one scaler edit made as a
 session's first action, and again straight after a select, moves the letterbox bar's
 pixels before and not after the fix.
 
@@ -261,7 +261,7 @@ panel's very first load was always the untouched startup state, which stopped be
 true once `SetLiveApplyHook()` existed and a select could land before this panel's
 first draw. Pinned by `tests/test_config.cpp`'s "a routed write from a caller that
 never resolved settings first clobbers sections it never touched" case and measured
-headless in `build-release/verify-shots/paneldisplay-routing/results.txt`: an
+headless: an
 Upscaling-first session and a Crosshair-first session each land only their own key in
 the game profile, nothing else. **What remains:** the underlying design property is
 unchanged -- `EnqueueRoutedWrite()` still has no way to tell "this caller never
@@ -291,7 +291,7 @@ the concept was written for.
 ### The same merge on the global path (2026-09-07)
 
 `global.json`'s `overlay` section had the **identical bug class**, and it was measured by
-`scripts/settings-audit.sh` on 2026-09-07 (`build-release/verify-shots/settings-audit-2026-09-07/`).
+`scripts/settings-audit.sh` on 2026-09-07.
 `EnqueueGlobalWrite(settings)` assigned `settings.overlay` over the mirror whole, and that
 one section has **several** writers, each holding its own long-lived copy:
 `PanelConfig.cpp`'s `s_GeneralSettings` (Appearance and the Profiles filter),
@@ -310,7 +310,8 @@ and there are now two instances of it: `s_RoutedMerge`, which merges per top-lev
 **section** of the session profile, and `s_GlobalMerge`, which merges per **field** of
 `overlay`. `EnqueueGlobalWrite()` and `EnqueueOverlayWrite()` both go through
 `MergeOverlayFromCaller()`; the latter is keyed by the `OverlaySettings`' own address, so
-`Chrome.cpp`'s geometry autosave and `Shell.cpp` are distinct callers.
+`Keybinds.cpp`'s overlay write (`config::EnqueueOverlayWrite( g_OverlayForWrite )`) and
+`EnqueueGlobalWrite()`'s are distinct callers.
 
 `Why per field and not per section here:` `overlay` **is** one section. A per-section merge
 would have asked "did this caller change `overlay`?", answered yes (it changed one field of
@@ -347,8 +348,7 @@ audit re-run in `results-after-fix.txt`: 42 failures -> 0.
 
 `src/Overlay/PanelConfig.cpp` (drawing and the config calls) and `PanelConfig.h`'s
 `panelconfig` namespace (every decision, pure, pinned by `tests/test_overlay_profiles.cpp`).
-Captures: `build-release/verify-shots/profiles-v2-ui/` (headless, the recipe in
-`capture.sh` there). Top to bottom, exactly the sketch:
+Captures were taken headless. Top to bottom, exactly the sketch:
 
 1. **The list** (`profiles.list`, a `CompositeKind::List` band -- six rows tall, edge
    to edge, the one composite that spends the label column). One line per profile
@@ -574,14 +574,13 @@ writes. A `schema_version` newer than the build still falls back to defaults and
 as `ParseConfigFile()` always did. The 1 -> 2 vibrancy step runs first on the old
 file, so a schema-1 config migrates through both.
 
-Verified headless (2026-09-06, `build-release/verify-shots/profiles-load-save/run.sh`,
-`results-*.txt` there): on CS2 (`STEAM_COMPAT_APP_ID=730`, game profile inheriting A)
+Verified headless (2026-09-06): on CS2 (`STEAM_COMPAT_APP_ID=730`, game profile inheriting A)
 an edit lands in `CS2.json` as a diff and survives another area's edit; clicking B
 changes the sharpness row, the crosshair rows **and the crosshair pixels on screen**
 (red/short -> blue/long, sampled at the game's centre) before any other area draws;
 an edit then lands in `B.json` only; clicking CS2 and A brings each one's values
 back; the same under `--profile B` and with `SteamAppId=730`. Earlier the same day
-(`profiles-v2/e2e.sh`, 25 checks): an old-schema config with a global, a profile and a `games/` file migrates as
+(an end-to-end script, 25 checks): an old-schema config with a global, a profile and a `games/` file migrates as
 the table says; an `overlay_e2_set` edit lands in the selected game profile as a diff;
 `--profile Tourney` creates it from the game's profile and leaves the assignment alone;
 `GS_RITZ_PROFILE` selects; `ritz_profile` switches live; the next flagless launch is
