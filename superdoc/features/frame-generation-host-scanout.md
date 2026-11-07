@@ -65,7 +65,7 @@ of the matrix is empty.
 #### Why the host loses frames
 
 Hyprland composites on the GPU's graphics queue, the queue the game renders on, and that
-queue does not preempt a running job (Navi 31). Hyprland's own work is tiny (7-23 ms of
+queue does not preempt a running job (RDNA 3). Hyprland's own work is tiny (7-23 ms of
 graphics engine time per second, `drm-engine-gfx` in `/proc/<pid>/fdinfo`), but each frame it
 draws has to wait for the game's job that is running, and with no finished draw it has
 nothing to flip at that vblank. So what costs frames is **how long one game job is, not how

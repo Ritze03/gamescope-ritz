@@ -98,7 +98,7 @@ for older GPUs is inside those DLLs. What is portable is the 2024–2025 FSR 3.1
   HLSL `msad4` intrinsic extensively" — but the GLSL/Vulkan build has a **software
   `Sad()`/`QSad()` fallback** behind `FFX_OPTICALFLOW_USE_MSAD4_INSTRUCTION` (four
   byte-wise `abs()` differences), so it runs on any Vulkan 1.1+ GPU with subgroup ops,
-  just slower where `msad4` isn't native. Memory at 4K: 26–28 MB on RX 7900 XTX / RX
+  just slower where `msad4` isn't native. Memory at 4K: 26–28 MB on a high-end RDNA 3 GPU / RX
   6600 / RTX 4080 / RTX 3060 (AMD's own table, which incidentally confirms NVIDIA was
   tested).
 - **Cost:** AMD publishes **no timing** for OF alone. See §5.4 for what can be inferred.
@@ -350,7 +350,7 @@ window in which a late game commit can still make vblank V. Total added motion-t
 latency: **≈ 1/refresh + t(OF+FI)**. This is the same scheme AMD's own
 `FrameInterpolationSwapchain` implements (present the generated frame, then delay the
 real one by "conservativeAvg = frameTime.getAverage() * 0.5 - variance" minus a safety
-margin) and the same class of cost AMD quotes in shipped games (Forspoken 4K/7900 XTX:
+margin) and the same class of cost AMD quotes in shipped games (Forspoken 4K on a high-end RDNA 3 GPU:
 55 ms with FSR3 Performance + FG vs 81 ms native — a *lower* absolute latency only
 because the upscaler more than pays for FG, which a compositor-side scheme cannot
 replicate).
@@ -450,7 +450,7 @@ AMD publishes **no per-pass timings** for OF or FI in the SDK docs (the tables a
 memory only). What exists:
 
 - AMD's launch numbers, from which the FG cost per generated frame can be *implied*
-  when the GPU is the bottleneck: Forspoken, RX 7900 XTX, 4K, FSR3 Performance: 90 fps
+  when the GPU is the bottleneck: Forspoken, a high-end RDNA 3 GPU, 4K, FSR3 Performance: 90 fps
   without FG → 164 fps with FG (real rate 82 fps) ⇒ `1/82 − 1/90 ≈ 1.1 ms` per generated
   frame including OF, FI and UI compose; Immortals of Aveum, same GPU/res: 107 → 167 fps
   (83.5 real) ⇒ `≈ 2.6 ms`. The 1440p / RX 6800 XT pairs (83 → 160, 113 → 128) are
@@ -459,8 +459,8 @@ memory only). What exists:
   on an RX 9060 XT** — but for the *ML* frame generation (FSR 4), not this code.
 
 **Working estimate for the analytical 3.1 path, at display resolution:** ~1–2.5 ms per
-generated frame at 4K on an RX 7900 XTX class GPU; scaling by pixel count and by a
-mid-range RDNA3 (RX 7700/7800 XT at roughly 55–70 % of a 7900 XTX) gives **≈ 1.5–4 ms at
+generated frame at 4K on a high-end RDNA 3 class GPU; scaling by pixel count and by a
+mid-range RDNA3 part (roughly 55–70 % of the development GPU) gives **≈ 1.5–4 ms at
 4K, ≈ 0.7–2 ms at 1440p, ≈ 0.4–1.2 ms at 1080p**. Running at layer-0 render resolution
 (§5.3) with FSR upscaling on scales that down further. Because the compositor shares
 the GPU with the game, that time comes straight out of the game's frame budget — at a

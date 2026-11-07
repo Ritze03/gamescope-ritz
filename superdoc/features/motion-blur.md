@@ -147,7 +147,7 @@ the FrameGen submodule to frame-gen-ritz `0f8c58e`.
 
 ## Costs and limits
 
-Library measurements (RX 7900 XTX, per sample): about **0.030 ms at 1280x960**, 0.052 ms at
+Library measurements (the development GPU, per sample): about **0.030 ms at 1280x960**, 0.052 ms at
 1080p, 0.105 ms at 1440p, per *shown* frame; a sample costs about as much as a generated
 frame. Scratch memory is about 3 B per pixel per sample at flow scale 2 (N = 8: 29 MB at
 1280x960, 88 MB at 1440p), allocated by the first blurred call and only growing. Blur only

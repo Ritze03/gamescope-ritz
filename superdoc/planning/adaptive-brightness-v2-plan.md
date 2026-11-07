@@ -63,7 +63,7 @@ FIRST real GPU measurement (this pass, harness resolution 1280×720, desktop GPU
 block (measure + Bloom + V2's own dispatches + apply), not V2's cost alone — see
 `shader-effects.md` for the full table this number came from, how it was captured, and
 the one number that changed once the pre-pass was measured with V2 subtracted out
-(2026-09-14 QC): at 1920×1080 on an RX 7900 XTX, V2's OWN cost over the 0.10 ms
+(2026-09-14 QC): at 1920×1080 on the development GPU, V2's OWN cost over the 0.10 ms
 pre-pass baseline (Saturation only, V2 off) is **+0.08 ms at defaults, +0.10 ms at
 Clarity 0.5** (AB Dynamic, for comparison, is 0.14 ms for the whole pre-pass); the
 harness's own 1280×720 mean settled at **181.6 µs**. The halo deviation the same QC

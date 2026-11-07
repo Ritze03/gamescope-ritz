@@ -930,7 +930,7 @@ is phrased as a concrete `vkcube` run.
   no functional regression versus M1–M7's behavior.
 
 - **M9a — Adaptive Brightness persistence spike. DONE (2026-08-21).** Result:
-  **persistence survives** — confirmed on real hardware (RADV/AMD 7900XTX), not
+  **persistence survives** — confirmed on real hardware (RADV/AMD), not
   just inferred from barrier code. Full method, evidence, and two extra findings
   (a zero-uniform-buffer crash unrelated to persistence, and a recompile-storm
   if the implicit-output pass isn't last) are recorded in

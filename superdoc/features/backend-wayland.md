@@ -228,7 +228,7 @@ line's `zero-copy` count says whether it worked.
 
 **Output images carry no AMD DCC modifier** (modifier filter in `CVulkanTexture::BInit()`). The
 host's `zwp_linux_dmabuf_v1` list is what it can sample, not what its planes take. From that
-list RADV picked `0x200000028a6bf04` (Navi 31: DCC, pipe-aligned, no retile), which is missing
+list RADV picked `0x200000028a6bf04` (RDNA 3: DCC, pipe-aligned, no retile), which is missing
 from the plane's `IN_FORMATS`, so `drmModeAddFB2WithModifiers` failed. Hyprland logged it three
 times, then remembered the dead buffer and only failed silently: `directScanoutBlockedBy` empty,
 `directScanoutTo` 0. Worse, each frame's failed attempt switched the output to the buffer's

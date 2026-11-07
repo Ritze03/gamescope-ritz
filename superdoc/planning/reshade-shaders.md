@@ -248,7 +248,7 @@ The subset of ReShade FX gamescope actually implements, verified against
   hardware/drivers rather than trust this read of the barrier code.
 
   **Update (2026-08-21):** that spike ran — persistence confirmed empirically on
-  real hardware (RADV/AMD 7900 XTX), not just inferred from the barrier code, plus
+  real hardware (RADV/AMD), not just inferred from the barrier code, plus
   two unrelated findings (a zero-uniform-buffer crash in `ReshadeEffectPipeline::init()`,
   and a same-execute() recompile hazard if the implicit-output pass isn't last).
   Full method and evidence in `superdoc/planning/DECISIONS.md` #14's update block.

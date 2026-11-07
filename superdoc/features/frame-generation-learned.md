@@ -87,7 +87,7 @@ trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are
   unconditional in the Learned estimate path (`mlEstimate()`); the host does nothing.
   **Caveat:** the test is whole-frame, so a small moving cursor on an otherwise still
   screen counts as a duplicate and its motion is not interpolated.
-- **Cost** (library figures, RX 7900 XTX, 1080p 2x, estimate + synth per real pair): V1
+- **Cost** (library figures, the development GPU, 1080p 2x, estimate + synth per real pair): V1
   0.30-0.33 ms, e2v4 (and e2v3, e2v5) 1.44-1.48 (half 1.09-1.13), e1v4 (and e1v3, e1v5) 0.62
   (half 0.49-0.51; round 3 re-measured e2v5 1.35-1.66 and e1v5 0.53-0.54); the zero test adds ~0.005 ms, the static guard ~0.045 ms per generated frame.
   Round 1's figures were ~10 % lower on a quieter machine; 1440p e2v3 2.59 (half 1.62), not

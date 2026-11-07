@@ -349,7 +349,7 @@ live guarantee, and both stretch checks now run as `INFO` (measured, not asserte
 the **default-setting ≤ 4-code bound stays asserted** for both scenes.
 
 **Cost, split into V2's own share (2026-09-14, V2 QC — the earlier "0.18–0.22 ms" figure
-below is the WHOLE pre-pass, not V2's own cost).** At 1920×1080 on an RX 7900 XTX: the
+below is the WHOLE pre-pass, not V2's own cost).** At 1920×1080 on the development GPU: the
 pre-pass with V2 off (Saturation only) is **0.10 ms**; with V2 on at defaults, **0.18
 ms**; with V2 on and Clarity 0.5, **0.20 ms** — so V2's OWN cost over the pre-pass
 baseline is **+0.08 ms at defaults, +0.10 ms with Clarity 0.5**. For comparison, AB

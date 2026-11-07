@@ -290,7 +290,7 @@ the critical path for v1.
 
 **Update (2026-08-21) — M9a spike result: persistence confirmed, plus two
 unrelated findings.** Run on an experimental branch (issues #17/#18), on real
-hardware (RADV/AMD Radeon RX 7900 XTX), not inferred from reading barrier
+hardware (RADV/AMD), not inferred from reading barrier
 code.
 
 **Method:** a throwaway `.fx` (never shipped) with a persistent 1×1 `R32F`

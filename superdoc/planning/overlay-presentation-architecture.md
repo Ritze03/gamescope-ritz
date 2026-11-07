@@ -68,7 +68,7 @@ On this machine those are genuinely different families. Verified at runtime,
 not inferred:
 
 ```
-vulkan: selecting physical device 'AMD Radeon RX 7900 XTX (RADV NAVI31)':
+vulkan: selecting physical device 'AMD Radeon GPU (RADV)':
         queue family 1 (general queue family 0)
 ```
 
@@ -124,7 +124,7 @@ changed *when* the texture was written, not *whether the write was legal*.
   consistent with this, and was never actually attributable to double
   buffering.
 
-On RADV/Navi31 the concrete mechanism is DCC (colour compression) metadata: the
+On RADV/RDNA 3 the concrete mechanism is DCC (colour compression) metadata: the
 graphics queue writes the image compressed, and with no release barrier the
 metadata is never resolved for the compute family, which then samples an image
 whose compression state it disagrees with.

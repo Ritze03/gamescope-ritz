@@ -36,7 +36,7 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
   `Why:` the user, seeing two identical selectors: *"Right now we have quality with the options
   quality and performance and v2 mode with quality and performance. This could realistically be
   a single selector for just quality and performance, and just pass it the same way for v1 and
-  v2 since both of them have the same options."* Library numbers (RX 7900 XTX, 1080p 2x, ms per
+  v2 since both of them have the same options."* Library numbers (the development GPU, 1080p 2x, ms per
   real pair): V1 0.30, V2 Quality 0.24, V2 Performance 0.14. V2 Quality adds a per-pixel
   edge-aware field and a coverage pass (which frame still shows each spot); Performance is the
   grid morph only.

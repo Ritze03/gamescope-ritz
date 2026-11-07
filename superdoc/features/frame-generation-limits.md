@@ -22,7 +22,7 @@ buffer) is on, a Vulkan game is limited by the WSI layer's timer and not at the 
 
 ## Costs
 
-Library measurements on a 7900 XTX, ms of GPU per real pair:
+Library measurements on the development GPU, ms of GPU per real pair:
 
 | Resolution | 2x / 3x / 4x, defaults | 2x / 3x / 4x, Performance |
 | --- | --- | --- |

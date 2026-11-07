@@ -201,8 +201,7 @@ already does against `/proc/<pid>/stat` *(verified, `src/steamcompmgr.cpp:5329`)
   gets close only via `fdinfo` (`/proc/<pid>/fdinfo/<fd>` DRM client stats), which is a
   materially bigger and fragile read.
 
-This machine is confirmed AMD RX 7900 XTX-class *(verified: `lspci -nn` reports
-`Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]`, PCI id `1002:744c`)*, so the
+The development machine is confirmed AMD RDNA 3 *(verified with `lspci -nn`)*, so the
 `amdgpu` sysfs surface above is directly applicable, not a generic "should work on
 AMD" guess — it was read live off this box.
 

@@ -58,7 +58,7 @@ optimisation-level artifact.
 
 ## Environment
 
-- **GPU:** AMD Radeon RX 7900 XTX (RADV NAVI31), Mesa/RADV driver stack.
+- **GPU:** AMD Radeon GPU (RADV), Mesa/RADV driver stack.
 - **Host compositor:** Hyprland.
 - **Display:** `DP-1`, 1920×1080 @ 280 Hz, with VRR enabled on the output
   (Hyprland `vrr = 3`, i.e. "VRR on for a fullscreen window whose content type is

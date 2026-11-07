@@ -139,7 +139,7 @@ does not directly follow the estimate) -- an under-count of 0.01-0.05 ms in plac
 resets the query pool), never in the same composite after it (that would wait on a
 submission that does not exist yet).
 
-**Cost** (library figures, 7900 XTX, 1440p, moving scene, marginal over Off): Crosshair
+**Cost** (library figures, the development GPU, 1440p, moving scene, marginal over Off): Crosshair
 +0.03 ms, Whole screen +0.05 ms; the worst case (Whole screen, 70% still) about 0.25 ms in
 total. **Memory**: three clean copies of the frame (44 MB at 1440p) in both modes, about
 15 MB more for Whole screen. The memory stays with the library until the interpolator is
