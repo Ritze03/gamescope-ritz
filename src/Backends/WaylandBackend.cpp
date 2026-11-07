@@ -15,6 +15,7 @@
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/HostShown.h"
+#include "Overlay/Diagnostics.h"
 
 #include <cstring>
 #include <unordered_map>
@@ -454,6 +455,8 @@ namespace gamescope
         /////////////////////
 
         virtual int Present( const FrameInfo_t *pFrameInfo, bool bAsync ) override;
+        bool ScanoutBlockWanted() const;
+        void PresentScanoutBlocker( CWaylandPlane &plane );
 
         virtual gamescope::GamescopeScreenType GetScreenType() const override;
         virtual GamescopePanelOrientation GetCurrentOrientation() const override;
@@ -816,6 +819,9 @@ namespace gamescope
 		wl_region *GetEmptyRegion() const { return m_pEmptyRegion; }
         wl_region *GetFullRegion() const { return m_pFullRegion; }
         CWaylandFb *GetBlackFb() const { return m_BlackFb.get(); }
+        // A 1x1 fully transparent single-pixel buffer, or null when the host has no
+        // wp_single_pixel_buffer_manager_v1. Only used by "Block direct scanout".
+        CWaylandFb *GetTransparentFb() const { return m_pOwnedTransparentFb.get(); }
 
         void OnConnectorDestroyed( CWaylandConnector *pConnector )
         {
@@ -910,6 +916,7 @@ namespace gamescope
         wl_region *m_pFullRegion = nullptr;
         Rc<CWaylandFb> m_BlackFb;
         OwningRc<CWaylandFb> m_pOwnedBlackFb;
+        OwningRc<CWaylandFb> m_pOwnedTransparentFb;
         OwningRc<CVulkanTexture> m_pBlackTexture;
         wp_presentation *m_pPresentation = nullptr;
         frog_color_management_factory_v1 *m_pFrogColorMgmtFactory = nullptr;
@@ -1264,11 +1271,57 @@ namespace gamescope
         }
     }
 
+    // "Block direct scanout" (Diagnostics area, global.json). Hosts only scan out a
+    // window that is a single surface, so one more surface on top, with nothing to
+    // see in it, makes them composite instead. Read per frame from an atomic. Without
+    // wp_single_pixel_buffer_manager_v1 there is no cheap buffer: the switch does
+    // nothing and says so once.
+    bool CWaylandConnector::ScanoutBlockWanted() const
+    {
+        if ( !Diagnostics_BlockScanout() )
+            return false;
+        if ( !m_pBackend->GetTransparentFb() )
+        {
+            static bool s_bLogged = false;
+            if ( !s_bLogged )
+            {
+                s_bLogged = true;
+                xdg_log.infof( "Block direct scanout is on, but the host has no wp_single_pixel_buffer_manager_v1: doing nothing" );
+            }
+            return false;
+        }
+        return true;
+    }
+
+    // One Present() per plane per frame, never Present(nullptr) first: the same
+    // buffer on the same plane is not re-attached (CWaylandPlane::Present() only
+    // attaches on a change), so there is no extra acquire/release to balance.
+    // The plane's subsurface already has an empty input region (CWaylandPlane::Init()),
+    // so it takes no input and leaves pointer focus on the toplevel.
+    void CWaylandConnector::PresentScanoutBlocker( CWaylandPlane &plane )
+    {
+        CWaylandFb *pFb = m_pBackend->GetTransparentFb();
+        plane.Present(
+            WaylandPlaneState
+            {
+                .pBuffer     = pFb->GetHostBuffer(),
+                .pFb         = pFb,
+                .flSrcWidth  = 1.0,
+                .flSrcHeight = 1.0,
+                .nDstWidth   = 1,
+                .nDstHeight  = 1,
+                .eColorspace = GAMESCOPE_APP_TEXTURE_COLORSPACE_PASSTHRU,
+                .bOpaque     = false,
+                .uFractionalScale = plane.GetScale(),
+            } );
+    }
+
     int CWaylandConnector::Present( const FrameInfo_t *pFrameInfo, bool bAsync )
     {
         UpdateFullscreenState();
 
         bool bNeedsFullComposite = false;
+        const bool bBlockScanout = m_bVisible && ScanoutBlockWanted();
 
         if ( !m_bVisible )
         {
@@ -1371,7 +1424,16 @@ namespace gamescope
                 }
 
                 for ( int i = 0; i < 8 && uCurrentPlane < 8; i++ )
+                {
+                    // Plane 7 is normally empty. When a real layer wants it, 8 layers
+                    // are in use and the host is not solitary anyway: never override it.
+                    if ( bBlockScanout && uCurrentPlane == 7 && i >= pFrameInfo->layers.count() )
+                    {
+                        PresentScanoutBlocker( m_Planes[uCurrentPlane++] );
+                        continue;
+                    }
                     m_Planes[uCurrentPlane++].Present( i < pFrameInfo->layers.count() ? &pFrameInfo->layers.get( i ) : nullptr );
+                }
             }
             else
             {
@@ -1412,7 +1474,12 @@ namespace gamescope
                 m_Planes[0].Present( &compositeLayer );
 
                 for ( int i = 1; i < 8; i++ )
-                    m_Planes[i].Present( nullptr );
+                {
+                    if ( bBlockScanout && i == 7 )
+                        PresentScanoutBlocker( m_Planes[i] );
+                    else
+                        m_Planes[i].Present( nullptr );
+                }
             }
         }
 
@@ -2548,6 +2615,10 @@ namespace gamescope
             wl_buffer *pBlackBuffer = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer( m_pSinglePixelBufferManager, 0, 0, 0, ~0u );
             m_pOwnedBlackFb = new CWaylandFb( this, pBlackBuffer );
             m_BlackFb = m_pOwnedBlackFb.get();
+
+            // Non-opaque, alpha 0: for "Block direct scanout" (CWaylandConnector::Present()).
+            wl_buffer *pClearBuffer = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer( m_pSinglePixelBufferManager, 0, 0, 0, 0 );
+            m_pOwnedTransparentFb = new CWaylandFb( this, pClearBuffer );
         }
         else
         {

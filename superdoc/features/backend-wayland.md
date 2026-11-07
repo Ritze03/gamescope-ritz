@@ -235,6 +235,29 @@ sometimes show older frames. They persist with the fix and were reportedly absen
 cause unknown ([TODO](../planning/TODO.md)). The Diagnostics area's warning about scanout being off
 is back since the crash fix ([diagnostics.md](diagnostics.md)).
 
+### Block direct scanout from gamescope
+
+User switch "Block direct scanout" ([diagnostics.md](diagnostics.md#block-direct-scanout), default
+off). Hosts only scan out a window that is a single surface (Hyprland reports `solitaryBlockedBy`
+`OPAQUE, SURFACES` when it is not; Mutter's scanout candidate check needing a single surface too is
+from memory and **unverified until tested**). `m_Planes` are subsurfaces of plane 0, so when the
+switch is on `CWaylandConnector::Present()` puts a 1x1 fully transparent buffer
+(`wp_single_pixel_buffer_manager_v1`, rgba 0, `bOpaque = false`, viewport destination 1x1 at the
+origin; `CWaylandBackend::GetTransparentFb()`) on the top plane, `m_Planes[7]`, in both the
+direct-plane and the full-composite path, before the commit loop. Plane 7 is normally empty; in
+the direct-plane path, if a real layer wants it (8 layers, or 7 plus the backing plane) it is left
+alone, because the host is not solitary then anyway. Hidden windows are skipped. Without the
+single-pixel manager the switch does nothing and logs once.
+
+The plane subsurface already has an empty input region (`CWaylandPlane::Init()`), so it takes no
+input and leaves pointer focus on the toplevel. Buffer lifetime, per
+[wayland-vrr-buffer-lifetime.md](../planning/wayland-vrr-buffer-lifetime.md): `CWaylandPlane::Present()`
+only attaches when the plane's buffer changes and acquires on that attach, so presenting the same
+transparent buffer every frame is one attach, one acquire and one release in total; the blocker
+makes exactly one `Present()` call per frame (never `Present(nullptr)` then a state), and turning
+the switch off presents `nullptr` on plane 7, which detaches it on the next frame. Cost: the host
+composites, so Frame generation's shown rate falls back (about 160 uncapped against 261-272).
+
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:
 [frame-generation.md](frame-generation-host-scanout.md#why-the-host-loses-frames)). Two things have to hold,

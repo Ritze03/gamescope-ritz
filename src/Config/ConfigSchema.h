@@ -1197,6 +1197,11 @@ namespace gamescope::config
         // its checks. Global (the host setup is per machine); default off.
         bool diagnostics_silence_warning = false;
 
+        // Diagnostics area's "Block direct scanout": gamescope keeps a transparent 1x1
+        // subsurface on top so a nested Wayland host cannot scan its window out.
+        // Global (the host setup is per machine); default off.
+        bool diagnostics_block_scanout = false;
+
         // Keyboard-control toggles for the overlay's own input capture (M2)
         // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
         // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also

@@ -135,3 +135,35 @@ TEST_CASE( "diagnostics: Silence warning mutes the alerts but not the state", "[
 	REQUIRE( AnyWarns( &off, &off + 1, false ) );
 	REQUIRE( !AnyWarns( &off, &off + 1, true ) );
 }
+
+TEST_CASE( "diagnostics: Block direct scanout states the truth and never alerts", "[diagnostics]" )
+{
+	// Off would warn; with blocking on, the area says gamescope blocks it and nothing alerts.
+	const ScanoutResult off = DecideDirectScanout( Nested(), Ok( R"({"int": 0})" ) );
+	REQUIRE( Alerts( off.eState, false ) );
+	const ScanoutResult blockedOff = WithBlock( off, true );
+	REQUIRE( blockedOff.eState == ScanoutState::Blocked );
+	REQUIRE( blockedOff.sHeadline == "Blocked by gamescope" );
+	REQUIRE( blockedOff.nValue == 0 );
+	REQUIRE( !WarnsAbout( blockedOff.eState ) );
+	REQUIRE( !Alerts( blockedOff.eState, false ) );
+	REQUIRE( !AnyWarns( &blockedOff, &blockedOff + 1, false ) );
+
+	// Every applicable state reads as Blocked, on any host (GNOME has no hyprctl).
+	Facts gnome = Nested();
+	gnome.bHyprland = false;
+	REQUIRE( WithBlock( DecideDirectScanout( gnome, Ok( "" ) ), true ).eState == ScanoutState::Blocked );
+	REQUIRE( WithBlock( DecideDirectScanout( Nested(), Ok( R"({"int": 1})" ) ), true ).eState == ScanoutState::Blocked );
+	REQUIRE( WithBlock( DecideDirectScanout( Nested(), Out( RunOutcome::Failed, 1 ) ), true ).eState == ScanoutState::Blocked );
+
+	// Off by default: the result passes through untouched.
+	const ScanoutResult same = WithBlock( off, false );
+	REQUIRE( same.eState == ScanoutState::Off );
+	REQUIRE( same.sHeadline == off.sHeadline );
+	REQUIRE( Alerts( same.eState, false ) );
+
+	// Nothing to block where the host cannot scan out, and nothing known before a check.
+	Facts sdl;
+	REQUIRE( WithBlock( DecideDirectScanout( sdl, Ok( "" ) ), true ).eState == ScanoutState::NotApplicable );
+	REQUIRE( WithBlock( ScanoutResult{}, true ).eState == ScanoutState::Pending );
+}

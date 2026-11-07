@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.14.12] – 2026-11-07
 
 ### Added
+- **Block direct scanout**: A switch in the Inspector of Diagnostics' Direct scanout row
+  that stops a Wayland host from putting the window on a display plane; off by default.
 - **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row
   mutes its startup toast and rail dot while the area still shows the true state.
 

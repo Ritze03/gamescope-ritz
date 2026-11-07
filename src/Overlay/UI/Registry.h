@@ -519,12 +519,18 @@ namespace gamescope::ui
 		// Why: the Diagnostics area's "Silence warning" belongs on the Direct
 		// scanout row's Inspector, not as a sheet row of its own (the user marked
 		// the spot on a screenshot).
+		// May be called more than once: the switches draw in call order. fnShown
+		// (optional) hides one where it does not apply (Block direct scanout is only
+		// for a Wayland host).
 		Entry &InspectorSwitch( const char *pszLabel, std::function<bool()> fnGet,
-		                        std::function<void( bool )> fnSet );
-		bool  HasInspectorSwitch() const { return (bool)m_InspSwitchGet; }
-		const std::string &InspectorSwitchLabel() const { return m_sInspSwitchLabel; }
-		bool  InspectorSwitchValue() const { return m_InspSwitchGet && m_InspSwitchGet(); }
-		void  SetInspectorSwitch( bool b ) const { if ( m_InspSwitchSet ) m_InspSwitchSet( b ); }
+		                        std::function<void( bool )> fnSet,
+		                        std::function<bool()> fnShown = nullptr );
+		bool  HasInspectorSwitch() const { return !m_InspSwitches.empty(); }
+		size_t InspectorSwitchCount() const { return m_InspSwitches.size(); }
+		bool  InspectorSwitchShown( size_t i ) const { return !m_InspSwitches[ i ].fnShown || m_InspSwitches[ i ].fnShown(); }
+		const std::string &InspectorSwitchLabel( size_t i ) const { return m_InspSwitches[ i ].sLabel; }
+		bool  InspectorSwitchValue( size_t i ) const { return m_InspSwitches[ i ].fnGet && m_InspSwitches[ i ].fnGet(); }
+		void  SetInspectorSwitch( size_t i, bool b ) const { if ( m_InspSwitches[ i ].fnSet ) m_InspSwitches[ i ].fnSet( b ); }
 
 		// ---- presentation flag: dropdown instead of segmented (2026-09-06) --
 		// A Kind::Choice presents as a segmented strip when it fits and as
@@ -767,9 +773,14 @@ namespace gamescope::ui
 		std::string m_sInspVerbLabel, m_sInspVerbVerb;           // InspectorVerb()
 		std::function<void()> m_InspVerbFn;
 		std::function<bool()> m_InspVerbShown;
-		std::string m_sInspSwitchLabel;                          // InspectorSwitch()
-		std::function<bool()> m_InspSwitchGet;
-		std::function<void( bool )> m_InspSwitchSet;
+		struct InspSwitch                                        // InspectorSwitch()
+		{
+			std::string sLabel;
+			std::function<bool()> fnGet;
+			std::function<void( bool )> fnSet;
+			std::function<bool()> fnShown;
+		};
+		std::vector<InspSwitch> m_InspSwitches;
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07

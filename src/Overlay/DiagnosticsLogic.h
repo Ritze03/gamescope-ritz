@@ -21,6 +21,7 @@ namespace gamescope::diagnostics
 		On,             // render:direct_scanout is 1 or 2
 		Off,            // render:direct_scanout is 0: the one state that warns
 		Unknown,        // could not be read: said plainly, never warned about as if Off
+		Blocked,        // "Block direct scanout" is on: gamescope keeps the host from scanning out; no warning
 	};
 
 	enum class RunOutcome { Ok, NotInstalled, TimedOut, Failed };
@@ -140,6 +141,24 @@ namespace gamescope::diagnostics
 			r.sReason = "render:direct_scanout has the unexpected value " + std::to_string( *oValue ) + ".";
 		}
 		return r;
+	}
+
+	// What the area shows when the user has "Block direct scanout" on (global.json
+	// overlay.diagnostics_block_scanout). Applied when the result is READ, not when the
+	// check ran, so flipping the switch changes the text at once without a recheck. The
+	// area then states the truth (scanout is off because gamescope blocks it) and the
+	// "scanout is off, turn it on" warning is wrong, so Blocked never warns. Left alone:
+	// NotApplicable (the switch does nothing there) and Pending (nothing known yet).
+	inline ScanoutResult WithBlock( const ScanoutResult &r, bool bBlocked )
+	{
+		if ( !bBlocked || r.eState == ScanoutState::NotApplicable || r.eState == ScanoutState::Pending )
+			return r;
+		ScanoutResult b = r;   // nValue stays: the host's own setting is still worth showing
+		b.eState = ScanoutState::Blocked;
+		b.sHeadline = "Blocked by gamescope";
+		b.sReason = "Block direct scanout is on: gamescope keeps a transparent layer on top so the "
+		            "host composites the window itself. Frame generation shows a lower rate.";
+		return b;
 	}
 
 	// The only state that warns. It was switched off 2026-11-06 to 2026-11-07 while

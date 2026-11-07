@@ -548,11 +548,9 @@ namespace gamescope::ui
 	}
 
 	Entry &Entry::InspectorSwitch( const char *pszLabel, std::function<bool()> fnGet,
-	                               std::function<void( bool )> fnSet )
+	                               std::function<void( bool )> fnSet, std::function<bool()> fnShown )
 	{
-		m_sInspSwitchLabel = pszLabel ? pszLabel : "";
-		m_InspSwitchGet    = std::move( fnGet );
-		m_InspSwitchSet    = std::move( fnSet );
+		m_InspSwitches.push_back( { pszLabel ? pszLabel : "", std::move( fnGet ), std::move( fnSet ), std::move( fnShown ) } );
 		return *this;
 	}
 

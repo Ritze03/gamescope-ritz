@@ -154,9 +154,11 @@ one related action does not deserve a sheet row. Not in the palette (read-only r
 *"It should only show this button on the inspector rail on the right side"*. Used by
 `PanelDiagnostics.cpp`.
 
-**Inspector-only switch** — `Entry::InspectorSwitch( label, fnGet, fnSet )` (2026-11-07): one bool
-switch on the row's CONFIGURE page, directly under the Inspector verb, drawn by
-`DrawInspectorSwitchRow()` in `Shell.cpp` in the Row grammar's lane with `controls::Switch`. The
+**Inspector-only switch** — `Entry::InspectorSwitch( label, fnGet, fnSet, fnShown = nullptr )`
+(2026-11-07): a bool switch on the row's CONFIGURE page, directly under the Inspector verb, drawn by
+`DrawInspectorSwitchRow()` in `Shell.cpp` in the Row grammar's lane with `controls::Switch`. Call it
+more than once for several switches (drawn in call order); the optional `fnShown` hides one where it
+does not apply (Diagnostics' "Block direct scanout" is hidden off Wayland). The
 row stays a readout, so the "nothing here to set" sentence is skipped for it. Not in the sheet or
 the palette; the setter persists itself. `Why:` Diagnostics' "Silence warning" belongs on the Direct
 scanout row's Inspector (the user marked the spot on a screenshot).

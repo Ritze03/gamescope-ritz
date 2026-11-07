@@ -335,7 +335,8 @@ namespace gamescope
 		if ( bToast )
 		{
 			g_bToasted = true;
-			if ( Diagnostics_Silenced() )
+			// Blocked by gamescope: "scanout is off, turn it on" would be wrong.
+			if ( Diagnostics_Silenced() || Diagnostics_BlockScanout() )
 				return;
 			Notifications::Show(
 				"Hyprland has direct scanout off, so frames gamescope makes are lost. "
@@ -362,7 +363,8 @@ namespace gamescope
 	bool Diagnostics_HasWarning()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );
-		return AnyWarns( &g_Pub.scanout, &g_Pub.scanout + 1, Diagnostics_Silenced() );
+		const ScanoutResult r = WithBlock( g_Pub.scanout, Diagnostics_BlockScanout() );
+		return AnyWarns( &r, &r + 1, Diagnostics_Silenced() );
 	}
 
 	namespace
@@ -390,13 +392,46 @@ namespace gamescope
 		force_repaint();
 	}
 
+	namespace
+	{
+		std::atomic<int> g_nBlockScanout{ -1 };   // -1: not read from global.json yet
+	}
+
+	// Read on the Wayland present path every frame: the atomic only. The first call
+	// reads global.json once (the same lazy read Diagnostics_Silenced() does).
+	bool Diagnostics_BlockScanout()
+	{
+		int n = g_nBlockScanout.load( std::memory_order_relaxed );
+		if ( n < 0 )
+		{
+			n = config::LoadGlobal().overlay.diagnostics_block_scanout ? 1 : 0;
+			g_nBlockScanout.store( n, std::memory_order_relaxed );
+		}
+		return n == 1;
+	}
+
+	void Diagnostics_SetBlockScanout( bool bBlock )
+	{
+		g_nBlockScanout.store( bBlock ? 1 : 0, std::memory_order_relaxed );
+		config::Settings s = config::LoadGlobal();
+		s.overlay.diagnostics_block_scanout = bBlock;
+		config::EnqueueGlobalWrite( s );
+		// An idle screen presents nothing: repaint so the plane appears or goes now.
+		force_repaint();
+	}
+
+	bool Diagnostics_ScanoutApplicable()
+	{
+		return BackendApplicable();
+	}
+
 	DiagnosticsView Diagnostics_View()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );
 		DiagnosticsView v;
 		v.bRunning = g_Pub.bRunning;
 		v.bEverChecked = g_Pub.bEverChecked;
-		v.scanout = g_Pub.scanout;
+		v.scanout = WithBlock( g_Pub.scanout, Diagnostics_BlockScanout() );
 		return v;
 	}
 }

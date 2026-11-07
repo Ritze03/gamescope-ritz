@@ -33,6 +33,42 @@ fullscreen with scanout on are still open there.
 crash test ran with 1 only, and earlier zero-copy measurements used 2; the state check treats both
 as On.
 
+## Block direct scanout
+
+A second switch under **Silence warning** on the same Inspector page (Configure) of the Direct
+scanout row: **Block direct scanout**, config `overlay.diagnostics_block_scanout` in `global.json`,
+default **off**, so nothing changes unless the user turns it on. On, gamescope itself keeps a
+nested Wayland host from putting its window on a display plane. It applies live: the setter
+(`Diagnostics_SetBlockScanout()`) stores an atomic, writes `global.json` and calls `force_repaint()`;
+the Wayland present path reads only `Diagnostics_BlockScanout()` (an atomic) every frame, and
+turning it off detaches the buffer on the next frame.
+
+`Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block
+noise after tabbing out and back in, and we suspect (unproven) host direct scanout is involved;
+GNOME has no reliable user switch for scanout, so the switch has to be on gamescope's side, both as
+a test and as a workaround. The brief artifacts on entering and leaving fullscreen under Hyprland
+and GNOME are the other reason ([TODO](../planning/TODO.md)). `Why global:` the host setup belongs
+to the machine, not to a game, like Silence warning.
+
+Mechanism: [backend-wayland.md](backend-wayland.md#block-direct-scanout-from-gamescope).
+Shown wherever `HostMayScanOutOutputImages()` is true (`Diagnostics_ScanoutApplicable()`: every
+Wayland host, not only Hyprland); hidden on SDL, DRM, headless and OpenVR, where there is nothing
+to block. The row is not Hyprland-only: its group is "Host", and under GNOME it reads "Hyprland not
+detected" with the switch on its Configure page.
+
+While it is on, `WithBlock()` (pure, `DiagnosticsLogic.h`, `tests/test_diagnostics.cpp`) turns any
+applicable result into state **Blocked** ("Blocked by gamescope", the host's own value still shown
+in Details) when the result is read, so toggling needs no recheck. Blocked never warns: no toast and
+no rail dot, since "scanout is off, turn it on" would be wrong. Not applicable and Pending are left
+alone.
+
+**Cost:** with scanout blocked the host composites again, so with Frame generation the shown rate
+falls back (about 160 uncapped against 261-272 with scanout, see below).
+
+**Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
+live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
+single-surface requirement is from memory, not checked.
+
 ## Hyprland direct scanout
 
 Why it matters (when it works): under nested Wayland on Hyprland the host's own draw waits behind the game's GPU
@@ -49,6 +85,7 @@ States (`ScanoutState`):
 | Hyprland not detected | `HYPRLAND_INSTANCE_SIGNATURE` was not set when gamescope started | no |
 | On | `render:direct_scanout` is 1 or 2 | no |
 | Off | it is 0 | **yes**, unless silenced |
+| Blocked | the user's Block direct scanout switch is on (shown instead of any applicable state above) | no |
 | Could not check | no `hyprctl`, no answer in 1 s, non-zero exit, no such option, unparsable output, a value other than 0/1/2 | no |
 
 The backend decides before Hyprland does, so headless under a Hyprland session says "Not
