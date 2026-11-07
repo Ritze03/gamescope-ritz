@@ -2209,6 +2209,7 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( Settings{}.motion_blur.same_as_framegen == true );
     REQUIRE( Settings{}.motion_blur.motion_version == "v1" );
     REQUIRE( Settings{}.motion_blur.quality == "quality" );
+    REQUIRE( Settings{}.motion_blur.pause_when_cursor_visible == false );
 
     // A profile written before the section existed loads the defaults.
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -2224,9 +2225,11 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.same_as_framegen == true );   // absent: follows Frame generation
     REQUIRE( loaded.motion_blur.motion_version == "v1" );
     REQUIRE( loaded.motion_blur.quality == "quality" );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == false );   // absent: off
 
     Settings s{};
     s.motion_blur.enabled = true;
+    s.motion_blur.pause_when_cursor_visible = true;
     s.motion_blur.samples = 7;            // every whole number 2..8 is a real choice
     s.motion_blur.amount = 85;
     s.motion_blur.relative = "game";
@@ -2245,6 +2248,10 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.same_as_framegen == false );
     REQUIRE( loaded.motion_blur.motion_version == "v2" );
     REQUIRE( loaded.motion_blur.quality == "performance" );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == true );
+
+    // Independent of Frame generation's own switch of the same name.
+    REQUIRE( loaded.framegen.pause_when_cursor_visible == false );
 
     // The keys the Motion blur area's rows are bound to (the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this).
@@ -2256,6 +2263,7 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( IsSettingsKey( "motion_blur.same_as_framegen" ) );
     REQUIRE( IsSettingsKey( "motion_blur.motion_version" ) );
     REQUIRE( IsSettingsKey( "motion_blur.quality" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.pause_when_cursor_visible" ) );
 }
 
 TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum string keeps its default", "[config]" )
@@ -2286,6 +2294,7 @@ TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum
     REQUIRE( loaded.motion_blur.samples == 8 );          // the library takes 16, the UI offers 2..8
     REQUIRE( loaded.motion_blur.amount == 0 );
     REQUIRE( loaded.motion_blur.enabled == false );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == false );   // key absent in a present object
 }
 
 // ---------------------------------------------------------------------

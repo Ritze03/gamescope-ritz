@@ -12,6 +12,8 @@ The newest version below is the one this build reports.
 ## [0.14.12] – 2026-11-07
 
 ### Added
+- **Motion blur: Pause while cursor visible**: A switch, off by default, that shows the
+  game's frames without blur while its mouse cursor is visible and resumes by itself.
 - **Compress output images**: A Display > General switch, shown on Wayland only, for
   AMD's image compression (DCC) on gamescope's output images; it is on by default, so
   output images are compressed again, and turning it off, on the next launch, avoids
