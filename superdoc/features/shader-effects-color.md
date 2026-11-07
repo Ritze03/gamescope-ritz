@@ -201,7 +201,7 @@ rather than a strength above neutral — see the formula section above for why `
 would make even the *old, renamed* effect's own ratio non-flat there, which would have
 muddied exactly the comparison this check exists to make.)
 
-Captures: `build-release/verify-shots/vibrancy-split-2026-09-08/effects-regression-captures/10-colors-*.png`;
+Captures: the untracked `vibrancy-split-2026-09-08` capture run (`effects-regression-captures/10-colors-*.png`);
 full numeric results: that directory's `results.txt`.
 
 ### Color Boost (`image.shaders.color_boost`) — NEW 2026-10-29
@@ -289,4 +289,4 @@ a cliff. Passed as float bits (`u_rcasCon`), like `RcasPushData_t::u_c1`.
 
 ## History
 
-- **Color Boost** (terminology entry, moved here 2026-11-07): **Color Boost** — the Shaders effect added 2026-10-29 (`image.shaders.color_boost`, config `reshade.color_boost`, `src/shaders/effects_common.h`'s `grade()` step 4, right after Vibrancy), from the user's *"make all of the colors more vibrant with a gamma (maybe inverted?) curve, so low saturation stuff gets greatly boosted and already high saturation stuff doesnt "blow out""*: an inverted gamma curve (`t' = 1 - (1-t)^k`, `k = 1 + Strength`) on each colour's **gamut fraction** `t` (its chroma as a fraction of the largest chroma its hue can have at that luma), so muted colours gain most, colours already at the edge gain nothing, and the result cannot leave the gamut (no clipping). The opposite direction to **Vibrancy** (which boosts already-saturated colours more) and not Saturation's flat multiplier.
+- **Color Boost** (glossary detail): **Color Boost** — the Shaders effect added 2026-10-29 (`image.shaders.color_boost`, config `reshade.color_boost`, `src/shaders/effects_common.h`'s `grade()` step 4, right after Vibrancy), from the user's *"make all of the colors more vibrant with a gamma (maybe inverted?) curve, so low saturation stuff gets greatly boosted and already high saturation stuff doesnt "blow out""*: an inverted gamma curve (`t' = 1 - (1-t)^k`, `k = 1 + Strength`) on each colour's **gamut fraction** `t` (its chroma as a fraction of the largest chroma its hue can have at that luma), so muted colours gain most, colours already at the edge gain nothing, and the result cannot leave the gamut (no clipping). The opposite direction to **Vibrancy** (which boosts already-saturated colours more) and not Saturation's flat multiplier.

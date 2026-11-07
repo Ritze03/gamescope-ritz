@@ -604,11 +604,11 @@ given.
 > mid-tone clients: 0 of 921,600 pixels differ, max delta 0 — unaffected by
 > this second retune, since `amount(k=0) = 0` exactly regardless of the
 > mapping curve, so the off-path never changed shape.
-> `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/` has the first
+> the untracked `zoom-sharpen-v2-2026-09-22` capture run has the first
 > retune's captures (`shots/`, `README.txt`) and this remapping's
 > (`v3/README.txt`, plus `sweep/` for the raw amount- and k-sweep
 > captures behind the tables above); the RCAS-era measurements are
-> preserved in `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
+> preserved in the untracked `zoom-sharpen-2026-09-22` capture run.
 
 **Third retune (2026-09-22): the ceiling was lowered by visual QC, not
 gradient energy — gradient energy was measuring the wrong thing.** A
@@ -650,7 +650,7 @@ The gain row is computed from the same fitted curve as the table above
 (`Ginf = 25.12`, `K = 1.39`), not a fresh gradient-energy sweep — this
 retune's own evidence is the visual QC grade, not a metric, per the
 finding above that the metric itself was misleading at the top of the
-old range. Evidence: `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/v4/`
+old range. Evidence: the untracked `zoom-sharpen-v2-2026-09-22` capture run (`v4`)
 (crops and a `sweep-stack.png`-style vertical stack for the default
 client at k = 0/0.25/0.5/0.75/1.0, plus k = 0/1.0 for both mid-tone
 clients; `README.txt` has the numbers). `sharpen 0` remains
@@ -869,7 +869,7 @@ alone reads.
   ~900 ms, ~1000 ms for the whole cycle. At `fade_ms 0` the first captured
   frame after the press is already fully zoomed and the first after the
   release already clear.
-- `build-release/verify-shots/zoom-2026-09-14/` — headless captures (private
+- the untracked `zoom-2026-09-14` capture run — headless captures (private
   sway, `effects_scene_client`, `wlserver_debug_mouse_button "273 1"`):
   circle/hold on the `colors` bands shows the bands at exactly 2× inside a
   360 px ring with the ring drawn, and before/released captures are
@@ -897,7 +897,7 @@ alone reads.
   monotonic, matches three independently-computed intermediate values,
   clamped past both ends) with the same no-Zoom.cpp-link property
   (2026-09-22, the slider remapping).
-- `build-release/verify-shots/zoom-sharpen-v2-2026-09-22/` — see the
+- the untracked `zoom-sharpen-v2-2026-09-22` capture run — see the
   "Sharpen" section above for the numbers: `sharpen 0` byte-identical to
   master `d259cae` (the pre-retune build), every differing pixel between
   `sharpen 0` and `sharpen 1` inside the projector's own radius, zero halo
@@ -909,7 +909,7 @@ alone reads.
   retune (ceiling `32 -> 1.3`) with the default client's full k-sweep and
   its vertical stack image, plus k=0/1.0 re-confirmation for both mid-tone
   clients. The RCAS-era measurements (superseded) are preserved in
-  `build-release/verify-shots/zoom-sharpen-2026-09-22/`.
+  the untracked `zoom-sharpen-2026-09-22` capture run.
 - `tests/test_pointer_mapping.cpp` (2026-09-27) — `ZoomRemapPoint()`/
   `ZoomPointInsideShape()` (`Overlay/Zoom.h`), no `Zoom.cpp` link needed:
   visible + inside a circle divides toward the centre; outside the shape is
@@ -928,4 +928,4 @@ alone reads.
 
 ## History
 
-- **Zoom** (terminology entry, moved here 2026-11-07): **Zoom** — this fork's compositor-drawn magnifier (2026-09-14; `src/Overlay/Zoom.{h,cpp}`, `src/shaders/cs_zoom.comp`, settings area `system.zoom` under MISC, keybind action `zoom` bound to `RMB` by default): a copy of the middle of the game at 1.5–5×, cut to a circle, rectangle or square with a 1 px black outline, shown while the chord is held or toggled. Built *inside* `vulkan_composite()` as layer 1 — after the bundled shaders, before the upscaler — so it carries the effects and is never scaled. The user's "projection" is the shape-cut picture; its sizes are 0..1 fractions of the game's on-screen rect. Since 2026-09-16 it arrives as a **staged reveal** rather than a pop: one **Fade duration** slider (`zoom.fade_ms`, 0–2000 ms, default 200, 0 = instant and byte-identical to the old behaviour) drives one progress float split at `Zoom.h`'s `kZoomFadeSplit` — the shape and its outline fade in **at their final size** over the first 10% of the fade duration, with the magnification pinned at exactly 1.0×, and only then does the magnification ramp to `factor` *inside* the already-visible projector over the remaining 90%; a release plays the same progress backwards, and a re-press mid-fade-out reverses from wherever it had got to. Time-driven from `get_time_in_nanos()`, so it looks the same at 60 and 240 fps. Since 2026-09-27, while the zoom is showing and the game's own cursor is visible (menus), a click is remapped to land on what the projector actually shows under the arrow rather than the arrow's un-magnified screen position — see `superdoc/features/zoom.md`'s "Clicks land on what the projector shows" section. **Not** upstream's `zoomScaleRatio` (Steam's whole-screen magnifier via the `screenZoom` X property), which scales the entire output.
+- **Zoom** (glossary detail): **Zoom** — this fork's compositor-drawn magnifier (2026-09-14; `src/Overlay/Zoom.{h,cpp}`, `src/shaders/cs_zoom.comp`, settings area `system.zoom` under MISC, keybind action `zoom` bound to `RMB` by default): a copy of the middle of the game at 1.5–5×, cut to a circle, rectangle or square with a 1 px black outline, shown while the chord is held or toggled. Built *inside* `vulkan_composite()` as layer 1 — after the bundled shaders, before the upscaler — so it carries the effects and is never scaled. The user's "projection" is the shape-cut picture; its sizes are 0..1 fractions of the game's on-screen rect. Since 2026-09-16 it arrives as a **staged reveal** rather than a pop: one **Fade duration** slider (`zoom.fade_ms`, 0–2000 ms, default 200, 0 = instant and byte-identical to the old behaviour) drives one progress float split at `Zoom.h`'s `kZoomFadeSplit` — the shape and its outline fade in **at their final size** over the first 10% of the fade duration, with the magnification pinned at exactly 1.0×, and only then does the magnification ramp to `factor` *inside* the already-visible projector over the remaining 90%; a release plays the same progress backwards, and a re-press mid-fade-out reverses from wherever it had got to. Time-driven from `get_time_in_nanos()`, so it looks the same at 60 and 240 fps. Since 2026-09-27, while the zoom is showing and the game's own cursor is visible (menus), a click is remapped to land on what the projector actually shows under the arrow rather than the arrow's un-magnified screen position — see `superdoc/features/zoom.md`'s "Clicks land on what the projector shows" section. **Not** upstream's `zoomScaleRatio` (Steam's whole-screen magnifier via the `screenZoom` X property), which scales the entire output.

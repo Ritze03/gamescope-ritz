@@ -19,7 +19,7 @@ appending. This file stays in context for the whole session.
 - **steamcompmgr** — the X11 window-manager subsystem inside gamescope (historically a standalone project this compositor absorbed); not the whole binary.
 - **Backend** — the display-output abstraction (`IBackend`); one of DRM, SDL, OpenVR, Headless, Wayland, selected at startup. Not a "client backend".
 - **Nested mode** — running gamescope as a window inside an existing desktop session (SDL/Wayland backend).
-- **Nested window** — a client window inside gamescope's own Xwayland (`xwayland_ctx_t`/`steamcompmgr_win_t`), not gamescope's outer window (that is **Nested mode**). The "Force maximize nested window" toggle names this sense; see `superdoc/features/resolution-and-refresh.md`.
+- **Nested window** — a client window inside gamescope's own Xwayland (`xwayland_ctx_t`/`steamcompmgr_win_t`), not gamescope's outer window (that is **Nested mode**). The "Force maximize nested window" toggle names this sense; see `superdoc/features/display-general.md`.
 - **Embedded mode** — gamescope owning the physical display directly via DRM/KMS (the Steam Deck / console usecase).
 - **Override window** — a window painted on top of the focused app window (e.g. the Steam overlay) without taking full focus.
 - **Underlay window** — a window painted beneath the current override, preserved across override changes.
@@ -35,7 +35,7 @@ appending. This file stays in context for the whole session.
 - **Reshade effect** — a post-process shader effect applied via the ReShade-compatible pipeline; distinct from the FSR/NIS *scaling* filters.
 - **gamescope_control** — the primary custom Wayland protocol interface external tools (Steam, `gamescopectl`) use to query and drive gamescope.
 - **WSI layer (FROG)** — the Vulkan layer games load to redirect their swapchain into gamescope; this fork ships its OWN, `VK_LAYER_RITZ_gamescope_wsi` (`ENABLE_GAMESCOPE_RITZ_WSI`), version-matched to the compositor since 2026-09-22. See `superdoc/features/build-and-tooling.md`.
-- **Low-latency wake-up** — the Display > General switch (`display.low_latency_wakeup`, default On, 2026-10-04) sizing the vblank wake-up lead from the measured draw time instead of upstream's ~4 ms; not under VRR. See `superdoc/features/resolution-and-refresh.md`.
+- **Low-latency wake-up** — the Display > General switch (`display.low_latency_wakeup`, default On, 2026-10-04) sizing the vblank wake-up lead from the measured draw time instead of upstream's ~4 ms; not under VRR. See `superdoc/features/display-general.md`.
 - **mangoapp** — gamescope's integration point for the MangoHud-style performance overlay (`src/mangoapp.cpp`).
 - **Command palette** — the searchable, ranked index over every registered Entry and Parameter (`src/Overlay/UI/CommandPalette.{h,cpp}`, drawn from `Shell.cpp`). Search with an empty query is browsing; there is no second "list everything" path.
 - **Launcher** — the command palette drawn **alone over the game**, no shell behind it (`LCtrl+RShift` while the overlay is closed; a toggle). The user's *"Launcher Style UI"*. See `superdoc/features/command-palette.md`.
@@ -48,7 +48,7 @@ appending. This file stays in context for the whole session.
 - **Color Boost** — the Shaders effect `image.shaders.color_boost` (2026-10-29): an inverted gamma curve on each colour's gamut fraction, so muted colours gain most and nothing clips; the opposite of **Vibrancy**. See `superdoc/features/shader-effects-color.md`.
 - **Adaptive Gamma** — the Shaders effect `image.shaders.adaptive_gamma` (2026-09-08): one exponent `x^g` aimed at a target median, adjusting contrast without clipping; exclusive with Adaptive Brightness and V2. See `superdoc/features/shader-effects-adaptive-gamma.md`.
 - **Adaptive Brightness V2** — `image.shaders.adaptive_brightness_v2` (2026-09-14): a third, exclusive choice beside Adaptive Brightness and Adaptive Gamma (toe-gamma curve, guided-filter detail, darkening); the original stays. See `superdoc/features/shader-effects-adaptive-brightness-v2.md`.
-- **About** — the `system.changelog` area, labelled "About" since 2026-09-09 (the id is unchanged): version, upstream base commit, `CHANGELOG.md` and the compiled-in licences. See `superdoc/features/log-and-about.md`.
+- **About** — the `system.changelog` area, labelled "About" since 2026-09-09 (the id is unchanged): version, upstream base commit, `CHANGELOG.md` and the compiled-in licences. See `superdoc/features/about.md`.
 - **Brightness Map** — the experimental local-tone effect `image.shaders.brightness_map`, added 2026-09-09 and removed 2026-09-14 at the user's request; superseded by **Adaptive Brightness V2**. See `superdoc/features/shader-effects.md`.
 - **Zoom** — this fork's compositor-drawn magnifier (2026-09-14; `src/Overlay/Zoom.{h,cpp}`, area `system.zoom`, keybind `zoom` = `RMB`), a staged reveal with a Fade duration. Not upstream's `zoomScaleRatio`. See `superdoc/features/zoom.md`.
 - **Held action** — a **keybind action** flagged `bHeld` (`zoom`, `autoclicker`): fires when its **chord** is a subset of the held keys, reports the release, and never swallows a mouse button. See `superdoc/features/keybinds.md`.
@@ -76,4 +76,4 @@ appending. This file stays in context for the whole session.
 - **Crosshair V2** — Frame generation's UI-protection detector V2 (2026-10-05, `UiProtection::CrosshairV2`) for the **Crosshair box** (`framegen.ui_box_height`); V1 is kept to compare. See `superdoc/features/frame-generation-ui-protection.md`.
 - **FrameGen** — the frame-interpolation *library* (`subprojects/FrameGen`, submodule of frame-gen-ritz, MIT), compiled into the binary; **Frame generation** is the feature built on it. See `superdoc/features/frame-generation.md`.
 - **Capture sink** — this fork's private per-session PipeWire sink the hosted game's audio is captured into (2026-10-07; `src/Audio/Capture.{h,cpp}`, config `audio.capture`, default on). See `superdoc/features/audio-capture.md`.
-- **Dynamics** — the Mixer's compressor/limiter on the captured game audio (2026-10-21; `src/Audio/Dynamics.{h,cpp}`, **Effects** area, config `audio.dynamics.*`, default Off); needs the **Capture sink**. See `superdoc/features/audio-capture.md`.
+- **Dynamics** — the Mixer's compressor/limiter on the captured game audio (2026-10-21; `src/Audio/Dynamics.{h,cpp}`, **Effects** area, config `audio.dynamics.*`, default Off); needs the **Capture sink**. See `superdoc/features/audio-dynamics.md`.

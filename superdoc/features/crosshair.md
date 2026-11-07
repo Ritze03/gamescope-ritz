@@ -397,7 +397,7 @@ it overlaps an arm).
 `Build()` is an `AddRectFilled` on whole output pixels with AA off, as
 described under Geometry. Nothing about this path changed when the raster
 path was added (2026-09-05); its output was measured pixel-for-pixel on
-the laptop (`build-release/verify-shots/crosshair/`) and must not move.
+the laptop (the untracked `crosshair` capture run) and must not move.
 It is also the fallback for Apply Scaling *on* when the game's buffer size
 is unknown, or when the raster texture could not be created — then sizes
 are scaled per axis and snapped, the pre-2026-09-05 behaviour.
@@ -736,7 +736,7 @@ the arithmetic):
   **soft** edges spanning ~1.5 px horizontally, with dark-green
   intermediate values between the black outline and the green fill; **off**
   the same capture is pixel-exact, identical to
-  `build-release/verify-shots/crosshair/03-outline-zoom.png`. The centroid
+  the untracked `crosshair` capture run (`03-outline-zoom.png`). The centroid
   must not shift between the two modes.
 - Hide modes still animate with Apply Scaling on (all three rebuild the
   raster per frame).
@@ -754,7 +754,7 @@ the arithmetic):
   translucent line shows the game, not black, through it.
 - Inverted HUD text colour + crosshair: the digits still invert the game
   and the crosshair keeps its own colour, at full and at partial opacity
-  (they share one layer). **Pixel-sample it; do not eyeball it.** `verify-shots/crosshair/16-inverted-hud.png`
+  (they share one layer). **Pixel-sample it; do not eyeball it.** the untracked `crosshair` capture run (`16-inverted-hud.png`)
   (2026-09-04) showed a bright digit over vkcube's dark grey and was
   accepted as proof — it proved nothing, because over a dark background an
   inverted digit and a plain white one look the same, and the user then
@@ -813,4 +813,4 @@ the `× opacity` from `ResampleToOutput()`'s RGB in the same breath.
 
 ## History
 
-- **Crosshair** (terminology entry, moved here 2026-11-07): **Crosshair** — the compositor-drawn crosshair (`src/Overlay/Crosshair.{h,cpp}`, settings area `system.crosshair`, added 2026-09-05): four arms, an optional centre dot, an optional outline, an optional auto-hide while right-click is held, an optional per-axis stretch ("Apply Scaling", measured against the game's resolution or, via "Scale from", a fixed reference resolution you pick, 2026-10-22), and an optional hide while the game's own cursor is visible (2026-09-28). Drawn into the **HUD**'s layer, centred on the game's on-screen rect, so it composites *after* an external frame-generation layer has interpolated the game — the in-game crosshair smears under frame generation, this one cannot. Distinct from the game's own crosshair and from the **Cursor** (the pointer).
+- **Crosshair** (glossary detail): **Crosshair** — the compositor-drawn crosshair (`src/Overlay/Crosshair.{h,cpp}`, settings area `system.crosshair`, added 2026-09-05): four arms, an optional centre dot, an optional outline, an optional auto-hide while right-click is held, an optional per-axis stretch ("Apply Scaling", measured against the game's resolution or, via "Scale from", a fixed reference resolution you pick, 2026-10-22), and an optional hide while the game's own cursor is visible (2026-09-28). Drawn into the **HUD**'s layer, centred on the game's on-screen rect, so it composites *after* an external frame-generation layer has interpolated the game — the in-game crosshair smears under frame generation, this one cannot. Distinct from the game's own crosshair and from the **Cursor** (the pointer).

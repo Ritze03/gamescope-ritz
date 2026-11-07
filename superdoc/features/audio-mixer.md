@@ -127,7 +127,7 @@ area is **static** (no `Rebuilds()`), but reads the same per-frame snapshot
 open. Its first row is a **Status** fact (`audio.effects.status`) whose help says the
 effects act on the captured game audio, so Capture game audio (in Mixer) has to be on.
 
-It acts on the captured audio (audio-capture.md's "Dynamics"), so its
+It acts on the captured audio ([audio-dynamics.md](audio-dynamics.md)), so its
 rows are dimmed with the reason "Capture game audio is off or not active" unless
 `Capture::Active()`; the choice is still stored per profile.
 

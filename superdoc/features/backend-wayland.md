@@ -9,7 +9,7 @@ initialize.
 
 ## How it works
 
-- The largest of the four backends after DRM (~4200 lines,
+- The largest of the five backends after DRM (~4200 lines,
   `src/Backends/WaylandBackend.cpp`). Core classes:
   `src/Backends/WaylandBackend.cpp:CWaylandBackend` (a `CBaseBackend`),
   `src/Backends/WaylandBackend.cpp:CWaylandConnector` (also implements
@@ -162,7 +162,7 @@ if the host offers it.
 
 - Select explicitly with `--backend wayland`
   (`src/main.cpp:parse_backend_name`); dispatched in the backend `switch` in `src/main.cpp:main`,
-  where — uniquely among the four backends — failure of `IBackend::Set<CWaylandBackend>()`
+  where — uniquely among the five backends — failure of `IBackend::Set<CWaylandBackend>()`
   falls straight through to `IBackend::Set<CSDLBackend>()` in the same case, gated
   `#if HAVE_SDL2`.
 - `src/main.cpp:auto_select_backend` picks Wayland whenever `$WAYLAND_DISPLAY` is set

@@ -157,7 +157,7 @@ latency added 7.9-9.2 ms, no better than Smoothness). Three causes, one fix each
    real ones (the PR #8 author: 240 of 560 ticks at 120 fps with a 4 ms lead). **Now** (first only while any
    of frame generation / motion blur / the lag spike buffer was on; **since 2026-10-04 for all
    play**, controlled by the Display > General **Low-latency wake-up** setting, default on, see
-   [resolution-and-refresh.md](resolution-and-refresh.md#low-latency-wake-up-displaylow_latency_wakeup)),
+   [display-general.md](display-general.md#low-latency-wake-up-displaylow_latency_wakeup)),
    `offset = min(max(max of the last 60 draw times, 0.75 ms) + 0.75 ms, one refresh)` (`kDrawTimeWindow`,
    `kMeasuredLeadMargin`, `CVBlankTimer::MeasuredLead()`): the draw time
    is wake-up -> present as the backends already report it through `UpdateLastDrawTime()`, so

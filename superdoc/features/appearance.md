@@ -1,45 +1,15 @@
-# System and Appearance — the two small settings areas of the SETTINGS rail group
+# Appearance — `setup.appearance`
 
-Two areas of the **Shell** in the SETTINGS rail group (`UI/Registry.cpp`): **System**
-(`system.general`) holds the clipboard-sync switch and its status; **Appearance**
-(`setup.appearance`) holds how the overlay itself looks. Neither affects the game's picture.
-Their routing differs (System is per profile, Appearance is global), and that is the main
-thing this page records.
+The **Appearance** area of the **Shell** in the SETTINGS rail group (`UI/Registry.cpp`): how the overlay itself looks. It does not affect
+the game's picture. Its routing is global (`global.json`), unlike [system-general.md](system-general.md), which is per profile; that is
+the main thing this page records. Both were one page until 2026-11-07 (text moved verbatim).
 
-## System — `system.general`
-
-Code: `src/Overlay/PanelSystem.{h,cpp}`. The behaviour of clipboard sync itself is in
-[clipboard-sync.md](clipboard-sync.md); this area is its switch.
-
-### How it works
-
-- **One switch, per profile.** *Clipboard sync* (`system.clipboard_sync`) is
-  `config::SystemSettings::clipboard_sync` (default on), a normal profile field written
-  through `config::EnqueueRoutedWrite()`. A game profile may override it.
-- **Two copies of the value, kept in step.** The nested backends read the atomic
-  `gamescope::g_bClipboardSyncEnabled` (`src/Clipboard/ClipboardSync.h`) on each event, as
-  does the outbound gate in `steamcompmgr.cpp`. The setter stores the atomic first and then
-  queues the routed write. `EnsureConfigLoaded()` reseeds the atomic from the resolved
-  settings whenever `ConfigGeneration()` moves, so selecting a profile that carries a
-  different value takes effect. *Why the atomic lives in `Clipboard/`:* both backends need it
-  and neither should include an Overlay file.
-- **Seeded before the Shell exists.** `PanelSystem_SeedFromConfig()` is called from
-  `main.cpp` (two call sites, both at startup) so a persisted *off* holds
-  from the first clipboard event, not from the first time the overlay is opened.
-- **Status line.** `ClipboardSyncStatus()` asks `GetBackend()->GetCurrentConnector()`'s
-  `GetNestedHints()` which protocol is really in use; a null result (embedded DRM mode, no
-  host compositor) reads "inert: no host (embedded)". It is the same discriminator the
-  broadcast path uses to decide whether a host exists.
-- Rows: *Clipboard sync* (group Clipboard) and a read-only *Clipboard status* facts row
-  (group Diagnostics).
-
-## Appearance — `setup.appearance`
 
 Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
 `PanelConfig_RegisterAreas`; the Profiles area is in the same file, see
 [profiles.md](profiles.md)).
 
-### How it works
+#### How it works
 
 - **Always global.** Every row edits `OverlaySettings` (`ConfigSchema.h`), which exists only
   in `global.json` (see [config-system.md](config-system.md)). The area badge is fixed to
@@ -76,7 +46,7 @@ Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
   it twice would draw two identical headers; and `notification_scale` must stay bound here so
   there is a single writer of `overlay` per cached copy. See [notifications.md](notifications.md).
 
-### Rows
+#### Rows
 
 | Row id | Config key (global.json `overlay`) | Default | Meaning |
 | --- | --- | --- | --- |
@@ -96,15 +66,9 @@ under one label; the split also keeps the row count high enough for the second c
 count follows row count alone (`Layout.cpp`'s solver); merging them once dropped the area to
 one column.
 
-## Where `UpscaleFilterGate.h` belongs
-
-`src/UpscaleFilterGate.h` (`FilterPassApplies( flScaleX, flScaleY )`) does not fit this page:
-it is the compositor's rule for whether the FSR/NIS passes run on the base layer, called from
-`steamcompmgr.cpp`. It belongs in [scaling-filters.md](scaling-filters.md), which currently
-shows the old inline expression instead of the function (see the report to the lead).
-
 ## Related links
 
 - [config-system.md](config-system.md), [profiles.md](profiles.md)
-- [clipboard-sync.md](clipboard-sync.md), [notifications.md](notifications.md)
-- [log-and-about.md](log-and-about.md) — the Log and About areas
+- [system-general.md](system-general.md) — the System area
+- [log.md](log.md), [about.md](about.md) — the Log and About areas
+

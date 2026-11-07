@@ -41,7 +41,7 @@ and never checked the lock, in upstream or here:
 - the item-10 **re-sync** above (`wlserver_resync_absolute_pointer()`, added 2026-09-05): a
   mapping change while the last input was an absolute sample replays that sample as a warp.
   Confirmed on the pre-fix binary: with the pointer locked, two scaler toggles and two nested-mode
-  changes delivered 2 motion lines to the client (`build-release/verify-shots/pointer-regression/`,
+  changes delivered 2 motion lines to the client (the untracked `pointer-regression` capture run,
   the `--gamescope gamescope-before-fix` runs). This is the fork's own addition and the one the
   2026-09-04/05 batch introduced; the host-sample path is upstream's, but it is the same class of
   event and the same fix closes it;
@@ -138,7 +138,7 @@ CS2 is an SDL3 game.
 through `SDL_SetX11EventHook()` printing every raw event with its device and the master's axis mode
 as SDL3 saw it, and `--lock-after S` so it is a **menu first**. Pre-fix binary (`17:06`, the one the
 user tested), 4 absolute samples then the lock then 10 x `dx=5`
-(`build-release/verify-shots/pointer-regression/x11-explore-20260906-171610-cur-lockafter2/`):
+(the untracked `pointer-regression` capture run, `x11-explore-20260906-171610-cur-lockafter2`):
 
 ```
 DEVICE id=2 name=Virtual core pointer axis0=abs axis1=abs      <- cached during the menu

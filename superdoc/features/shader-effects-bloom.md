@@ -244,7 +244,7 @@ actually have.
 Same recipe as everything above (private headless sway, nested `gamescope --backend
 wayland`, `gamescopectl screenshot "<path> 4"`, `tests/effects_scene_client.c` as the
 game, 1280×720). Bloom alone, every other effect off, defaults unless stated. Captures:
-`build-release/verify-shots/bloom-2026-09-08/`.
+the untracked `bloom-2026-09-08` capture run.
 
 The line profiles are measured on the existing **`haloinv`** scene — a flat 220 box,
 320×320, centred on a flat 15 field — which was built for the Local-adaptation halo
@@ -405,7 +405,7 @@ any other effect and nothing about it is derived from another row's state.
 
 ##### Looked at, not just measured
 
-Captures in `build-release/verify-shots/bloom-2026-09-08/`, graded by eye rather than by
+Captures in the untracked `bloom-2026-09-08` capture run, graded by eye rather than by
 checklist:
 
 - **`17-haloinv-bloom-intensity-1.6.png`** — the clearest single answer. A soft,

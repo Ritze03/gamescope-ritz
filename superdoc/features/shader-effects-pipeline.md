@@ -258,7 +258,7 @@ effect out of "Shaders" where every capture, keyword and doc link currently poin
 it is a shell-layout change whose risk has nothing to do with the tone curve this request was
 about — landing both together would make one hard-to-judge diff out of two easy ones. The
 measured cost of the raise itself is one more Inspector row: verified by capture at 2560×1440
-(`build-release/verify-shots/adaptive-local-2026-09-07/inspector-8-params.png`) with the
+(the untracked `adaptive-local-2026-09-07` capture run, `inspector-8-params.png`) with the
 header correctly reading **"PARAMETERS 8 of 8"** and well over half the panel empty below the
 rows; `test_overlay_shell.cpp` still shows the same row set scrolling at 2.0×, as it did at
 six and at seven. **The promotion is now owed work** (`requests-2026-09-08.md`), and Adaptive
@@ -323,4 +323,4 @@ about. `scripts/effects-regression.sh` drives it for its per-frame checks
 
 ## History
 
-- **Preview split** (terminology entry, moved here 2026-11-07): **Preview split** — the **Shaders** area's `image.shaders.preview_split` switch (added 2026-09-14, top row, above the Effects band), the user's own testing aid: *"It should only apply the shader to the right half of the screen ... so you can judge what an effect really does."* Display-only: every effect still processes the WHOLE frame (an adaptive effect's statistics are never disturbed), and `cs_effects_layer0.comp`'s final store overwrites only the left half with the raw input texel. Deliberately excluded from `NativeEffectsState_t::AnyEnabled()`, so with every other effect off it shows raw|raw at zero cost rather than forcing the pre-pass on by itself. Does not apply to a user's own ReShade `.fx` file.
+- **Preview split** (glossary detail): **Preview split** — the **Shaders** area's `image.shaders.preview_split` switch (added 2026-09-14, top row, above the Effects band), the user's own testing aid: *"It should only apply the shader to the right half of the screen ... so you can judge what an effect really does."* Display-only: every effect still processes the WHOLE frame (an adaptive effect's statistics are never disturbed), and `cs_effects_layer0.comp`'s final store overwrites only the left half with the raw input texel. Deliberately excluded from `NativeEffectsState_t::AnyEnabled()`, so with every other effect off it shows raw|raw at zero cost rather than forcing the pre-pass on by itself. Does not apply to a user's own ReShade `.fx` file.

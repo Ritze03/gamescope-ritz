@@ -242,6 +242,6 @@ flAnim = ui::Approach( flAnim, flTarget, ui::tok::kDurRegion, ImGui::GetIO().Del
 
 1. `grep -nE 'IM_COL32|ImVec4\(|[0-9]+\.[0-9]+f' ` over your new UI code: any literal is a smell.
 2. Run `tests/gamescope_tests '[overlay_ui]'` (via the build script in `scripts/`, see
-   [../features/build-and-tooling.md](../features/build-and-tooling.md)): it pins the laws, lane
+   [../features/gentle-build.md](../features/gentle-build.md)): it pins the laws, lane
    arithmetic, rail table and accordion.
 3. Check at display scale 0.5, 1.0 and 2.0; the slab, lane and drawer behaviour change between them.

@@ -60,7 +60,7 @@ Verified by capture before committing to it, not just argued: at 2560×1440 (2x-
 shell width) the Inspector's Configure page renders all 7 rows —  Mode, Strength,
 Target brightness, Adapt to brighter, Adapt to darker, Min gain, Max gain — with well
 over half the panel's height still empty below them
-(`build-release/verify-shots/requests-07-item2-7/03-shaders-ab-selected-whole.png`). No
+(the untracked `requests-07-item2-7` capture run, `03-shaders-ab-selected-whole.png`). No
 crowding at this width; a narrow drawer at high UI scale (D13.4's 2.0x case,
 `tests/test_overlay_shell.cpp`) still needs to scroll, exactly as it already did at six.
 
@@ -73,7 +73,7 @@ the header via `controls::ParametersHeaderText( nCount, nBudget )` (`Controls.h`
 pure formatting, pinned in `test_overlay_ui.cpp`) instead of a second hand-copied
 literal — the header and the registry constant cannot silently disagree again.
 Verified: selecting this row now reads **"PARAMETERS 7 of 7"**
-(`build-release/verify-shots/accent-header-2026-09-07/02-adaptive-brightness-inspector.png`).
+(the untracked `accent-header-2026-09-07` capture run, `02-adaptive-brightness-inspector.png`).
 
 `Why the declaration order matters elsewhere too:` groups in a sheet area are packed
 into columns by a greedy shortest-column algorithm over declaration order, not by an
@@ -254,7 +254,7 @@ Two consequences checked by measurement rather than assumed:
   `p2 × min_gain` = 9.0 exactly) still holds — 9.0..9.05 is within float rounding of
   it — so nothing is mathematically broken, but the **margin above "crushed" is real
   and roughly halved** (15 vs a floor of "distinguishable from black" versus 9 vs the
-  same floor). Visually (`build-release/verify-shots/adaptive-gain-2026-09-07/`,
+  same floor). Visually (the untracked `adaptive-gain-2026-09-07` capture run,
   bright scene, min_gain 0.5 vs 0.3, both at `max_gain` 4.0): the 30-value shadow
   rectangles read as very dark grey in both captures, not literally crushed to black,
   but the 0.3 capture is visibly the darker of the two — the loosened cap is a real,
@@ -305,9 +305,9 @@ positions — **dark** (bands 5/8/12/16/20, a pure-black corner, six 240 squares
 image), **bright** (bands 200/215/230/245/255, six 30-valued rectangles ≈ 4 %, so p2 *is*
 the shadows) and **mid** (26/77/128/179/230) — advanced with `SIGUSR1`. Every number is the
 mean grey of a region's interior, all six Adaptive Brightness params at their defaults,
-strength 1.0. Captures: `build-release/verify-shots/effects-regression/20260907-055139/`
+strength 1.0. Captures: the untracked `effects-regression` capture run (`20260907-055139`)
 and, for a direct old-vs-new side-by-side at fixed scenes,
-`build-release/verify-shots/adaptive-gain-2026-09-07/`.
+the untracked `adaptive-gain-2026-09-07` capture run.
 
 > **2026-09-08 note.** The `Dynamic (new)` column below is the **2026-09-07** curve. The
 > ceiling fix ([The ceiling](#the-ceiling-target-brightness-and-max-gain-went-inert-2026-09-08))
@@ -384,7 +384,7 @@ and answered by sweeping the knob on the dark reference scene rather than by rea
 code. Dynamic, everything else at the schema defaults, Local adaptation forced to 0 so
 this is the global curve alone; the applied gain is `effects_ab_log`'s, the band values
 are the capture's
-(`build-release/verify-shots/adaptive-local-2026-09-07/dark-maxgain-{1.5,2,3,4}.png`):
+(the untracked `adaptive-local-2026-09-07` capture run, `dark-maxgain-{1.5,2,3,4}.png`):
 
 | `max_gain` | applied gain | gamma | dark bands 5 / 8 / 12 / 16 / 20 | 240 lights |
 | --- | --- | --- | --- | --- |
@@ -428,7 +428,7 @@ scene's statistics. The harness reproduces the GPU's dark-scene capture **code f
 (71/90/111/128/143), which is what makes the rest of its numbers usable. Beside the four
 synthetic scenes it was run on two **real photographs** resized to 1280×720 — a night-city
 frame and a moonlit one — because a continuous histogram is the thing the band charts do
-not have; no real game frame existed under `build-release/verify-shots/` to use instead.
+not have; no real game frame existed among the untracked verification captures to use instead.
 
 | scene (measured p50 / p98) | `0.9/p98` — all Max gain ever saw | Target inert above | which clamp binds there |
 | --- | --- | --- | --- |
@@ -545,5 +545,5 @@ already captures and arms that capture itself, so the row fills in on its own).
 *inside* these same bounds and never widens them, so the frame's answer is the one that
 tells the user which knob to reach for. In Whole image mode the row names that mode's own
 single gain bound instead of pretending the Dynamic classifier applies. Captured at three
-settings in `build-release/verify-shots/adaptive-ceiling-2026-09-08/`.
+settings in the untracked `adaptive-ceiling-2026-09-08` capture run.
 

@@ -4,7 +4,7 @@ The headless backend runs gamescope with no window, no compositor connection, an
 physical display at all — it exists purely to give the compositor a valid `IBackend` so
 the rest of the pipeline (Vulkan compositing, `steamcompmgr`, capture) runs the same as
 any other mode, with output only reachable via the [screen-capture pipeline](screen-capture-pipewire.md)
-or [control IPC](control-ipc.md). It is the smallest of the four backends by a wide
+or [control IPC](control-ipc.md). It is the smallest of the five backends by a wide
 margin.
 
 ## How it works

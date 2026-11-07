@@ -20,7 +20,7 @@ the storage layer underneath it.
   profile file, never in `global.json`. *Why:* an overlay preference such as UI scale is a
   property of the person at the keyboard, not of a game setup; keeping it out of profiles
   means a per-game profile cannot carry or override it, and the Appearance area can say
-  "global only" truthfully (see [system-and-appearance.md](system-and-appearance.md)).
+  "global only" truthfully (see [appearance.md](appearance.md)).
 - **Plain-data schema, JSON elsewhere.** `src/Config/ConfigSchema.h` holds only structs
   (`Settings`, `OverlaySettings`, `ProfileMeta`, `GameAssignment`, `ProfileAssignments`, one
   `...Settings` struct per section) and has no JSON dependency. Serialization lives in
@@ -119,6 +119,6 @@ for reading a file and does, in order:
 ## Related links
 
 - [profiles.md](profiles.md) — the profile model, selection, migration to Profiles v2
-- [system-and-appearance.md](system-and-appearance.md) — the `overlay` section's main editor
+- [appearance.md](appearance.md) — the `overlay` section's main editor
 - [config-system planning scout](../planning/config-system.md) — the original design
   reasoning; written before the profile model, so its per-game file layout is superseded

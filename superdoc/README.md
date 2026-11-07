@@ -49,7 +49,11 @@ indented under it.
 - [Scaling filters](features/scaling-filters.md) — FSR (EASU/RCAS) and NIS upscaling.
 - [HDR color management](features/hdr-color-management.md) — PQ conversion and color management.
 - [Resolution and refresh](features/resolution-and-refresh.md) — runtime nested game
-  resolution, paced refresh, the frame limiter and low-latency wake-up (the Display areas).
+  resolution and paced refresh (the Display > Resolution area).
+- [Frame limiter](features/frame-limiter.md) — the Display > Frame limiter area, the saved
+  limit, and the layer's pacing of Vulkan games.
+- [Display > General](features/display-general.md) — Adaptive sync, Allow tearing,
+  Low-latency wake-up, Force maximize nested window.
 - [Reshade effects](features/reshade-effects.md) — the ReShade-compatible post-process
   pipeline, for users' own `.fx` files.
 - [Shader effects (Shaders area)](features/shader-effects.md) — hub: the native build-time
@@ -91,10 +95,11 @@ indented under it.
   command-line flag go read-only with a "LAUNCH OPTION" tag.
 - [Notifications](features/notifications.md) — toasts: the independent-context shape, the
   lazy glyph-bake hazard, the launch warm-up and why it never pushes a layer.
-- [Log and About](features/log-and-about.md) — the two read-only areas at the end of the
-  rail: captured log, version identity, compiled-in changelog and licences.
-- [System and Appearance](features/system-and-appearance.md) — the two small areas of the
-  SETTINGS rail group.
+- [Log](features/log.md) — the OTHER > Log area: the captured gamescope and game log.
+- [About](features/about.md) — the OTHER > About area: version identity, compiled-in
+  changelog and licences.
+- [System](features/system-general.md) — the SETTINGS > System area (clipboard-sync switch).
+- [Appearance](features/appearance.md) — the SETTINGS > Appearance area (global, not per profile).
 - [Diagnostics](features/diagnostics.md) — the OTHER > Diagnostics area: Hyprland direct
   scanout check, why its warnings are switched off, the Recheck button.
 
@@ -132,7 +137,9 @@ indented under it.
 - [Mixer](features/audio-mixer.md) — per-app PipeWire volume, detection strategies, the
   Mixer hotkey; also the Effects area.
 - [Game audio capture](features/audio-capture.md) — the private per-session sink, the env
-  tag, the mover, and the Dynamics (compressor/limiter) stage.
+  tag and the mover.
+- [Audio Dynamics](features/audio-dynamics.md) — the compressor/limiter stage on the
+  captured audio, and its config.
 
 ### Steam surfaces
 
@@ -156,7 +163,12 @@ indented under it.
 
 - [Scripting / ConVars](features/scripting-convars.md) — the runtime tunable-variable and
   debug-command system.
-- [Build and tooling](features/build-and-tooling.md) — Meson build, agent build scripts.
+- [Build and tooling](features/build-and-tooling.md) — Meson build, feature flags, what is
+  compiled in, the FrameGen submodule.
+- [Gentle build](features/gentle-build.md) — how agents build and test (`scripts/gentle-build.sh`).
+- [Unit tests](features/unit-tests.md) — the `tests/gamescope_tests` Catch2 binary.
+- [SteamOS device tooling](features/steamos-device-tooling.md) — the `tools/` scripts.
+- [Remote test rig](features/remote-test-rig.md) — `scripts/remote-test.sh`, the test laptop.
 - [Process management](features/process-management.md) — child-process and Xwayland
   lifecycle.
 

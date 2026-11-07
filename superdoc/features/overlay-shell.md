@@ -389,4 +389,4 @@ lane and row arithmetic, rail table, accordion state machine, palette scoring, i
 
 ## History
 
-- **Shell** (terminology entry, moved here 2026-11-07): **Shell** — the E2 settings overlay proper: slab, rail, sheet and inspector (`src/Overlay/UI/Shell.cpp`). "The full/clickable overlay" in the user's wording. The launcher is deliberately *not* part of it. Closed with the X in the title bar; there is no separate settings tab for this any more (the former `setup.shell` tab was removed 2026-08-27).
+- **Shell** (glossary detail): **Shell** — the E2 settings overlay proper: slab, rail, sheet and inspector (`src/Overlay/UI/Shell.cpp`). "The full/clickable overlay" in the user's wording. The launcher is deliberately *not* part of it. Closed with the X in the title bar; there is no separate settings tab for this any more (the former `setup.shell` tab was removed 2026-08-27).

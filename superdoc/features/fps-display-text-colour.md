@@ -307,7 +307,7 @@ are classified "not a digit", and composite as their own magenta-tinted
 colour: a few magenta fringe pixels along the digit's edge where it
 crosses the arm (measured 2026-09-06 on encoded 148 with the default green
 crosshair: 35 such pixels in the glyph pair,
-`build-release/verify-shots/split-retire/zoom/overlap-mid.png`). The
+the untracked `split-retire` capture run, `zoom/overlap-mid.png`). The
 digit's interior over the arm still takes `g_hudInvertColor` correctly; the crosshair everywhere
 else is untouched. The split mode rendered this configuration cleanly
 (separate layers), so this is the trade for the layer slot — accepted
@@ -377,7 +377,7 @@ the digit box) and compare it to the box centre's own background colour,
 inverted in **ENCODED** space — plain `255 − bg` per channel for SDR (see
 the "No contrast guard ... encoded, not linear" bullet above for why this
 replaced a linear-light invert within the same day). Three backgrounds,
-captured under `build-release/verify-shots/hud-invert-2026-09-27/`:
+captured under the untracked `hud-invert-2026-09-27` capture run:
 
 | background (encoded) | digit core (measured) | expected (`255 − bg`) |
 |---|---|---|

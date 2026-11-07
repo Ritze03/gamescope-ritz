@@ -34,7 +34,7 @@ glyph's own ink occupies, and a digit's ink starts a little in from the
 left of its cell and stops a little short of the font's full ascent — gaps
 `CalcTextSizeA()` cannot see and the old code never corrected for. Measured
 2026-09-07 at font size 36, backdrop off, outline off, top-left anchor
-(`build-release/verify-shots/hud-margin-2026-09-07/`):
+(the untracked `hud-margin-2026-09-07` capture run):
 
 | margin | measured left | measured top |
 |---|---|---|
@@ -119,8 +119,7 @@ Verified across all four corners, all four edge-centre anchors, margins
 one font size and the one background it was measured on** (36 px on flat
 148 grey, where a faint glyph row still registers as a one-count
 *darkening*); on a dark game the same row vanishes and the digits sit 1 px
-in from the margin — see *2026-09-14* below. `build-release/verify-shots/
-hud-backdrop-removal-2026-09-09/` has the full table, the raw log and
+in from the margin — see *2026-09-14* below. The untracked `hud-backdrop-removal-2026-09-09` capture run has the full table, the raw log and
 8×-zoomed corner crops at margin 0 and margin 5, with and without the
 outline. `scripts/pixel-regression.sh`'s `check_hud_margin()` keeps a
 compact, permanent subset of that matrix green: all four corners at margins
@@ -132,7 +131,7 @@ backdrop-on one), plus one 4-digit reading.
 **The report.** The user: the HUD sits 1 px too far from the bottom edge at
 a bottom anchor. A font-size sweep (margin 8, outline 0, zero-tolerance diff
 of the on-screen capture against a no-HUD capture of the same `dark` scene,
-`build-release/verify-shots/fps-hud-bottom-2026-09-14/measurements.txt`)
+the untracked `fps-hud-bottom-2026-09-14` capture run, `measurements.txt`)
 made it a property of the size, not the edge: sizes 12 and 14 → bottom gap
 9 (top exact); 18 and 36 → top gap 9 (bottom exact); every other size from
 16 to 72 exact on both. Outline 2 changed nothing about which sizes flip.
@@ -216,8 +215,7 @@ fallback for a glyph whose bitmap cannot be read. With an outline the ring
 is the same bitmap stamped out by the radius, so its visible edge is the
 same floor on the same bitmap and `EdgeShift()` adds the radius as before.
 
-**Measured after the fix** (`build-release/verify-shots/
-fps-hud-bottom-2026-09-14/after/`, table in `measurements.txt`): sizes 12,
+**Measured after the fix** (the untracked `fps-hud-bottom-2026-09-14` capture run, `after`; table in `measurements.txt`): sizes 12,
 14, 16, 18, 20, 24, 36 and 48 at margins 0 and 8, outline 0 (dark scene)
 and 2 (bright scene — a black ring cannot register on near-black),
 top-left and bottom-left, plus bottom-right at 12 and 36. The harness
@@ -331,8 +329,8 @@ new scan. Every measurement below is from that corrected build.
 bottom-left anchors, outline off and `HUD_OUTLINE_STRENGTH` on, values
 12/14/88 forced) against the pre-fix binary
 (`scripts/pixel-regression.sh HUD_SIDE_SWEEP=1 --only hud-side-bearing`;
-evidence under `verify-shots/hud-side-2026-09-29/` in whichever of
-`build-release/`/`build-agent/` the run used) found the single-`'0'`
+evidence in the untracked `hud-side-2026-09-29` capture run, in whichever
+build dir the run used) found the single-`'0'`
 reference wrong in **both directions** on the RIGHT edge, not just as a
 gap: at margin 24 the measured right edge was 25 (a 1px gap, e.g. size
 24/outline off) at some sizes and 23 (the outline genuinely **past** the
@@ -423,7 +421,7 @@ only to show it did not regress.
 Second, at margin 0 (bottom-right anchor, plain HUD — the profile's
 existing state, unmodified), the same five values measured **exactly
 0/0 on both axes, with zero variance whatsoever** — see
-`build-agent/verify-shots/hud-side-2026-09-29/jitter-v2-bottomright-*.png`.
+the untracked `hud-side-2026-09-29` capture run (`jitter-v2-bottomright-*.png`).
 Together the two runs show the pen origin never moves regardless of
 displayed value; only the antialiased edge of whichever specific digit is
 drawn can differ, by construction never more than the ten-digit spread

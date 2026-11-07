@@ -436,7 +436,7 @@ settles to a bit-stable picture.
 **Verified on the user's own real capture, through the GPU** (`--image`, private headless
 sway + nested `gamescope --backend wayland`, the same recipe `scripts/effects-
 regression.sh` uses, standalone; captures under
-`build-release/verify-shots/abv2-darken-2026-09-14/`). Defaults (`capture-defaults.png`):
+the untracked `abv2-darken-2026-09-14` capture run). Defaults (`capture-defaults.png`):
 identical to the numbers already in this doc's own table above (`pct128=4.18%`,
 `sep off=62.5 on=87.0` — the SAME harness numbers, confirmed a second time from a
 standalone instance). Darken 0.5 / Max darken 2 (`capture-darken-0.5.png`): looked at
@@ -467,7 +467,7 @@ ranges, steps and defaults this section documents, `max_darken` (`slider`, `1..4
 `0.5`, default `1`) and `darken` (`slider`, `0..1` step `0.05`, default `0`) included.
 
 **Re-verified on the same real capture, S-curve redesign (2026-09-15)** — same recipe,
-own standalone instance (`build-release/verify-shots/abv2-scurve-2026-09-15/`), `XDG_
+own standalone instance (the untracked `abv2-scurve-2026-09-15` capture run), `XDG_
 CONFIG_HOME` isolated this time (an own `mktemp -d` profile, never the user's real one —
 see the config-write mistake note below for why that matters). **Defaults** (Max darken
 1, `capture-defaults.png`): `pct128=4.18%`, zombie/floor separation `sep=87.0` (floor

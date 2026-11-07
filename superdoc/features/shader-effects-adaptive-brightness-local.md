@@ -117,7 +117,7 @@ and it is why the slider's full 0..100 % range is shippable rather than needing 
 
 `scripts/effects-regression.sh`'s `halfsplit`, Dynamic, defaults, strength 1.0. "Local 0" is
 the global curve — the same numbers this feature exists to fix. Captures:
-`build-release/verify-shots/adaptive-local-2026-09-07/split-local-{0,50,100}.png`.
+the untracked `adaptive-local-2026-09-07` capture run (`split-local-{0,50,100}.png`).
 
 | Local adaptation | dark half 5 / 8 / 12 / 16 / 20 | bright half 200 / 215 / 230 / 245 / 255 | bright half's spread |
 | --- | --- | --- | --- |
@@ -282,7 +282,7 @@ size never depends on the game's.
 
 ##### Measured: the right half is the effect, not an impression
 
-`build-release/verify-shots/ab-preview-2026-09-07/`, headless, `pixel-regression.sh`'s
+the untracked `ab-preview-2026-09-07` capture run, headless, `pixel-regression.sh`'s
 recipe, `tests/effects_scene_client.c` as the game, Adaptive Brightness alone (the other
 three off), Dynamic, schema defaults. The strip is sampled in the capture and compared
 against a `gamescopectl screenshot "<p> 4"` of the *same scene with the effect on and
@@ -381,7 +381,7 @@ and is the obvious follow-up; it was not done here because it is a change to
 `requests-2026-09-08.md` item 6: *"For the dynamic mode, sometimes the whole image
 pulsates for some reason."* Found by measurement, not argument — the `effects_ab_log`
 readback (below) was built for it and is what the numbers here come from
-(`build-release/verify-shots/adaptive-pulse-2026-09-07/`, `results.txt` has every run).
+(the untracked `adaptive-pulse-2026-09-07` capture run, `results.txt` has every run).
 
 **What it was not.** A completely still frame (`tests/effects_scene_client.c`'s `texdark`,
 no motion) logged for 400 composites at both `max_gain` 2 and 4: raw and smoothed

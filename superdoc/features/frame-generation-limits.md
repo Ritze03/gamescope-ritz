@@ -18,7 +18,7 @@ pairing (e.g. 144 Hz, limit 48, 3x), but is no longer required: a game running a
 below the refresh generates. FG never caps the game itself. While FG (or blur, or the lag
 buffer) is on, a Vulkan game is limited by the WSI layer's timer and not at the paints, so
 120 means 120 and the game's frame does not land on the next paint. See
-[resolution-and-refresh](resolution-and-refresh.md#the-limiter-paces-vulkan-games-in-the-layer-2026-11-04).
+[frame-limiter](frame-limiter.md#the-limiter-paces-vulkan-games-in-the-layer-2026-11-04).
 
 ## Costs
 

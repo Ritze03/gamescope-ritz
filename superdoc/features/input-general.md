@@ -188,7 +188,7 @@ nothing live for them specifically was the actual gap, not a hypothetical one.
 
 `force_grab_cursor` was already re-applied centrally on every profile switch by
 `main.cpp`'s `ritz_apply_config_live()`, independent of which Shell area is currently open
-(see [resolution-and-refresh.md](resolution-and-refresh.md)). `force_grab_keyboard` now
+(see [display-general.md](display-general.md)). `force_grab_keyboard` now
 gets the same treatment: `ritz_apply_config_live()` sets `g_bGrabbed` and calls **both**
 `SDLBackend_SetKeyboardGrabbed()` and `WaylandBackend_SetKeyboardGrabbed()` (each a no-op
 on the backend that isn't running) whenever it runs with `bStartup == false` — i.e. on
@@ -217,7 +217,7 @@ way).
 
 - [Terminology's Rail group entry](../meta/TERMINOLOGY.md) — where INPUT sits among the
   Shell's six rail groups.
-- [resolution-and-refresh.md](resolution-and-refresh.md) — Force grab cursor's own
+- [display-general.md](display-general.md) — Force grab cursor's own
   live-apply path, `ritz_apply_config_live()`.
 - [cursor-pipeline.md](cursor-pipeline.md) — what "grabbed" changes about which cursor is
   drawn.

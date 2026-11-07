@@ -114,86 +114,6 @@ backend (unsets fullscreen, writes `g_nOutputWidth/Height`, `RequestDecorCommit(
 `Commit()` sends `libdecor_state_new(w,h)`). Nothing in the tree calls either any more. Details
 of both live in [backend-sdl.md](backend-sdl.md) and [backend-wayland.md](backend-wayland.md).
 
-### Force maximize nested window (`display.force_windows_fullscreen`)
-
-Tracker: `../planning/requests-2026-09-08.md` item 3. A Quick toggles switch in
-`display.general` (`src/Overlay/PanelDisplay.cpp`, alongside Adaptive sync / Allow
-tearing / Force grab cursor), persisted as `gamescope.force_windows_fullscreen` and
-mirroring the pre-existing `--force-windows-fullscreen` CLI flag (upstream's own, unused
-by this fork's UI until now). See TERMINOLOGY.md's **Nested window** entry for what
-"nested window" means here — a client window inside gamescope's own Xwayland session, not
-gamescope's own outer window (**Nested mode**).
-
-**What it actually does.** `xwayland_ctx_t::force_windows_fullscreen` (`steamcompmgr.cpp`)
-is read in exactly two places: `determine_and_apply_focus()`'s `win_has_game_id()` branch
-(a focused Steam-tracked game window) and `handle_desktop_window()` (every other mapped
-top-level window). Both already treat "is fullscreen" and "the flag is set" identically —
-either resizes the window to the nested canvas (`root_width x root_height`) instead of the
-size the window itself requested (`sizeHintsSpecified` / `requestedWidth/Height`). The
-toggle changes nothing about *how* those two functions resize a window; it only supplies
-the boolean they already read.
-
-**Genuinely live, not startup-only** — determined by reading every consumer before
-wiring the row, per this feature's own precedent (issues #25 and #68 both shipped a
-control that rendered and silently did nothing). Two things made this the small, safe
-case rather than the "label it startup-only" case:
-
-1. The flag already had a live path *upstream never used from this UI*: an external tool
-   writing the `GAMESCOPE_FORCE_WINDOWS_FULLSCREEN` root-window X11 property is caught by
-   a `PropertyNotify` handler (`steamcompmgr.cpp`) that writes the ctx's flag and calls
-   `MakeFocusDirty()`.
-2. `MakeFocusDirty()` bumps a serial every `global_focus_t` checks once per frame
-   (`focus_t::IsDirty()`), on the very same steamcompmgr thread `PanelDisplay_Draw()`
-   itself runs on (see this file's own "Thread safety" header comment) — so a dirtied
-   focus reaches `determine_and_apply_focus()` the next frame, for every focused window,
-   the exact same effect the atom path gets from an external tool.
-
-So `steamcompmgr_set_force_windows_fullscreen( bool )` (new, `steamcompmgr.cpp`/`.hpp`)
-just does in-process what the atom handler does for an external one: sets every currently
-live Xwayland ctx's flag (there is normally one; more under `--xwayland-count`) and calls
-`MakeFocusDirty()`. `steamcompmgr_get_force_windows_fullscreen()` reads ctx 0 back for the
-row's own state and the area's Summary line. Measured (headless nested gamescope, a raw
-Xlib client with fixed `WM_NORMAL_HINTS` so it takes the `handle_desktop_window()` branch):
-toggling the row while that same client keeps running moves it between its own requested
-size and the nested canvas size with no relaunch — `build-release/verify-shots/
-force-maximize-2026-09-08/results.txt`.
-
-**CLI still wins over config, the same way `-w/-h/-r` beat `nested_width/height/refresh_hz`
-— but the mechanism differs because this flag's own CLI parse lives somewhere else.**
-`-w/-h/-r` and their config fields are both read inside `main.cpp`, so "config first, CLI
-after" is one function's own call order. `--force-windows-fullscreen` has never been
-parsed there: it is parsed inside `steamcompmgr_main()`'s *own*, separate
-`getopt_long()` pass over the same `argv` (`steamcompmgr.cpp`) — a second, independent
-parse that several long-only flags this fork's UI doesn't touch already go through. So
-the config value cannot be written straight into a live global the way `g_nNestedWidth`
-is; instead `apply_ritz_config_to_startup_state()` (`main.cpp`, still runs before *both*
-getopt passes) seeds a small bridge global, `g_bForceWindowsFullscreenStartup`, and
-`steamcompmgr_main()`'s own local `bForceWindowsFullscreen` (previously always
-`false`-initialized) now seeds from it before its getopt loop runs. Since the flag is
-`no_argument` (`--force-windows-fullscreen` can only ever set it *true*, there is no
-`--no-force-windows-fullscreen`), an explicit CLI flag still forces the local variable
-`true` unconditionally regardless of what the config seed was — the same one-directional
-"CLI wins" guarantee, just enforced across two getopt passes instead of one. Verified
-(same headless run): config `false` + `--force-windows-fullscreen` on the command line
-still starts the probe client maximized.
-
-Also live-applied on every non-startup config reload path that already carries
-`force_grab_cursor` (`ritz_apply_config_live()` in `main.cpp`, and, since 2026-09-27,
-`PanelInput.cpp`'s own `EnsureConfigLoaded()` — the row moved out of `display.general`
-to `input.general`/`PanelDisplay.cpp` to `PanelInput.cpp`, see
-[input-general.md](input-general.md), and `PanelDisplay.cpp`'s
-`PushCachedSettingsToLiveState()` no longer carries this field), so a profile switch or
-a per-game config swap while running picks it up immediately, not only at the next
-launch.
-
-**Re-pinned to the origin (2026-11-02).** `determine_and_apply_focus()`'s placement
-(`!w->placed` once-only move of a root-sized focus window to 0,0, upstream `8e72b0a`)
-now also runs every pass while this flag is set. `Why:` X confines the pointer to the
-root, so a root-sized window sitting off the origin has an unreachable strip; a client
-(Minecraft/GLFW) that moves its window after we resized it keeps the same size, so
-`placed` stayed true and nothing corrected it (user: "the mouse cant reach all of the
-space"). Cause inferred from code, not reproduced live.
-
 ### The pointer follows the change
 
 The absolute-pointer mapping (force-grab off) is rebuilt from the painted base layer every
@@ -219,151 +139,6 @@ game window heading for a size **larger than the new screen** is resized to the 
 never pointed at, which was the Rust report. A window smaller than the new screen is left
 alone. Details and the measurements: [cursor-pipeline.md](cursor-pipeline.md), "A window
 larger than the screen".
-
-### Low-latency wake-up (`display.low_latency_wakeup`)
-
-Added 2026-10-04. Display > General switch, **default On**, config key
-`gamescope.low_latency_wakeup` (per profile, like VRR / Allow tearing / Force maximize; additive,
-schema stays 5, absent = true). It mirrors into the `vblank_measured_lead` ConVar (the same
-plain-mirror pattern as `cv_tearing_enabled`: `ApplyEdit` writes config + ConVar, and
-`main.cpp`'s `ritz_apply_config_live` / `PanelDisplay.cpp`'s `PushCachedSettingsToLiveState`
-re-push it on startup and profile switch). There is no launch flag, so no launch lock; the
-ConVar stays usable from the debug console for a session-only override until the next profile
-push.
-
-`CVBlankTimer` (`src/vblankmanager.{hpp,cpp}`) wakes ahead of each vblank by an offset.
-- **Off (upstream)**: `offset = rollingMaxDrawTime + redZone`; the draw time is seeded at 3 ms and
-  floored at 2.4 ms while compositing, the red zone is 1.65 ms on internal screens (nested
-  mode included), so a compositing frame wakes about 4.05 ms ahead, clamped to one refresh
-  (3.57 ms at 280 Hz).
-- **On**: `offset = min(max(M, 0.75 ms) + 0.75 ms, one refresh)` where `M` is the largest of the
-  last 60 wake-up -> present draw times (`UpdateLastDrawTime()`; 3 ms assumed until one is
-  measured) -- `CVBlankTimer::MeasuredLead()`, a pure static, unit-tested. A 1.1 ms worst draw
-  gives 1.85 ms. The 0.75 ms floor on `M` keeps the lead at **1.5 ms minimum**: a direct-scanout
-  frame measures tiny draws, and a lead sized from those would miss the first refresh after an
-  overlay or composite appears. Applies with or without compositing and with or without frame
-  generation, motion blur or the lag buffer.
-- **VRR** (On or Off): upstream's fixed lead (compositing floor 2.4 ms while compositing +
-  0.3 ms flush = 2.70 ms), whatever the draws cost; the switch does not apply under VRR. The
-  status line says `(measured, ...)` only when the timer really used the measured lead, else
-  `(vrr)` or `(default)` (`CVBlankTimer::GetLastLeadKind()`). `Why:` the measured lead under
-  VRR was tried 2026-10-06 (`e8e6424`) and reverted the same day. At 280 Hz with max draws of
-  3-6 ms it sat at the full-refresh cap (3.57 ms) 99% of the time; under VRR the timer is
-  re-armed from each presentation feedback (`WaylandBackend.cpp`), and a full-refresh lead
-  makes the next wake "feedback + one refresh", which races the preemptive re-arm. A timing
-  model over 16 host-latency combinations gave 257.5 fps presented with 9.8% of frames longer
-  than 1.5 refresh intervals, against 272.6 fps and 2.6% with the 2.70 ms lead; the user's
-  session measured 250 +/- 19 presented, matching the measured-lead rows. User report: "it's
-  even worse than before ... sometimes the FPS I'm actually achieving are even lower ...
-  less smooth ... more prone to stutters". Without VRR both leads cap at 3.57 ms at 280 Hz,
-  so only VRR differed.
-
-**Trade-off** (stated in the help text): a draw that suddenly takes longer than the recent
-maximum misses the refresh, so the previous image shows once more (one stutter); the window is a
-rolling max, so it widens at once and narrows only after 60 clean draws. Valve's cautious values
-were tuned mainly for the Steam Deck. `Why` default On: the user's priority is latency, and the
-lead is delay no later stage can recover -- a real frame landing inside it is shown one refresh
-late (see [frame-generation.md](frame-generation.md)'s Latency section for the headless
-numbers: 4.05 -> about 1.9 ms). A read-only **Wake-up lead** Facts row under the switch shows the
-current lead and the recent max draw; the frame-generation debug status line carries the same
-text.
-
-## Frame generation and the Frame limiter
-
-The Frame limiter caps the *game*; [frame generation](frame-generation.md) multiplies the
-capped rate on screen, and never caps the game itself. refresh/N is the natural pairing
-(144 Hz, limit 48, 3x). Frame generation reads the refresh the vblank timer ticks at: the
-nested refresh if set, else the output refresh, and steps N down when the game is too fast
-for it.
-
-### The saved limit is applied at launch and on a profile switch (2026-11-04)
-
-Nothing used to apply `gamescope.fps_limit` outside the stepper's own edit: the startup config
-apply returns before the compositor exists, and the panel's reload push skipped it on purpose. So
-the stepper showed the saved 120 while the game ran uncapped until the stepper was touched. Now
-`PanelDisplay_ApplyConfigFpsLimit()` (`PanelDisplay.cpp`) runs once in `steamcompmgr_main()` as soon
-as the Xwayland servers exist, and again from `main.cpp`'s live-apply hook on a profile switch (0
-included, so a switch to a profile with no limit uncaps). It uses the stepper's own setter (the
-`g_nCombinedAppRefreshCycleOverride` path, plus the `GAMESCOPE_FPS_LIMIT` property at startup), and
-`update_runtime_info()` puts the rate in the limiter file, which the layer reads per present, so
-the game may start before or after.
-
-- `Why` only a change of the configured value is pushed (`fpslimit::NeedsPush()`,
-  `src/FpsLimitApply.h`): the hook fires on every config change, and a limit set live meanwhile
-  (the `gamescope_control` protocol, `debug_set_fps_limit`, the stepper) must survive an unrelated
-  reload.
-- An explicit `--framerate-limit` wins over the profile (`Opt::FramerateLimit`), and is now applied
-  through the same setter: the bare variable it used to set was zeroed by the first frame's
-  `update_app_target_refresh_cycle()`.
-
-### The limiter holds every Vulkan game (2026-11-03)
-
-The compositor only holds commits flagged FIFO (`wlserver_surface_is_fifo()` from the
-`set_present_mode` the layer sends), and the layer always forces MAILBOX at the driver. The layer
-used to report the app's own mode unless the app was "frame-limiter aware" (DXVK >= 2.3 /
-vkd3d >= 2.12), so a game presenting MAILBOX / IMMEDIATE (vsync off: CS2, Forza under
-vkd3d-proton, Minecraft's LWJGL Vulkan) was never held. While the limiter is active the layer now
-reports FIFO to the compositor for every app (`layer/VkLayer_FROG_gamescope_wsi.cpp`,
-`QueuePresentKHR`); aware apps still also see FIFO-only mode lists and get `OUT_OF_DATE` once on a
-limiter flip, unchanged. `Why:` tearing is moot when the user asked for a cap, and the report is
-only the compositor's pacing hint, not what the driver presents. Needs the layer's
-`GAMESCOPE_LIMITER_FILE` (set by `main.cpp`) as before. Since 2026-11-04 this applies only while the
-limiter is on the vblank grid; see the next section.
-
-### The limiter paces Vulkan games in the layer (2026-11-04)
-
-The compositor's limiter works at its paints: without VRR it releases every Nth vblank (an integer
-divisor, so 120 on 280 Hz is really 140); with VRR a time schedule is only looked at when something
-wakes the loop. A Vulkan game is now paced by the WSI layer instead: `update_runtime_info()` writes
-a second word to the limiter file, the rate to pace to (`g_uLimiterPaceFps`, set in the main loop),
-and after each present the layer sleeps to an absolute deadline
-(`limiterpace::NextDeadline()`, `src/LimiterPace.h`, `clock_nanosleep`) and reports MAILBOX so the
-compositor holds nothing. No per-frame traffic, no protocol: it reaches X11 bypass, X11 non-bypass
-and native Wayland swapchains alike.
-
-- **Who paces** (`limiterpace::LayerPaces()`): the layer, unless VRR is off, none of frame
-  generation / motion blur / the lag spike buffer is on, and the limit divides the refresh. `Why`
-  that case stays on the vblank grid: it is exact there and locked to the display, where a timer
-  would beat against the refresh (60 on 59.94 Hz drops a frame every 16 s). A game without our
-  layer (GL, plain X11) never reads the word and is limited as before, frame callbacks included.
-- **Where it sleeps**: after the present, before the game's next frame, where Minecraft's own
-  limiter sleeps, so input is read after the wait. Sleeping before the driver's present was tried:
-  no better on output, and it delays a finished frame by the whole sleep.
-- **Why not at the paints.** Traced with the paint times beside the game's acquire and present
-  times: under the old limiter the game sat blocked in `vkAcquireNextImageKHR` for 6.0 ms per
-  frame, and came back 0.01 ms (median) after a paint's wake-up, because that is when a held commit
-  is let go and its buffer freed. With about 3 ms of CPU to record its frame it then presented
-  right before the next paint, 883 of 3000 paints fell within 1 ms after a present, and those
-  waited 5.4 ms on average, 7.4 at most, for the frame that had just been queued. The game's limiter
-  and the layer's put the frame at whatever phase the timer gives, so it hits fewer paints, and a
-  paint that is hit waits only for what is left of the burst. That is the gap between the 6.5 and
-  3.5 ms maxima under the two limiters. It stopped mattering much once the wait itself was fixed,
-  see [frame-generation](frame-generation-pacing.md#paints-behind-the-games-gpu-burst-2026-11-04), but the
-  held game stays wrong: output locked at 2.00x, and a limit that is not the number asked for.
-- `Why` a word in the limiter file and not the frame gate the Hold game switch used: the layer
-  already reads that file at every present; the gate needs compositor traffic per frame, and a timer
-  on the compositor's loop to make it exact.
-
-Measured (Minecraft, 280 Hz, VRR on, Target = refresh, Smoothness, HUD fix in, same session, two
-25 s runs each; the worktree build with the limiter path switched live):
-
-| Limit | Old limiter | Layer |
-| --- | --- | --- |
-| 90 | game 89, output 121-164 | game 90, output 311 |
-| 120 | game 118, output 243-281 | game 120.5, output 311 |
-| 160 | game 157, output 310 | game 160, output 311 |
-
-Before the HUD fix, and for comparison Minecraft's own limit of 120 in the same scene: old limiter
-game 113-117, output 220-240; layer game 121, output 299-300; Minecraft's own game 119, output
-300-301, `other` paints missing 35-41% in both. With VRR off the old limiter gave output 184-195
-and the layer 302.
-
-**Not verified live:** a game that does not bypass Xwayland (frame callbacks are still gated there,
-so with VRR it may run a little under the limit); DXVK / vkd3d-proton games (the limiter-aware
-path), Minecraft being the only game tested. With frame generation off the rate was checked
-headless only (vkcube at 280 Hz, frames over time: limit 120 gave 119.5 on X11 bypass with FIFO,
-119.8 with MAILBOX, 118.6 on native Wayland; limit 140, on the grid, 139.9; at 60 Hz, limit 60,
-60.1), not by eye on a display.
 
 ## Honest limits (the help text says these too)
 
@@ -609,6 +384,8 @@ defaults to on"*, and the audit's own row (`results-after-fix.txt`: `on-disk` an
 
 ## Related
 
+- [display-general.md](display-general.md) — Force maximize nested window and Low-latency wake-up (the other Display > General switches), moved out 2026-11-07.
+- [frame-limiter.md](frame-limiter.md) — the Frame limiter, moved out 2026-11-07.
 - [backend-sdl.md](backend-sdl.md), [backend-wayland.md](backend-wayland.md) — the two
   `RequestOutputSize()` implementations, now with no caller.
 - [steamcompmgr-focus.md](steamcompmgr-focus.md) — the force-resize the mode change relies on.
@@ -622,7 +399,5 @@ defaults to on"*, and the audit's own row (`results-after-fix.txt`: `on-disk` an
 
 ## History
 
-- **Nested window** (terminology entry, moved here 2026-11-07): **Nested window** — a client window running *inside* gamescope's own embedded Xwayland session (an app or game window, addressed by `xwayland_ctx_t`/`steamcompmgr_win_t`) — not gamescope's own outer window, which **Nested mode** (running gamescope as a window inside a desktop session; defined in [`superdoc/meta/TERMINOLOGY.md`](../meta/TERMINOLOGY.md)) is about. The General area's "Force maximize nested window" toggle (`display.force_windows_fullscreen`, mirrors `--force-windows-fullscreen`) names this sense: it makes every such window open at the full nested canvas size regardless of its own requested size.
-- **Low-latency wake-up** (terminology entry, moved here 2026-11-07): **Low-latency wake-up** — the Display > General switch (`display.low_latency_wakeup`, config `gamescope.low_latency_wakeup`, default On, 2026-10-04) that sizes the vblank timer's *wake-up lead* — how long before each refresh gamescope wakes to draw — from the measured draw time (`max of the last 60 draws + 0.75 ms`, at least 1.5 ms, at most one refresh) instead of upstream's fixed-ish ~4 ms (`rollingMaxDrawTime + redZone`). Does not apply under VRR, which keeps upstream's fixed 2.70 ms lead whatever the setting (a measured VRR lead was tried 2026-10-06 and reverted the same day: it raced the feedback-driven re-arm and presented fewer, less even frames). Off = upstream's cautious timing, even with frame generation. Until 2026-10-04 this was frame-generation-only and not a setting.
-- **Nested resolution / refresh** (terminology entry, moved here 2026-11-07): **Nested resolution / refresh** — the game's own resolution and paced refresh (`-w`/`-h`/`-r`; `g_nNestedWidth`/`g_nNestedHeight`/`g_nNestedRefresh`), set live by `steamcompmgr_set_nested_mode()` and shown in the Resolution area's Aspect/Resolution rows and Live-state line (`superdoc/features/resolution-and-refresh.md`). Named for the code's own `g_nNested*` prefix, per the user's instruction (requests-2026-09-07 item 4: "Use the terminology 'nested' and 'output'"). Not the same sense as **Nested mode** (defined in [`superdoc/meta/TERMINOLOGY.md`](../meta/TERMINOLOGY.md); that names the whole run-as-a-window setup); this is specifically the pair of numbers Xwayland reports to the game inside it. With no `-w/-h` and no saved size it defaults to the **screen's** resolution (`g_nScreenWidth/Height`, what the Resolution area's "Native" means), not the window's first size (2026-10-22).
-- **Output resolution / refresh** (terminology entry, moved here 2026-11-07): **Output resolution / refresh** — the size and refresh the host actually granted gamescope's own window (`g_nOutputWidth`/`g_nOutputHeight`/`g_nOutputRefresh`), i.e. what used to be called "window" and "host refresh" in the Resolution area's Live-state line before requests-2026-09-07 item 4 renamed it. The game's picture is scaled by gamescope to fit this size; it is not requestable from the Resolution area (the window-sizing rows were removed 2026-09-06 — see that doc's "Window size" section) but is always reported, read-only, alongside the **Nested resolution / refresh** it is paired with.
+- **Nested resolution / refresh** (glossary detail): **Nested resolution / refresh** — the game's own resolution and paced refresh (`-w`/`-h`/`-r`; `g_nNestedWidth`/`g_nNestedHeight`/`g_nNestedRefresh`), set live by `steamcompmgr_set_nested_mode()` and shown in the Resolution area's Aspect/Resolution rows and Live-state line (`superdoc/features/resolution-and-refresh.md`). Named for the code's own `g_nNested*` prefix, per the user's instruction (requests-2026-09-07 item 4: "Use the terminology 'nested' and 'output'"). Not the same sense as **Nested mode** (defined in [`superdoc/meta/TERMINOLOGY.md`](../meta/TERMINOLOGY.md); that names the whole run-as-a-window setup); this is specifically the pair of numbers Xwayland reports to the game inside it. With no `-w/-h` and no saved size it defaults to the **screen's** resolution (`g_nScreenWidth/Height`, what the Resolution area's "Native" means), not the window's first size (2026-10-22).
+- **Output resolution / refresh** (glossary detail): **Output resolution / refresh** — the size and refresh the host actually granted gamescope's own window (`g_nOutputWidth`/`g_nOutputHeight`/`g_nOutputRefresh`), i.e. what used to be called "window" and "host refresh" in the Resolution area's Live-state line before requests-2026-09-07 item 4 renamed it. The game's picture is scaled by gamescope to fit this size; it is not requestable from the Resolution area (the window-sizing rows were removed 2026-09-06 — see that doc's "Window size" section) but is always reported, read-only, alongside the **Nested resolution / refresh** it is paired with.

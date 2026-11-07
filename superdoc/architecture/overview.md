@@ -153,7 +153,9 @@ steamcompmgr loop described below.
 - **Frame limiter and refresh** — `g_nSteamCompMgrTargetFPS` in `src/steamcompmgr.cpp`
   holds commits to the vblank grid; `src/LimiterPace.h` decides when the WSI layer paces
   the game on its own timer. Nested resolution/refresh: `steamcompmgr_set_nested_mode()`.
-  See [resolution-and-refresh](../features/resolution-and-refresh.md).
+  See [resolution-and-refresh](../features/resolution-and-refresh.md),
+  [frame-limiter](../features/frame-limiter.md) and the Display > General switches in
+  [display-general](../features/display-general.md).
 - **Audio** — `src/Audio/Volume.{h,cpp}` (Mixer, wpctl-based stream guessing, fallback;
   panel `PanelAudio.cpp`), `Capture.{h,cpp}` (a private PipeWire sink per session, a
   loopback pair on its own `pw_thread_loop`, thread `"gamescope-audio"`; session tag
@@ -176,8 +178,9 @@ steamcompmgr loop described below.
   every frame from `SettingsOverlay_AddLayer`. See [diagnostics](../features/diagnostics.md).
 - **Log, About, System, Appearance** — `src/Overlay/LogCapture.{h,cpp}`, `PanelLog.cpp`,
   `PanelChangelog.cpp` (`ChangelogParse.cpp`, `embed_changelog.py`),
-  `PanelSystem.cpp`, `PanelConfig.cpp`. See [log-and-about](../features/log-and-about.md)
-  and [system-and-appearance](../features/system-and-appearance.md).
+  `PanelSystem.cpp`, `PanelConfig.cpp`. See [log](../features/log.md),
+  [about](../features/about.md), [system-general](../features/system-general.md) and
+  [appearance](../features/appearance.md).
 - **Ritz launcher module** — `extensions/gamescope-ritz.json`:
   [ritz-extension](../features/ritz-extension.md).
 
@@ -227,7 +230,8 @@ Further threads, independent of the two above:
   generic epoll loop calling waitables' `OnPollIn()`. See
   [input-emulation](../features/input-emulation.md#threading-model-verified).
 - **Game audio capture** — its own `pw_thread_loop` (`gamescope-audio`), with a realtime
-  playback callback that also runs Dynamics. See [audio-capture](../features/audio-capture.md).
+  playback callback that also runs Dynamics. See [audio-capture](../features/audio-capture.md)
+  and [audio-dynamics](../features/audio-dynamics.md).
 - **Autoclicker worker, Friends poller, Diagnostics worker** — small background threads
   that keep clicks, Steam reads and `hyprctl` off the frame path
   ([autoclicker](../features/autoclicker.md), [steam-friends](../features/steam-friends.md),
@@ -314,11 +318,18 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
   `gamescope_broadcast_clipboard()` (`src/steamcompmgr.cpp`), fed by the data-control
   protocols in `src/Backends/WaylandBackend.cpp`.
 - **Resolution, refresh, frame limit** —
-  [resolution-and-refresh](../features/resolution-and-refresh.md):
+  [resolution-and-refresh](../features/resolution-and-refresh.md),
+  [frame-limiter](../features/frame-limiter.md):
   `steamcompmgr_set_nested_mode()` and `g_nSteamCompMgrTargetFPS` in
   `src/steamcompmgr.cpp`.
+- **VRR, tearing, wake-up lead, force-maximize switches** —
+  [display-general](../features/display-general.md): `RegisterGeneral()` in
+  `src/Overlay/PanelDisplay.cpp`.
 - **A new build/feature flag** — [build-and-tooling](../features/build-and-tooling.md)'s
-  Meson options table (`meson.build`, `src/meson.build`).
+  Meson options table (`meson.build`, `src/meson.build`). Agent builds:
+  [gentle-build](../features/gentle-build.md); tests: [unit-tests](../features/unit-tests.md);
+  device and test-laptop scripts: [steamos-device-tooling](../features/steamos-device-tooling.md),
+  [remote-test-rig](../features/remote-test-rig.md).
 
 **Settings overlay and config**
 
@@ -339,8 +350,8 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 - **A toast** — [notifications](../features/notifications.md):
   `src/Overlay/Notifications.cpp` (`Notifications::Show`).
 - **Log, About/changelog, System, Appearance areas** —
-  [log-and-about](../features/log-and-about.md),
-  [system-and-appearance](../features/system-and-appearance.md).
+  [log](../features/log.md), [about](../features/about.md),
+  [system-general](../features/system-general.md), [appearance](../features/appearance.md).
 - **Diagnostics tab (Hyprland direct scanout check)** —
   [diagnostics](../features/diagnostics.md): `src/Overlay/Diagnostics.cpp`,
   `DiagnosticsLogic.h`.
@@ -373,8 +384,8 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 
 - **Per-app volume (Mixer)** — [audio-mixer](../features/audio-mixer.md):
   `src/Audio/Volume.cpp`, `src/Overlay/PanelAudio.cpp`.
-- **Capture sink and Dynamics (compressor)** — [audio-capture](../features/audio-capture.md):
-  `src/Audio/Capture.cpp`, `src/Audio/Dynamics.cpp`.
+- **Capture sink and Dynamics (compressor)** — [audio-capture](../features/audio-capture.md),
+  [audio-dynamics](../features/audio-dynamics.md): `src/Audio/Capture.cpp`, `src/Audio/Dynamics.cpp`.
 
 **Image and frame pacing**
 

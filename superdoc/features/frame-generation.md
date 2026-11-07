@@ -21,7 +21,7 @@ Code map:
 | Library build glue | `src/FrameGen/FrameGenLib.cpp` + the `custom_target()`s in `src/meson.build` |
 | Renderer host (`fghost`) | `src/FrameGen/FrameGenHost.{h,cpp}` |
 | Pacing (`framegen::pacing::Pacer`) | **the library**: `subprojects/FrameGen/gpu/pacing.h` (header-only; tests: its own `pacingtest`). gamescope's `src/FrameGen/Pacing.h` was deleted 2026-10-04 |
-| Wake-up lead | `src/vblankmanager.{hpp,cpp}` (`MeasuredLead`, `vblank_measured_lead`, `GetLastLead`); setting: [Low-latency wake-up](resolution-and-refresh.md#low-latency-wake-up-displaylow_latency_wakeup) |
+| Wake-up lead | `src/vblankmanager.{hpp,cpp}` (`MeasuredLead`, `vblank_measured_lead`, `GetLastLead`); setting: [Low-latency wake-up](display-general.md#low-latency-wake-up-displaylow_latency_wakeup) |
 | Pacing glue + the main-loop gate | `src/steamcompmgr.cpp` (`FrameGen_OnArrival` / `FrameGen_PrePaint` / `FrameGen_PostPaint` / `FrameGen_TimerPaced`, `PaintTick` in the paint decision) |
 | Composite hook | `src/rendervulkan.cpp` (`vulkan_composite()`, `fghost::RecordBaseLayer`) |
 | Frame-ring copy shader | `src/shaders/cs_fg_copy.comp` |
@@ -71,11 +71,11 @@ which FG cannot substitute per output frame.
 ## Related
 
 [lag-spike-buffer](lag-spike-buffer.md) · [motion-blur](motion-blur.md) · [shader-effects](shader-effects.md) · [compositing-vulkan](compositing-vulkan.md) ·
-[resolution-and-refresh](resolution-and-refresh.md) · [backend-drm](backend-drm.md)
+[resolution-and-refresh](resolution-and-refresh.md) · [frame-limiter](frame-limiter.md) · [display-general](display-general.md) · [backend-drm](backend-drm.md)
 
 ## History
 
-- **Frame generation** (terminology entry, moved here 2026-11-07): this fork's in-compositor frame interpolation (2026-10-04; settings area `image.framegen`, "Frame generation", MOTION rail group, per profile, off by default).
+- **Frame generation** (glossary detail): this fork's in-compositor frame interpolation (2026-10-04; settings area `image.framegen`, "Frame generation", MOTION rail group, per profile, off by default).
   - What it does: it synthesises frames between two real game frames with optical flow, either a **fixed 2x-8x** multiplier or a **Target fps**, with a **Priority** of *Low latency* (least delay, content time snaps to each new real frame) or *Smoothness* (even spacing, about one game frame of delay).
   - Pacing: it is paced **per vblank**. Every output frame is generated for its own content time `tau = V - D` between the two latest real frames, so "how many generated frames per real frame" is never held, it falls out of the arrival times.
   - **Pause at refresh rate** (`framegen.pause_at_refresh`, default on) decides whether it stops generating once the game alone reaches the refresh rate (on) or keeps generating above it, e.g. 800 fps, painting on its own timer between vblanks where the backend can show that (off).
@@ -84,7 +84,7 @@ which FG cannot substitute per output frame.
   - Distinct from a **Shaders** effect (it changes *how many* frames are shown), from the FSR/NIS **upscalers** and from an external frame-generation Vulkan layer (**not** used in-tree).
   - It never caps the game or forces VRR off.
   - It passes real frames through only when the game already reaches the output rate, the GPU cost guard (the "Limit to GPU speed" switch, off by default) trips, or the content is unsupported (YCbCr, or a pixel format outside 8-bit / 10-bit / fp16 RGB; HDR and 10-bit games work since 2026-10-04).
-- **FrameGen** (terminology entry, moved here 2026-11-07): the frame-interpolation *library* itself (`subprojects/FrameGen`, a git submodule of github.com/Ritze03/frame-gen-ritz, MIT).
+- **FrameGen** (glossary detail): the frame-interpolation *library* itself (`subprojects/FrameGen`, a git submodule of github.com/Ritze03/frame-gen-ritz, MIT).
   - Contents: optical flow + synthesis compute shaders; 8-bit, 10-bit and fp16 RGB, SDR or HDR, built as per-format shader variants.
   - Integration: compiled straight into the gamescope binary (`src/FrameGen/FrameGenLib.cpp` wraps its `framegen.cpp`; its shaders are `custom_target()`s in `src/meson.build`), not a separate process or Vulkan layer.
   - **Frame generation** (the previous bullet) is the feature built on it.

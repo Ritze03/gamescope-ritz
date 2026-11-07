@@ -4,7 +4,7 @@ The DRM/KMS atomic backend is "embedded mode": gamescope becomes the display ser
 itself, driving a real GPU connector/CRTC/plane pipeline directly via the kernel's
 atomic modesetting API, with no host compositor or window manager involved. This is how
 gamescope runs on the Steam Deck and other console-like/kiosk setups. It's by far the
-largest and most hardware-facing of the four backends (~4200 lines).
+largest and most hardware-facing of the five backends (~4200 lines).
 
 ## How it works
 
@@ -74,9 +74,10 @@ largest and most hardware-facing of the four backends (~4200 lines).
 - **VRR.** `VRR_ENABLED` is a CRTC atomic property (`src/Backends/DRMBackend.cpp:CDRMCRTC`'s `CRTCProperties`,
   set in `src/Backends/DRMBackend.cpp:drm_prepare`); `CDRMConnector::IsVRRActive`
   (`src/Backends/DRMBackend.cpp:CDRMConnector::IsVRRActive`) reads it back off `g_DRM.pCRTC`. This backend is
-  the only one of the four where `SupportsVRR()`/`IsVRRActive()` can be genuinely `true`
-  — the nested backends (SDL, Wayland, headless) all hard-return `false` since they don't
-  own a CRTC to negotiate VRR against.
+  the only one that negotiates VRR against a CRTC of its own; the SDL, OpenVR and headless
+  backends hard-return `false` from `SupportsVRR()`, and the Wayland backend only reports
+  whether the host compositor is currently presenting with VRR
+  (`CWaylandConnector::SupportsVRR()` returns `m_bHostCompositorIsCurrentlyVRR`).
 - **Tearing / async flips.** `g_bSupportsAsyncFlips`
   (`src/Backends/DRMBackend.cpp:g_bSupportsAsyncFlips`) is probed once via
   `drmGetCap(DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP)` (`src/Backends/DRMBackend.cpp:init_drm`), and

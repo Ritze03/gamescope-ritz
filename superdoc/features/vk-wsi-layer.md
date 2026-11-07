@@ -27,7 +27,7 @@ An implicit Vulkan layer that intercepts a game's swapchain creation and redirec
 
 ## Frame-limiter pacing in the layer
 
-The layer also paces Vulkan games for the compositor's frame limiter (commit `d83864c`): `gamescopeLimiterInfo` reads the limiter file named by `GAMESCOPE_LIMITER_FILE` (word 0 limiter on, word 1 the rate to pace to), and in `VkDeviceOverrides::QueuePresentKHR` the layer sleeps to an absolute deadline from `limiterpace::NextDeadline` (`src/LimiterPace.h`) after the present while reporting MAILBOX. Who paces, where it sleeps and why are documented in [resolution-and-refresh.md](resolution-and-refresh.md) (section "The limiter paces Vulkan games in the layer").
+The layer also paces Vulkan games for the compositor's frame limiter (commit `d83864c`): `gamescopeLimiterInfo` reads the limiter file named by `GAMESCOPE_LIMITER_FILE` (word 0 limiter on, word 1 the rate to pace to), and in `VkDeviceOverrides::QueuePresentKHR` the layer sleeps to an absolute deadline from `limiterpace::NextDeadline` (`src/LimiterPace.h`) after the present while reporting MAILBOX. Who paces, where it sleeps and why are documented in [frame-limiter.md](frame-limiter.md) (section "The limiter paces Vulkan games in the layer").
 
 ## Using it
 

@@ -196,4 +196,4 @@ decides open-vs-close from `PaletteActive()` before it sends anything. `Launcher
 
 ## History
 
-- **Launcher** (terminology entry, moved here 2026-11-07): **Launcher** — the command palette drawn **alone over the game**, with no shell behind it (`Left Ctrl + Right Shift` while the overlay is closed — rebound from `Left Ctrl + Right Ctrl` 2026-09-01, see CHANGELOG.md). The user's *"Launcher Style UI"*. Distinct from the palette drawn *over an open shell*, which is the same widget with a scrim and a different Esc. See IMPLEMENTATION.md's Issue #88 entry.
+- **Launcher** (glossary detail): **Launcher** — the command palette drawn **alone over the game**, with no shell behind it (`Left Ctrl + Right Shift` while the overlay is closed — rebound from `Left Ctrl + Right Ctrl` 2026-09-01, see CHANGELOG.md). The user's *"Launcher Style UI"*. Distinct from the palette drawn *over an open shell*, which is the same widget with a scrim and a different Esc. See IMPLEMENTATION.md's Issue #88 entry.

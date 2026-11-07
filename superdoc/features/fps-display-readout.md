@@ -395,7 +395,7 @@ right anchors flush, centre anchor unchanged. The box itself (size and
 where the digits sit inside it changed. `fps_display_force "<n>"` (a debug
 ConCommand, `-1` or no argument releases it) forces the displayed reading
 to an exact integer, bypassing smoothing, for pixel-measuring this without
-waiting on a real frame rate — see `build-release/verify-shots/hud-align/`
+waiting on a real frame rate — see the untracked `hud-align` capture run
 for the measured before/after edge positions.
 
 ## Warm-up: `FpsDisplay_WarmUp()`

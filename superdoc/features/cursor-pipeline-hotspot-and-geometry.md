@@ -169,7 +169,7 @@ with the system `wine` (11.16) inside gamescope's own Xwayland, in the private s
 raw deltas), and a line per `WM_MOUSEMOVE` in client and screen coordinates. Alongside it,
 `xdotool`/`xprop` polled the X root, the window's geometry and its `_NET_WM_STATE` five times a
 second, and temporary logging in `DetermineAndApplyFocus()` recorded every resize decision.
-Runs: `build-release/verify-shots/pointer-regression/explore-20260906-21*-wine-*`.
+Runs: the untracked `pointer-regression` capture run (`explore-20260906-21*-wine-*`).
 
 The sequence, output 1280x720, nested mode changed by `steamcompmgr_debug_set_nested_mode`:
 
