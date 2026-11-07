@@ -882,9 +882,9 @@ namespace gamescope::ui::shell
 			// Motion blur (2026-10-04): the second MOTION-group area, its own
 			// switch next to Frame generation's (they work alone and together).
 			PanelMotionBlur_RegisterArea( reg );
-			// Lag spike buffer (2026-10-04): the third MOTION-group area, independent
-			// of Frame generation's multiplier (it fills gaps with or without it).
-			PanelLagBuffer_RegisterArea( reg );
+			// Lag spike buffer: disabled 2026-11-07 (fghost::kLagBufferAvailable), so
+			// its area is not registered. Restore this call together with that switch.
+			// ponytail: PanelLagBuffer_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
 			// The System tab (2026-09-05, requests-2026-09-05.md item 5)

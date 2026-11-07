@@ -4,7 +4,7 @@ Shows extra frames on screen between the game's own, by synthesising them with
 optical-flow interpolation: a fixed multiplier of 2x to 8x, or a **Target fps**. Added
 2026-10-04, pacing reworked the same day (per-vblank fractional pacing, Target fps, Low
 latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate from the multiplier choice), per profile. Rail group **MOTION**
-(first area; Motion blur is the second and the Lag spike buffer the third), moved there from DISPLAY the same day -- see
+(first area; Motion blur is the second; the Lag spike buffer was the third, disabled 2026-11-07), moved there from DISPLAY the same day -- see
 [motion-blur](motion-blur.md) for the sibling feature the two share a pacer and a renderer with.
 
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
