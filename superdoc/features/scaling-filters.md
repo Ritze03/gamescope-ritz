@@ -9,15 +9,15 @@ dispatches.
 ## How it works
 
 - **Filter** (the resampling algorithm) is `GamescopeUpscaleFilter`
-  (`src/main.hpp:40`): `LINEAR`, `NEAREST`, `FSR`, `NIS`, `PIXEL`. Parsed from the
-  `--filter`/`-F` CLI flag by `parse_upscaler_filter()` (`src/main.cpp:425`) into
-  `g_wantedUpscaleFilter` (`src/main.hpp:69`); the live value used by the compositor
-  is `g_upscaleFilter` (`src/main.hpp:67`).
+  (`src/main.hpp:GamescopeUpscaleFilter`): `LINEAR`, `NEAREST`, `FSR`, `NIS`, `PIXEL`. Parsed from the
+  `--filter`/`-F` CLI flag by `parse_upscaler_filter()` (`src/main.cpp:parse_upscaler_filter`) into
+  `g_wantedUpscaleFilter` (`src/main.hpp:g_wantedUpscaleFilter`); the live value used by the compositor
+  is `g_upscaleFilter` (`src/main.hpp:g_upscaleFilter`).
 - **Scaler** (how the content rectangle is fit into the output) is a separate enum,
-  `GamescopeUpscaleScaler` (`src/main.hpp:58`): `AUTO`, `INTEGER`, `FIT`, `FILL`,
+  `GamescopeUpscaleScaler` (`src/main.hpp:GamescopeUpscaleScaler`): `AUTO`, `INTEGER`, `FIT`, `FILL`,
   `STRETCH`. Parsed from `--scaler`/`-S` by `parse_upscaler_scaler()`
-  (`src/main.cpp:407`). The actual output scale factor for a given source size is
-  computed by `calc_scale_factor_scaler()` (`src/steamcompmgr.cpp:1729`):
+  (`src/main.cpp:parse_upscaler_scaler`). The actual output scale factor for a given source size is
+  computed by `calc_scale_factor_scaler()` (`src/steamcompmgr.cpp:calc_scale_factor_scaler`, a wrapper over the pure, unit-tested `gamescope::ComputeScalerRatios()` in `src/PointerMapping.h`):
   `STRETCH` scales X/Y independently to fill the output; `FIT`/`AUTO` scale
   uniformly to the smaller axis (`AUTO` additionally clamps to `g_flMaxWindowScale`);
   `FILL` scales uniformly to the larger axis (cropping); `INTEGER` floors the
@@ -25,12 +25,12 @@ dispatches.
   exact multiples instead of a fractional ratio.
 - **FSR** (`GamescopeUpscaleFilter::FSR`) is AMD FidelityFX Super Resolution 1, run as
   two compute passes when `frameInfo->useFSRLayer0` is set (decided in
-  `steamcompmgr.cpp`'s per-frame paint, the "just draw focused window as normal" branch
-  around `src/steamcompmgr.cpp:2989` — see "FSR/NIS at native resolution" below for
+  the "just draw focused window as normal" branch of
+  `src/steamcompmgr.cpp:paint_all` — see "FSR/NIS at native resolution" below for
   exactly when that's true): an EASU upscale pass (`src/shaders/cs_easu.comp`, pipeline
   `SHADER_TYPE_EASU`) into a scratch image, then an RCAS sharpen pass
   (`src/shaders/cs_composite_rcas.comp`, `SHADER_TYPE_RCAS`) that also does the final
-  layer composite in the same dispatch (`src/rendervulkan.cpp`, around `:6029`). Both
+  layer composite in the same dispatch (`src/rendervulkan.cpp:vulkan_composite`, the `useFSRLayer0` branch). Both
   passes `#include "ffx_fsr1.h"` (`src/shaders/ffx_fsr1.h`), AMD's vendored reference
   implementation — gamescope does not reimplement the EASU/RCAS math itself.
   RCAS sharpness is driven by `g_upscaleFilterSharpness / 10.0f`.
@@ -39,15 +39,15 @@ dispatches.
   (`src/shaders/cs_nis.comp`, `SHADER_TYPE_NIS`) upscales into a scratch image using
   precomputed coefficient textures (`g_output.nisScalerImage`/`nisUsmImage`), then a
   plain BLIT pass composites that scratch image as if it were a screen-size layer
-  (`src/rendervulkan.cpp`, around `:6062`). Sharpness is inverted from the same
+  (`src/rendervulkan.cpp:vulkan_composite`, the `useNISLayer0` branch). Sharpness is inverted from the same
   `g_upscaleFilterSharpness` value: `(20 - g_upscaleFilterSharpness) / 20.0f`.
 - **NEAREST / LINEAR / PIXEL** need no extra compute pass — they're expressed purely
   as a sampler choice on the plain BLIT path. `bind_all_layers()`
-  (`src/rendervulkan.cpp:3949`) sets nearest-neighbour sampling when
+  (`src/rendervulkan.cpp:bind_all_layers`) sets nearest-neighbour sampling when
   `Layer_t::filter == NEAREST`, when the layer is already screen-sized
   (`isScreenSize()`), or when it's `LINEAR` but the colorspace won't convert to linear
   automatically. `PIXEL` is resolved earlier, per-layer, in
-  `src/steamcompmgr.cpp:2248`-`2252`: if the scale ratio on both axes is an exact
+  `src/steamcompmgr.cpp:paint_window_commit`: if the scale ratio on both axes is an exact
   integer, `PIXEL` downgrades itself to `NEAREST` (no benefit to a smarter filter when
   every source pixel maps to a whole block of output pixels); otherwise it currently
   falls through to whatever `Layer_t::filter` already was. *Why PIXEL exists
@@ -55,17 +55,17 @@ dispatches.
   future room for a smarter non-blurry filter for the non-integer case, without
   callers having to know which case they're in.
 - Hardware overlay planes only support bilinear scaling, not FSR/NIS/nearest —
-  `DoesHardwareSupportUpscaleFilter()` (`src/main.hpp:51`) returns true only for
-  `LINEAR`. `commit_t::ShouldPreemptivelyUpscale()` (`src/commit.cpp:133`) uses that
+  `DoesHardwareSupportUpscaleFilter()` (`src/main.hpp:DoesHardwareSupportUpscaleFilter`) returns true only for
+  `LINEAR`. `commit_t::ShouldPreemptivelyUpscale()` (`src/commit.cpp:commit_t::ShouldPreemptivelyUpscale`) uses that
   to decide whether a FIFO (vsync-paced) commit should be pre-upscaled via shader
   ahead of time rather than relying on the hardware scaler at present time.
   *Why gate on FIFO:* pre-emptive upscaling costs a shader pass per commit, so it's
   only worth paying for content that's actually going to be shown at a steady cadence,
   not e.g. an unthrottled high-fps commit stream.
 - Sharpness is a single shared control, `g_upscaleFilterSharpness`
-  (`src/main.hpp`, default `2`, `src/main.cpp:334`), 0–20, set via `--sharpness`/
+  (`src/main.hpp:g_upscaleFilterSharpness`, default `2` in `src/main.cpp:g_upscaleFilterSharpness`), 0–20, set via `--sharpness`/
   `--fsr-sharpness` (aliases) or the `GAMESCOPE_SHARPNESS`/`GAMESCOPE_FSR_SHARPNESS` X11
-  properties (handled in `src/steamcompmgr.cpp`, around `:7110`); FSR and NIS each
+  properties (handled in `src/steamcompmgr.cpp:handle_property_notify`); FSR and NIS each
   remap it into their own native sharpness range as noted above.
 - **Changing the filter KEEPS the sharpness value** (reversed 2026-09-22; see below).
 
@@ -163,7 +163,7 @@ by the same RCAS/NIS strength the Sharpness slider drives when actually upscalin
 - `--sharpness <0-20>` sets FSR/NIS sharpening strength; ignored by `linear`/`nearest`/
   `pixel`.
 - At runtime, the same choices are exposed as X11 root-window properties gamescope
-  polls (e.g. the sharpness properties handled around `src/steamcompmgr.cpp:7110`) —
+  polls (e.g. the sharpness properties handled in `src/steamcompmgr.cpp:handle_property_notify`) —
   see [scripting-convars.md](scripting-convars.md) for the general convar/property
   mechanism these ride on.
 
@@ -171,9 +171,9 @@ by the same RCAS/NIS strength the Sharpness slider drives when actually upscalin
 
 | Config key | Default | Meaning |
 | --- | --- | --- |
-| `--filter` | `linear` (`GamescopeUpscaleFilter::LINEAR`, `src/main.cpp:332`) | Resampling algorithm: `linear`, `nearest`, `fsr`, `nis`, `pixel`. |
-| `--scaler` | `auto` (`GamescopeUpscaleScaler::AUTO`, `src/main.cpp:333`) | Content-fit mode: `auto`, `integer`, `fit`, `fill`, `stretch`. |
-| `--sharpness` | `2` (`src/main.cpp:334`) | 0–20, FSR RCAS / NIS sharpen strength. Aliased as `--fsr-sharpness`. |
+| `--filter` | `linear` (`GamescopeUpscaleFilter::LINEAR`, `src/main.cpp:g_wantedUpscaleFilter`) | Resampling algorithm: `linear`, `nearest`, `fsr`, `nis`, `pixel`. |
+| `--scaler` | `auto` (`GamescopeUpscaleScaler::AUTO`, `src/main.cpp:g_wantedUpscaleScaler`) | Content-fit mode: `auto`, `integer`, `fit`, `fill`, `stretch`. |
+| `--sharpness` | `2` (`src/main.cpp:g_upscaleFilterSharpness`) | 0–20, FSR RCAS / NIS sharpen strength. Aliased as `--fsr-sharpness`. |
 
 ## Related links
 
