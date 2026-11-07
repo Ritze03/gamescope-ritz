@@ -24,24 +24,24 @@ resource/pipeline lifecycle — different enough in shape to be a separate page.
 
 ## How it works
 
-- `ReshadeEffectPipeline` (`src/reshade_effect_manager.hpp:49`) owns one compiled effect:
+- `ReshadeEffectPipeline` (`src/reshade_effect_manager.hpp:ReshadeEffectPipeline`) owns one compiled effect:
   its Vulkan pipelines, textures, samplers, uniform buffer, descriptor sets, and the
   parsed `reshadefx::module`. `init(CVulkanDevice*, const ReshadeEffectKey&)`
-  (declared `:55`) builds all of that for a specific `ReshadeEffectKey` — effect path,
+  (`ReshadeEffectPipeline::init`) builds all of that for a specific `ReshadeEffectKey` — effect path,
   target buffer size/colorspace/format, and technique index — so a pipeline is keyed to
   both the shader file and the exact framebuffer it will run against.
-- `ReshadeEffectManager` (`src/reshade_effect_manager.hpp:91`) caches a single "last"
+- `ReshadeEffectManager` (`src/reshade_effect_manager.hpp:ReshadeEffectManager`) caches a single "last"
   compiled pipeline (`m_lastKey` / `m_lastPipeline`); `init(CVulkanDevice*)`
-  (declared `:96`, implemented `src/reshade_effect_manager.cpp:1910`) stores the device,
-  and `pipeline(const ReshadeEffectKey&)` (`:98`) returns the cached pipeline if the key
+  (`ReshadeEffectManager::init`, implemented in `src/reshade_effect_manager.cpp`) stores the device,
+  and `pipeline(const ReshadeEffectKey&)` (`ReshadeEffectManager::pipeline`) returns the cached pipeline if the key
   matches or rebuilds it otherwise. *Why:* effects are swapped rarely relative to frames
   rendered, so a one-entry cache avoids recompiling the shader module every frame while
   keeping the manager itself trivial — no need for a full pipeline cache/LRU.
 - Free functions bridge the manager to the rest of Gamescope:
   `reshade_effect_manager_set_uniform_variable(key, value)` pushes a uniform value by
   name; `reshade_effect_manager_set_effect(path, callback)`
-  (`src/reshade_effect_manager.hpp:110`, implemented
-  `src/reshade_effect_manager.cpp:1951`) asynchronously loads/compiles a new effect file
+  (`src/reshade_effect_manager.hpp:reshade_effect_manager_set_effect`, implemented
+  in `src/reshade_effect_manager.cpp`) asynchronously loads/compiles a new effect file
   and invokes `callback` when done; `reshade_effect_manager_enable_effect()` /
   `reshade_effect_manager_disable_effect()` toggle whether the active effect is applied
   during composite.
@@ -97,7 +97,7 @@ enables it, and optionally pushes uniform variable values to drive runtime param
 
 | Config key | Default | Meaning |
 | --- | --- | --- |
-| `ReshadeEffectFlag::AlwaysScanout` (`src/reshade_effect_manager.hpp:45`) | off | Per-pipeline flag bit; effect always contributes to the scanout-eligible output rather than only an intermediate buffer. |
+| `ReshadeEffectFlag::AlwaysScanout` (`src/reshade_effect_manager.hpp:ReshadeEffectFlag`) | off | Per-pipeline flag bit; effect always contributes to the scanout-eligible output rather than only an intermediate buffer. |
 
 ## Related links
 

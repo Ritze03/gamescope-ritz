@@ -15,27 +15,27 @@ work, inherited by this fork, not something this fork diverged to produce.
 
 ### The focus data model
 
-- `focus_t` (`src/xwayland_ctx.hpp:27`) is the per-Xwayland-server focus snapshot:
+- `focus_t` (`src/xwayland_ctx.hpp:focus_t`) is the per-Xwayland-server focus snapshot:
   `focusWindow`, `inputFocusWindow`, `overrideWindow`, `overrideUnderlayWindow`,
   `overrideWindowMouse`, `decorationWindows`, plus a `ulCurrentFocusSerial` dirty-flag
   checked by `IsDirty()`.
-- `global_focus_t : focus_t` (`src/steamcompmgr.cpp:846`) adds the cross-server view:
+- `global_focus_t : focus_t` (`src/steamcompmgr.cpp:global_focus_t`) adds the cross-server view:
   `keyboardFocusWindow`, `fadeWindow`, `cursor`, and `ulVirtualFocusKey` — the connector
   this snapshot belongs to.
-- `g_VirtualConnectorFocuses` (`src/steamcompmgr.cpp:870`) is
+- `g_VirtualConnectorFocuses` (`src/steamcompmgr.cpp:g_VirtualConnectorFocuses`) is
   `unordered_map<VirtualConnectorKey_t, global_focus_t>` — **one focus snapshot per
-  output connector**, not one global snapshot. `GetCurrentFocus()` (`:871`) and
-  `GetCurrentMouseFocus()` (`:882`) look up the map by the backend's current
+  output connector**, not one global snapshot. `GetCurrentFocus()` and
+  `GetCurrentMouseFocus()` (both `src/steamcompmgr.cpp`) look up the map by the backend's current
   connector / current mouse connector respectively; `GetCurrentMouseFocus()` falls back
   to `GetCurrentFocus()` when there's no distinct mouse connector. *Why a map keyed by
   connector at all:* in VR (see [backend-openvr](backend-openvr.md)) keyboard and mouse
   focus can legitimately sit on different overlay connectors at once, and multiple
   physical outputs can each be showing a different app — a single global snapshot
   can't represent that.
-- `focus_info` (`src/steamcompmgr.cpp:932`, a `ConCommand` — see
+- `focus_info` (`src/steamcompmgr.cpp:cc_focus_info`, a `ConCommand` — see
   [scripting-convars](scripting-convars.md) for the ConVar/ConCommand mechanism) sets
-  `g_bPendingFocusInfo`, consumed on the steamcompmgr thread (`:9316`) to call
-  `DumpFocusInfo()` (`:4376`). It prints the global focus window/input/keyboard/override
+  `g_bPendingFocusInfo`, consumed on the steamcompmgr thread (`src/steamcompmgr.cpp:steamcompmgr_main`, main loop) to call
+  `src/steamcompmgr.cpp:DumpFocusInfo`. It prints the global focus window/input/keyboard/override
   windows, every connector's focus next to which one is current, the
   `gamescopeFocusedAppAtom`/`gamescopeFocusedWindowAtom` X properties Steam reads back,
   and — per Xwayland server — the *real* X11 keyboard focus (`XGetInputFocus`) next to
@@ -46,23 +46,23 @@ work, inherited by this fork, not something this fork diverged to produce.
 
 ### The reroll pipeline
 
-`determine_and_apply_focus` (`src/steamcompmgr.cpp:4434`) is the per-connector entry
+`determine_and_apply_focus` (`src/steamcompmgr.cpp:determine_and_apply_focus`) is the per-connector entry
 point, called once per `global_focus_t` in `g_VirtualConnectorFocuses` whenever
 `IsDirty()` is true. Per pass it:
 
 1. Resets the snapshot but carries `focusWindow`, `ulVirtualFocusKey`, and
    `pVirtualConnector` forward from the previous pass.
-2. Calls `xwayland_ctx_t::DetermineAndApplyFocus` (`src/xwayland_ctx.hpp:105`) for every
+2. Calls `xwayland_ctx_t::DetermineAndApplyFocus` (`src/xwayland_ctx.hpp:xwayland_ctx_t::DetermineAndApplyFocus`) for every
    Xwayland server whose local `focus.IsDirty()` is set, and
-   `steamcompmgr_xdg_determine_and_apply_focus` (`:4356`) for the XDG-native path — both
-   funnel into `pick_primary_focus_and_override` (`:3739`), which picks `focusWindow`
+   `steamcompmgr_xdg_determine_and_apply_focus` (`src/steamcompmgr.cpp:steamcompmgr_xdg_determine_and_apply_focus`) for the XDG-native path — both
+   funnel into `pick_primary_focus_and_override` (`src/steamcompmgr.cpp:pick_primary_focus_and_override`), which picks `focusWindow`
    and `overrideWindow` from the connector's possible-focus-window list according to the
    active `VirtualConnectorStrategy` (see [backend-openvr](backend-openvr.md) for the
    VR-specific strategies).
-3. `pick_decoration_windows` (`:3671`) collects same-app, same-pid helper windows (e.g.
+3. `pick_decoration_windows` collects same-app, same-pid helper windows (e.g.
    Xalia's highlight overlay) that aren't the override window, are viewable and
    on-screen, to paint above the override.
-4. `carry_override_underlay` (`:3706`) keeps the *previous* override window painted
+4. `carry_override_underlay` keeps the *previous* override window painted
    beneath a newly-arrived one, as `overrideUnderlayWindow`, while it's still the same
    pid and a good override candidate. *Why:* only one override paints per frame, so
    when a dialog's own popup (a combo box list, a nested warning box) grabs the
@@ -74,7 +74,7 @@ point, called once per `global_focus_t` in `g_VirtualConnectorFocuses` whenever
 
 ### X11 keyboard focus: the toplevel-vs-subwindow problem
 
-`xwayland_ctx_t::DetermineAndApplyFocus` (defined near `src/steamcompmgr.cpp:4173`-`:4219`)
+`xwayland_ctx_t::DetermineAndApplyFocus` (defined as `src/steamcompmgr.cpp:xwayland_ctx_t::DetermineAndApplyFocus`)
 is where the subtlety lives. Steam's CEF browser can focus a *subwindow* of its own
 toplevel (e.g. a dropdown), and gamescope must not yank X11 focus back to the toplevel
 on the next no-op reroll:
@@ -98,27 +98,27 @@ if ( keyboardFocusWindow && ctx->currentKeyboardFocusWindow &&
 - *Why (`396794a`, "reclaim keyboard focus when it lands on None"):* an X11 client can
   drop keyboard focus to `None` directly, and with `RevertToNone` any revert (e.g. the
   subwindow being destroyed under the old code) also lands on `None`. The `FocusOut`
-  handler (`src/steamcompmgr.cpp:7934`, in `xwayland_ctx_t::Dispatch()`) only corrected
+  handler (`src/steamcompmgr.cpp:xwayland_ctx_t::Dispatch`, `case FocusOut`) only corrected
   focus when it moved to a *different tracked window*; its guard compared
   `w->xwayland().id == ctx->currentKeyboardFocusWindow`, which never matched once focus
   was preserved on a subwindow (the tracked window is the *subwindow* id, but `w` here
-  is looked up from the event's own window). The fix (`src/steamcompmgr.cpp:7940`)
+  is looked up from the event's own window). The fix (same `FocusOut` case)
   matches the stored window directly
   (`ev.xfocus.window == ctx->currentKeyboardFocusWindow`) as well as by toplevel, tracks
   focus moves that stay within the same toplevel, and — the actual bug fix — explicitly
   reclaims focus (`bSetFocus = true`) when the new real focus is `None`. Without this,
   focus dropped to `None` was never noticed and nothing ever took it back.
-- The `bSetFocus` path at the bottom of `Dispatch()` (`src/steamcompmgr.cpp:8044`-`:8046`)
+- The `bSetFocus` path at the bottom of `Dispatch()` (`src/steamcompmgr.cpp:xwayland_ctx_t::Dispatch`, the `if ( bSetFocus )` block)
   applies the same toplevel-vs-subwindow revert-mode logic as the main apply path, via
   `find_win( ctx, ctx->currentKeyboardFocusWindow, false )` (the `false` disables
   recursing into children, so it only matches an exact toplevel — see `find_win`,
-  `src/steamcompmgr.cpp:1338`) to decide `RevertToNone` vs `RevertToParent`.
+  `src/steamcompmgr.cpp:find_win`) to decide `RevertToNone` vs `RevertToParent`.
 
 ### Two crash/undefined-behaviour fixes in the property path
 
 - *Why (`1efc919`, "do not read zero-element properties in `get_prop`", an upstream
   Valve commit — see the note at the top of this doc):* `get_prop`
-  (`src/steamcompmgr.cpp:3342`) calls `XGetWindowProperty`, which hands back a
+  (`src/steamcompmgr.cpp:get_prop`) calls `XGetWindowProperty`, which hands back a
   non-null allocation even when the property holds **zero**
   elements (e.g. the focused-app atom when nothing is focused). The old code
   unconditionally `memcpy`'d `sizeof(unsigned int)` bytes out of that allocation
@@ -145,7 +145,7 @@ if ( keyboardFocusWindow && ctx->currentKeyboardFocusWindow &&
   only, not the X11 geometry) because some app dropdowns (WebView2-based launchers)
   position slightly outside the output; moving the actual X11 window instead makes some
   hosts close it outright.
-- `log_focus`-scoped logging (`focus_log`, `src/steamcompmgr.cpp:126`) reports override
+- `log_focus`-scoped logging (`src/steamcompmgr.cpp:focus_log`) reports override
   and underlay slot changes with the window's override-redirect flag and pid, since
   keyboard focus no longer visibly follows helper windows — without it, override fights
   like the one `carry_override_underlay` fixes are invisible in the journal.
@@ -158,15 +158,14 @@ if ( keyboardFocusWindow && ctx->currentKeyboardFocusWindow &&
 - `log_focus` debug logging — enable to see override/underlay slot changes and
   `determine_and_apply_focus` reroll traces as they happen.
 - steamcompmgr owns all of this state on its **own thread**, spawned at
-  `src/main.cpp:1101` (`std::thread steamCompMgrThread( steamCompMgrThreadRun, argc,
+  `src/main.cpp:main` (`std::thread steamCompMgrThread( steamCompMgrThreadRun, argc,
   argv )`, named `"gamescope-xwm"`) — and that thread, not the main thread, is the one
-  that owns the vblank-paced render/present loop (`paint_all()`,
-  `src/steamcompmgr.cpp:2564`) alongside the X11 window management described above; the
+  that owns the vblank-paced render/present loop (`src/steamcompmgr.cpp:paint_all`) alongside the X11 window management described above; the
   main thread only runs `wlserver_run()`'s Wayland-protocol dispatch loop after startup.
   See [architecture overview](../architecture/overview.md#threading-model) for the full
   threading picture. Backends signal a focus change across that boundary with `MakeFocusDirty()`
-  (`src/steamcompmgr.cpp:831`, an atomic serial bump) followed by `nudge_steamcompmgr()`
-  (`:7537`), rather than message-passing; the reroll itself only runs on the
+  (`src/steamcompmgr.cpp:MakeFocusDirty`, a serial bump) followed by `nudge_steamcompmgr()`
+  (`src/steamcompmgr.cpp:nudge_steamcompmgr`), rather than message-passing; the reroll itself only runs on the
   steamcompmgr thread on its next pass through `determine_and_apply_focus`.
 
 ## Related links
