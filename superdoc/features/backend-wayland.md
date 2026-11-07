@@ -9,51 +9,51 @@ initialize.
 
 ## How it works
 
-- The largest of the four backends after DRM (~3300 lines,
+- The largest of the four backends after DRM (~4200 lines,
   `src/Backends/WaylandBackend.cpp`). Core classes:
-  `src/Backends/WaylandBackend.cpp:643 CWaylandBackend` (a `CBaseBackend`),
-  `src/Backends/WaylandBackend.cpp:399 CWaylandConnector` (also implements
+  `src/Backends/WaylandBackend.cpp:CWaylandBackend` (a `CBaseBackend`),
+  `src/Backends/WaylandBackend.cpp:CWaylandConnector` (also implements
   `INestedHints`, same pattern as SDL's `CSDLConnector`), plus a `CWaylandPlane` per
   surface and a dedicated `CWaylandInputThread` for relative-pointer input.
-- `CWaylandBackend::Init` (`src/Backends/WaylandBackend.cpp:1967`) connects to the host
+- `CWaylandBackend::Init` (`src/Backends/WaylandBackend.cpp:CWaylandBackend::Init`) connects to the host
   compositor with `wl_display_connect`, walks the registry, and does two
   `wl_display_roundtrip` calls to bind every protocol object it needs. It then hard-fails
   `Init()` if any required global is missing:
   `!m_pCompositor || !m_pSubcompositor || !m_pXdgWmBase || !m_pLinuxDmabuf || !m_pViewporter || !m_pPresentation || !m_pRelativePointerManager || !m_pPointerConstraints || !m_pShm`
-  (`src/Backends/WaylandBackend.cpp:2005`). *Why:* this failure path is exactly what lets
-  `src/main.cpp:997-1002` fall back to constructing `CSDLBackend` in the same switch
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::Init`). *Why:* this failure path is exactly what lets
+  `src/main.cpp:main` fall back to constructing `CSDLBackend` in the same switch
   case — a host claiming `$WAYLAND_DISPLAY` but missing `xdg_wm_base`/linux-dmabuf isn't
   usable, so Wayland-nesting quietly degrades to SDL rather than gamescope refusing to
   start (see [backend-sdl.md](backend-sdl.md#using-it)).
 - **No Vulkan swapchain.** `UsesVulkanSwapchain()` is `false`
-  (`src/Backends/WaylandBackend.cpp:2296`); instead `ImportDmabufToBackend`
-  (`src/Backends/WaylandBackend.cpp:2218`) wraps the client's dmabuf planes with
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::UsesVulkanSwapchain`); instead `ImportDmabufToBackend`
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::ImportDmabufToBackend`) wraps the client's dmabuf planes with
   `zwp_linux_dmabuf_v1_create_params` / `..._create_immed` and hands the resulting
   `wl_buffer` straight to the host compositor as a `CWaylandFb`. This is the core
   architectural split from SDL, which must round-trip composited frames through a real
   swapchain present because SDL/X11 give no zero-copy buffer-import path. `UsesModifiers()`
-  (`src/Backends/WaylandBackend.cpp:2257`) is real here (backed by
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::UsesModifiers`) is real here (backed by
   `zwp_linux_dmabuf_v1`'s modifier events, gated by `cv_wayland_use_modifiers`), unlike
   SDL/headless where it's always `false`.
-- **Fake EDID.** Since there's no real display to read an EDID off of, `Init` synthesizes
+- **Fake EDID.** Since there's no real display to read an EDID off of, `UpdateEdid` synthesizes
   one with `GenerateSimpleEdid(g_nNestedWidth, g_nNestedHeight)`
-  (`src/Backends/WaylandBackend.cpp:1002`, stored in `CWaylandConnector::m_FakeEdid` at
-  `:476`, served back through `GetRawEDID()` at `:1204`) and feeds it through the same
+  (`src/Backends/WaylandBackend.cpp:CWaylandConnector::UpdateEdid`, stored in `CWaylandConnector::m_FakeEdid`,
+  served back through `src/Backends/WaylandBackend.cpp:CWaylandConnector::GetRawEDID`) and feeds it through the same
   `WritePatchedEdid` used by DRM's real EDIDs
-  (`src/Backends/WaylandBackend.cpp:2342`, `HackUpdatePatchedEdid`) — see
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::HackUpdatePatchedEdid`) — see
   [backend-drm.md](backend-drm.md#how-it-works) for where the real path lives. *Why:*
   downstream consumers like DXVK's HDR probing read the patched-EDID file regardless of
   backend, so a nested backend without hardware still has to produce a plausible one.
 - **Virtual connectors.** `UsesVirtualConnectors()` returns `true`
-  (`src/Backends/WaylandBackend.cpp:2345`) and `CreateVirtualConnector`
-  (`src/Backends/WaylandBackend.cpp:2349`) builds a new `CWaylandConnector` (i.e. a new
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::UsesVirtualConnectors`) and `CreateVirtualConnector`
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::CreateVirtualConnector`) builds a new `CWaylandConnector` (i.e. a new
   `xdg_toplevel` window) on demand. *Why:* this is what lets gamescope open more than one
   top-level window under a single Wayland-nesting session — DRM and SDL don't need this
   because DRM enumerates real physical connectors and SDL only ever has the one window.
 - Relative mouse / pointer lock goes through `zwp_pointer_constraints_v1` +
   `zwp_relative_pointer_manager_v1` on the dedicated `CWaylandInputThread`
-  (`src/Backends/WaylandBackend.cpp:2417 SetRelativeMouseMode`,
-  `src/Backends/WaylandBackend.cpp:2440` `zwp_pointer_constraints_v1_lock_pointer`) —
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::SetRelativeMouseMode`, which calls
+  `zwp_pointer_constraints_v1_lock_pointer`) —
   running pointer/relative-motion handling off the main protocol dispatch thread so input
   latency doesn't couple to compositing/frame-callback work.
 - **Host-shortcut inhibition** (Input › General's "Force grab keyboard", added
@@ -86,8 +86,8 @@ initialize.
   `zwp_keyboard_shortcuts_inhibit_manager_v1` (host-shortcut inhibition for Input ›
   General's "Force grab keyboard", see the bullet below).
 - `SupportsExplicitSync()` is unconditionally `true`
-  (`src/Backends/WaylandBackend.cpp:2306`) and `SupportsPlaneHardwareCursor()` is `false`
-  (`src/Backends/WaylandBackend.cpp:2285`, same reasoning as SDL: cursor goes through
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::SupportsExplicitSync`) and `SupportsPlaneHardwareCursor()` is `false`
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::SupportsPlaneHardwareCursor`, same reasoning as SDL: cursor goes through
   `INestedHints`, not a real cursor plane). `SupportsTearing()` is true only when the host
   offers `wp_tearing_control_manager_v1` — see [Tearing](#tearing) below.
 - **Settings-overlay cursor** — `INestedHints::PresentOverlayCursor( bool ) -> bool`, driven
@@ -161,21 +161,21 @@ if the host offers it.
 ## Using it
 
 - Select explicitly with `--backend wayland`
-  (`src/main.cpp:445-446 parse_backend_name`); dispatched at `src/main.cpp:997-1003`,
+  (`src/main.cpp:parse_backend_name`); dispatched in the backend `switch` in `src/main.cpp:main`,
   where — uniquely among the four backends — failure of `IBackend::Set<CWaylandBackend>()`
   falls straight through to `IBackend::Set<CSDLBackend>()` in the same case, gated
   `#if HAVE_SDL2`.
-- `src/main.cpp:453 auto_select_backend` picks Wayland whenever `$WAYLAND_DISPLAY` is set
+- `src/main.cpp:auto_select_backend` picks Wayland whenever `$WAYLAND_DISPLAY` is set
   (checked first, before `$DISPLAY`) — see [backend-sdl.md](backend-sdl.md#using-it) for
   the X11 fallback branch and [backend-drm.md](backend-drm.md#using-it) for the
   no-desktop-session case.
 - Sizing follows the same nested-mode convention as every other nested backend: `-W`/`-H`/`-r`
   set the window size and refresh, defaulting to 720p @ 60 Hz 16:9 if unset
-  (`src/Backends/WaylandBackend.cpp:1975-1987`, identical logic to
+  (`src/Backends/WaylandBackend.cpp:CWaylandBackend::Init`, identical logic to
   [backend-sdl.md](backend-sdl.md#how-it-works) and
   [backend-headless.md](backend-headless.md#how-it-works)).
 - Unlike DRM/SDL, there's no dedicated `meson_options.txt` feature flag gating this
-  backend — it's built unconditionally (`src/meson.build:99`), since libwayland-client is
+  backend — it's built unconditionally (`src/meson.build`, the unconditional `src` list), since libwayland-client is
   already a hard dependency of gamescope's own Wayland server.
 
 ## Frame generation
@@ -194,7 +194,7 @@ released. If all of them are still held, the frame is skipped (`force_repaint()`
 `-EBUSY`) and the next vblank tries again. `Why:` upstream simply advances the ring
 (`(n + 1) % 3`), assuming the host releases an image within two frames. GNOME/Mutter
 scanning a fullscreen gamescope window out directly does not. Measured 2026-10-26 on
-the user's 9070 XT, 165 Hz, with the user's CS2 flags:
+a high-end AMD GPU at 165 Hz with CS2:
 
 - 6.9% of composites targeted an image Mutter still held.
 - 2.2% found all three held.

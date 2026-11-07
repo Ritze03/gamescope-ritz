@@ -25,7 +25,7 @@ nothing in the log said so.
 **Cause of the "only ~170-240 of 311 shown" report: the host cannot draw while the game's
 GPU job runs** (mechanism below, in [why the host loses frames](#why-the-host-loses-frames)).
 First step of that finding, that it is not gamescope's commits: setup: Minecraft, Default profile (Target = refresh, Smoothness, Learned motion),
-nested on the 280 Hz DP-1 under Hyprland 0.56.2; the counter checked per commit
+nested on a high-refresh monitor (<connector>) under a recent Hyprland (the release current at the time; later releases may differ); the counter checked per commit
 (`sent` == feedback requests == `presented` + `discarded` in a per-event trace, every run).
 Falsification: a 100-line plain Wayland shm client (no gamescope, no frame generation) that
 commits at 311/s with the same feedback counting, as a window next to the game on the same

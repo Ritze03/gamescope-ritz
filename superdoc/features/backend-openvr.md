@@ -2,30 +2,30 @@
 
 Renders gamescope's composited output into a SteamVR overlay instead of a physical display,
 so a nested desktop or app can live inside a VR headset. It implements the same
-`IBackend` (`src/backend.h:312`) contract as the other backends — see
+`IBackend` (`src/backend.h:IBackend`) contract as the other backends — see
 [backend-drm](backend-drm.md), [backend-sdl](backend-sdl.md),
 [backend-wayland](backend-wayland.md), [backend-headless](backend-headless.md) — but each
-`COpenVRConnector` (`src/Backends/OpenVRBackend.cpp:311`) maps to one SteamVR overlay
+`COpenVRConnector` (`src/Backends/OpenVRBackend.cpp:COpenVRConnector`) maps to one SteamVR overlay
 plane rather than one physical connector, and visibility is driven by SteamVR events
 instead of hotplug.
 
 ## How it works
 
-- `COpenVRBackend` (`src/Backends/OpenVRBackend.cpp:441`) owns the set of active
-  connectors under `m_mutActiveConnectors` (`:1487`) and two atomics that name the
+- `COpenVRBackend` (`src/Backends/OpenVRBackend.cpp:COpenVRBackend`) owns the set of active
+  connectors under `m_mutActiveConnectors` (`COpenVRBackend`) and two atomics that name the
   connector currently entitled to keyboard and mouse input:
-  `m_pKeyboardFocusConnector` / `m_pMouseFocusConnector` (`:1488`-`:1489`).
+  `m_pKeyboardFocusConnector` / `m_pMouseFocusConnector` (also `COpenVRBackend` members).
 - **Normal path — SteamVR grants focus.** `COpenVRBackend::SetMouseFocus` /
-  `SetKeyboardFocus` (`:1049`, `:1089`) fire from SteamVR input-focus-changed events, look
+  `SetKeyboardFocus` fire from SteamVR input-focus-changed events, look
   up which connector's plane owns the newly-focused overlay handle
-  (`GetPlaneByOverlayHandle`, `:1037`), swap the focus-connector atomic, and call
+  (`COpenVRBackend::GetPlaneByOverlayHandle`), swap the focus-connector atomic, and call
   `MakeFocusDirty()` + `nudge_steamcompmgr()` so the steamcompmgr thread rerolls focus
   on its next pass (see [steamcompmgr-focus](steamcompmgr-focus.md) for what happens on
   that side).
 - **Visibility path — a connector becomes visible.** `COpenVRConnector::UpdateVisibility`
-  (`src/Backends/OpenVRBackend.cpp:1842`) is the single place `m_bOverlayShown` /
+  (`src/Backends/OpenVRBackend.cpp:COpenVRConnector::UpdateVisibility`) is the single place `m_bOverlayShown` /
   `m_bSceneAppVisible` transitions are observed (fed by `MarkOverlayShown` /
-  `MarkSceneAppShown`, `:405`/`:412`). Since commit `fcc1341`, on the visible-edge it
+  `MarkSceneAppShown`, both `COpenVRConnector` methods). Since commit `fcc1341`, on the visible-edge it
   also **takes** keyboard and mouse focus for itself, rather than only reacting to a
   grant:
   ```cpp
@@ -52,27 +52,27 @@ instead of hotplug.
 - Both paths converge on the same two atomics, so [steamcompmgr-focus](steamcompmgr-focus.md)'s
   `GetCurrentFocus()` / `GetCurrentMouseFocus()` never need to know which path granted
   focus, only which connector currently holds it.
-- Every connector carries a `VirtualConnectorKey_t` (`src/backend.h:49`, `uint64_t`),
+- Every connector carries a `VirtualConnectorKey_t` (`src/backend.h:VirtualConnectorKey_t`, `uint64_t`),
   the same key steamcompmgr uses to index `g_VirtualConnectorFocuses` — see
   [steamcompmgr-focus](steamcompmgr-focus.md) for the per-connector focus-state model
   this feeds.
 - `COpenVRBackend::GetCurrentConnector` / `GetCurrentMouseConnector`
-  (`src/Backends/OpenVRBackend.cpp:769`, `:773`) simply return
+  (`src/Backends/OpenVRBackend.cpp:COpenVRBackend::GetCurrentConnector`, `COpenVRBackend::GetCurrentMouseConnector`) simply return
   `m_pKeyboardFocusConnector` and `m_pMouseFocusConnector` respectively — the same two
   atomics the take-on-visible and SteamVR-grant paths above write — so keyboard and
   mouse focus can legitimately point at different connectors at once (e.g. a VR overlay
   keyboard vs. a scene-app pointer), and [steamcompmgr-focus](steamcompmgr-focus.md)'s
   `GetCurrentFocus()` / `GetCurrentMouseFocus()` resolve to different connector keys
-  accordingly. `m_oulCurrentSceneVirtualConnectorKey` (`:1483`) is a separate piece of
+  accordingly. `m_oulCurrentSceneVirtualConnectorKey` (a `COpenVRBackend` member) is a separate piece of
   state — which connector's scene app SteamVR currently reports as active — tracked by
-  the SteamVR scene-app-changed event handler (`:1182`) and consulted when a connector
-  is constructed (`:1829`); it is not read by `UpdateVisibility`'s take-on-visible guard
+  the SteamVR scene-app-changed event handler (`COpenVRBackend::ProcessVRInput`, the `VREvent_SceneApplicationChanged` case) and consulted when a connector
+  is initialised (`COpenVRConnector::Init`); it is not read by `UpdateVisibility`'s take-on-visible guard
   or by these two getters.
 
 ## Using it
 
-- Select the backend with `--backend openvr` (parsed in `src/main.cpp:441`,
-  constructed at `src/main.cpp:990`); only built when `HAVE_OPENVR` is enabled.
+- Select the backend with `--backend openvr` (parsed in `src/main.cpp:parse_backend_name`,
+  constructed in the backend `switch` of `src/main.cpp:main`); only built when `HAVE_OPENVR` is enabled.
 - SteamVR overlay identity and behaviour are set via CLI flags at startup — see
   Options below. There is no in-session UI for these; they're one-shot construction
   parameters for the overlay.
@@ -103,8 +103,8 @@ instead of hotplug.
 | `--vr-scroll-speed` | Scroll speed for the VR pointer |
 | `--vr-session-manager` | Register as the SteamVR session manager overlay |
 
-Full text lives at `src/main.cpp:239`-`:252` (help output) and the `getopt_long` table
-at `src/main.cpp:99`-`:114`.
+Full text lives at `src/main.cpp:usage` (help output) and the `getopt_long` table
+`src/main.cpp:gamescope_options`.
 
 ## Frame generation
 
