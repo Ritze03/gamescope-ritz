@@ -211,14 +211,29 @@ race: 0 of 1662 composites were held there. Measure on a real output.
 
 ## Direct scanout under a host
 
-**Known issue (2026-11-06): direct scanout on can crash the GPU, root cause unknown. Keep
-`render:direct_scanout` at 0 for now.** `Why:` gamescope nested on Hyprland with scanout on and
-a game running crashed the GPU 4 times in about 285 fullscreen entries (gfxhub write page fault
-from gamescope, then a cs2 gfx ring timeout, a failed ring reset and a full GPU reset that killed
-the desktop); with `direct_scanout = 0`, 0 crashes in 183 entries. Removing the format-change
-modeset (matching XR30 formats) did not stop it. Nothing here explains it yet, so the mechanism
-below works but is not safe to recommend. The Diagnostics area's warning about scanout being off
-is switched off for this reason ([diagnostics.md](diagnostics.md)).
+**Crash fixed (2026-11-07); picture artifacts still open.** Gamescope nested on Hyprland with
+scanout on and a game running crashed the GPU about once per 70 fullscreen entries (gfxhub write
+page fault from gamescope, `PERMISSION_FAULTS=0x1`, then a cs2 gfx ring timeout and a full GPU
+reset that killed the desktop). The fix: `CVulkanTexture::BInit()` no longer chains
+`VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA` onto an output image's memory when
+`HostMayScanOutOutputImages()` is true (this backend only). The image-side `wsi_image_create_info`
+(scanout) stays; DRM and the other backends are untouched. `Why:` RADV keeps WSI-flagged memory
+out of its global buffer-object list, so an output image is only listed in submissions that use
+it. When the host's scanout pins and moves the exported image, a gamescope submission that does
+not list it can make the kernel clear its mapping (`amdgpu_vm_handle_moved()`, reservation held
+by the display side), and a queued write then faults.
+
+Evidence (Hyprland nested, scanout on, 300 scripted fullscreen entries, CS2): without the fix a
+GPU reset at entry 78 and again at 85, all 10 logged faults of the second one inside a single
+output image, 0.2 s after a rebuild of the output images. The descriptor ring was ruled out
+(in-flight sets peaked at 6-8 of 24). `RADV_DEBUG=allbos` on gamescope alone: 300 clean. With the
+fix and no `allbos`: 300 clean with Frame generation off and 300 clean with it on at a 140 fps
+limit, scanout engaged on 298 of 300 each, 0 faults.
+
+**Still open:** the picture artifacts when entering and leaving fullscreen with scanout on, which
+sometimes show older frames. They persist with the fix and were reportedly absent under `allbos`;
+cause unknown ([TODO](../planning/TODO.md)). The Diagnostics area's warning about scanout being off
+stays switched off for now ([diagnostics.md](diagnostics.md)).
 
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:

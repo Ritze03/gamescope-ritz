@@ -138,8 +138,9 @@ nothing, so no job of its own waits behind the game. Until 2026-11-05 that could
 gamescope: KMS refused its output images, which also explains the user's `settings.lua` comment
 "Breaks FSR in Gamescope". The refusal, the fix and the buffer count are in
 [backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host). The setting itself is the
-user's: Hyprland's config still has it off, and it should stay off for now: scanout on can crash
-the GPU (root cause unknown, 2026-11-06, see backend-wayland.md's known issue).
+user's: Hyprland's config still has it off, and it stayed off while scanout on could crash
+the GPU (fixed 2026-11-07; picture artifacts on fullscreen changes are still open, see
+backend-wayland.md).
 
 Synthetic (`dc` + `burst`, as above, scanout on, `zc` = zero-copy every shown frame): **280 at
 every job length**, 8, 12, 16 and 24 ms at 30 per second, and 5 and 7 ms at 120 per second with

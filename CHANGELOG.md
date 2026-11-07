@@ -9,6 +9,12 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.12] – 2026-11-07
+
+### Fixed
+- **Direct scanout crash**: Fixed the GPU crash that could happen when entering fullscreen
+  with the host's direct scanout on.
+
 ## [0.14.11] – 2026-11-06
 
 ### Fixed

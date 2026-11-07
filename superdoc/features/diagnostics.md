@@ -15,14 +15,16 @@ scanout on and a game running crashed the GPU 4 times in about 285 fullscreen en
 write page fault from gamescope, then a cs2 gfx ring timeout, a failed ring reset and a full GPU
 reset that killed the desktop). With `direct_scanout = 0` there were 0 crashes in 183 entries.
 Giving the output image the screen's own format, so no format-change modeset happens, did not
-stop it. **The root cause is unknown** and still being investigated. Telling users to turn the
+stop it. The crash was fixed on 2026-11-07 (output images no longer carry the WSI memory chain under a
+host); the warnings stay off while scanout's picture artifacts are open. Telling users to turn the
 option on is therefore harmful. The user: *"Yeah, turn off the warning for now."*
 
 The toast, the dot (`Area::WarnWhen`, `Diagnostics_HasWarning()`), `AnyWarns()` and the check
 itself are all kept. **To restore:** make `WarnsAbout()` `return e == ScanoutState::Off;` again,
 restore the fix text in `PanelDiagnostics.cpp` (set `render:direct_scanout = 2`) and the toast
 text in `Diagnostics.cpp`, and flip the assertions in `tests/test_diagnostics.cpp`. Do that only
-once the crash is fixed. The area now says: Off is the safe setting (costs some generated
+once the picture artifacts with scanout on are solved too (the crash itself was fixed 2026-11-07, see
+[backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)). The area now says: Off is the safe setting (costs some generated
 frames), and On carries a caution that it can currently crash the GPU. Both are plain text, not
 a warning.
 
@@ -97,9 +99,9 @@ Not applicable or Hyprland not detected. It is not a palette row (like every rea
 searching "diagnostics", "hyprland", "wiki" or "docs" finds the area, whose Overview carries it.
 `Why:` the user, on the first version with the button in the sheet: *"It should only show this
 button on the inspector rail on the right side"*. Below the rows, when Off: leave it off for now, what that costs (some generated
-frames), and that scanout on can crash the GPU when entering or leaving fullscreen while a game
-runs (until 2026-11-06 this was the fix `render:direct_scanout = 2` with config snippets). When
-On: a short caution of the same crash. For the other states the area shows the one-sentence
+frames), and that scanout on can show picture artifacts when entering or leaving fullscreen (it could
+crash the GPU until 2026-11-07; until 2026-11-06 this was the fix `render:direct_scanout = 2` with config snippets). When
+On: a short caution about the artifacts. For the other states the area shows the one-sentence
 reason.
 
 The link runs `xdg-open <url>` the same way (fixed argv, no shell, the host environment above,

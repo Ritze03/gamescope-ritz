@@ -2556,7 +2556,13 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 		VkMemoryDedicatedAllocateInfo memory_dedicated_info = {};
 		struct wsi_memory_allocate_info memory_wsi_info = {};
 
-		if ( flags.bFlippable == true )
+		// Why: RADV keeps WSI-flagged memory out of its global BO list, so an output
+		// image is only listed in submissions that use it. When the host's scanout pins
+		// and moves the exported image, a submission that does not list it can make the
+		// kernel clear its mapping (amdgpu_vm_handle_moved, reservation held by the
+		// display side), and a queued write then faults. Without the flag the image
+		// stays in the global list. Only done where a host may scan it out.
+		if ( flags.bFlippable == true && !GetBackend()->HostMayScanOutOutputImages() )
 		{
 			memory_wsi_info = {
 				.sType = VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA,
