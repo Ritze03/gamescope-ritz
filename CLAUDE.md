@@ -10,7 +10,7 @@ upstream work, not this fork's divergence. This fork's actual own work is additi
 top: the settings-overlay/FPS-HUD system (see `superdoc/planning/
 overlay-presentation-architecture.md`).
 
-<!-- superdoc:start v2 -->
+<!-- superdoc:start v3 -->
 ## Docs: read before you touch, update after you change
 
 Full discipline — what to read, when to update, how to record the *why* — lives in the
