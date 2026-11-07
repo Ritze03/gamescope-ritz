@@ -657,7 +657,10 @@ namespace gamescope
 			return s;
 		} );
 
+		a.Columns( 2 );
+
 		a.Group( "Quick toggles" );
+		a.GroupColumn( 0 );
 
 		a.Switch( "display.adaptive_sync", "Adaptive sync (VRR)",
 			ui::AnyBind::Of<bool>(
@@ -763,6 +766,11 @@ namespace gamescope
 			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ForceWindowsFullscreen ); },
 				LaunchLockReason( LaunchOptions::Opt::ForceWindowsFullscreen ).c_str() );
+
+		// Wayland host: its own second column. Both rows are ShownWhen (Wayland only), so
+		// off Wayland the group is hidden and General falls back to one column.
+		a.Group( "Wayland host" );
+		a.GroupColumn( 1 );
 
 		// Block direct scanout (2026-11-07): GLOBAL, not per profile -- the host setup
 		// belongs to the machine, not to a game -- so it carries the config key of its

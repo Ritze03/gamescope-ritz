@@ -35,6 +35,11 @@ The newest version below is the one this build reports.
 - **Lag spike buffer**: Switched off and removed from the settings menu because it
   barely worked; saved values are ignored.
 
+### Info
+- **Two-column settings**: Frame generation, Motion blur and Display > General are
+  regrouped into two columns, and four rows (Priority, Quality, Measured against and
+  Motion blur's Quality) now use buttons.
+
 ## [0.14.11] – 2026-11-06
 
 ### Fixed

@@ -57,6 +57,16 @@ fallback). Saving writes every `framegen` key, so a profile saved earlier alread
 inherits the parent's value); only a profile with no `safety` key loads the new default.
 No migration.
 
+**Layout** (2026-11-07): two columns (`a.Columns( 2 )`, every group pinned with `GroupColumn()`).
+Column 0: group "Frame generation" (Frame generation, Multiplier, Target fps, Priority, Motion
+version, Quality), then "Artifact protection" (Artifact safety, Static HUD protection, UI protection,
+Crosshair box size). Column 1: "Learned motion" (Learned net, Learned precision, Zero-motion test,
+Static guard), "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
+GPU speed), "Status". Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
+against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
+falls back to a dropdown. `Why:` the user arranged this on a visual workbench. The paragraph below
+lists the rows in their older single-group order.
+
 Rows, in order: **Frame generation** (a switch, `framegen.enabled`; help *Generates extra
 frames between the game's own frames. Adds delay, so it is not suited to twitch
 shooters.*), **Multiplier** (2x / 3x / 4x / 5x / 6x / 7x / 8x / Target fps; it sets `mode`,

@@ -72,9 +72,17 @@ config section `motion_blur` (schema stays 5; additive; absent loads the default
 | `motion_blur.weights` | `even` / `gaussian` (default) | the row "Weighting": `BlurWeights::Even` (a box shutter, hard-edged smear like a camera) / `Gaussian` (the ends carry 13.5% of the centre's weight: softer, effectively shorter) |
 | `motion_blur.pause_when_cursor_visible` | `false` (default) / `true` | the row "Pause while cursor visible" (switch, 2026-11-07): while the game's mouse cursor is visible the blur stops and the game's frames show, resuming by itself when the cursor hides; additive, absent loads off |
 
-Rows, in order: **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
-(slider 0..100 %), **Measured against**, **Weighting**, **Pause while cursor visible** (switch), then (group "Interpolation") **Use Frame
-generation's settings** (switch, default on), **Quality** and **Motion version**, and **Status**.
+The area is two columns (`a.Columns( 2 )`, groups pinned with `GroupColumn()`). Column 0, group
+"Motion blur": **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
+(slider 0..100 %), **Measured against** (buttons), **Weighting**. Column 1, top to bottom: group
+"Pausing" with **Pause while cursor visible** (switch), group "Interpolation" with **Use Frame
+generation's settings** (switch, default on), **Motion version**, **Quality** (buttons), and group
+"Status" with **Status**. Measured against and Quality use `Entry::Segmented()` and fall back to a
+dropdown when the column is too narrow. Quality's help now points at Frame generation's Quality
+help for the V1 and V2 figures instead of repeating them.
+
+`Why:` the user laid these groups, the order (Motion version before Quality) and the buttons out
+on a visual workbench; the Shell now matches that layout.
 The other rows are disabled while the Motion blur switch is off; Quality and Motion version are
 also disabled while "Use Frame generation's settings" is on (greyed out, showing Frame
 generation's values). The rail summary reads `off` or `N samples`. The help

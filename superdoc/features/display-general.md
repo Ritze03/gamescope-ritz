@@ -16,6 +16,11 @@ live global, plus two global, Wayland-only switches (last two rows):
 | `display.block_direct_scanout` | Block direct scanout | `overlay.diagnostics_block_scanout` in `global.json` (global, not per profile) | `Diagnostics_BlockScanout()` | none; shown on the Wayland backend only |
 | `display.compress_output_images` | Compress output images | `overlay.compress_output_images` in `global.json` (global, not per profile) | `Diagnostics_CompressOutputImages()` | none; shown on the Wayland backend only; applies on the next launch |
 
+The area is two columns (`a.Columns( 2 )`): "Quick toggles" in column 0 and a "Wayland host" group
+(Block direct scanout, then Compress output images) in column 1. Both rows are `ShownWhen`, so off
+Wayland the second column is empty and General stays one column. `Why:` the user wanted the two
+Wayland switches in their own second column.
+
 The locks are the `Adaptive sync`, `Allow tearing` and `Force maximize` rows of the flag table in
 [launch-option-lock.md](launch-option-lock.md). `Force grab cursor` used to be a fifth switch here; it
 moved to `input.general` on 2026-09-27 ([input-general.md](input-general.md)).

@@ -208,7 +208,10 @@ namespace gamescope
 			return std::to_string( m.samples ) + " samples";
 		} );
 
+		a.Columns( 2 );
+
 		a.Group( "Motion blur" );
+		a.GroupColumn( 0 );
 
 		a.Switch( "motion_blur.enabled", "Motion blur",
 			ui::AnyBind::Of<bool>(
@@ -257,6 +260,7 @@ namespace gamescope
 			       "screen: subtle, and it stays short as Frame generation shows more frames. "
 			       "Game frame measures it against one of the game's own frames: the film look, "
 			       "longer and heavier, and it needs more samples to stay smooth." )
+			.Segmented()
 			.Default( 0 )
 			.Keywords( "motion blur measured against relative shown frame game frame film look subtle" )
 			.DisabledUnless( On, "motion blur is off" );
@@ -273,6 +277,9 @@ namespace gamescope
 			.Keywords( "motion blur weighting weights even gaussian soft box shutter" )
 			.DisabledUnless( On, "motion blur is off" );
 
+		a.Group( "Pausing" );
+		a.GroupColumn( 1 );
+
 		a.Switch( "motion_blur.pause_when_cursor_visible", "Pause while cursor visible",
 			ui::AnyBind::Of<bool>(
 				[]{ EnsureConfigLoaded(); return s_Settings.motion_blur.pause_when_cursor_visible; },
@@ -285,6 +292,7 @@ namespace gamescope
 			.DisabledUnless( On, "motion blur is off" );
 
 		a.Group( "Interpolation" );
+		a.GroupColumn( 1 );
 
 		a.Switch( "motion_blur.same_as_framegen", "Use Frame generation's settings",
 			ui::AnyBind::Of<bool>(
@@ -337,20 +345,16 @@ namespace gamescope
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
 			kQualityOptions, std::size( kQualityOptions ) )
 			.Help( "Quality is the default look; Performance is cheaper on the GPU and a little "
-			       "less clean. Motion version V1: Performance estimates motion at a quarter "
-			       "resolution and can miss thin, fast detail (roughly 35-50% cheaper; 1440p 2x: "
-			       "0.50 -> 0.25 ms per game frame, RX 7900 XTX); switching pauses the picture for "
-			       "an instant. Motion version V2: Quality works out a motion value for every pixel "
-			       "and keeps the side of the picture that is still visible at edges, Performance "
-			       "is a simpler warp, a little less clean around moving edges (1080p 2x, RX 7900 "
-			       "XTX: V1 0.30, V2 Quality 0.24, V2 Performance 0.14 ms per game frame); "
-			       "switching does not interrupt the picture. Shown greyed out with Frame "
-			       "generation's value while \"Use Frame generation's settings\" is on." )
+			       "less clean. See Frame generation's Quality help for the V1 and V2 figures. "
+			       "Shown greyed out with Frame generation's value while \"Use Frame generation's "
+			       "settings\" is on." )
+			.Segmented()
 			.Default( 0 )
 			.Keywords( "motion blur quality performance cost gpu motion estimation v2 mode" )
 			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
 
 		a.Group( "Status" );
+		a.GroupColumn( 1 );
 
 		a.Facts( "motion_blur.status", "Status", []
 		{
