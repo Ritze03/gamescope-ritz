@@ -100,11 +100,13 @@ FreeSync and NIST upscaling works even at the native resolution, so it behaves m
 like a filter instead of an actual upscaler."* ("FreeSync and NIST" is
 speech-to-text for FSR and NIS.)
 
-The gate lives in `steamcompmgr.cpp`'s per-frame paint, in the "just draw focused
-window as normal" branch (around `src/steamcompmgr.cpp:2989`):
+The gate is `FilterPassApplies( flScaleX, flScaleY )` in `src/UpscaleFilterGate.h`
+(a header of its own so the unit tests can reach it), called from `steamcompmgr.cpp`'s
+per-frame paint in the "just draw focused window as normal" branch. It returns
+`flScaleX <= 1.0f + kEpsilon && flScaleY <= 1.0f + kEpsilon` with `kEpsilon = 0.001f`:
 
 ```cpp
-bool bFilterPassApplies = frameInfo.layers.get( 0 ).scale.x <= 1.001f && frameInfo.layers.get( 0 ).scale.y <= 1.001f;
+bool bFilterPassApplies = FilterPassApplies( frameInfo.layers.get( 0 ).scale.x, frameInfo.layers.get( 0 ).scale.y );
 frameInfo.useFSRLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::FSR && bFilterPassApplies;
 frameInfo.useNISLayer0 = g_upscaleFilter == GamescopeUpscaleFilter::NIS && bFilterPassApplies;
 ```

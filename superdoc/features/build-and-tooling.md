@@ -239,24 +239,23 @@ library (`pacingtest`); gamescope no longer has pacing tests. See
 
 ### Remote test laptop (`scripts/remote-test.sh`)
 
-A second real-hardware rig, distinct from the SteamOS device tooling above: a separate,
-low-power laptop on the local network, reachable over SSH with key auth, running a live
-Hyprland session. Its connection details live in the untracked local file
+A second real-hardware rig, distinct from the SteamOS device tooling above: a separate
+test machine on the local network, reachable over SSH with key auth, running a live
+Wayland session. Its connection details and hardware notes live in the untracked local file
 `.claude/local/test-laptop-notes.md`, not in this repo. *Why it exists:* every overlay bug this project has hit took multiple failed
-rounds because agents could only test headlessly on the maintainer's own working
+rounds because agents could only test headlessly on the main development
 machine — no visible overlay, no real force-grab as a launch flag, no soak testing, and
-twice a test window landed on the maintainer's own display by accident. This laptop is a
+twice a test window landed on the development machine's own display by accident. The test machine is a
 real, dedicated Wayland session nobody else is using, reachable non-interactively.
 
-*Why build-here-ship-there, not build-on-the-laptop:* the laptop's CPU is a low-power
-U-series part; a full LTO release build there would take a long time and make the
+*Why build-here-ship-there, not build-on-the-test-machine:* its CPU is much slower than the
+development machine's; a full LTO release build there would take a long time and make the
 machine unusable while it ran. The desktop already compiles at GCC's default `-march`
 (generic x86-64 baseline — nothing in `meson.build` or `scripts/build-gamescope-ritz.sh`
 sets `-march=native` or anything else; `/etc/makepkg.conf`'s `-march=native` only affects
 `makepkg`, not a plain `meson`/`ninja` invocation), so the binary this produces already
-runs on any x86_64 CPU including the laptop's — verified via `readelf -n` reporting `x86
-ISA used: x86-64-baseline`. So the desktop builds once (fast, on real hardware the
-maintainer games on anyway) and `scripts/remote-test.sh sync` ships the compiled binary
+runs on any x86_64 CPU including the test machine's — verified via `readelf -n` reporting `x86
+ISA used: x86-64-baseline`. So the desktop builds once (fast, on the faster development machine) and `scripts/remote-test.sh sync` ships the compiled binary
 over rather than repeating the build on weaker hardware.
 
 - `scripts/remote-test.sh sync [--no-build]` — builds locally
@@ -270,8 +269,8 @@ over rather than repeating the build on weaker hardware.
   a separate binary from the distro's gamescope package, already present on the
   laptop the same way it is on the desktop.
 - `scripts/remote-test.sh run [--wait] -- <command...>` — runs a command on the laptop
-  with `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`/`HYPRLAND_INSTANCE_SIGNATURE` exported (read
-  live from the running Hyprland process's own `/proc/<pid>/environ` on every call, since
+  with the session's `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` and compositor-instance variables exported (read
+  live from the running compositor process's own `/proc/<pid>/environ` on every call, since
   every `ssh host 'cmd'` is a fresh non-interactive shell that inherits none of the
   target session's environment) and the remote bin dir on `PATH`. Without `--wait` the
   command is launched via `setsid nohup ... & disown` so it survives the SSH session
@@ -286,11 +285,11 @@ over rather than repeating the build on weaker hardware.
 - `scripts/remote-test.sh env` — prints the resolved `export` lines for a caller who
   wants to `ssh` in by hand instead.
 
-**Known gap (2026-09-02):** the test laptop was missing the system `wlroots` 0.20
+**Known gap (2026-09-02):** the test machine was missing the system `wlroots` 0.20
 library, so a synced binary failed its `--version` self-check with "shared libraries:
-libwlroots-0.20.so: cannot open shared object file". Install the package on the laptop
-(details in the local notes file). Its Vulkan stack was already fine: the Intel driver
-and loader are installed, only the `vulkaninfo` tool is not.
+libwlroots-0.20.so: cannot open shared object file". Install the package there
+(details in the local notes file). Its Vulkan driver and loader were already fine; only
+the `vulkaninfo` tool was missing.
 
 ## Unit tests (`tests/gamescope_tests`)
 

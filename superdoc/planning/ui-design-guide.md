@@ -1,5 +1,8 @@
 # ImGui Overlay — Visual Design Guide
 
+> **Partly behind the code.** Where this page and the code disagree, `superdoc/ui/STYLING-GUIDE.md`
+> and the tokens in the code are authoritative; read this page for the design history and rationale.
+
 Distilled from the design handoff `Game Overlay UI Mockups-handoff.zip` (Claude Design canvas export,
 extracted to scratchpad, not committed to this repo). This file captures **visual language only** —
 colors, type, spacing, component chrome, iconography rules, motion, and ImGui feasibility. It does

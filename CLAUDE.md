@@ -22,6 +22,7 @@ Reference docs — plain links, read the one relevant to your task on demand:
 - **`superdoc/architecture/overview.md`** — codebase navigation map (module map, data flow,
   "where to look for X"). **Start here to navigate the code.**
 - Per-feature behaviour — `superdoc/features/`
+- Styling rules — `superdoc/ui/STYLING-GUIDE.md`
 - `superdoc/README.md` — the docs table of contents
 - **Building (agents)** — build and test ONLY with `scripts/gentle-build.sh` (build dir
   `build-agent/`) — never a raw `ninja`/`meson compile`, never an LTO `build-release/`
