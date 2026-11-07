@@ -222,7 +222,7 @@ is switched off for this reason ([diagnostics.md](diagnostics.md)).
 
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:
-[frame-generation.md](frame-generation.md#why-the-host-loses-frames)). Two things have to hold,
+[frame-generation.md](frame-generation-host-scanout.md#why-the-host-loses-frames)). Two things have to hold,
 both behind `HostMayScanOutOutputImages()` (`src/backend.h`, true only here), and the status
 line's `zero-copy` count says whether it worked.
 

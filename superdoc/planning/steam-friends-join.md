@@ -38,9 +38,9 @@ the one that already ships.
 | # | The user asked | The honest answer |
 |---|---|---|
 | 1 | *"Can the Friends window run in a child session we stream and remote-control?"* | The remoting stack costs two packages this machine does not have, and the idea is circular: see [§2](#2-the-child-session-proposal-and-why-it-is-circular). |
-| 2 | *"Can it just take a single window? Spawn it from the tray headlessly?"* | No. An X11 window belongs to the server its client connected to; the tray only messages the running client, which opens the window on **its** display. [§1](#1-moving-an-existing-window-closed-for-good) closes this for good. |
-| 3 | *"The important thing is joining friends — any way is fine."* | This is the question with a good answer. [§5](#5-the-approach-that-actually-wins-a-native-join-list). |
-| 4 | *"No API keys. Explore what the default Steam `.so` offers."* | Correct instinct, and it makes the answer *better*, not worse — the local library gives the one field the web API was wanted for. [§6](#6-the-local-library-what-it-offers-and-what-it-costs). |
+| 2 | *"Can it just take a single window? Spawn it from the tray headlessly?"* | No. An X11 window belongs to the server its client connected to; the tray only messages the running client, which opens the window on **its** display. [§1](#1-moving-an-existing-window--closed-for-good) closes this for good. |
+| 3 | *"The important thing is joining friends — any way is fine."* | This is the question with a good answer. [§5](#5-the-approach-that-actually-wins--a-native-join-list). |
+| 4 | *"No API keys. Explore what the default Steam `.so` offers."* | Correct instinct, and it makes the answer *better*, not worse — the local library gives the one field the web API was wanted for. [§6](#6-the-local-library--what-it-offers-and-what-it-costs). |
 
 ---
 
@@ -260,7 +260,7 @@ local answer.
 **`ISteamFriends::GetFriendGamePlayed`.** It fills a `FriendGameInfo_t` carrying the
 friend's `m_gameID` **and `m_steamIDLobby`, which is non-zero exactly when they are in a
 lobby you can join.** That is the entire feature in one field, obtained locally from the
-already-logged-in client. Details and cost in [§6](#6-the-local-library-what-it-offers-and-what-it-costs).
+already-logged-in client. Details and cost in [§6](#6-the-local-library--what-it-offers-and-what-it-costs).
 
 Sources that were considered and rejected:
 
@@ -555,7 +555,7 @@ enters it).
 `build-release/verify-shots/steam-friends-phase12-2026-09-08/results.txt`.
 No `CHANGELOG.md` entry: nothing is user-visible until the UI exists, so the
 repo's rule ("purely internal work gets no entry") applies. **Read
-[§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot) before
+[§6e](#6e-correction--the-published-vtable-order-is-wrong-by-one-slot) before
 touching any of it.**
 
 **Phase 3 — the list in the Shell.** A `system.friends` area with the existing list
@@ -585,7 +585,7 @@ and each is recorded where it was decided:**
 - **The list shows EVERY friend in a game, not only the joinable ones.** The
   sketch's filter would make an empty panel and a broken read
   indistinguishable, because a wrong `m_steamIDLobby` offset — the one thing
-  [§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot) says
+  [§6e](#6e-correction--the-published-vtable-order-is-wrong-by-one-slot) says
   is still unproven — reads as zero exactly like "not in a lobby". Rows that
   cannot be joined carry the reason instead. See the feature doc's *"Why the
   list shows every friend in a game"*.
@@ -632,7 +632,7 @@ The short version, because both halves change what is written above:
 Nothing here was run for them. Each is safe *when not in a match*.
 
 1. **The one thing phases 1 and 2 could not prove: a non-zero lobby id.**
-   Everything else in the read path is now confirmed live ([§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot));
+   Everything else in the read path is now confirmed live ([§6e](#6e-correction--the-published-vtable-order-is-wrong-by-one-slot));
    this needs a friend who is *actually in a joinable lobby* at the moment you run it,
    which never happened while it was being built.
    ```
@@ -672,5 +672,5 @@ every command. That directory lives under the build tree and a clean rebuild wip
 |---|---|
 | `probe-nesting.sh` → `results-nesting.txt`, `01`–`03*.png` | §2a: a nested session keeps its own game; env inheritance is what decides, and it is escapable per process |
 | `probe-cdp.sh` + `cdp_client.py` → `results-cdp.txt`, `10`–`15*.png` | §3: CDP renders and drives a browser you do not own — and stops dead the moment its window is unmapped **or fully covered** |
-| `steamclient_probe.c` → `results-steamclient.txt` | §6c: the client's own `steamclient.so` loads and every symbol the friends path needs resolves, with no app id and nothing sent to the live client. **Its `--connect` half declares the superseded vtable order — see [§6e](#6e-correction-the-published-vtable-order-is-wrong-by-one-slot).** |
+| `steamclient_probe.c` → `results-steamclient.txt` | §6c: the client's own `steamclient.so` loads and every symbol the friends path needs resolves, with no app id and nothing sent to the live client. **Its `--connect` half declares the superseded vtable order — see [§6e](#6e-correction--the-published-vtable-order-is-wrong-by-one-slot).** |
 | `../steam-friends-phase12-2026-09-08/results.txt` | phases 1 and 2: the off-by-one correction, the live read after it, every fail-soft path, and the gate results |

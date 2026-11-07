@@ -152,7 +152,7 @@ buffer, as in the Status line).
   `fgpacing::Reason::WaitingForDecoder` (text "Waiting for the next video frame"; never occurs
   for gamescope's arrival mode, static_asserted); `OnFrame` and the format variants (Rgb10,
   RgbaF16, Nv12, P010) are used for Rgba8, Rgb10 and RgbaF16 since 2026-10-04 (HDR frame generation, see
-  [frame-generation](frame-generation.md#hdr-and-10-bit-games)); Nv12 / P010 are not built.
+  [frame-generation](frame-generation-renderer.md#hdr-and-10-bit-games)); Nv12 / P010 are not built.
 
 ## Costs and limits
 

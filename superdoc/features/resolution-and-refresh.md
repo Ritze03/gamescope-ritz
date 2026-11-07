@@ -338,7 +338,7 @@ and native Wayland swapchains alike.
   and the layer's put the frame at whatever phase the timer gives, so it hits fewer paints, and a
   paint that is hit waits only for what is left of the burst. That is the gap between the 6.5 and
   3.5 ms maxima under the two limiters. It stopped mattering much once the wait itself was fixed,
-  see [frame-generation](frame-generation.md#paints-behind-the-games-gpu-burst-2026-11-04), but the
+  see [frame-generation](frame-generation-pacing.md#paints-behind-the-games-gpu-burst-2026-11-04), but the
   held game stays wrong: output locked at 2.00x, and a limit that is not the number asked for.
 - `Why` a word in the limiter file and not the frame gate the Hold game switch used: the layer
   already reads that file at every present; the gate needs compositor traffic per frame, and a timer

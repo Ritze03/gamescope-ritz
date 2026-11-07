@@ -67,7 +67,7 @@ config section `motion_blur` (schema stays 5; additive; absent loads the default
 | `motion_blur.amount` | 0..100 (default 50) | the row "Blur amount": the shutter in percent of one interval (`Inputs::blurAmount` = `amount / 100`); 0 is no blur; clamped on load |
 | `motion_blur.relative` | `shown` (default) / `game` | the row "Measured against": **Shown frame** = the shutter is a fraction of one *shown* frame's interval (subtle; stays short as FG shows more frames); **Game frame** = a fraction of one *game* frame's interval (the film look: longer, heavier, needs more samples) = `BlurRelative::ShownFrame` / `GameFrame` |
 | `motion_blur.same_as_framegen` | `true` (default) / `false` | the switch "Use Frame generation's settings": on = the blur follows `framegen.motion_version` / `framegen.quality`; additive, absent loads `true` (2026-10-22) |
-| `motion_blur.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the blur's own version, used only while the switch is off (see "The interpolator's version and quality"); additive, an unknown string keeps `v1`. `learned` (2026-10-26) borrows Frame generation's `framegen.learned_net` / `learned_half` / `learned_zero_test` / `learned_static_guard` -- the blur has no Learned rows of its own ([Learned motion](frame-generation.md#learned-motion)) |
+| `motion_blur.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the blur's own version, used only while the switch is off (see "The interpolator's version and quality"); additive, an unknown string keeps `v1`. `learned` (2026-10-26) borrows Frame generation's `framegen.learned_net` / `learned_half` / `learned_zero_test` / `learned_static_guard` -- the blur has no Learned rows of its own ([Learned motion](frame-generation-learned.md#learned-motion)) |
 | `motion_blur.quality` | `quality` (default) / `performance` | the row "Quality": the blur's own, used only while the switch is off; on V2 it is V2's mode; additive |
 | `motion_blur.weights` | `even` / `gaussian` (default) | the row "Weighting": `BlurWeights::Even` (a box shutter, hard-edged smear like a camera) / `Gaussian` (the ends carry 13.5% of the centre's weight: softer, effectively shorter) |
 
@@ -86,7 +86,7 @@ clarity so it is not for competitive play.
 
 **The interpolator's version and quality** (2026-10-22). Blur and Frame generation run on ONE
 `framegen::Interpolator`, whose Motion version (V1 / V2) and Quality are Frame generation's
-`framegen.motion_version` / `framegen.quality` ([frame-generation.md](frame-generation.md#motion-version-2)).
+`framegen.motion_version` / `framegen.quality` ([frame-generation.md](frame-generation-motion-v2.md#motion-version-2)).
 This area has the switch **Use Frame generation's settings** (`motion_blur.same_as_framegen`,
 default **on**) and the blur's own **Quality** (`motion_blur.quality`) and **Motion version**
 (`motion_blur.motion_version`) rows:
@@ -162,7 +162,7 @@ Limits: blur averages interpolation errors, it does not hide them -- an artefact
 sub-frame is spread over the window, softer but wider. It reduces clarity in motion by
 design, so competitive players will often want it off or a short shutter. The library's usual
 limits apply per sub-frame: RGB only, 8-bit, 10-bit or fp16, SDR or HDR (YCbCr is refused and the status
-says why; see [frame-generation](frame-generation.md#hdr-and-10-bit-games)), very fast motion, repetitive structures, scene cuts and flicks present the
+says why; see [frame-generation](frame-generation-renderer.md#hdr-and-10-bit-games)), very fast motion, repetitive structures, scene cuts and flicks present the
 nearer real frame. With 2 samples a fast object shows two ghost copies rather than a
 ramp -- use more samples for a longer smear.
 

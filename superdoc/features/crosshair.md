@@ -110,7 +110,7 @@ Consequences for the HUD's own logic, all in `FpsDisplay.cpp`:
   (`src/shaders/alphamode.h`) tells the digits apart from everything else
   by a **marker in the texel**: the digits are magenta with `G == 0`, and
   a texel with any green at all composites exactly as coverage would
-  ([fps-display.md](fps-display.md#what-inverted-mode-does-not-invert) has
+  ([fps-display.md](fps-display-text-colour.md#what-inverted-mode-does-not-invert) has
   the whole scheme). The crosshair's only obligation is therefore to never
   put a `G == 0` texel in that layer: `FpsDisplay_AddLayer()` sets
   `CrosshairFrame::bReserveInvertMarker` while the readout is Inverted, and
@@ -760,7 +760,7 @@ the arithmetic):
   inverted digit and a plain white one look the same, and the user then
   reported "inversion doesn't work" the next day. The recipe that does
   discriminate is in
-  [fps-display.md](fps-display.md#verifying-inverted-mode-pixel-recipe):
+  [fps-display.md](fps-display-text-colour.md#verifying-inverted-mode-pixel-recipe):
   a bright flat client, and the digit core must come out *dark*.
 
 **Automated:** `scripts/pixel-regression.sh` runs the inversion-plus-crosshair

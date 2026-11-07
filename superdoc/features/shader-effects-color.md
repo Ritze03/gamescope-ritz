@@ -32,7 +32,7 @@ is what an iPhone "Saturation" slider does, not that app's "Vibrancy". The maths
 is **byte-for-byte unchanged** by the rename — only the id, the config key and the
 label moved. See [the Vibrancy section](#vibrancy-imageshadersvibrancy--new-2026-09-08)
 below for the new effect that took the freed-up "Vibrancy" name, and
-["Verified: the rename changed nothing"](#verified-the-rename-changed-nothing-2026-09-08)
+["Verified: the rename changed nothing"](#verified-the-rename-changed-nothing-and-the-new-effect-works-as-designed-2026-09-08)
 for the measurement that backs "byte-for-byte" up.
 
 **Config**: `ReshadeSaturationSettings` — `enabled`, `strength` (float),

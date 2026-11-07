@@ -2,7 +2,7 @@
 
 Volume for the game gamescope is hosting, plus per-app volume for everything else
 playing. **Volume only** since 2026-10-22: the compressor moved out to its own **Effects**
-area (`audio.effects`, [below](#effects-area-audio-effects-2026-10-22)); both live in the
+area (`audio.effects`, [below](#effects-area-audioeffects-2026-10-22)); both live in the
 **AUDIO** rail group (Mixer, then Effects). UI: `src/Overlay/PanelAudio.{h,cpp}` (registers
 as the `audio.mixer` area, rail label "Mixer"). Logic: `src/Audio/Capture.{h,cpp}` (game audio capture, see
 [audio-capture.md](audio-capture.md)) and `src/Audio/Volume.{h,cpp}` (the wpctl-based

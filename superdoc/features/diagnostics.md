@@ -32,7 +32,7 @@ Why it matters (when it works): under nested Wayland on Hyprland the host's own 
 job, so frames Frame generation makes are lost (shown about 160 uncapped). With
 `render:direct_scanout = 2` and the output images of [backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)
 the host puts gamescope's buffer on a plane and shown reaches 261-272. See
-[frame-generation.md](frame-generation.md#why-the-host-loses-frames).
+[frame-generation.md](frame-generation-host-scanout.md#why-the-host-loses-frames).
 
 States (`ScanoutState`):
 

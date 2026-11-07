@@ -235,16 +235,16 @@ order.
 
 Each row may own at most **ten** `Param`s before `Registry.cpp` aborts registration —
 raised from six 2026-09-06 (request #17, see the
-[Adaptive Brightness budget decision](#the-budget-decision-seven-params-not-six-2026-0607)
+[Adaptive Brightness budget decision](shader-effects-adaptive-brightness.md#the-budget-decision-seven-params-not-six-2026-09-0607)
 for the evidence and the why), from seven 2026-09-07 (Local adaptation, below), and from
 eight 2026-09-14 (Adaptive Brightness V2's own darkening — Max darken, Darken — see
-[the row-budget note](#the-row-budget-eight-to-ten-not-a-fold-2026-09-14) in that effect's
+[the row-budget note](shader-effects-darkening.md) in that effect's
 own section). See `PanelShaders.cpp`'s "THE SIX BUDGET" comment and `Registry.cpp`'s
 `kParamBudget`. Counts: Saturation 2, Vibrancy 1 (new 2026-09-08), Color Boost 1 (new 2026-10-29), Pre-Sharpen 1, Bloom 3
 (new 2026-09-08), Adaptive Brightness 8 (zero headroom of the OLD 8-ceiling; two spare
 now), Adaptive Gamma 7 (5 on 2026-09-08, plus its own two adaptation speeds 2026-09-09),
 Adaptive Brightness V2 **10** (zero headroom, raised the same day it hit the old ceiling
-— see its own section above), Shadow Control
+— see [its own page](shader-effects-adaptive-brightness-v2.md)), Shadow Control
 1. **The budget was not raised again** for Adaptive Gamma, for Bloom, or for Adaptive
 Gamma's speeds, and did not need to be — see each effect's own section for why five and three params are their honest
 counts rather than a squeeze.
@@ -277,7 +277,7 @@ keeps proving the Inspector's Configure body scrolls past whatever the budget is
 with no test edit needed — a taller row costs a scrollbar, not a layout break, at every
 scale already pinned by that test. Raising was still weighed against folding an existing
 V2 param (the way Adaptive Brightness's own history has always preferred); see
-[the row-budget note](#the-row-budget-eight-to-ten-not-a-fold-2026-09-14) for why no fold
+[the row-budget note](shader-effects-darkening.md) for why no fold
 was honest this time either.
 
 ## Diagnostics

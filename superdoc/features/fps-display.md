@@ -16,7 +16,7 @@ game while the panel is closed.
 runs ImGui every paint but hashes the draw data and skips the general-queue draw when it matches
 what the texture holds. `Why:` the composite waits for that draw, and the general queue is the one
 the game renders on, so a draw per paint put every paint behind the game's frame. See
-[frame-generation](frame-generation.md#paints-behind-the-games-gpu-burst-2026-11-04).
+[frame-generation](frame-generation-pacing.md#paints-behind-the-games-gpu-burst-2026-11-04).
 
 ## History: two phases, both 2026-09-03
 
@@ -29,7 +29,7 @@ unchanged since Phase 1.
 
 **Phase 2** (this page) added everything else, following the user's own
 spec verbatim: hide-above-X, update modes (three then, two since 2026-09-05),
-a plain backdrop (removed again 2026-09-09 — see [Backdrop: removed](#backdrop-removed)),
+a plain backdrop (removed again 2026-09-09 — see [Backdrop: removed](fps-display-readout.md#backdrop-removed-2026-09-09)),
 a two-way text-colour choice with lag-spike reactions, and a black outline
 sized in pixels (a drop shadow until 2026-09-03, when the outline
 replaced it).

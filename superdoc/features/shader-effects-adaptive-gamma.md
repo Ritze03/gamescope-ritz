@@ -232,7 +232,7 @@ grain rather than by symmetry with Adaptive Brightness:
   ([`ag-speed-asymmetry`](#measured-the-speed-control-2026-09-09)). "Quick to react when a
   light comes on, slow to open up as it goes dark" is a real setting; one number cannot
   express it, and it is precisely the argument that kept Adaptive Brightness's own pair
-  intact when [the budget was tight](#the-budget-decision-seven-params-not-six-2026-0607).
+  intact when [the budget was tight](shader-effects-adaptive-brightness.md#the-budget-decision-seven-params-not-six-2026-09-0607).
 - **This row already pairs its directions.** `Max lift` and `Max darken` are one bound
   each way, deliberately, for exactly the reason a floor and a ceiling are not one number.
   A single speed would have been the only control on the row that collapsed a direction.

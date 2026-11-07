@@ -214,7 +214,7 @@ tinted into the backdrop, and only when one was actually drawn. With the
 backdrop gone there is nothing left to tint, so a spike does nothing in
 this mode; "Lag spike detection" is a Fixed-mode feature now, which its
 help text says. That is the second thing removing the backdrop cost (see
-[Backdrop: removed](#backdrop-removed)), and the same trade the setting
+[Backdrop: removed](fps-display-readout.md#backdrop-removed-2026-09-09)), and the same trade the setting
 already made at opacity 0 since 2026-09-03.
 
 ### What Inverted mode does *not* invert

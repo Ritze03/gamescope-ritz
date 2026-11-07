@@ -2,7 +2,7 @@
 
 **2026-09-09, research only. Nothing under `src/` was changed.**
 Sibling of [`steam-friends-join.md`](steam-friends-join.md), whose
-[§6e](steam-friends-join.md#6e-correction-the-published-vtable-order-is-wrong-by-one-slot)
+[§6e](steam-friends-join.md#6e-correction--the-published-vtable-order-is-wrong-by-one-slot)
 this page **refines and partly corrects**. Read this before acting on §6e's
 "one slot earlier" rule.
 
@@ -275,7 +275,7 @@ been wrong.
 - `steamui.so`'s URL-command table has `+connect_lobby %llu` as the literal
   **immediately after** `joinlobby` — the argument Steam appends when it acts on
   a join (already recorded in
-  [§5](steam-friends-join.md#5-the-approach-that-actually-wins-a-native-join-list)).
+  [§5](steam-friends-join.md#5-the-approach-that-actually-wins--a-native-join-list)).
 - CS2's own `libclient.so` contains `connect_lobby`, `steam_display`,
   `steam_player_group`, `steam_player_group_size`, `game:state`,
   `CMsgGCHInviteUserToLobby`, `k_EGCMsgInviteUserToLobby` and
