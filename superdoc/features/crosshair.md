@@ -810,3 +810,7 @@ over encoded 51 measures `(35, 99, 35)`, not the `(35, 190, 35)` an ideal
 half-blend would give — so whoever makes that decision changes that
 check's formula in the same commit, with the new measurement, and drops
 the `× opacity` from `ResampleToOutput()`'s RGB in the same breath.
+
+## History
+
+- **Crosshair** (terminology entry, moved here 2026-11-07): **Crosshair** — the compositor-drawn crosshair (`src/Overlay/Crosshair.{h,cpp}`, settings area `system.crosshair`, added 2026-09-05): four arms, an optional centre dot, an optional outline, an optional auto-hide while right-click is held, an optional per-axis stretch ("Apply Scaling", measured against the game's resolution or, via "Scale from", a fixed reference resolution you pick, 2026-10-22), and an optional hide while the game's own cursor is visible (2026-09-28). Drawn into the **HUD**'s layer, centred on the game's on-screen rect, so it composites *after* an external frame-generation layer has interpolated the game — the in-game crosshair smears under frame generation, this one cannot. Distinct from the game's own crosshair and from the **Cursor** (the pointer).

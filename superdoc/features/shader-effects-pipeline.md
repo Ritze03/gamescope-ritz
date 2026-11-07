@@ -321,3 +321,6 @@ a few frames per second; this is what made the pulse measurable rather than argu
 about. `scripts/effects-regression.sh` drives it for its per-frame checks
 (`effects_regression_sample.py ablog`).
 
+## History
+
+- **Preview split** (terminology entry, moved here 2026-11-07): **Preview split** — the **Shaders** area's `image.shaders.preview_split` switch (added 2026-09-14, top row, above the Effects band), the user's own testing aid: *"It should only apply the shader to the right half of the screen ... so you can judge what an effect really does."* Display-only: every effect still processes the WHOLE frame (an adaptive effect's statistics are never disturbed), and `cs_effects_layer0.comp`'s final store overwrites only the left half with the raw input texel. Deliberately excluded from `NativeEffectsState_t::AnyEnabled()`, so with every other effect off it shows raw|raw at zero cost rather than forcing the pre-pass on by itself. Does not apply to a user's own ReShade `.fx` file.

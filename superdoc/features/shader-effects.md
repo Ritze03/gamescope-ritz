@@ -82,3 +82,7 @@ This page is the hub; the detail lives in these sub-pages (sections moved verbat
   before that block was isolated onto its own instance.
 - `superdoc/planning/requests-2026-09-08.md` item 6 — the pulse: measured, found, fixed;
   and the Local adaptation item — the split-scene, halo and gain-sweep evidence.
+
+## History
+
+- **Brightness Map** (terminology entry, moved here 2026-11-07): It divided the picture by a low-pass of the frame's own luminance against a mid-grey target, so a dark object on a bright field was lifted independently of the object's size — the case Adaptive Gamma's Local adaptation is too coarse to resolve. **Adaptive Brightness V2**'s guided-filter base/detail operator (added the same day, see that entry above) supersedes the idea, edge-aware where this was a plain Gaussian.

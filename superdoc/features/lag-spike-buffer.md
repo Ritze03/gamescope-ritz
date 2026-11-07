@@ -187,3 +187,7 @@ buffer, as in the Status line).
 
 [frame-generation](frame-generation.md) · [motion-blur](motion-blur.md) ·
 [build-and-tooling](build-and-tooling.md)
+
+## History
+
+- **Lag spike buffer** (terminology entry, moved here 2026-11-07): **Lag spike buffer** — this fork's lag-spike bridge (2026-10-04; settings area `image.lagbuffer`, **MOTION** rail group below Motion blur; `src/Overlay/PanelLagBuffer.cpp`, `fghost::LagBufferConfig`, config section `lag_buffer`; the library's frame-gen-ritz PR #4): it detects the game's frame-time spikes and runs the picture slightly **behind** real time (a delay sized from the newest big spike inside the **Look-back** window, capped by **Max buffer**, that grows at once when a spike within Max is bigger than the current delay and otherwise ramps at 3 % and shrinks slowly after a 2 s dwell), so a repeat of a recent spike is bridged with generated frames instead of freezing. **Independent of Frame generation** — the user rejected a magic "1x fill gaps only" multiplier value: with Frame generation off it shows real frames and generates only inside gaps, with it on it fills gaps as part of normal pacing, and it combines with Motion blur. It adds its buffer as input delay (meant for controller and slower games) and does not delay audio. Not a frame limiter and not a network "lag compensation".

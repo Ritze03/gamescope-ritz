@@ -149,3 +149,7 @@ does not need it.
 headless instance can run the whole path (spawn, timeout, toast, row) against a fake `hyprctl`
 put early on `PATH`. It exists because the real condition needs a host compositor; it changes
 nothing else.
+
+## History
+
+- **Diagnostics** (terminology entry, moved here 2026-11-07): **Diagnostics** — the Shell's `system.diagnostics` area, last in the **OTHER** rail group (2026-11-05; `src/Overlay/PanelDiagnostics.cpp`, `Diagnostics.{h,cpp}`, pure half `DiagnosticsLogic.h`): checks of the setup *around* gamescope that cost the user frames without any error, each with a plain state and what to change, plus a **Recheck all** button. One check today: whether Hyprland has `render:direct_scanout` on, read with `hyprctl` off the paint thread and only when gamescope runs nested through the Wayland backend (anywhere else it says "Not applicable" and never warns). Its warnings (a once-per-session toast, and a yellow dot on the OTHER heading and the Diagnostics row of the rail, both added 2026-11-05) are **switched off since 2026-11-06** because direct scanout on can crash the GPU (`WarnsAbout()` returns false; the machinery is kept); the docs link is an Inspector-only button, not a sheet row. The user's own wording: *"Under the 'OTHER' category, add the tab 'Diagnostics'."* Distinct from the **Log** (what gamescope printed) and from the `Diagnostics` *group* inside the Log area (its buffer facts).

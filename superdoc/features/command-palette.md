@@ -193,3 +193,7 @@ decides open-vs-close from `PaletteActive()` before it sends anything. `Launcher
 - [overlay-shell.md](overlay-shell.md), [keybinds.md](keybinds.md)
 - Design record: `superdoc/planning/redesign/AUTONOMOUS-DECISIONS.md` (D16, D22, D25, D31),
   `superdoc/planning/redesign/round-2/e2-inspector-plus/IMPLEMENTATION.md` (issue #88)
+
+## History
+
+- **Launcher** (terminology entry, moved here 2026-11-07): **Launcher** — the command palette drawn **alone over the game**, with no shell behind it (`Left Ctrl + Right Shift` while the overlay is closed — rebound from `Left Ctrl + Right Ctrl` 2026-09-01, see CHANGELOG.md). The user's *"Launcher Style UI"*. Distinct from the palette drawn *over an open shell*, which is the same widget with a scrim and a different Esc. See IMPLEMENTATION.md's Issue #88 entry.

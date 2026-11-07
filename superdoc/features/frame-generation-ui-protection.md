@@ -292,3 +292,7 @@ The Registry got one new generic hook for this: `Entry::ValueText( fn )`, a valu
 row whose number alone says too little (used by the box-size row for `2.5% · 24 px`); it replaces
 `FormatDeclValue()`'s "value + unit" in every host that draws the value (sheet row, Inspector row),
 so they cannot disagree.
+
+## History
+
+- **Crosshair V2** (terminology entry, moved here 2026-11-07): **Crosshair V2** / **Crosshair box** — Frame generation's UI protection has a **box**: the centred square it watches and pastes back exactly (`framegen.ui_box_height`, the *Crosshair box size* slider, 0.5-10% of the game's *height*, default 2.5%, shown as `2.5% · 24 px`; the Inspector previews the game pixels under it, `src/Overlay/UiBoxPreview.cpp`). **Crosshair** is the original (V1) detector, which inpaints the crosshair out of the estimate; **Crosshair V2** (2026-10-05, the library's `UiProtection::CrosshairV2`) only protects pixels that stay still and stand out, never pastes over moving content and has no fill-in step, so the specks and moving patterns V1 leaves are gone. See `superdoc/features/frame-generation.md`'s "Crosshair V2 and the box size".

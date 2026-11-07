@@ -97,3 +97,7 @@ motion reads better. **Same latency as V1** (a synth reads only the current pair
   other nine read the luma and are one shader for every format. Without a format's four, the
   library refuses V2 there with a reason and V1 still works (so a stale incremental build dir
   shows up as the Status line's ` · V1: ...`; `FrameGenLib.cpp` is the file to touch).
+
+## History
+
+- **Motion version 2** (terminology entry, moved here 2026-11-07): **Motion version 2** (V2) — the FrameGen library's second motion algorithm (2026-10-22, library branch `framegen-v2`; row **Motion version** V1 / V2 (`framegen.motion_version`); the **Quality** row, `framegen.quality`, also picks V2's Quality / Performance mode — there is no separate V2 mode setting, 2026-10-22. Motion blur has its own pair and a "Use Frame generation's settings" switch (default on, `motion_blur.same_as_framegen`) that follows Frame generation's; both features share ONE interpolator, so with the switch off the blur's own pair applies to the whole picture while the blur is on): a "morphing" interpolator with no per-pixel hold. Works in every game format this build runs (8-bit, 10-bit, HDR, fp16; library commit a5a5991) on a GPU with the needed subgroup operations; where the library refuses it (e.g. no subgroups) V1 runs and the Status line gives the library's reason. Unrelated to **Crosshair V2** below and to **Adaptive Brightness V2**.
