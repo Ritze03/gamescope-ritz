@@ -1,5 +1,6 @@
 #include "Controls.h"
 #include "Colors.h"
+#include "Layout.h"
 
 #include "../Fonts.h"
 #include "../Palette.h"
@@ -2264,6 +2265,262 @@ namespace gamescope::ui
 		}
 	}
 
+	namespace
+	{
+		// The wheel for a child window this file created. Applied by hand
+		// for the reason Shell.cpp's ApplyChildWheelScroll() records (ImGui's
+		// own pass has not moved a child through this overlay's input path),
+		// but never on top of a native scroll: the stored value is where the
+		// scroll stood when we last looked, so a frame that already moved
+		// without us is left alone and the wheel is not applied twice.
+		void WheelScrollChild( ImGuiWindow *pWin, float flStepPx )
+		{
+			if ( !pWin )
+				return;
+			ImGuiStorage &st = pWin->StateStorage;
+			const ImGuiID kKey = pWin->GetID( "##wheel_last" );
+			const float flLast = st.GetFloat( kKey, pWin->Scroll.y );
+			const bool bMovedNatively = pWin->Scroll.y != flLast;
+			float flNow = pWin->Scroll.y;
+			const float flWheel = ImGui::GetIO().MouseWheel;
+			if ( flWheel != 0.0f && !bMovedNatively )
+			{
+				flNow = std::clamp( pWin->Scroll.y - flWheel * flStepPx, 0.0f, pWin->ScrollMax.y );
+				ImGui::SetScrollY( pWin, flNow );
+			}
+			st.SetFloat( kKey, flNow );
+		}
+	}
+
+	namespace controls
+	{
+		// =================================================================
+		//  TextMultiline -- Export / Import dialogs (2026-11)
+		// =================================================================
+		char *TextBufferResize( std::string &s, int nLen )
+		{
+			s.resize( (size_t)std::max( nLen, 0 ) );
+			return s.data();
+		}
+
+		namespace
+		{
+			int TextMultilineResizeCb( ImGuiInputTextCallbackData *pData )
+			{
+				if ( pData->EventFlag == ImGuiInputTextFlags_CallbackResize )
+					pData->Buf = TextBufferResize( *static_cast<std::string *>( pData->UserData ), pData->BufTextLen );
+				return 0;
+			}
+		}
+
+		bool TextMultiline( const ImRect &rc, const char *pszId, std::string *psValue,
+		                    bool bReadOnly, const char *pszPlaceholder, bool bError )
+		{
+			if ( !psValue || rc.GetWidth() <= 0.0f || rc.GetHeight() <= 0.0f )
+				return false;
+
+			ImGui::PushID( pszId );
+			Dl()->AddRectFilled( rc.Min, rc.Max, Col( Role::SurfaceRaised ) );
+			Boundary( rc, bError ? Col( Role::Warn ) : Col( Role::LineControl ) );
+
+			// Mono Meta, the Log's body face. The font is pushed at the size
+			// DrawText() uses, so the text here and the rest of the dialog
+			// are the same measure.
+			ImGui::PushFont( fonts::Get( fonts::Style::Meta ), fonts::RasterSize( TypeSizePx( TypeRole::Meta ) ) );
+
+			const float flFrame = Hairline();
+			const float flPad   = Px( tok::kSelfPadX );
+			ImGui::SetCursorScreenPos( ImVec2( rc.Min.x + flFrame, rc.Min.y + flFrame ) );
+			ImGui::PushStyleColor( ImGuiCol_FrameBg, IM_COL32_BLACK_TRANS );
+			ImGui::PushStyleColor( ImGuiCol_Text, bReadOnly ? Col( Role::TextBody ) : Col( Role::TextPrimary ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImVec2( flPad, flPad ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_FrameBorderSize, 0.0f );
+
+			const ImGuiInputTextFlags nFlags = ImGuiInputTextFlags_CallbackResize |
+				( bReadOnly ? ImGuiInputTextFlags_ReadOnly : 0 );
+			const bool bEdited = ImGui::InputTextMultiline( "##ml", psValue->data(), psValue->capacity() + 1,
+				ImVec2( rc.GetWidth() - flFrame * 2.0f, rc.GetHeight() - flFrame * 2.0f ),
+				nFlags, TextMultilineResizeCb, psValue );
+
+			ImGui::PopStyleVar( 2 );
+			ImGui::PopStyleColor( 2 );
+
+			// The text area is a child window of the current one; ask ImGui
+			// for the one under the pointer and give it the wheel (see
+			// WheelScrollChild()).
+			ImGuiContext &g = *ImGui::GetCurrentContext();
+			if ( g.HoveredWindow && g.HoveredWindow->ParentWindow == ImGui::GetCurrentWindow() &&
+			     ( g.HoveredWindow->Flags & ImGuiWindowFlags_ChildWindow ) && rc.Contains( ImGui::GetIO().MousePos ) )
+			{
+				WheelScrollChild( g.HoveredWindow, Px( tok::kControlH ) * 3.0f );
+			}
+
+			ImGui::PopFont();
+
+			if ( psValue->empty() && pszPlaceholder && *pszPlaceholder && !ImGui::IsItemActive() )
+				DrawText( ImRect( rc.Min.x + flFrame + flPad, rc.Min.y + flFrame + flPad,
+				                  rc.Max.x - flFrame - flPad, rc.Min.y + flFrame + flPad + Px( tok::kControlH ) ),
+				          TypeRole::Meta, Col( Role::TextMeta ), pszPlaceholder );
+
+			ImGui::PopID();
+			return bEdited;
+		}
+
+		// =================================================================
+		//  Checkbox -- three states, dialogs only (see Controls.h)
+		// =================================================================
+		CheckState CheckNext( CheckState e )
+		{
+			return e == CheckState::On ? CheckState::Off : CheckState::On;   // Off -> On, Mixed -> On
+		}
+
+		CheckState CheckAggregate( size_t nOn, size_t nTotal )
+		{
+			if ( nTotal == 0 || nOn == 0 )
+				return CheckState::Off;
+			return nOn >= nTotal ? CheckState::On : CheckState::Mixed;
+		}
+
+		bool CheckboxActivates( bool bPressed, bool bKeyFocus, bool bSpacePressed, bool bDisabled )
+		{
+			return !bDisabled && ( bPressed || ( bKeyFocus && bSpacePressed ) );
+		}
+
+		namespace
+		{
+			constexpr float kCheckBoxSize = 16.0f;   // the mock-up's .cb
+
+			// One painter for both entry points: the box inside the hit rect,
+			// the label beside it. The rect is the one Begin() registered.
+			bool CheckboxCore( const ImRect &rcHit, const char *pszId, CheckState *peState,
+			                   const char *pszLabel, bool bDisabled, bool bKeyFocus, bool bBoxAtRight )
+			{
+				if ( !peState )
+					return false;
+				const Atom a = Begin( rcHit, pszId );
+				if ( !a )
+					return false;
+
+				bool bChanged = false;
+				if ( CheckboxActivates( a.bPressed, bKeyFocus,
+				                        bKeyFocus && ImGui::IsKeyPressed( ImGuiKey_Space, false ), bDisabled ) )
+				{
+					*peState = CheckNext( *peState );
+					bChanged = true;
+					ImGui::MarkItemEdited( a.id );
+				}
+
+				const bool bOn    = *peState != CheckState::Off;
+				const float flBox = Px( kCheckBoxSize );
+				const float flX   = bBoxAtRight ? a.rc.Max.x - flBox : a.rc.Min.x + Px( tok::kXS );
+				const ImRect rcBox( flX, a.rc.GetCenter().y - flBox * 0.5f,
+				                    flX + flBox, a.rc.GetCenter().y + flBox * 0.5f );
+
+				{
+					ScopedDim dim( bDisabled );
+					if ( a.bHovered && !bDisabled )
+						Dl()->AddRectFilled( a.rc.Min, a.rc.Max, palette::White( 0.04f ) );
+
+					// Switch's own palette: on = accent track + border, off =
+					// faint fill + LineControl.
+					Dl()->AddRectFilled( rcBox.Min, rcBox.Max, bOn ? Accent( 0.30f ) : palette::White( 0.07f ) );
+					Boundary( rcBox, bOn ? Accent( 0.65f ) : Col( Role::LineControl ) );
+
+					const ImU32 colMark = Col( Role::AccentKnob );
+					const float flStroke = std::max( Hairline(), Px( 1.6f ) );
+					if ( *peState == CheckState::On )
+					{
+						// A tick: two strokes, laid out on the box so it scales.
+						const ImVec2 p0( rcBox.Min.x + flBox * 0.24f, rcBox.Min.y + flBox * 0.54f );
+						const ImVec2 p1( rcBox.Min.x + flBox * 0.43f, rcBox.Min.y + flBox * 0.72f );
+						const ImVec2 p2( rcBox.Min.x + flBox * 0.77f, rcBox.Min.y + flBox * 0.30f );
+						Dl()->AddLine( p0, p1, colMark, flStroke );
+						Dl()->AddLine( p1, p2, colMark, flStroke );
+					}
+					else if ( *peState == CheckState::Mixed )
+					{
+						const float flY = rcBox.GetCenter().y;
+						Dl()->AddLine( ImVec2( rcBox.Min.x + flBox * 0.25f, flY ),
+						               ImVec2( rcBox.Max.x - flBox * 0.25f, flY ), colMark, flStroke );
+					}
+
+					if ( bKeyFocus && !bDisabled )
+						Boundary( a.rc, Accent( 0.80f ) );
+
+					if ( pszLabel && *pszLabel )
+					{
+						const float flLabelX = rcBox.Max.x + Px( tok::kM );
+						DrawText( ImRect( flLabelX, a.rc.Min.y, a.rc.Max.x - Px( tok::kXS ), a.rc.Max.y ),
+						          TypeRole::Label,
+						          *peState == CheckState::Off ? Col( Role::TextLabel ) : Col( Role::TextPrimary ),
+						          pszLabel );
+					}
+				}
+				return bChanged;
+			}
+		}
+
+		bool CheckboxAt( const ImRect &rc, const char *pszId, CheckState *peState,
+		                 const char *pszLabel, bool bDisabled, bool bKeyFocus )
+		{
+			return CheckboxCore( rc, pszId, peState, pszLabel, bDisabled, bKeyFocus, false );
+		}
+
+		bool Checkbox( const RowCtx &row, const char *pszId, CheckState *peState, bool bDisabled )
+		{
+			// A control-height square hit box, right-anchored in the lane like
+			// a Switch; the 16-unit box is drawn flush right inside it.
+			return CheckboxCore( row.Place( tok::kControlH ), pszId, peState, nullptr, bDisabled, false, true );
+		}
+
+		// =================================================================
+		//  Clipboard hooks
+		// =================================================================
+		namespace
+		{
+			ClipboardReadFn  s_fnClipRead  = nullptr;
+			ClipboardWriteFn s_fnClipWrite = nullptr;
+
+			const char *ImGuiGetClipboard( ImGuiContext * )
+			{
+				// ImGui keeps the pointer only until its next clipboard call.
+				static std::string s_sText;
+				s_sText = ClipboardRead();
+				return s_sText.c_str();
+			}
+
+			void ImGuiSetClipboard( ImGuiContext *, const char *pszText )
+			{
+				ClipboardWrite( pszText ? pszText : "" );
+			}
+		}
+
+		void SetClipboardHooks( ClipboardReadFn fnRead, ClipboardWriteFn fnWrite )
+		{
+			s_fnClipRead  = fnRead;
+			s_fnClipWrite = fnWrite;
+		}
+
+		std::string ClipboardRead()
+		{
+			return s_fnClipRead ? s_fnClipRead() : std::string();
+		}
+
+		void ClipboardWrite( std::string sText )
+		{
+			if ( s_fnClipWrite )
+				s_fnClipWrite( std::move( sText ) );
+		}
+
+		void InstallImGuiClipboard()
+		{
+			ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+			pio.Platform_GetClipboardTextFn = ImGuiGetClipboard;
+			pio.Platform_SetClipboardTextFn = ImGuiSetClipboard;
+		}
+
+	}
+
 	// =========================================================================
 	//  Modal -- see Controls.h
 	// =========================================================================
@@ -2302,6 +2559,142 @@ namespace gamescope::ui
 		const ImRect rc( ctx.rcBody.Min.x, ctx.flCursorY, ctx.rcBody.Max.x, ctx.flCursorY + flHeightPx );
 		ctx.flCursorY += flHeightPx;
 		return rc;
+	}
+
+	float ModalWidthPx( float flSlabWidthPx, float flWantedBase )
+	{
+		const float flRoom = flSlabWidthPx - Px( tok::kXL ) * 2.0f;
+		if ( flWantedBase <= 0.0f )
+			return std::clamp( flRoom, Px( 240.0f ), Px( 420.0f ) );
+		// Wide: what was asked for, but never past the slab's room and never
+		// below the default floor (a slab narrower than 240 still gets 240).
+		return std::clamp( Px( flWantedBase ), Px( 240.0f ), std::max( Px( 240.0f ), flRoom ) );
+	}
+
+	bool ModalBackdropCloses( bool bOptIn, bool bPressedThisFrame, ImVec2 vMouse, const ImRect &rcPanel )
+	{
+		return bOptIn && bPressedThisFrame && !rcPanel.Contains( vMouse );
+	}
+
+	namespace
+	{
+		constexpr float kPaneTitleH = 22.0f;   // the mock-up's pane title strip
+	}
+
+	ModalPaneRowLayout LayOutModalPaneRow( const ImRect &rcBody, float flTopPx, int nPanes,
+	                                       float flFirstColBase, float flBoxHeightPx )
+	{
+		ModalPaneRowLayout out;
+		out.nPanes = std::clamp( nPanes, 1, 2 );
+
+		const float flGap    = Px( tok::kL );
+		const float flW      = std::max( 0.0f, rcBody.GetWidth() );
+		const float flTitleH = Px( kPaneTitleH );
+		const float flBoxH   = std::max( 0.0f, flBoxHeightPx );
+
+		float flCol0 = flW;
+		if ( out.nPanes == 2 )
+		{
+			const float flRoom = std::max( 0.0f, flW - flGap );
+			flCol0 = flFirstColBase > 0.0f ? std::min( Px( flFirstColBase ), flRoom * 0.55f ) : flRoom * 0.5f;
+		}
+
+		float x = rcBody.Min.x;
+		for ( int i = 0; i < out.nPanes; ++i )
+		{
+			const float flColW = ( i == 0 ) ? flCol0 : std::max( 0.0f, rcBody.Max.x - x );
+			out.rcTitle[ i ] = ImRect( x, flTopPx, x + flColW, flTopPx + flTitleH );
+			out.rcBox[ i ]   = ImRect( x, flTopPx + flTitleH, x + flColW, flTopPx + flTitleH + flBoxH );
+			x += flColW + flGap;
+		}
+		out.flBottom = flTopPx + flTitleH + flBoxH + Px( tok::kM );
+		return out;
+	}
+
+	ModalPaneRowLayout ModalPaneRow( ModalBodyCtx &ctx, const char *const *ppszTitles, int nPanes,
+	                                 float flFirstColBase, float flBoxHeightBase )
+	{
+		float flBoxH = Px( flBoxHeightBase );
+		if ( ctx.flMaxBodyPx > 0.0f )
+		{
+			const float flUsed  = ctx.flCursorY - ctx.rcBody.Min.y;
+			const float flAvail = ctx.flMaxBodyPx - flUsed - Px( kPaneTitleH ) - Px( tok::kM );
+			flBoxH = std::min( flBoxH, std::max( flAvail, Px( tok::kRowH ) * 3.0f ) );
+		}
+
+		const ModalPaneRowLayout lay =
+			LayOutModalPaneRow( ctx.rcBody, ctx.flCursorY, nPanes, flFirstColBase, flBoxH );
+
+		for ( int i = 0; i < lay.nPanes; ++i )
+		{
+			char szTitle[ 96 ] = "";
+			if ( ppszTitles && ppszTitles[ i ] )
+			{
+				snprintf( szTitle, sizeof( szTitle ), "%s", ppszTitles[ i ] );
+				for ( char *p = szTitle; *p; ++p )
+					if ( *p >= 'a' && *p <= 'z' )
+						*p = (char)( *p - 'a' + 'A' );
+			}
+			DrawText( lay.rcTitle[ i ], TypeRole::Section, Col( Role::TextMeta ), szTitle );
+			Dl()->AddRectFilled( lay.rcBox[ i ].Min, lay.rcBox[ i ].Max, palette::White( 0.03f ) );
+			Boundary( lay.rcBox[ i ], Col( Role::LineControl ) );
+		}
+
+		ctx.flCursorY = lay.flBottom;
+		return lay;
+	}
+
+	ModalPane ModalPaneBegin( const ImRect &rcBox, const char *pszId )
+	{
+		ModalPane pane;
+		ImGui::SetCursorScreenPos( rcBox.Min );
+		// Transparent: the box frame was painted by ModalPaneRow(), and a
+		// child that fills its own background would hide it (and, per the
+		// styling guide, re-paint over a parent's divider).
+		ImGui::PushStyleColor( ImGuiCol_ChildBg, IM_COL32_BLACK_TRANS );
+		ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 0.0f, 0.0f ) );
+		pane.bOpen = ImGui::BeginChild( pszId, ImVec2( rcBox.GetWidth(), rcBox.GetHeight() ),
+		                                ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings );
+		ImGui::PopStyleVar();
+		ImGui::PopStyleColor();
+
+		const float flFrame = Hairline();
+		pane.rcInner = ImRect( rcBox.Min.x + flFrame, rcBox.Min.y + flFrame,
+		                       rcBox.Max.x - flFrame, rcBox.Max.y - flFrame );
+		if ( pane.bOpen )
+		{
+			if ( ImGui::IsWindowHovered() )
+				WheelScrollChild( ImGui::GetCurrentWindow(), Px( tok::kControlH ) * 3.0f );
+			// ScrollView: start at the child's cursor, report the height used.
+			const ScrollView sv = ScrollView::Begin(
+				Rect{ pane.rcInner.Min.x, pane.rcInner.Min.y, pane.rcInner.Max.x, pane.rcInner.Max.y },
+				ImGui::GetCursorScreenPos().y );
+			pane.flOriginY = sv.flOriginY;
+			pane.flCursorY = sv.flOriginY;
+		}
+		return pane;
+	}
+
+	ImRect ModalPaneNextRow( ModalPane &pane, float flHeightBase )
+	{
+		const float flH = Px( flHeightBase > 0.0f ? flHeightBase : tok::kControlH );
+		const ImRect rc( pane.rcInner.Min.x, pane.flCursorY, pane.rcInner.Max.x, pane.flCursorY + flH );
+		pane.flCursorY += flH;
+		return rc;
+	}
+
+	void ModalPaneEnd( ModalPane &pane )
+	{
+		if ( pane.bOpen )
+		{
+			const ScrollView sv = ScrollView::Begin(
+				Rect{ pane.rcInner.Min.x, pane.rcInner.Min.y, pane.rcInner.Max.x, pane.rcInner.Max.y },
+				pane.flOriginY );
+			// The extent: every row hands back its height through the cursor.
+			ImGui::Dummy( ImVec2( 0.0f, sv.ContentHeight( pane.flCursorY, 0.0f ) ) );
+		}
+		ImGui::EndChild();
+		pane = ModalPane{};
 	}
 
 	void OpenModal( ModalSpec spec )
@@ -2366,7 +2759,7 @@ namespace gamescope::ui
 
 		ImGui::PushID( "e2modal" );
 
-		const float flW      = std::clamp( rcSlab.GetWidth() - Px( tok::kXL ) * 2.0f, Px( 240.0f ), Px( 420.0f ) );
+		const float flW      = ModalWidthPx( rcSlab.GetWidth(), s_Modal.spec.flWidthBase );
 		const float flTitleH = Px( tok::kRowH );
 		const float flFootH  = Px( tok::kRowH );
 		const float flBodyH  = std::max( s_Modal.flLastBodyHeightPx, Px( tok::kRowH ) );
@@ -2403,6 +2796,7 @@ namespace gamescope::ui
 		ctx.rcBody    = ImRect( rc.Min.x + flPad, rcTitle.Max.y, rc.Max.x - flPad, rcFoot.Min.y );
 		ctx.lane      = Lane::ForColumn( ImMax( 0.0f, ctx.rcBody.GetWidth() ) / std::max( Scale(), 0.01f ) );
 		ctx.flCursorY = ctx.rcBody.Min.y;
+		ctx.flMaxBodyPx = std::max( 0.0f, rcSlab.GetHeight() - Px( tok::kXL ) * 2.0f - flTitleH - flFootH );
 		if ( s_Modal.spec.fnBody )
 			s_Modal.spec.fnBody( ctx );
 		s_Modal.flLastBodyHeightPx = std::max( ctx.flCursorY - ctx.rcBody.Min.y, Px( tok::kRowH ) );
@@ -2420,10 +2814,12 @@ namespace gamescope::ui
 		                       rcPrimary.Min.x - flBtnGap, flBtnY + flBtnH );
 
 		const bool bCancelClicked  = VerbAt( rcCancel, "cancel", "Cancel", controls::Intent::Neutral, true );
+		// fnPrimaryEnabled false: dimmed, inert, and Enter is ignored too.
+		const bool bPrimaryOk = !s_Modal.spec.fnPrimaryEnabled || s_Modal.spec.fnPrimaryEnabled();
 		const bool bPrimaryClicked = VerbAt( rcPrimary, "primary", pszPrimary,
 		                                    s_Modal.spec.bPrimaryDanger ? controls::Intent::Danger
 		                                                                : controls::Intent::Accent,
-		                                    true );
+		                                    bPrimaryOk );
 
 		// ---- keyboard: Esc cancels; Enter confirms when no field is being
 		// edited. Controls.h's ModalSpec::fnPrimary comment records why "the
@@ -2435,9 +2831,15 @@ namespace gamescope::ui
 		const bool bEsc   = ImGui::IsKeyPressed( ImGuiKey_Escape, false );
 		const bool bEnter = ( ImGui::IsKeyPressed( ImGuiKey_Enter, false ) ||
 		                     ImGui::IsKeyPressed( ImGuiKey_KeypadEnter, false ) ) &&
-		                   !ImGui::IsAnyItemActive();
+		                   !ImGui::IsAnyItemActive() && bPrimaryOk;
 
-		if ( bCancelClicked || bEsc )
+		// A press on the scrim, outside the panel, cancels a modal that
+		// opted in. Read from raw mouse state on the press frame, so a drag
+		// that starts inside (selecting text) and ends outside never closes.
+		const bool bBackdrop = ModalBackdropCloses( s_Modal.spec.bCloseOnBackdrop,
+			ImGui::IsMouseClicked( ImGuiMouseButton_Left, false ), ImGui::GetIO().MousePos, rc );
+
+		if ( bCancelClicked || bEsc || bBackdrop )
 		{
 			std::function<void()> fnCancel = std::move( s_Modal.spec.fnCancel );
 			CloseModal();

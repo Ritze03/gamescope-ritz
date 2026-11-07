@@ -196,6 +196,11 @@ void gamescope_set_selection(std::string contents, GamescopeSelection eSelection
 // transfer that produced the text ran on a worker thread, and none of those
 // three destinations may be touched from there.
 void gamescope_post_selection( std::string contents );
+
+// The current CLIPBOARD text, readable from any thread (the overlay's Ctrl+V
+// and Paste button). It is gamescope's own copy: the host session's clipboard
+// only lands here while System > Clipboard sync is on.
+std::string gamescope_clipboard_text();
 void gamescope_set_reshade_effect(std::string effect_path);
 void gamescope_clear_reshade_effect();
 
