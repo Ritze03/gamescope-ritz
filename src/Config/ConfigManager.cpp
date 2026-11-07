@@ -391,6 +391,7 @@ namespace gamescope::config
                 const std::string sQuality = JGetString( *pBlur, "quality", m.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     m.quality = sQuality;
+                m.pause_when_cursor_visible = JGetBool( *pBlur, "pause_when_cursor_visible", m.pause_when_cursor_visible );
             }
 
             // Lag spike buffer (2026-10-04). Additive: look-back and max are clamped,
@@ -863,6 +864,7 @@ namespace gamescope::config
             jMotionBlur[ "same_as_framegen" ] = mb.same_as_framegen;
             jMotionBlur[ "motion_version" ] = mb.motion_version;
             jMotionBlur[ "quality" ] = mb.quality;
+            jMotionBlur[ "pause_when_cursor_visible" ] = mb.pause_when_cursor_visible;
 
             const auto &lb = s.lag_buffer;
             nlohmann::json jLagBuffer = nlohmann::json::object();

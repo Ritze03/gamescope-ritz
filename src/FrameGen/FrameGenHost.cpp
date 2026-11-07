@@ -146,11 +146,13 @@ namespace fghost
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
 		// (1 = gaussian), 13 enabled, 14 own interpolator settings, 15-16 own motion version
-		// (1 = V2, 2 = Learned), 17 own quality (1 = performance). Kept apart from g_uConfig so a blur edit never
+		// (1 = V2, 2 = Learned), 17 own quality (1 = performance), 18 pause while cursor visible
+		// (read by steamcompmgr only; not in the library-config key). Kept apart from g_uConfig so a blur edit never
 		// reconfigures frame generation and vice versa; a reader that sees one
 		// updated and not the other just gets the previous other half for one frame.
 		constexpr uint32_t kBlurEnabledBit = 1u << 13;
 		constexpr uint32_t kBlurOwnBit = 1u << 14;
+		constexpr uint32_t kBlurPauseBit = 1u << 18;
 
 		uint32_t PackBlur( const BlurConfig &b )
 		{
@@ -163,7 +165,8 @@ namespace fghost
 				| ( b.enabled ? kBlurEnabledBit : 0u )
 				| ( b.useOwnInterp ? kBlurOwnBit : 0u )
 				| ( uint32_t( b.motion ) << 15 )
-				| ( uint32_t( b.quality ) << 17 );
+				| ( uint32_t( b.quality ) << 17 )
+				| ( b.pauseWhenCursorVisible ? kBlurPauseBit : 0u );
 		}
 
 		BlurConfig UnpackBlur( uint32_t u )
@@ -179,6 +182,7 @@ namespace fghost
 			if ( b.motion > Motion::Learned )
 				b.motion = Motion::V1;
 			b.quality = Quality( ( u >> 17 ) & 1u );
+			b.pauseWhenCursorVisible = ( u & kBlurPauseBit ) != 0;
 			return b;
 		}
 

@@ -577,6 +577,10 @@ namespace gamescope::config
         bool same_as_framegen = true;
         std::string motion_version = "v1";
         std::string quality = "quality";
+        // "Pause while cursor visible" (2026-11-07): while the game's mouse cursor is
+        // visible the blur stops and the game's own frames show. Independent of
+        // framegen.pause_when_cursor_visible. ADDITIVE: absent loads off.
+        bool pause_when_cursor_visible = false;
     };
 
     // Game audio capture (2026-10-07, Audio/Capture.{h,cpp}): the per-profile switch for

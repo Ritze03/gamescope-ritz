@@ -96,6 +96,7 @@ namespace gamescope
 			c.useOwnInterp = !m.same_as_framegen;
 			c.motion = (fghost::Motion)IndexOf( m.motion_version, kMotionKeys, 3, 0 );   // the index IS the enum value
 			c.quality = IndexOf( m.quality, kQualityKeys, 2, 0 ) == 1 ? fghost::Quality::Performance : fghost::Quality::Quality;
+			c.pauseWhenCursorVisible = m.pause_when_cursor_visible;
 			return c;
 		}
 
@@ -270,6 +271,17 @@ namespace gamescope
 			       "a little shorter." )
 			.Default( 1 )
 			.Keywords( "motion blur weighting weights even gaussian soft box shutter" )
+			.DisabledUnless( On, "motion blur is off" );
+
+		a.Switch( "motion_blur.pause_when_cursor_visible", "Pause while cursor visible",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.motion_blur.pause_when_cursor_visible; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.motion_blur.pause_when_cursor_visible = b; PersistAndPush(); } ) )
+			.Help( "Shows the game's frames without blur while its mouse cursor is visible, so "
+			       "menus and settings screens stay sharp. The blur resumes by itself when the "
+			       "cursor hides again." )
+			.Default( false )
+			.Keywords( "cursor pause menu mouse" )
 			.DisabledUnless( On, "motion blur is off" );
 
 		a.Group( "Interpolation" );

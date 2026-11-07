@@ -163,6 +163,9 @@ namespace fghost
 		bool useOwnInterp = false;
 		Motion motion = Motion::V1;
 		Quality quality = Quality::Quality;
+		// "Pause while cursor visible": the host (steamcompmgr) stops the blur while the
+		// game's cursor is visible. Its own switch, independent of Config's.
+		bool pauseWhenCursorVisible = false;
 	};
 
 	// Replace the whole blur config. Thread-safe, cheap, any time. Like
