@@ -120,8 +120,8 @@ steamcompmgr loop described below.
 - **Crosshair** — `src/Overlay/Crosshair.{h,cpp}` and `CrosshairMath.h`, drawn into the
   HUD's layer. See [crosshair](../features/crosshair.md).
 - **Cursor** — `src/Overlay/CursorArt.cpp` (the overlay pointer), `PanelCursor.cpp`,
-  `src/x11cursor.cpp`, `src/CursorPolicy.h`, `src/PointerMapping.h` and `MouseCursor`
-  (`src/steamcompmgr.hpp`). See [cursor-pipeline](../features/cursor-pipeline.md).
+  `src/x11cursor.cpp`, `src/CursorPolicy.h`, `src/PointerMapping.h`, and the `MouseCursor`
+  class (declared in `src/steamcompmgr.hpp`, defined in `src/steamcompmgr.cpp`). See [cursor-pipeline](../features/cursor-pipeline.md).
 - **Input extras** — Autoclicker (`src/Overlay/Autoclicker.{h,cpp}`,
   `Autoclicker_IsInjecting`) and Null binds (`gamescope::nullbinds::Engine`,
   `src/Overlay/NullBinds.{h,cpp}`), a pure engine hooked from the **top** of both
@@ -302,7 +302,7 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 - **A layer (HUD, notification, crosshair, cursor, override, ...) silently vanished** —
   `LayerStack_t::push()` (`src/rendervulkan.hpp`) returns `nullptr` once a frame's
   `FrameInfo_t` hits `k_nMaxLayers` (6); callers log a rate-limited warning naming the
-  dropped layer, and the `layer_budget_stats` ConCommand (`src/steamcompmgr.cpp`) prints
+  dropped layer, and the `layer_budget_stats` ConCommand (`cc_layer_budget_stats` in `src/rendervulkan.cpp`) prints
   the drop count and the highest layer count reached.
 - **Drive gamescope from outside** — [control-ipc](../features/control-ipc.md)
   (`gamescopectl`, convars, screenshots) and

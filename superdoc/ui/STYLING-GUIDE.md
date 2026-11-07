@@ -102,7 +102,7 @@ numeric or state readout), `Meta` (Mono 400, units, chips, and the Log/About bod
   `RailIcon`. `Why:` widening the range could not help (the faces have no such glyph) and the atlas
   is rebuilt per scale, so every baked range is paid again at each scale change.
 - Do NOT ship an icon font or an icon file. Area icons are stroked paths on a 24-unit grid in
-  `Icons.cpp` (`kIconGrid`, `kIconStroke` 1.7); fills only where a fill carries meaning. A missing
+  `Icons.cpp` (the constants `kIconGrid`, `kIconStroke` 1.7 live in `Icons.h`); fills only where a fill carries meaning. A missing
   icon falls back to the area's initial, never a blank.
 
 ## Size, spacing and the scale
