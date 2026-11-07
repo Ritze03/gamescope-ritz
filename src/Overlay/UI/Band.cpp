@@ -2,7 +2,7 @@
 
 namespace gamescope::ui
 {
-	BandSpec Band( CompositeKind eKind )
+	BandSpec Band( CompositeKind eKind, int nListStrips )
 	{
 		// API.md §7's kSpecs table, verbatim. x == 0 means "full-bleed to the
 		// lane". SPEC §4.4 lists five composites; Colour override is
@@ -22,19 +22,25 @@ namespace gamescope::ui
 			// row's control column -- so this is the one band that spends
 			// its label column, and clauses 2 and 4 are deliberately not
 			// honoured for it (line 1 is list rows, not a labelled row).
-			case CompositeKind::List:   return { tok::kListBandLines, ImVec2( 0.0f, 0.0f ), true };
+			// A second verb strip is one more line, and only a List has it.
+			case CompositeKind::List:   return { tok::kListBandLines + ( nListStrips > 1 ? 1 : 0 ),
+			                                     ImVec2( 0.0f, 0.0f ), true };
 		}
 		return { 2, ImVec2( 0.0f, 44.0f ) };
 	}
 
-	BandLayout LayOutBand( const Lane &laneBase, float flOriginPx, float flTopPx, CompositeKind eKind )
+	BandLayout LayOutBand( const Lane &laneBase, float flOriginPx, float flTopPx, CompositeKind eKind,
+	                       int nListStrips )
 	{
-		const BandSpec spec = Band( eKind );
+		const BandSpec spec = Band( eKind, nListStrips );
 
 		// Clause 1: the height is n x 44, n in {2,3}. Nothing else -- which is
 		// what keeps ImGuiListClipper's uniform step exact without a prefix
 		// sum (a band is n clipper items whose first item paints the band).
-		const int nLines = ImClamp( spec.nLines, tok::kBandMinLines, tok::kBandMaxLines );
+		// A List with a second strip is kBandMaxLines + 1: Tokens.h's max was
+		// sized for the one-strip list, so a List is clamped by its own spec.
+		const int nLines = ImClamp( spec.nLines, tok::kBandMinLines,
+		                            spec.bSpansRow ? tok::kListBandLines + 1 : tok::kBandMaxLines );
 
 		// Clause 2: line 1 is an ordinary row context, so a composite is
 		// indistinguishable from a row until your eye reaches the control
@@ -68,16 +74,24 @@ namespace gamescope::ui
 			const float flLeft  = rcLabel.Min.x;
 			const float flRowPx = Px( tok::kRowH );
 			const float flItemH = Px( tok::kControlH );
-			const float flListAreaH = flRowPx * (float)( nLines - 1 );
+			const int   nStrips = nLines - tok::kListBandLines > 0 ? 2 : 1;
+			const float flListAreaH = flRowPx * (float)( nLines - nStrips );
 			const int   nItems  = ImMax( 1, (int)( ( flListAreaH - Px( tok::kS ) * 2.0f ) / flItemH ) );
 			const float flListH = flItemH * (float)nItems;
 			const float flListY = rcBand.Min.y + ( flListAreaH - flListH ) * 0.5f;
 			const ImRect rcList( flLeft, flListY, flRight, flListY + flListH );
 
-			const float flStripTop = rcBand.Max.y - flRowPx;
-			const ImRect rcStrip( flLeft, flStripTop + ( flRowPx - flItemH ) * 0.5f,
-			                      flRight, flStripTop + ( flRowPx + flItemH ) * 0.5f );
-			return BandLayout{ rcBand, rcList, line1, rcStrip };
+			// The first strip is the line after the list's area; a second strip
+			// takes the last line. With one strip they coincide with the old
+			// "last line", so a list without a second strip is unchanged.
+			auto StripRect = [ & ]( int nLineFromTop )
+			{
+				const float flTop = rcBand.Min.y + flRowPx * (float)nLineFromTop;
+				return ImRect( flLeft, flTop + ( flRowPx - flItemH ) * 0.5f,
+				               flRight, flTop + ( flRowPx + flItemH ) * 0.5f );
+			};
+			return BandLayout{ rcBand, rcList, line1, StripRect( nLines - nStrips ),
+			                   nStrips > 1 ? StripRect( nLines - 1 ) : ImRect() };
 		}
 
 		const ImRect rcBody( flRight - ImMin( flBodyW, line1.CtlWidthPx() ), flCy - flBodyH * 0.5f,
@@ -86,6 +100,6 @@ namespace gamescope::ui
 		// Clause 4 needs no code: no allocator in this file ever produces a
 		// rect in the label column of lines 2..n, so there is nothing to put
 		// there. "It is air."
-		return BandLayout{ rcBand, rcBody, line1, ImRect() };
+		return BandLayout{ rcBand, rcBody, line1, ImRect(), ImRect() };
 	}
 }

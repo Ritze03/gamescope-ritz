@@ -363,6 +363,50 @@ group's rows, however many areas pile up elsewhere.
   edges so it differs from `system.crosshair`'s own glyph), a speaker (AUDIO), plus MOTION, MISC,
   SETTINGS, OTHER. A missing area icon falls back to the area's initial, never a blank rail.
 
+## Dialog parts: wide modal, panes, checkbox, multi-line text, clipboard, second strip
+
+Built for the Profiles Export and Import dialogs (2026-11; copy and paste JSON text, no files).
+All in `Controls.{h,cpp}` unless stated.
+
+- **Wide modal.** `ModalSpec::flWidthBase` (0 = the 240..420 default, unchanged; 760 for the
+  dialogs) through `ModalWidthPx()`, clamped to the slab minus 2 x kXL and never under 240.
+  `ModalPaneRow( ctx, titles, nPanes, flFirstColBase, flBoxHeightBase )` draws one row of 1 or 2
+  titled, framed boxes (call twice for Import's 2x2) and shortens the boxes to
+  `ModalBodyCtx::flMaxBodyPx` so the footer stays on screen; `LayOutModalPaneRow()` is the pure
+  arithmetic. A box's content scrolls: `ModalPaneBegin` / `ModalPaneNextRow` / `ModalPaneEnd` wrap
+  a child window in `ui::ScrollView`. `Why:` panes are data-simple like `ModalNextRow`, and the
+  wheel is applied by hand (as the sheet does) but never on top of a native scroll.
+- **Backdrop and primary.** `bCloseOnBackdrop` (default false): a press outside the panel runs
+  Cancel (`ModalBackdropCloses()`). `fnPrimaryEnabled` dims the primary and ignores click and
+  Enter; `fnValidate` stays the press-time gate with an inline message. `Why:` Import must be
+  visibly unavailable until the pasted JSON parses, which a press-time check cannot show. No
+  third footer button: the plan listed one for the dropped Files mode.
+- **Checkbox.** `CheckState { Off, On, Mixed }`, `CheckboxAt( rc, id, &state, label, bDisabled,
+  bKeyFocus )` for a tree row, `Checkbox( row, ... )` for an option in a row. Dialogs only (see the
+  styling guide). The overlay never enables ImGui keyboard navigation, so the dialog owns a
+  cursor and passes `bKeyFocus` (Space toggles); `ListBoxStep()` steps an index.
+- **Multi-line text.** `TextMultiline( rc, id, &std::string, bReadOnly, placeholder, bError )`:
+  ImGui `InputTextMultiline` with a resize callback (`TextBufferResize()`), Mono Meta, no 256-byte
+  limit; read-only selects and copies. Characters outside the baked atlas show as the fallback
+  glyph and stay in the string. `Why:` `controls::Text` is single-line and 256 bytes; an export
+  is tens of KB.
+- **Clipboard.** Read: `std::string gamescope_clipboard_text()` (`steamcompmgr.hpp`), guarded by
+  a mutex because the overlay thread reads what the steamcompmgr thread writes. `Shell.cpp`'s
+  `Draw()` installs `controls::SetClipboardHooks()` (read and `gamescope_post_selection` write) and
+  `InstallImGuiClipboard()` each frame, so Ctrl+V / Ctrl+C / Ctrl+X work in fields and a Paste
+  button calls `controls::ClipboardRead()`. `Why:` hooks, not a direct call, because the unit
+  tests link `Controls.cpp` without steamcompmgr. The host clipboard only reaches gamescope while
+  `system.clipboard_sync` (`gamescope::g_bClipboardSyncEnabled`, `Clipboard/ClipboardSync.h`) is on;
+  a dialog that offers Paste should say so when it is off. Ctrl+V reaches ImGui: the key arrives as
+  `ImGuiKey_V` with the Ctrl modifier (its control-character text is dropped), and
+  `RunKeyboard()` returns early while a modal is open, so no shell shortcut takes it.
+- **Second list strip.** `Entry::ListActionRow2()` puts a verb on a second strip
+  (`ListVerb::nRow` 1); `ListStripCount()` is 1 or 2. `Band( List, nStrips )` / `LayOutBand()`
+  grow the band by exactly one 44-unit line and return `BandLayout::rcStrip2`; the list and the
+  first strip keep their place, and a list without a second-strip verb is unchanged. `LinesFor()`
+  in `Shell.cpp` reads the same spec, so the scroll height follows. `Why:` Tokens.h's
+  `kBandMaxLines` was sized for one strip, so a List clamps by its own spec instead.
+
 ## Keyboard map (SPEC section 8.2)
 
 `RunKeyboard()` in `Shell.cpp`: arrows adjust the focused row or the highlighted palette result in

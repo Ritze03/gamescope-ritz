@@ -284,6 +284,9 @@ namespace gamescope::ui
 		// "double-click acts, single click only selects" can say so without
 		// changing what any other List composite's click already does.
 		bool                         bOnDoubleClick = false;
+		// Which strip the chip sits on: 0 = the strip under the list (every
+		// existing verb), 1 = the second strip (Entry::ListActionRow2()).
+		int                          nRow = 0;
 	};
 
 	// Profiles v2 (2026-09-06): a row's relation to the session profile's
@@ -644,6 +647,15 @@ namespace gamescope::ui
 		Entry &ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
 		                   std::function<std::string()> fnDisabledReason = {},
 		                   bool bOnDoubleClick = false );
+		// The same verb on a SECOND strip under the first (Profiles: Export and
+		// Import sit one line below Create, Copy, Edit, Delete). A list with no
+		// second-strip verb is exactly as tall as before; one with any is one
+		// 44-unit line taller (Band.h). Indices from ListActionAt() still
+		// run over every verb in declaration order, whichever strip it is on.
+		Entry &ListActionRow2( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
+		                       std::function<std::string()> fnDisabledReason = {} );
+		// 1, or 2 when any verb is on the second strip.
+		int ListStripCount() const;
 		size_t ListActionCount() const { return m_ListActions.size(); }
 		const ListVerb &ListActionAt( size_t i ) const { return m_ListActions[ i ]; }
 

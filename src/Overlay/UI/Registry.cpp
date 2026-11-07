@@ -435,6 +435,20 @@ namespace gamescope::ui
 		                                         std::move( fnDisabledReason ), bOnDoubleClick } );
 		return *this;
 	}
+	Entry &Entry::ListActionRow2( const char *pszLabel, std::function<void()> fn, bool bDanger,
+	                              std::function<std::string()> fnDisabledReason )
+	{
+		m_ListActions.push_back( ui::ListVerb{ pszLabel ? pszLabel : "", std::move( fn ), bDanger,
+		                                         std::move( fnDisabledReason ), false, 1 } );
+		return *this;
+	}
+	int Entry::ListStripCount() const
+	{
+		for ( const ui::ListVerb &v : m_ListActions )
+			if ( v.nRow > 0 )
+				return 2;
+		return 1;
+	}
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }
 
 	// ---- reset (P3b) ----------------------------------------------------
