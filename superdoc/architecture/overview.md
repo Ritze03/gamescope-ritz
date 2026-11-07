@@ -398,7 +398,7 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
   `src/steamcompmgr.cpp`, the hook `fghost::RecordBaseLayer` in `vulkan_composite()`.
 - **Motion blur** — [motion-blur](../features/motion-blur.md):
   `fghost::BlurConfig` (`src/FrameGen/FrameGenHost.h`), `src/Overlay/PanelMotionBlur.cpp`.
-- **Lag spike buffer** — [lag-spike-buffer](../features/lag-spike-buffer.md):
+- **Lag spike buffer** (disabled 2026-11-07, kill switch `fghost::kLagBufferAvailable`) — [lag-spike-buffer](../features/lag-spike-buffer.md):
   `fghost::LagBufferConfig`, `src/Overlay/PanelLagBuffer.cpp`.
 
 **Steam**

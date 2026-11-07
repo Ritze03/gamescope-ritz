@@ -83,7 +83,7 @@ indented under it.
 - [Motion blur](features/motion-blur.md) — interpolation-based blur, with or without frame
   generation; the shared-timeline composition model.
 - [Lag spike buffer](features/lag-spike-buffer.md) — bridges frame-time spikes by running
-  slightly behind real time; independent of frame generation.
+  slightly behind real time; independent of frame generation. Disabled since 2026-11-07.
 
 ### Settings overlay (UI framework)
 

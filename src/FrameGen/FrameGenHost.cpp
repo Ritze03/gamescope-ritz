@@ -195,7 +195,7 @@ namespace fghost
 			const int nLook = std::min( std::max( l.lookbackMin, kMinLagLookbackMin ), kMaxLagLookbackMin );
 			const int nMax = std::min( std::max( l.maxBufferMs, 0 ), kMaxLagBufferMs );
 			const uint32_t uMode = std::min( uint32_t( l.testMode ), 2u );
-			return ( l.enabled ? kLagEnabledBit : 0u ) | ( uMode << 1 ) | ( uint32_t( nLook ) << 3 ) | ( uint32_t( nMax ) << 7 );
+			return ( ( l.enabled && kLagBufferAvailable ) ? kLagEnabledBit : 0u ) | ( uMode << 1 ) | ( uint32_t( nLook ) << 3 ) | ( uint32_t( nMax ) << 7 );
 		}
 
 		LagBufferConfig UnpackLag( uint32_t u )

@@ -1,5 +1,15 @@
 # Lag spike buffer (`image.lagbuffer`)
 
+> **DISABLED since 2026-11-07.** The feature is forced off in code and has no menu entry; a
+> saved profile's `lag_buffer` values are still read and written but ignored. `Why:` the user's
+> decision: *"lets disable 'Lag Spike Buffer' in the code itself (barely works). Dont delete the
+> code, but force it off and remove the menu entry."* All code is kept, so the rest of this page
+> describes the dormant design. **To restore:** set `fghost::kLagBufferAvailable = true`
+> (`src/FrameGen/FrameGenHost.h`; the one kill switch, applied in `PackLag()`) and re-enable the
+> `PanelLagBuffer_RegisterArea( reg )` call in `src/Overlay/UI/Shell.cpp`. The panel, the config
+> schema, the icon and the rail slot are untouched; the rail slot is skipped while the area is
+> unregistered. Stored values survive, so a restored area shows what the profile held.
+
 Detects the game's frame-time spikes and runs the picture slightly **behind** real time,
 so a repeat of a recent spike is bridged with **generated frames** instead of freezing.
 Added 2026-10-04 (frame-gen-ritz PR #4, merged; gamescope pins FrameGen main `2991d45`).

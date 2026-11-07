@@ -184,6 +184,13 @@ namespace fghost
 	constexpr int kMaxLagLookbackMin = 10;   // the library takes 600 s; the UI offers 1..10 minutes
 	constexpr int kMaxLagBufferMs = 250;
 
+	// ponytail: KILL SWITCH for the Lag spike buffer (disabled 2026-11-07, "barely works").
+	// While false, PackLag() (FrameGenHost.cpp) stores enabled = false whatever any caller
+	// passes, so a saved profile's lag_buffer.enabled is kept but has no effect, and
+	// PanelLagBuffer_RegisterArea() is not called (Shell.cpp), so there is no menu entry.
+	// To re-enable: set this true and restore the call in Shell.cpp's RegisterAll().
+	constexpr bool kLagBufferAvailable = false;
+
 	// Independent of Config AND BlurConfig: the buffer fills gaps with generated
 	// frames whether or not frame generation (the multiplier) is on, and combines
 	// with blur. Pushed to the pacer (Inputs::lagBuffer) live; nothing here waits.

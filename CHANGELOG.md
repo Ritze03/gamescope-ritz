@@ -18,8 +18,12 @@ The newest version below is the one this build reports.
 ### Fixed
 - **Direct scanout crash**: Fixed the GPU crash that could happen when entering
   fullscreen with the host's direct scanout on.
+
+### Removed
 - **Diagnostics direct-scanout warning**: Diagnostics warns again when Hyprland's direct
   scanout is off, now that the crash is fixed.
+- **Lag spike buffer**: Switched off and removed from the settings menu because it
+  barely worked; saved values are ignored.
 
 ## [0.14.11] – 2026-11-06
 

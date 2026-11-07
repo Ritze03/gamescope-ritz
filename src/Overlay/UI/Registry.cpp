@@ -991,6 +991,7 @@ namespace gamescope::ui
 			// or together (the library's pacer composes them).
 			{ "image.framegen",        RailGroup::Motion },
 			{ "image.motionblur",      RailGroup::Motion },
+			// Lag spike buffer: disabled 2026-11-07, never registered; RailAreas() skips this slot.
 			{ "image.lagbuffer",       RailGroup::Motion },
 			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
 			// moves here from Settings (it is the pointer's own on-screen
