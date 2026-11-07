@@ -12,13 +12,13 @@ old winner and the synthetic press of the new one on every real switch.
 area, the `wlserver_key()` hook and its worker thread). Config
 `config::NullBindsSettings` (`src/Config/ConfigSchema.h`, JSON key
 `null_binds`, a normal per-profile section like `zoom`/`autoclicker`),
-settings area `system.null_binds` ("Null binds", rail MISC group). Default
+settings area `system.null_binds` ("Null binds", rail INPUT group). Default
 **off**, and both pairs default **on** once the master switch is.
 
 > **Status (2026-09-27): wired end to end.** `NullBinds_OnKey()` is called
 > from the top of both `wlserver_key()` and `wlserver_handle_key()`
 > (`src/wlserver.cpp`), the area is registered from `Shell.cpp`, and it sits
-> in the rail's MISC group after the autoclicker. Turning the switch on in
+> in the rail's INPUT group after the autoclicker. Turning the switch on in
 > the settings, or shipping it on in a profile, now actually changes what
 > the game receives.
 

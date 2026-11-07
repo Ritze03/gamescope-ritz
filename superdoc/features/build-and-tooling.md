@@ -229,7 +229,7 @@ library (`pacingtest`); gamescope no longer has pacing tests. See
   built one — the rollback counterpart to the install scripts.
 - `steamos_common_remote.sh` / `steamos_common_local.sh` and
   `steamos_password_helpers.sh` hold the shared connection/credential plumbing (device IP,
-  SSH invocation via `envsshpass`, password handling) that every other `*_remote.sh`
+  SSH invocation, credential handling) that every other `*_remote.sh`
   script sources first.
   *Why split into `_remote`/`_local` pairs:* the `_remote` script runs on the developer's
   machine and only handles getting bits onto the device and invoking SSH; the `_local`
@@ -239,10 +239,10 @@ library (`pacingtest`); gamescope no longer has pacing tests. See
 
 ### Remote test laptop (`scripts/remote-test.sh`)
 
-A second real-hardware rig, distinct from the SteamOS device tooling above: a personal
-CachyOS laptop (Intel Kaby Lake-U / HD Graphics 620, `mo@192.0.2.167`, hostname
-`mo-laptop`), reachable over SSH with key auth, running a live Hyprland session on
-seat0/tty1. *Why it exists:* every overlay bug this project has hit took multiple failed
+A second real-hardware rig, distinct from the SteamOS device tooling above: a separate,
+low-power laptop on the local network, reachable over SSH with key auth, running a live
+Hyprland session. Its connection details live in the untracked local file
+`.claude/local/test-laptop-notes.md`, not in this repo. *Why it exists:* every overlay bug this project has hit took multiple failed
 rounds because agents could only test headlessly on the maintainer's own working
 machine — no visible overlay, no real force-grab as a launch flag, no soak testing, and
 twice a test window landed on the maintainer's own display by accident. This laptop is a
@@ -267,7 +267,7 @@ over rather than repeating the build on weaker hardware.
   nothing else to sync: the Lua scripts, the shader effects and the licence texts are all
   compiled into the binary, which is why the old `--extras` flag is gone. `gamescopectl`
   is not synced — it's
-  a separate binary owned by the `gamescope-git` pacman package, already present on the
+  a separate binary from the distro's gamescope package, already present on the
   laptop the same way it is on the desktop.
 - `scripts/remote-test.sh run [--wait] -- <command...>` — runs a command on the laptop
   with `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`/`HYPRLAND_INSTANCE_SIGNATURE` exported (read
@@ -286,15 +286,11 @@ over rather than repeating the build on weaker hardware.
 - `scripts/remote-test.sh env` — prints the resolved `export` lines for a caller who
   wants to `ssh` in by hand instead.
 
-**Known gap (2026-09-02):** the laptop is missing `wlroots0.20` (`libwlroots-0.20.so`),
-so a synced binary currently fails its `--version` self-check with "shared libraries:
-libwlroots-0.20.so: cannot open shared object file". Fix on the laptop: `sudo pacman -S
-wlroots0.20` (present in the standard `extra` repo, not just the desktop's
-`cachyos-extra-v3`). The Vulkan stack, by contrast, is already fine unverified-but-fine:
-`vulkaninfo` itself isn't installed, but both `/usr/share/vulkan/icd.d/intel_icd.json`
-(the modern `anv` driver, `libvulkan_intel.so`) and `intel_hasvk_icd.json` are present
-with their driver libraries in place, and `vulkan-intel`/`vulkan-icd-loader` are
-installed — nothing to install there.
+**Known gap (2026-09-02):** the test laptop was missing the system `wlroots` 0.20
+library, so a synced binary failed its `--version` self-check with "shared libraries:
+libwlroots-0.20.so: cannot open shared object file". Install the package on the laptop
+(details in the local notes file). Its Vulkan stack was already fine: the Intel driver
+and loader are installed, only the `vulkaninfo` tool is not.
 
 ## Unit tests (`tests/gamescope_tests`)
 

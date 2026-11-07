@@ -7,7 +7,7 @@ outline. `src/Overlay/Zoom.{h,cpp}` (config, settings area, the active flag),
 (`src/rendervulkan.cpp`; the picture), `keybinds::Action::Zoom`
 (`src/Keybinds.cpp`; the chord). Config `config::ZoomSettings`
 (`src/Config/ConfigSchema.h`, JSON key `zoom`, a normal per-profile section
-like `crosshair`), settings area `system.zoom` ("Zoom", in the rail's MISC
+like `crosshair`), settings area `system.zoom` ("Zoom", in the rail's OVERLAY
 group after Crosshair). Default **off**.
 
 > **Why (2026-09-14):** the user's request, near verbatim: *"Something like a
@@ -854,7 +854,7 @@ alone reads.
   no longer end a mouse-button-held zoom (2026-09-14).
 - `tests/test_config.cpp` — every `zoom` field round-trips; absent means
   defaults.
-- `tests/test_overlay_ui.cpp` — the area has an icon and sits in MISC.
+- `tests/test_overlay_ui.cpp` — the area has an icon and sits in OVERLAY.
 - `tests/test_config.cpp` — `zoom.fade_ms` round-trips with the rest of the
   section (2026-09-16); a file without the key takes the 200 ms default, so no
   schema bump or migration was needed.

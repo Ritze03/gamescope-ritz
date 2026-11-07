@@ -8,7 +8,7 @@ the wanted flag, the worker thread), `keybinds::Action::Autoclicker`
 `wlserver_ritz_mouse_hotkey()` (`src/wlserver.cpp`). Config
 `config::AutoclickerSettings` (`src/Config/ConfigSchema.h`, JSON key
 `autoclicker`, a normal per-profile section like `zoom`), settings area
-`system.autoclicker` ("Autoclicker", in the rail's MISC group after Zoom).
+`system.autoclicker` ("Autoclicker", in the rail's INPUT group after General).
 Default **off**.
 
 > **In the UI since 2026-09-22.** It first landed hidden the same day
@@ -196,11 +196,11 @@ Two limits, both real and both deliberate:
 
 ## Where it is registered
 
-`Autoclicker_RegisterArea()` is called from the Shell's MISC block
-(`src/Overlay/UI/Shell.cpp`), next to `Zoom_RegisterArea()`, because both are
+`Autoclicker_RegisterArea()` is called from the Shell's INPUT block
+(`src/Overlay/UI/Shell.cpp`), right after `Zoom_RegisterArea()` in source order, because both are
 things a hotkey does to the game rather than pages you set up once. The rail
-grouping is `{ "system.autoclicker", RailGroup::Misc }` in
-`src/Overlay/UI/Registry.cpp`, straight after `system.zoom`. The icon
+grouping is `{ "system.autoclicker", RailGroup::Input }` in
+`src/Overlay/UI/Registry.cpp`, after `input.general`. The icon
 (`src/Overlay/UI/Icons.cpp`) is a mouse seen from above with its left button
 filled solid — SPEC 8.0's "only where a fill carries meaning": the identity of
 this area is "a button is being held", and a solid quarter is what says that at

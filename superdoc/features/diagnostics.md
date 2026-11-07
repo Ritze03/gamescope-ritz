@@ -127,12 +127,12 @@ How it looks per rail state (`Shell.cpp`, `DrawRail()`):
 
 | Rail state | Heading (OTHER) | Diagnostics row |
 | --- | --- | --- |
-| Full rail, group closed | triangle right after the name, left of the chevron | not drawn (group closed, the heading carries it) |
-| Full rail, group open | same | triangle right after the row title |
+| Full rail, group closed | dot right after the name, left of the chevron | not drawn (group closed, the heading carries it) |
+| Full rail, group open | same | dot right after the row title |
 | Icon-only rail | small badge on the icon's top-right | small badge on the icon's top-right |
 
-The triangle is drawn, not the character: the bundled faces bake only Basic Latin and Latin-1
-(`Fonts.cpp`), so U+26A0 would be a box. It is placed after the name and clamped before the
+The dot is drawn as a filled circle, not a font character: the bundled faces bake only Basic
+Latin and Latin-1 (`Fonts.cpp`), so a glyph such as U+26A0 would be a box. It is placed after the name and clamped before the
 chevron, so heading width and the accordion animation are unchanged. Not on the HUD or the
 launcher. `Why:` the user: *"if something is active in the diagnostics, it should show a warning
 sign on the OTHER category and the Diagnostics tab name, to tell the user, to look there."*

@@ -86,15 +86,17 @@ copy `extensions/gamescope-ritz.json` over
 `~/.config/ritz/extensions/ritze__gamescope_ritz.json`, the user's own module file.
 
 To use this module, copy it there by hand (the README's "Ritz launcher extension" section
-carries the same command). With ritz-get's default clone path it works from any directory:
+carries the same command). `<ritz-get clone of gamescope-ritz>` is the checkout ritz-get made (its default location is
+under `~/.local/share/ritz-get/`; the manifest is `extensions/gamescope-ritz.json` at that
+checkout's root):
 
 ```sh
 mkdir -p ~/.config/ritz/extensions
-cp ~/.local/share/ritz-get/src/gamescope-ritz/extensions/gamescope-ritz.json \
+cp <ritz-get clone of gamescope-ritz>/extensions/gamescope-ritz.json \
    ~/.config/ritz/extensions/ritze__gamescope_ritz.json
 ```
 
-From a hand-made clone, use `extensions/gamescope-ritz.json` as the source instead.
+From a hand-made clone, use that clone's `extensions/gamescope-ritz.json` as the source.
 
 *Why that destination name:* Ritz names an author's module file `<author>__<name>.json`
 (lowercased, spaces/hyphens to underscores), so the user's real "Gamescope-Ritz" module by
