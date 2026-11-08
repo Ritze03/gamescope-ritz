@@ -100,8 +100,8 @@ indented under it.
   changelog and licences.
 - [System](features/system-general.md) — the SETTINGS > System area (clipboard-sync switch).
 - [Appearance](features/appearance.md) — the SETTINGS > Appearance area (global, not per profile).
-- [Diagnostics](features/diagnostics.md) — the OTHER > Diagnostics area: Hyprland direct
-  scanout check, the Silence warning switch, the Recheck button.
+- [Compatibility](features/diagnostics.md) — the OTHER > Compatibility area (was Diagnostics): Hyprland direct
+  scanout check, the two machine-wide host switches and the recommended settings.
 
 ### Settings & config
 

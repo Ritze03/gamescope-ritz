@@ -3,9 +3,8 @@
 The Display > **General** area (`display.general`, `src/Overlay/PanelDisplay.cpp`,
 `RegisterGeneral()`) holds the switches a user flips mid-game, so it is registered first and sits above
 the other Display areas. Its Summary line reads like `VRR off · tearing off`, plus
-` · nested windows maximized` when that switch is on and ` · direct scanout blocked` when Block direct
-scanout is on. Four switches persisted per profile in the `gamescope.*` config block and mirrored into a
-live global, plus two global, Wayland-only switches (last two rows):
+` · nested windows maximized` when that switch is on. Four switches persisted per profile in the
+`gamescope.*` config block and mirrored into a live global:
 
 | Row id | Label | Config key | Live target | Launch flag (locks the row) |
 |---|---|---|---|---|
@@ -13,13 +12,10 @@ live global, plus two global, Wayland-only switches (last two rows):
 | `display.allow_tearing` | Allow tearing | `gamescope.tearing_enabled` | `cv_tearing_enabled` | `--immediate-flips` |
 | `display.low_latency_wakeup` | Low-latency wake-up | `gamescope.low_latency_wakeup` | `vblank_measured_lead` | none |
 | `display.force_windows_fullscreen` | Force maximize nested window | `gamescope.force_windows_fullscreen` | `steamcompmgr_set_force_windows_fullscreen()` | `--force-windows-fullscreen` |
-| `display.block_direct_scanout` | Block direct scanout | `overlay.diagnostics_block_scanout` in `global.json` (global, not per profile) | `Diagnostics_BlockScanout()` | none; shown on the Wayland backend only |
-| `display.compress_output_images` | Compress output images | `overlay.compress_output_images` in `global.json` (global, not per profile) | `Diagnostics_CompressOutputImages()` | none; shown on the Wayland backend only; applies on the next launch |
 
-The area is two columns (`a.Columns( 2 )`): "Quick toggles" in column 0 and a "Wayland host" group
-(Block direct scanout, then Compress output images) in column 1. Both rows are `ShownWhen`, so off
-Wayland the second column is empty and General stays one column. `Why:` the user wanted the two
-Wayland switches in their own second column.
+Block direct scanout and Compress output images lived here until 2026-11-08; they moved to the
+Compatibility area ([diagnostics.md](diagnostics.md)) with their history. General is one column of
+"Quick toggles" again.
 
 The locks are the `Adaptive sync`, `Allow tearing` and `Force maximize` rows of the flag table in
 [launch-option-lock.md](launch-option-lock.md). `Force grab cursor` used to be a fifth switch here; it
@@ -176,77 +172,6 @@ late (see [frame-generation.md](frame-generation.md)'s Latency section for the h
 numbers: 4.05 -> about 1.9 ms). A read-only **Wake-up lead** Facts row under the switch shows the
 current lead and the recent max draw; the frame-generation debug status line carries the same
 text.
-
-## Block direct scanout (`display.block_direct_scanout`)
-
-Default Off. Config `overlay.diagnostics_block_scanout` in `global.json` (the key kept its early name
-from when the switch sat in Diagnostics). On, gamescope itself keeps a nested Wayland host from
-putting its window on a display plane. It applies live: the setter (`Diagnostics_SetBlockScanout()`,
-`src/Overlay/Diagnostics.cpp`) stores an atomic, writes `global.json` and calls `force_repaint()`;
-the Wayland present path reads only `Diagnostics_BlockScanout()` (an atomic) every frame, and turning
-it off detaches the buffer on the next frame. Mechanism:
-[backend-wayland.md](backend-wayland.md#block-direct-scanout-from-gamescope).
-
-**Global, not per profile.** `Why:` the host setup belongs to the machine, not to a game. The row
-carries the global config key via `.Key( "overlay.diagnostics_block_scanout" )` (like Filter game
-profiles); the Shell's per-profile dot and "Reset to inherited" only know settings keys, so the row
-shows neither.
-
-**Wayland only.** The row has `.ShownWhen( Diagnostics_ScanoutApplicable() )` (the Wayland backend,
-`HostMayScanOutOutputImages()`; `GS_RITZ_DIAGNOSTICS_ASSUME_WAYLAND=1` forces it for tests). On SDL,
-DRM, headless and OpenVR it is neither on the sheet nor in the command palette. An SDL window on a
-Wayland desktop gets no row either: the blocker exists only in `CWaylandConnector::Present()`, so
-there is nothing to block ([overlay-shell.md](overlay-shell.md#inspector-only-switch)'s row-level hide).
-
-`Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block noise
-after tabbing out and back in, and we suspect (unproven) host direct scanout is involved; GNOME has no
-reliable user switch for scanout, so the switch has to be on gamescope's side, both as a test and as a
-workaround. The brief artifacts on entering and leaving fullscreen under Hyprland and GNOME are the
-other reason ([TODO](../planning/TODO.md)). `Why Display > General:` the user asked for a normal GUI
-feature rather than a Diagnostics extra; it first lived in the Inspector of Diagnostics' Direct scanout
-row.
-
-Diagnostics: while it is on the Direct scanout row reads "Blocked by gamescope" and nothing nags (no
-toast, no yellow dot); see [diagnostics.md](diagnostics.md#block-direct-scanout).
-
-**Cost:** with scanout blocked the host composites again, so with Frame generation the shown rate falls
-back (about 160 uncapped against 261-272 with scanout). The host must offer
-`wp_single_pixel_buffer_manager_v1`; without it the switch does nothing and logs once.
-
-**Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
-live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
-single-surface requirement is from memory, not checked.
-
-## Compress output images (`display.compress_output_images`)
-
-Default **On**. Config `overlay.compress_output_images` in `global.json` (a file without the key
-loads as On). `Why On:` the user: "DCC should be on by default since it is the default in GameScope."
-On, the driver may pick an AMD DCC modifier for gamescope's output images, as upstream does. Off
-restores the filter this fork added in fd24a76, in `CVulkanTexture::BInit()` (`src/rendervulkan.cpp`):
-output images then never use a DCC modifier ([backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)).
-
-**Applies on the next launch.** `vulkan_compress_output_images()` reads the setting once, at the
-first output image, and keeps that value. `Why:` output images are allocated at startup and again on
-a resize (`vulkan_remake_output_images()`); the host may still hold the old ones (see
-`vulkan_select_free_output_image()`), so a live switch would either do nothing until a random resize or
-reallocate images the host is scanning. The row says so. Config is loaded in `main()` long before
-Vulkan starts, so the lazy `global.json` read is safe there.
-
-**Global, Wayland only.** Same `.Key(...)` and `.ShownWhen( Diagnostics_ScanoutApplicable() )` as
-Block direct scanout. `Why global:` the GPU and host belong to the machine, not to a game.
-
-`Why the switch exists:` fd24a76 removed DCC from output images because, on RDNA 3 with Hyprland's
-direct scanout on, the driver's pick is a compression the screen refuses and Hyprland reconfigures
-the display on every frame (511 modesets in 6 s, shown frames down to 73-147). **Known cost of the
-On default:** that modeset loop returns on such a setup until the switch is turned Off. Separately, a
-user on an RDNA 4 GPU (GFX12 modifiers) under GNOME sees the picture scrambled into block noise while
-the host scans out gamescope's output image; screenshots stay clean and Block direct scanout cures
-it, so the image is intact and the plane's read of it is wrong. **Hypothesis, untested:** that DCC
-(this switch On) cures it; the old filter was only ever tested on RDNA 3.
-
-**Log line**, once at creation and again if a remake picks another modifier, switch On or Off:
-`output image: format 0x<fourcc> modifier 0x<16 hex digits>, compress output images on|off`
-(scope `vulkan`). The modifier is the number to ask an RDNA 4 user for.
 
 ## Related
 

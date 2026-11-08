@@ -1,11 +1,40 @@
-# Diagnostics
+# Compatibility (was Diagnostics)
 
-The Shell's **Diagnostics** area (`system.diagnostics`, OTHER rail group, last) checks setup
+The Shell's **Compatibility** area (`system.diagnostics`, labelled Diagnostics until 2026-11-08,
+OTHER rail group, first) holds the machine-wide compatibility switches and the checks. The checks look at setup
 outside gamescope that costs frames without printing an error, says what is wrong and what to
 set, and has a **Recheck all** button. The warning can be silenced
 (see [Silence warning](#silence-warning)). Code: `src/Overlay/Diagnostics.{h,cpp}` (runtime),
 `src/Overlay/DiagnosticsLogic.h` (pure: parsing and state decisions,
 `tests/test_diagnostics.cpp`), `src/Overlay/PanelDiagnostics.cpp` (area). One check today.
+
+## The Compatibility area
+
+Since 2026-11-08 the area (id `system.diagnostics`, kept, as About kept `system.changelog`) is
+labelled **Compatibility** and is the first of the OTHER group (Compatibility, Log, About). Two
+columns (`a.Columns( 2 )`, `GroupColumn`):
+
+| Column | Group | Rows |
+| --- | --- | --- |
+| 0 | This machine | Block direct scanout, Compress output images (Wayland backend only, `ShownWhen`) |
+| 0 | Recommended settings | **Pick recommended settings** [Apply], **Re-detect** [Detect] |
+| 1 | Environment | read-only Facts Desktop, GPU, Backend, Recommended; then the Direct scanout check |
+| 1 | Actions | Recheck all, the check result body |
+
+`Why:` the user's idea (2026-11-08): machine-wide settings on the left, checks on the right, and
+defaults derived from the environment instead of one fixed default. The two switches left Display >
+General for it (General is one column again). The summary line is the Direct scanout headline. The
+GPU fact is filled from `rendervulkan.cpp` (`Diagnostics_SetGpuName( props.deviceName )`). The rail
+icon is unchanged (the pulse trace).
+
+### Restart to apply
+
+Compress output images is latched at the first output image, so a change applies on the next
+launch. While `Diagnostics_CompressOutputImages() != Diagnostics_CompressOutputImagesAtLaunch()` the
+row shows an orange **Restart to apply** left of its value; switching back hides it. Mechanism:
+`Entry::StatusWhen( fn )` (`Registry.h`; the Shell draws a non-empty result in `Role::WarnText` left
+of the value and the label zone gives up the width). `Why:` the user: today you have to read the help
+text to learn that it needs a restart. The help text still says "Applies on the next launch".
 
 ## Silence warning
 
@@ -33,9 +62,58 @@ fullscreen with scanout on are still open there.
 crash test ran with 1 only, and earlier zero-copy measurements used 2; the state check treats both
 as On.
 
+## Recommendations
+
+The two global switches `overlay.diagnostics_block_scanout` (Block direct scanout) and
+`overlay.compress_output_images` (Compress output images) are optional keys in
+`global.json`. An ABSENT key is not "false": it takes the recommendation for the host
+desktop. A key that is present is the user's own choice and is never changed except by
+"Pick recommended settings". A save never writes an untouched switch
+(`ConfigManager.cpp`), so absent stays absent.
+
+Host desktop: `Diagnostics_HostDesktop()`, from the environment gamescope was launched
+with (`Diagnostics_CaptureHostEnv()`, first thing in `main()`): `HYPRLAND_INSTANCE_SIGNATURE`
+set, or `XDG_CURRENT_DESKTOP` (colon-separated list, case-insensitive, entry prefix match)
+naming Hyprland, GNOME or KDE; otherwise Other. Pure logic in `DiagnosticsLogic.h`
+(`DetectDesktop`).
+Why: `main.cpp` overwrites `XDG_CURRENT_DESKTOP` with `gamescope` later, so only the
+captured copy is the host's.
+
+Recommendation table (`Recommend()`; the GPU plays no part):
+
+| Desktop  | Block direct scanout | Compress output images |
+|----------|----------------------|------------------------|
+| Hyprland | Off                  | Off                    |
+| GNOME    | Off                  | On                     |
+| KDE/other| Off                  | On                     |
+
+Why: Compress On blacked out fullscreen on Hyprland; the other desktops keep the shipped
+defaults.
+
+Resolution: the first call to any of the getters runs `ResolveCompat()` once (call_once):
+detect the desktop, read `global.json`, resolve each absent key to the recommendation,
+log it once (`compatibility: desktop ...`). `vulkan_compress_output_images()` calls
+`Diagnostics_CompressOutputImages()` at the first output image, so the very first launch
+already runs with the recommendation, no restart. The resolved value is not written to
+`global.json`.
+Why: a first launch under Hyprland must not render a black screen and ask for a restart.
+
+Launch value: `Diagnostics_CompressOutputImagesAtLaunch()` is what the process started
+with (what rendervulkan latched). The UI shows an orange "Restart to apply" while
+`Diagnostics_CompressOutputImages()` differs from it, and clears it when switched back.
+Why: Compress is latched at the first output image, which users otherwise only learn from
+the help text.
+
+Buttons: "Pick recommended settings" = `Diagnostics_ApplyRecommended()` (writes both keys,
+making them present; Block live, Compress next launch; text from
+`Diagnostics_RecommendationText()`, e.g. "Block scanout Off · Compress Off").
+"Re-detect" = `Diagnostics_Redetect()` (changes no setting; the read-only facts
+Desktop/Backend/GPU come from `Diagnostics_Facts()`; GPU reads "unknown" until
+`Diagnostics_SetGpuName()` is called).
+
 ## Block direct scanout
 
-The switch lives in Display > General, not here: [display-general.md](display-general.md#block-direct-scanout-displayblock_direct_scanout).
+The switch is described [below](#block-direct-scanout-switch-displayblock_direct_scanout).
 While it is on, `WithBlock()` (pure, `DiagnosticsLogic.h`, `tests/test_diagnostics.cpp`) turns any
 applicable result into state **Blocked** ("Blocked by gamescope", the host's own value still shown
 in Details) when the result is *read*, so toggling needs no recheck. Blocked never warns: no
@@ -124,7 +202,7 @@ from it; nothing opens by itself.
 
 While any diagnostic warns (and Silence warning is off), the Shell's rail shows a plain filled yellow circle (`glyph::WarnDot()`,
 `glyph::kWarnDotColor`, antialiased, no "!") on the **OTHER** group heading and on the
-**Diagnostics** row. `Why:` the first cut was a drawn warning triangle with a "!", which looked
+**Compatibility** row. `Why:` the first cut was a drawn warning triangle with a "!", which looked
 improvised; the user: *"The badge looks really bad. It doesnt look proper. Just make it a yellow
 circle instead of the fake warning symbol."* The colour is a literal yellow, not `Role::Warn`
 (orange).
@@ -148,7 +226,7 @@ The dot is drawn as a filled circle, not a font character: the bundled faces bak
 Latin and Latin-1 (`Fonts.cpp`), so a glyph such as U+26A0 would be a box. It is placed after the name and clamped before the
 chevron, so heading width and the accordion animation are unchanged. Not on the HUD or the
 launcher. `Why:` the user: *"if something is active in the diagnostics, it should show a warning
-sign on the OTHER category and the Diagnostics tab name, to tell the user, to look there."*
+sign on the OTHER category and the Compatibility tab name, to tell the user, to look there."*
 
 ### Adding a check
 
@@ -163,6 +241,79 @@ headless instance can run the whole path (spawn, timeout, toast, row) against a 
 put early on `PATH`. It exists because the real condition needs a host compositor; it changes
 nothing else.
 
+## Block direct scanout switch (`display.block_direct_scanout`)
+
+Default Off (absent key: the recommendation). Config `overlay.diagnostics_block_scanout` in `global.json` (the key kept its early name
+from when the switch sat in Diagnostics). On, gamescope itself keeps a nested Wayland host from
+putting its window on a display plane. It applies live: the setter (`Diagnostics_SetBlockScanout()`,
+`src/Overlay/Diagnostics.cpp`) stores an atomic, writes `global.json` and calls `force_repaint()`;
+the Wayland present path reads only `Diagnostics_BlockScanout()` (an atomic) every frame, and turning
+it off detaches the buffer on the next frame. Mechanism:
+[backend-wayland.md](backend-wayland.md#block-direct-scanout-from-gamescope).
+
+**Global, not per profile.** `Why:` the host setup belongs to the machine, not to a game. The row
+carries the global config key via `.Key( "overlay.diagnostics_block_scanout" )` (like Filter game
+profiles); the Shell's per-profile dot and "Reset to inherited" only know settings keys, so the row
+shows neither.
+
+**Wayland only.** The row has `.ShownWhen( Diagnostics_ScanoutApplicable() )` (the Wayland backend,
+`HostMayScanOutOutputImages()`; `GS_RITZ_DIAGNOSTICS_ASSUME_WAYLAND=1` forces it for tests). On SDL,
+DRM, headless and OpenVR it is neither on the sheet nor in the command palette. An SDL window on a
+Wayland desktop gets no row either: the blocker exists only in `CWaylandConnector::Present()`, so
+there is nothing to block ([overlay-shell.md](overlay-shell.md#inspector-only-switch)'s row-level hide).
+
+`Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block noise
+after tabbing out and back in, and this switch cured it, so host direct scanout is involved; GNOME has no
+reliable user switch for scanout, so the switch has to be on gamescope's side, both as a test and as a
+workaround. The brief artifacts on entering and leaving fullscreen under Hyprland and GNOME are the
+other reason ([TODO](../planning/TODO.md)). `Why it moved:` it first lived in the Inspector of the
+Direct scanout row, then in Display > General (the user asked for a normal GUI feature); on
+2026-11-08 it moved here, with the user's idea of machine-wide settings left and checks right.
+
+While it is on the Direct scanout row reads "Blocked by gamescope" and nothing nags (no toast, no
+yellow dot); see [Block direct scanout](#block-direct-scanout) below.
+
+**Cost:** with scanout blocked the host composites again, so with Frame generation the shown rate falls
+back (about 160 uncapped against 261-272 with scanout). The host must offer
+`wp_single_pixel_buffer_manager_v1`; without it the switch does nothing and logs once.
+
+**Not verified:** whether Hyprland or Mutter actually refuses scanout with the extra surface needs a
+live test. Hyprland's `solitaryBlockedBy` `OPAQUE, SURFACES` supports it there; for Mutter the
+single-surface requirement is from memory, not checked.
+
+## Compress output images switch (`display.compress_output_images`)
+
+Default **On** for a desktop that does not recommend otherwise (an absent key takes the
+[recommendation](#recommendations)). `Why On:` the user: "DCC should be on by default since it is the default in GameScope."
+On, the driver may pick an AMD DCC modifier for gamescope's output images, as upstream does. Off
+restores the filter this fork added in fd24a76, in `CVulkanTexture::BInit()` (`src/rendervulkan.cpp`):
+output images then never use a DCC modifier ([backend-wayland.md](backend-wayland.md#direct-scanout-under-a-host)).
+
+**Applies on the next launch** (since 2026-11-08 the row shows an orange "Restart to apply" while
+the value differs from the one this run started with, see [Restart to apply](#restart-to-apply)).
+`vulkan_compress_output_images()` reads the setting once, at the
+first output image, and keeps that value. `Why:` output images are allocated at startup and again on
+a resize (`vulkan_remake_output_images()`); the host may still hold the old ones (see
+`vulkan_select_free_output_image()`), so a live switch would either do nothing until a random resize or
+reallocate images the host is scanning. The row says so. Config is loaded in `main()` long before
+Vulkan starts, so the lazy `global.json` read is safe there.
+
+**Global, Wayland only.** Same `.Key(...)` and `.ShownWhen( Diagnostics_ScanoutApplicable() )` as
+Block direct scanout. `Why global:` the GPU and host belong to the machine, not to a game.
+
+`Why the switch exists:` fd24a76 removed DCC from output images because, on RDNA 3 with Hyprland's
+direct scanout on, the driver's pick is a compression the screen refuses and Hyprland reconfigures
+the display on every frame (511 modesets in 6 s, shown frames down to 73-147). **Known cost of the
+On default:** that modeset loop returns on such a setup until the switch is turned Off. Separately, a
+user on an RDNA 4 GPU (GFX12 modifiers) under GNOME sees the picture scrambled into block noise while
+the host scans out gamescope's output image; screenshots stay clean and Block direct scanout cures
+it, so the image is intact and the plane's read of it is wrong. **Hypothesis, untested:** that DCC
+(this switch On) cures it; the old filter was only ever tested on RDNA 3.
+
+**Log line**, once at creation and again if a remake picks another modifier, switch On or Off:
+`output image: format 0x<fourcc> modifier 0x<16 hex digits>, compress output images on|off`
+(scope `vulkan`). The modifier is the number to ask an RDNA 4 user for.
+
 ## History
 
-- **Diagnostics** (glossary detail): **Diagnostics** — the Shell's `system.diagnostics` area, last in the **OTHER** rail group (2026-11-05; `src/Overlay/PanelDiagnostics.cpp`, `Diagnostics.{h,cpp}`, pure half `DiagnosticsLogic.h`): checks of the setup *around* gamescope that cost the user frames without any error, each with a plain state and what to change, plus a **Recheck all** button. One check today: whether Hyprland has `render:direct_scanout` on, read with `hyprctl` off the paint thread and only when gamescope runs nested through the Wayland backend (anywhere else it says "Not applicable" and never warns). Its warnings (a once-per-session toast, and a yellow dot on the OTHER heading and the Diagnostics row of the rail, both added 2026-11-05) were off 2026-11-06 to 2026-11-07 while scanout on could crash the GPU, and can be muted with the **Silence warning** switch (global); the docs link is an Inspector-only button, not a sheet row. The user's own wording: *"Under the 'OTHER' category, add the tab 'Diagnostics'."* Distinct from the **Log** (what gamescope printed) and from the `Diagnostics` *group* inside the Log area (its buffer facts).
+- **Compatibility / Diagnostics** (glossary detail): **Compatibility** (**Diagnostics** until 2026-11-08) — the Shell's `system.diagnostics` area, in the **OTHER** rail group (2026-11-05, first since 2026-11-08; `src/Overlay/PanelDiagnostics.cpp`, `Diagnostics.{h,cpp}`, pure half `DiagnosticsLogic.h`): checks of the setup *around* gamescope that cost the user frames without any error, each with a plain state and what to change, plus a **Recheck all** button. One check today: whether Hyprland has `render:direct_scanout` on, read with `hyprctl` off the paint thread and only when gamescope runs nested through the Wayland backend (anywhere else it says "Not applicable" and never warns). Its warnings (a once-per-session toast, and a yellow dot on the OTHER heading and the Diagnostics row of the rail, both added 2026-11-05) were off 2026-11-06 to 2026-11-07 while scanout on could crash the GPU, and can be muted with the **Silence warning** switch (global); the docs link is an Inspector-only button, not a sheet row. The user's own wording: *"Under the 'OTHER' category, add the tab 'Diagnostics'."* Distinct from the **Log** (what gamescope printed) and from the `Diagnostics` *group* inside the Log area (its buffer facts).

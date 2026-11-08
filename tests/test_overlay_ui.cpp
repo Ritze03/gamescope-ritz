@@ -2193,9 +2193,9 @@ TEST_CASE( "rail: the eight groups are in the order the request named", "[overla
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },
+		{ "system.diagnostics",    ui::RailGroup::Other },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
-		{ "system.diagnostics",    ui::RailGroup::Other },
 	};
 	const size_t nExpected = sizeof( expected ) / sizeof( expected[ 0 ] );
 
@@ -2350,7 +2350,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"audio.mixer", "audio.effects", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",
-		"system.log", "system.changelog", "system.diagnostics",
+		"system.diagnostics", "system.log", "system.changelog",
 	};
 	for ( const char *pszId : pszAllAreas )
 		reg.Add( pszId, pszId, ui::Section::Display );
@@ -4031,6 +4031,25 @@ TEST_CASE( "an Entry's ValueText() hook and Preview() are plain declarations", "
 	REQUIRE( (bool)boxed.ValueTextOf() );
 	REQUIRE( boxed.ValueTextOf()( ui::Value{ 3.0f } ) == "3 px" );
 	REQUIRE( boxed.PreviewOf() == ui::Entry::PreviewKind::UiBox );
+}
+
+TEST_CASE( "an Entry's StatusWhen() is evaluated live and empty means nothing drawn", "[overlay_ui]" )
+{
+	// 2026-11-08: Compress output images shows "Restart to apply" while it differs from
+	// the launch value. The text is read every call, not captured at declaration.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "system.diagnostics", "Compatibility", ui::Section::System );
+	bool b = true;
+	bool bLaunch = true;
+	ui::Entry &plain = area.Switch( "x.plain", "Plain", ui::Bind( &b ) ).Help( "No status." );
+	REQUIRE( plain.StatusText().empty() );
+	ui::Entry &e = area.Switch( "x.compress", "Compress", ui::Bind( &b ) ).Help( "Status." )
+		.StatusWhen( [&]{ return b != bLaunch ? std::string( "Restart to apply" ) : std::string(); } );
+	REQUIRE( e.StatusText().empty() );
+	b = false;
+	REQUIRE( e.StatusText() == "Restart to apply" );
+	b = true;
+	REQUIRE( e.StatusText().empty() );
 }
 
 TEST_CASE( "listbox: multi-select click rules (plain, Ctrl, exclusive row, never empty)", "[overlay_ui]" )

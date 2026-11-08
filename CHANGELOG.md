@@ -12,6 +12,10 @@ The newest version below is the one this build reports.
 ## [0.14.13] – 2026-11-08
 
 ### Added
+- **Compatibility area**: Other > Compatibility shows your desktop, GPU and backend,
+  holds the machine-wide host switches and can pick the recommended settings for them.
+- **Restart to apply**: Compress output images shows an orange "Restart to apply"
+  while it differs from the value this run started with.
 - **Import from another profile**: The Import dialog's Source can now be a profile from
   the list instead of pasted JSON, so settings copy from one profile to another directly.
 - **Import into several profiles**: Ctrl+click in the Import destination list selects
@@ -34,6 +38,10 @@ The newest version below is the one this build reports.
 - **Shaders summary**: The area now reads "n of 9 effects on" instead of "of 8".
 
 ### Info
+- **Diagnostics is now Compatibility**: The area is renamed and is the first entry
+  under Other.
+- **Host switches moved**: Block direct scanout and Compress output images moved from
+  Display > General to Other > Compatibility.
 - **Shaders regrouped**: The effect switches now sit under Colour, Post-processing and
   Brightness control, each with its own on-count.
 - **HUD settings layout**: The HUD area now has two columns, and the margins and the

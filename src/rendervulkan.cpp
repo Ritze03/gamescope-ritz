@@ -465,6 +465,7 @@ bool CVulkanDevice::selectPhysDev(VkSurfaceKHR surface)
 	VkPhysicalDeviceProperties props;
 	vk.GetPhysicalDeviceProperties( m_physDev, &props );
 	vk_log.infof( "selecting physical device '%s': queue family %x (general queue family %x)", props.deviceName, m_queueFamily, m_generalQueueFamily );
+	gamescope::Diagnostics_SetGpuName( props.deviceName );
 
 	// GPU TIMESTAMPS (NEW 2026-09-14, adaptive-brightness-v2-plan.md Stage
 	// 0): both halves of the guard the plan asks for -- the device-wide

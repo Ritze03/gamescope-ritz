@@ -232,12 +232,12 @@ limit, scanout engaged on 298 of 300 each, 0 faults.
 
 **Still open:** the picture artifacts when entering and leaving fullscreen with scanout on, which
 sometimes show older frames. They persist with the fix and were reportedly absent under `allbos`;
-cause unknown ([TODO](../planning/TODO.md)). The Diagnostics area's warning about scanout being off
+cause unknown ([TODO](../planning/TODO.md)). The Compatibility area's warning about scanout being off
 is back since the crash fix ([diagnostics.md](diagnostics.md)).
 
 ### Block direct scanout from gamescope
 
-User switch "Block direct scanout" ([display-general.md](display-general.md#block-direct-scanout-displayblock_direct_scanout), default
+User switch "Block direct scanout" ([diagnostics.md](diagnostics.md#block-direct-scanout-switch-displayblock_direct_scanout), default
 off). Hosts only scan out a window that is a single surface (Hyprland reports `solitaryBlockedBy`
 `OPAQUE, SURFACES` when it is not; Mutter's scanout candidate check needing a single surface too is
 from memory and **unverified until tested**). `m_Planes` are subsurfaces of plane 0, so when the
@@ -292,7 +292,7 @@ filter above only applies with it Off. On, the filter is skipped and the driver 
 upstream gamescope does; on RDNA 3 with Hyprland's direct scanout that brings back the modeset loop
 measured above, so Off is the remedy there. Whether DCC cures the RDNA 4 scrambling under GNOME is a
 hypothesis, untested. The chosen modifier is logged at creation. See
-[display-general.md](display-general.md#compress-output-images-displaycompress_output_images).
+[diagnostics.md](diagnostics.md#compress-output-images-switch-displaycompress_output_images).
 
 **Four output images.** One is on screen, one committed behind it and held until the next flip,
 one being drawn. With three, 34-46 paints a second found none free and shown stopped at 240-273;
