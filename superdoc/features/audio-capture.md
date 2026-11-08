@@ -197,6 +197,23 @@ buffer with nothing valid (no writers, or a chunk flagged empty) being copied
 verbatim; the old loop also took its size from the *minimum* over the input planes
 (`UINT32_MAX` when there were none) and dereferenced `data` unchecked.
 
+## Shutdown order
+
+`DestroyPair()` (used by `Shutdown()` and by switching the feature off) tears the pair
+down in this order: raise `Impl::bStopping`; `pw_stream_set_active(false)` and
+`pw_stream_disconnect` capture, then playback; clear the atomic `pCap`/`pPlay`
+pointers; remove the listeners and `pw_stream_destroy` both. Only after that does
+`Shutdown()` drop the registry and core, `pw_thread_loop_stop`, and destroy the context
+and loop. Both streams are `RT_PROCESS`, so their callbacks run on PipeWire's data-loop
+thread outside `pw_thread_loop_lock`; both callbacks check `bStopping` and the atomic
+pointers (acquire) and return early. `CreatePair()` clears the flag. `Shutdown()` is
+idempotent (a null `s_pImpl` returns) and serialised with `Start()` on `s_LifeMutex`.
+
+`Why:` a coredump at exit (SIGSEGV in `pw_stream_trigger_process`, called from the
+capture callback on the data-loop thread while the main thread was in `Shutdown()`):
+playback was destroyed first, so the still-running capture callback triggered a freed
+stream.
+
 ## Dynamics: the DSP stage
 
 The stereo-linked compressor/limiter run over the captured audio, its order in the playback

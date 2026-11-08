@@ -201,8 +201,11 @@ namespace gamescope::Audio::Capture
 			bool bSettled = false;      // Start() may stop waiting
 
 			// The loopback pair.
-			pw_stream *pCap = nullptr;
-			pw_stream *pPlay = nullptr;
+			// Atomic: the process callbacks read them on the data-loop thread while
+			// DestroyPair() (loop thread) clears them.
+			std::atomic<pw_stream *> pCap{ nullptr };
+			std::atomic<pw_stream *> pPlay{ nullptr };
+			std::atomic<bool> bStopping{ false };   // set before the pair is torn down; the process callbacks bail out
 			spa_hook capListener{};
 			spa_hook playListener{};
 			pw_stream_state eCapState = PW_STREAM_STATE_UNCONNECTED;
@@ -466,11 +469,15 @@ namespace gamescope::Audio::Capture
 		void CaptureProcess( void *data )
 		{
 			Impl *p = static_cast<Impl *>( data );
-			if ( pw_stream_trigger_process( p->pPlay ) < 0 )
+			pw_stream *pCap = p->pCap.load( std::memory_order_acquire );
+			pw_stream *pPlay = p->pPlay.load( std::memory_order_acquire );
+			if ( p->bStopping.load( std::memory_order_acquire ) || !pCap || !pPlay )
+				return;   // being torn down: the partner may be gone
+			if ( pw_stream_trigger_process( pPlay ) < 0 )
 			{
 				pw_buffer *pBuf;
-				while ( ( pBuf = pw_stream_dequeue_buffer( p->pCap ) ) )
-					pw_stream_queue_buffer( p->pCap, pBuf );
+				while ( ( pBuf = pw_stream_dequeue_buffer( pCap ) ) )
+					pw_stream_queue_buffer( pCap, pBuf );
 			}
 		}
 
@@ -538,6 +545,8 @@ namespace gamescope::Audio::Capture
 		void PlaybackProcess( void *data )
 		{
 			Impl *p = static_cast<Impl *>( data );
+			if ( p->bStopping.load( std::memory_order_acquire ) || !p->pCap.load( std::memory_order_acquire ) || !p->pPlay.load( std::memory_order_acquire ) )
+				return;
 
 			pw_buffer *pIn = nullptr, *pTmp;
 			while ( ( pTmp = pw_stream_dequeue_buffer( p->pCap ) ) )
@@ -728,8 +737,8 @@ namespace gamescope::Audio::Capture
 			}
 			if ( eNew == PW_STREAM_STATE_PAUSED )
 			{
-				pw_stream_flush( p->pPlay, false );
-				pw_stream_flush( p->pCap, false );
+				if ( pw_stream *pPlay = p->pPlay ) pw_stream_flush( pPlay, false );
+				if ( pw_stream *pCap = p->pCap ) pw_stream_flush( pCap, false );
 			}
 		}
 
@@ -827,17 +836,30 @@ namespace gamescope::Audio::Capture
 		{
 			p->bActive = false;
 			ClearMoves( p );
-			if ( p->pPlay )
-			{
-				spa_hook_remove( &p->playListener );
-				pw_stream_destroy( p->pPlay );
-				p->pPlay = nullptr;
-			}
-			if ( p->pCap )
+			// Order matters: both streams are RT_PROCESS, so their callbacks run on
+			// PipeWire's data-loop thread, outside pw_thread_loop_lock, and the capture
+			// callback triggers the playback stream. Destroying playback first left
+			// capture's callback calling pw_stream_trigger_process() on a freed stream
+			// (SIGSEGV at exit). So: (1) raise the stopping flag the callbacks check,
+			// (2) deactivate and disconnect capture, then playback (pw_stream_disconnect
+			// waits for the data loop to leave the callback), (3) only then clear the
+			// pointers and destroy.
+			p->bStopping.store( true, std::memory_order_release );
+			pw_stream *pCap = p->pCap.load();
+			pw_stream *pPlay = p->pPlay.load();
+			if ( pCap ) { pw_stream_set_active( pCap, false ); pw_stream_disconnect( pCap ); }
+			if ( pPlay ) { pw_stream_set_active( pPlay, false ); pw_stream_disconnect( pPlay ); }
+			p->pCap.store( nullptr, std::memory_order_release );
+			p->pPlay.store( nullptr, std::memory_order_release );
+			if ( pCap )
 			{
 				spa_hook_remove( &p->capListener );
-				pw_stream_destroy( p->pCap );
-				p->pCap = nullptr;
+				pw_stream_destroy( pCap );
+			}
+			if ( pPlay )
+			{
+				spa_hook_remove( &p->playListener );
+				pw_stream_destroy( pPlay );
 			}
 			DynamicsPrepare( 0, 0, nullptr ); // both streams are gone: nothing to process
 			p->eCapState = p->ePlayState = PW_STREAM_STATE_UNCONNECTED;
@@ -856,6 +878,7 @@ namespace gamescope::Audio::Capture
 		{
 			if ( p->pCap || p->pPlay || !p->pCore )
 				return;
+			p->bStopping.store( false, std::memory_order_release );
 
 			spa_audio_info_raw info;
 			std::string sPosition;

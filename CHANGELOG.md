@@ -27,6 +27,8 @@ The newest version below is the one this build reports.
   profile between two rows, Ctrl+Shift+click adds the range, like in a file manager.
 
 ### Fixed
+- **Audio capture shutdown**: Closing gamescope no longer risks a crash while the game-audio
+  capture shuts down.
 - **Import Source switch**: It was a dropdown that would not open; it is now always the
   two-button switch, fully readable.
 - **Bigger Export and Import dialogs**: Both dialogs are about 20% larger.
