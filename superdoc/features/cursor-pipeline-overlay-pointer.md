@@ -97,8 +97,22 @@ seam shows on the shared diagonal; the closed `AddPolyline` outline, centred on 
 true edge, covers the hard fill edges. The hotspot is the visible tip: the path is
 shifted back by the Pointy tip's own miter offset (`CursorArt_PointyTipMiterOffset()`,
 same formula as the Default's). Colours, outline width and scale are shared with
-Default. The game-side rasterised fallback (`CursorArt_Rasterise()`, "Use everywhere")
-and the rail icon still draw the Default shape.
+Default. The rail icon still draws the Default shape.
+
+**In-game (fix, 2026-11-08).** The first version only changed `CursorArt_Draw()`, so
+the Pointy never showed over the game. `CursorArt_Rasterise()` (the "Use everywhere" /
+"Override game cursor" bitmap; its only callers are `steamcompmgr.cpp`'s
+`SetDefaultCursorImage()` and the override-game branch of the cursor repaint) now
+rasterises the same four vertices when `CursorArt_IsPointy()`. It is a per-pixel
+signed-distance fill, so the concave notch uses a polygon distance with an even-odd
+inside test (`SignedDistanceToPolygon()`) instead of the triangle routine; the inlay/
+outline split and one-pixel anti-aliasing are the Default path's. The bitmap is sized
+from the polygon's own extent, and the hotspot is the tip vertex plus the rounded-join
+offset (`flOutlineWidth/2` along the tip bisector), as for Default. A Style change
+reaches the game cursor through `QueueSave()` -> `steamcompmgr_notify_cursor_appearance_changed()`
+(the same dirty flag as scale/colours), which re-runs `SetDefaultCursorImage()`.
+
+Why: the user's test finding, "The pointy cursor doesnt render ingame."
 
 Why: the user saw this icon in the design workbench and asked for it "only as an
 option, so the current one should still be the default ... like a pointy version. So
