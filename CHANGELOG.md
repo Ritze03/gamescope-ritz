@@ -27,6 +27,8 @@ The newest version below is the one this build reports.
   the pointer is over it, without clicking it first.
 - **Empty space in the Import dialog**: The paste field and the destination list now fill
   their panes instead of leaving a blank strip below them.
+- **Right defaults on first launch**: Block direct scanout and Compress output images now
+  start from a recommendation for your desktop (Hyprland: both Off), with no restart.
 - **Shaders summary**: The area now reads "n of 9 effects on" instead of "of 8".
 
 ### Info

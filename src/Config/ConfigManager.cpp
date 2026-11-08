@@ -615,8 +615,12 @@ namespace gamescope::config
 
                 s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
                 s.overlay.diagnostics_silence_warning = JGetBool( *pOverlay, "diagnostics_silence_warning", s.overlay.diagnostics_silence_warning );
-                s.overlay.diagnostics_block_scanout = JGetBool( *pOverlay, "diagnostics_block_scanout", s.overlay.diagnostics_block_scanout );
-                s.overlay.compress_output_images = JGetBool( *pOverlay, "compress_output_images", s.overlay.compress_output_images );
+                // Unset unless present (compatibility recommendations, D7).
+                // A wrong-typed value counts as absent.
+                if ( auto it = pOverlay->find( "diagnostics_block_scanout" ); it != pOverlay->end() && it->is_boolean() )
+                    s.overlay.diagnostics_block_scanout = it->get<bool>();
+                if ( auto it = pOverlay->find( "compress_output_images" ); it != pOverlay->end() && it->is_boolean() )
+                    s.overlay.compress_output_images = it->get<bool>();
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
                 s.overlay.profiles_filter_other_games = JGetBool( *pOverlay, "profiles_filter_other_games", s.overlay.profiles_filter_other_games );
@@ -1025,8 +1029,12 @@ namespace gamescope::config
 
             jOverlay[ "startup_announce_enabled" ] = o.startup_announce_enabled;
             jOverlay[ "diagnostics_silence_warning" ] = o.diagnostics_silence_warning;
-            jOverlay[ "diagnostics_block_scanout" ] = o.diagnostics_block_scanout;
-            jOverlay[ "compress_output_images" ] = o.compress_output_images;
+            // Written only once set, so an untouched switch keeps following the
+            // host-desktop recommendation.
+            if ( o.diagnostics_block_scanout )
+                jOverlay[ "diagnostics_block_scanout" ] = *o.diagnostics_block_scanout;
+            if ( o.compress_output_images )
+                jOverlay[ "compress_output_images" ] = *o.compress_output_images;
             jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
             jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
             jOverlay[ "profiles_filter_other_games" ] = o.profiles_filter_other_games;
