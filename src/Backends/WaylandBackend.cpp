@@ -1271,7 +1271,7 @@ namespace gamescope
         }
     }
 
-    // "Block direct scanout" (Display > General, global.json
+    // "Block direct scanout" (Compatibility, global.json
     // overlay.diagnostics_block_scanout). Hosts only scan out a
     // window that is a single surface, so one more surface on top, with nothing to
     // see in it, makes them composite instead. Read per frame from an atomic. Without
