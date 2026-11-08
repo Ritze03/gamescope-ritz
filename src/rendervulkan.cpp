@@ -167,7 +167,7 @@ std::span<const uint64_t> GetSupportedSampleModifiers( uint32_t uDrmFormat )
 
 static LogScope vk_log("vulkan");
 
-// "Compress output images" (Display > General, global): read once, at the first output
+// "Compress output images" (Compatibility, global): read once, at the first output
 // image, so every later remake agrees with the images the host already holds. config is
 // loaded long before Vulkan starts (main.cpp), so global.json is readable here.
 static bool vulkan_compress_output_images()

@@ -254,7 +254,7 @@ namespace gamescope::diagnostics
 		ScanoutResult b = r;   // nValue stays: the host's own setting is still worth showing
 		b.eState = ScanoutState::Blocked;
 		b.sHeadline = "Blocked by gamescope";
-		b.sReason = "Block direct scanout is on (Display > General): gamescope keeps a transparent "
+		b.sReason = "Block direct scanout is on (see This machine): gamescope keeps a transparent "
 		            "layer on top so the host composites the window itself. Frame generation shows a lower rate.";
 		return b;
 	}

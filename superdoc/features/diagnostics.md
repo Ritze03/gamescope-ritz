@@ -110,6 +110,17 @@ making them present; Block live, Compress next launch; text from
 "Re-detect" = `Diagnostics_Redetect()` (changes no setting; the read-only facts
 Desktop/Backend/GPU come from `Diagnostics_Facts()`; GPU reads "unknown" until
 `Diagnostics_SetGpuName()` is called).
+Re-detect only logs and repaints: the desktop is captured at launch, the GPU/backend facts are
+read live, so its help says a session change shows after a restart.
+
+Row defaults: both switch rows declare `.Default( Diagnostics_Recommended().x )`, so the Shell's
+modified edge, the Inspector's "reset" and Ctrl+D compare against the recommendation for this
+desktop (fixed at launch; registration runs after `Diagnostics_CaptureHostEnv()`). Why: a
+constant default would mark an untouched row as modified on Hyprland. Known quirk: "reset" goes
+through the row's setter, so it writes the key (making it present, at the recommended value);
+it is a deliberate user action, so this does not break "a present key is only changed by the
+user". On a backend where the switches are hidden (not Wayland) the "This machine" group has
+no shown rows and the Shell draws no band for it (bands are emitted per shown row).
 
 ## Block direct scanout
 

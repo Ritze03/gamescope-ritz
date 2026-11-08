@@ -287,7 +287,7 @@ screenshot does. Cost, without scanout: about 3% shown (232 -> 224, 206 -> 199, 
 across launches, so roughly. Games keep DCC: `GetSupportedModifiers()` stays whole, because it
 also decides what gamescope offers its own clients.
 
-The "Compress output images" setting (Display > General, **On by default**, next launch) is why the
+The "Compress output images" setting (Compatibility, default by host desktop: On except under Hyprland, next launch) is why the
 filter above only applies with it Off. On, the filter is skipped and the driver may pick DCC, as
 upstream gamescope does; on RDNA 3 with Hyprland's direct scanout that brings back the modeset loop
 measured above, so Off is the remedy there. Whether DCC cures the RDNA 4 scrambling under GNOME is a

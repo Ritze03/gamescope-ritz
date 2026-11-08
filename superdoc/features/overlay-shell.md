@@ -176,8 +176,8 @@ scanout row's Inspector (the user marked the spot on a screenshot).
 **Row-level hide** — `Entry::ShownWhen( fn )` (2026-11-07): the row exists only while `fn()` is true.
 `Area::EntryCount()` and `EntryAt()` return the shown rows only, so the sheet, the column row count
 (`Solve()`), keyboard navigation and the command palette all treat a hidden row as undeclared; the
-answer may change at run time. `Why:` Display > General's "Block direct scanout" is Wayland-only
-([display-general.md](display-general.md)) and must be neither visible nor findable on other
+answer may change at run time. `Why:` the Compatibility area's "Block direct scanout" is Wayland-only
+([diagnostics.md](diagnostics.md#block-direct-scanout-switch-displayblock_direct_scanout)) and must be neither visible nor findable on other
 backends. Area-level hiding stays `Area::AvailableWhen()`.
 
 **Warning marker** — `Area::WarnWhen( fn )` (2026-11-05) draws a plain filled yellow dot

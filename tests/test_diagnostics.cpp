@@ -145,7 +145,7 @@ TEST_CASE( "diagnostics: Block direct scanout states the truth and never alerts"
 	REQUIRE( blockedOff.eState == ScanoutState::Blocked );
 	REQUIRE( blockedOff.sHeadline == "Blocked by gamescope" );
 	REQUIRE( blockedOff.nValue == 0 );
-	REQUIRE( blockedOff.sReason.find( "Display > General" ) != std::string::npos );
+	REQUIRE( blockedOff.sReason.find( "This machine" ) != std::string::npos );
 	REQUIRE( !WarnsAbout( blockedOff.eState ) );
 	REQUIRE( !Alerts( blockedOff.eState, false ) );
 	REQUIRE( !AnyWarns( &blockedOff, &blockedOff + 1, false ) );

@@ -1201,14 +1201,14 @@ namespace gamescope::config
         // its checks. Global (the host setup is per machine); default off.
         bool diagnostics_silence_warning = false;
 
-        // Display > General's "Block direct scanout": gamescope keeps a transparent 1x1
+        // Compatibility's "Block direct scanout": gamescope keeps a transparent 1x1
         // subsurface on top so a nested Wayland host cannot scan its window out.
         // Global (the host setup is per machine). UNSET (key absent) until the user
         // sets it or "Pick recommended settings" writes it: unset takes the
         // recommendation for the host desktop (Diagnostics_*, DiagnosticsLogic.h).
         std::optional<bool> diagnostics_block_scanout;
 
-        // Display > General's "Compress output images": lets the driver pick an AMD DCC
+        // Compatibility's "Compress output images": lets the driver pick an AMD DCC
         // modifier for gamescope's output images under a nested Wayland host (Off
         // filters them out). Global (the GPU and host are per machine); read once at
         // startup, so a change applies on the next launch. UNSET (key absent) until

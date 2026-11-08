@@ -97,7 +97,7 @@ namespace gamescope
 			       "help with picture corruption or artifacts. It costs frames with Frame generation, "
 			       "because the host then draws every frame again. Not verified to work on every "
 			       "host." )
-			.Default( false )
+			.Default( Diagnostics_Recommended().bBlockScanout )
 			.Keywords( "scanout direct wayland host gnome mutter hyprland artifacts corruption "
 			           "block noise glitch plane" );
 
@@ -116,7 +116,7 @@ namespace gamescope
 			       "misbehaves: on RDNA 3 with Hyprland's direct scanout on, the driver picks a "
 			       "compression the screen refuses and Hyprland reconfigures the display on every "
 			       "frame. Applies on the next launch." )
-			.Default( true )
+			.Default( Diagnostics_Recommended().bCompress )
 			.Keywords( "dcc compress compression modifier amd rdna output images scanout wayland "
 			           "host gnome mutter scrambled noise corruption restart" );
 
@@ -130,8 +130,9 @@ namespace gamescope
 			.Keywords( "pick recommended settings defaults apply reset desktop" );
 
 		a.Action( "diagnostics.redetect", "Re-detect", "Detect", []{ Diagnostics_Redetect(); } )
-			.Help( "Reads the desktop session, GPU and backend again and updates the Environment "
-			       "rows. It changes no setting." )
+			.Help( "Refreshes the Environment rows and logs what was detected. The desktop is read "
+			       "when gamescope starts, so a change of session shows after a restart. It changes "
+			       "no setting." )
 			.Keywords( "redetect detect desktop gpu backend environment refresh" );
 
 		// ---- right: environment and checks ---------------------------------
