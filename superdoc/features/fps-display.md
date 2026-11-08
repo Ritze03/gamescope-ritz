@@ -38,24 +38,26 @@ number, drawn well, not a second profiler.
 
 ## The settings, top to bottom
 
-`system.hud`'s row order matches this list exactly (`FpsDisplay_RegisterArea()`):
+`system.hud` is a two-column area (`Columns(2)`, every group pinned with `GroupColumn`),
+laid out as the user's workbench mock-up (2026-11-08); `FpsDisplay_RegisterArea()`:
 
-| Row | Config field(s) | What it does |
+| Column | Group | Rows |
 | --- | --- | --- |
-| Show HUD | `enabled` | Master switch. Not gated by itself (SPEC §3.13). |
-| Placement | `anchor`, `margin_x`, `margin_y` | 9-point anchor + pixel margins (Phase 1, unchanged). |
-| Font size | `font_size` | Text size in px. |
-| Update mode | `update_mode` | Smoothing / Immediate — see below. ("Update every second" was folded into Smoothing 2026-09-05.) |
-| Hide above X | `hide_above_enabled`, `hide_above_fps` | Switch + threshold `.Param()` — see Hysteresis below. |
-| Text colour | `color_mode` | Fixed / Inverted — see below. |
-| Number colour | `color_fps` | Fixed mode only — see "Number colour and Text opacity" below. |
-| Text opacity | `text_opacity` | Fixed mode only — see "Number colour and Text opacity" below. |
-| Lag spike detection | `lag_detection_enabled` | Master switch for the whole spike reaction. Default **on**. |
-| FPS shown | `fps_shown` | Choice: Game (default) / Output / Both; see "FPS shown" below. |
-| Outline size | `outline_strength` | 0–4 px of black outline; 0 means no outline drawn at all. |
+| 0 | HUD | Show HUD (`enabled`; master switch, not gated by itself, SPEC §3.13) |
+| 0 | Placement | Placement (`anchor`, 3x3 grid), Horizontal margin (`hud.margin_x`), Vertical margin (`hud.margin_y`); sliders 0-128 px step 4 |
+| 0 | Visibility | Hide above X (`hide_above_enabled`), Threshold (`hud.hide_above_fps`, 30-300 fps step 5, enabled only while Hide above X is on), Lag spike detection (`lag_detection_enabled`, default on) |
+| 0 | Readout | FPS shown (`fps_shown`: Game / Frame gen / Game + FG), Update mode (`update_mode`: Smoothing / Immediate) |
+| 1 | Appearance | Font size, Outline size (0-4 px, 0 = off), Text colour (`color_mode`: Fixed / Inverted), Number colour (`color_fps`, Fixed only; its "Custom colour" stays a Param), Text opacity (Fixed only) |
 
 Every row is gated `DisabledUnless(MonitorOn, "the HUD is off")` except the
-master switch itself.
+master switch itself (plus the Fixed-only and Threshold rules above).
+
+Why: the user likes the workbench layout (related rows grouped, Appearance alone
+in the second column). The margins and the threshold used to be `.Param()`s of
+Placement / Hide above X; they are sheet rows now so they read as settings, not
+fine print. Their ids changed from `hud.anchor.margin_x` / `hud.anchor.margin_y` /
+`hud.hide_above.fps` to `hud.margin_x` / `hud.margin_y` / `hud.hide_above_fps`;
+the config keys are unchanged, so no saved value moves.
 
 ### Number colour and Text opacity (2026-09-07)
 
@@ -150,5 +152,5 @@ This page is the hub; the detail lives in these sub-pages (sections moved verbat
 
 ## History
 
-- **HUD** (glossary detail): **HUD** — the on-screen readout drawn over the game: a single FPS integer (`src/Overlay/FpsDisplay.cpp`'s `DrawReadout()`), positioned by a 9-point anchor plus pixel margins. Its settings-panel area is `system.hud` ("HUD" in the rail), renamed from `system.monitor`/"Monitor" (HUD layouts Phase 1, 2026-09-02) because "Monitor" read as ambiguous against this project's own "Overlay" naming, which **Shell**/**Click-UI** (see [overlay-shell.md](overlay-shell.md)) already claims. Distinct from both the **Shell** (the settings surface that hosts the HUD's own settings tab) and the **Launcher** (an unrelated command-palette feature). Used to carry a small **profiler** (see the **Profiler** bullet below) and a named per-module layout system; both were removed 2026-09-03 as a deliberate scope reduction, and the current minimal `system.hud` area (Show HUD / anchor / margins / font size) is a placeholder a later phase rebuilds properly. Its "FPS shown" choice (2026-10-04; Game by default) picks the game's own frame rate, the output rate actually sent to the display (frames made by Frame generation included), or Both, drawn as two numbers while the Frame generation switch is on, `120 > 280` (game > output) while it is generating and `340 - 340` (game - output) while it passes frames through, and as the lone game number with the switch off (the output number is the game's own rate except while generating); it replaced the short-lived "Count generated frames" switch. Since 2026-09-27, the Inverted text-colour mode samples one pixel of the game underneath the number each frame and shows its plain inverse, so the readout keeps changing with the scene instead of staying white — per the user's "capture a single pixel of the color below it and just invert it".
+- **HUD** (glossary detail): **HUD** — the on-screen readout drawn over the game: a single FPS integer (`src/Overlay/FpsDisplay.cpp`'s `DrawReadout()`), positioned by a 9-point anchor plus pixel margins. Its settings-panel area is `system.hud` ("HUD" in the rail), renamed from `system.monitor`/"Monitor" (HUD layouts Phase 1, 2026-09-02) because "Monitor" read as ambiguous against this project's own "Overlay" naming, which **Shell**/**Click-UI** (see [overlay-shell.md](overlay-shell.md)) already claims. Distinct from both the **Shell** (the settings surface that hosts the HUD's own settings tab) and the **Launcher** (an unrelated command-palette feature). Used to carry a small **profiler** (see the **Profiler** bullet below) and a named per-module layout system; both were removed 2026-09-03 as a deliberate scope reduction, and the current minimal `system.hud` area (Show HUD / anchor / margins / font size) is a placeholder a later phase rebuilds properly. Its "FPS shown" choice (2026-10-04; Game by default) picks the game's own frame rate, the output rate actually sent to the display (frames made by Frame generation included; "Frame gen"), or "Game + FG", drawn as two numbers while the Frame generation switch is on, `120 > 280` (game > output) while it is generating and `340 - 340` (game - output) while it passes frames through, and as the lone game number with the switch off (the output number is the game's own rate except while generating); it replaced the short-lived "Count generated frames" switch. Since 2026-09-27, the Inverted text-colour mode samples one pixel of the game underneath the number each frame and shows its plain inverse, so the readout keeps changing with the scene instead of staying white — per the user's "capture a single pixel of the color below it and just invert it".
 - **Profiler** (glossary detail): **Profiler** — the user's own term for the perf-stats modules the **HUD** used to carry on top of the plain FPS number: CPU load, GPU load, a frametime readout, a frametime graph, a 1%/0.1%-low percentile row, and a Now Playing (MPRIS) module. Removed 2026-09-03 at the user's explicit request as feature bloat — the HUD is a single FPS integer now. The underlying frame-rate counting/timing and lag-spike detection (the raw per-frame frametime history, `FpsDisplay.cpp`'s `s_flFrametimeHistoryMs`) were kept, since a later phase builds on them; the CPU/GPU/media sampling (`src/Metrics/SystemStats.{h,cpp}`, the only consumer of which was the profiler) was deleted along with it.
