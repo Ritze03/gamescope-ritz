@@ -32,6 +32,10 @@ The newest version below is the one this build reports.
 ### Info
 - **Shaders regrouped**: The effect switches now sit under Colour, Post-processing and
   Brightness control, each with its own on-count.
+- **HUD settings layout**: The HUD area now has two columns, and the margins and the
+  hide-above Threshold are ordinary rows instead of sub-settings.
+- **Clearer FPS shown names**: The options are now Game, Frame gen and Game + FG (were
+  Game, Output and Both); your saved choice is unchanged.
 
 ## [0.14.12] – 2026-11-07
 
