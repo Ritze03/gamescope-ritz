@@ -939,14 +939,14 @@ namespace gamescope::ui::shell
 			// INPUT areas that change what the game receives without a
 			// visible surface of their own. See Overlay/NullBinds.h.
 			NullBinds_RegisterArea( reg );
+			// 2026-11-08: Compatibility (id system.diagnostics, was Diagnostics),
+			// first in OTHER: Compatibility, Log, About.
+			PanelDiagnostics_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question
 			// ABOUT the running system rather than configuring it.
 			PanelChangelog_RegisterArea( reg );
-			// 2026-11-05: checks of the setup around gamescope that cost
-			// frames silently (Hyprland's direct scanout). OTHER, last.
-			PanelDiagnostics_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,
@@ -4021,6 +4021,17 @@ namespace gamescope::ui::shell
 			// see its own use two switch cases down for DrawSharedControl.
 			SplitValueColumn( entry, sValue, row,
 				bAffordance ? Region::Sheet : Region::Inspector, &rcLabel, &rcValue );
+
+			// Entry::StatusWhen(): a warn-coloured status (e.g. "Restart to apply") just
+			// left of the value; the label zone gives up its width first.
+			if ( const std::string sStatus = entry.StatusText(); !sStatus.empty() )
+			{
+				const float flW = MeasureText( TypeRole::Meta, sStatus.c_str() ).x;
+				const float flRight = rcValue.Min.x - Px( tok::kM );
+				Label( { flRight - flW, rcValue.Min.y, flRight, rcValue.Max.y },
+				       TypeRole::Meta, Col( Role::WarnText ), sStatus.c_str(), TextAlign::Right );
+				rcLabel.Max.x = std::max( rcLabel.Min.x, flRight - flW - Px( tok::kM ) );
+			}
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,

@@ -647,20 +647,15 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
 		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing "
-		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead "
-		            "block direct scanout wayland host" );
+		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
 			s += steamcompmgr_get_force_windows_fullscreen() ? " · nested windows maximized" : "";
-			s += Diagnostics_ScanoutApplicable() && Diagnostics_BlockScanout() ? " · direct scanout blocked" : "";
 			return s;
 		} );
 
-		a.Columns( 2 );
-
 		a.Group( "Quick toggles" );
-		a.GroupColumn( 0 );
 
 		a.Switch( "display.adaptive_sync", "Adaptive sync (VRR)",
 			ui::AnyBind::Of<bool>(
@@ -766,50 +761,6 @@ namespace gamescope
 			.Keywords( "maximize fullscreen nested window force size windows-fullscreen" )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ForceWindowsFullscreen ); },
 				LaunchLockReason( LaunchOptions::Opt::ForceWindowsFullscreen ).c_str() );
-
-		// Wayland host: its own second column. Both rows are ShownWhen (Wayland only), so
-		// off Wayland the group is hidden and General falls back to one column.
-		a.Group( "Wayland host" );
-		a.GroupColumn( 1 );
-
-		// Block direct scanout (2026-11-07): GLOBAL, not per profile -- the host setup
-		// belongs to the machine, not to a game -- so it carries the config key of its
-		// global.json field (overlay.*, like Filter game profiles): the per-profile dot
-		// and "Reset to inherited" only know settings keys and leave it Plain. Shown
-		// only on the Wayland backend (Diagnostics_ScanoutApplicable()): the blocker
-		// lives in CWaylandConnector::Present(), so no other backend has anything to
-		// block. See superdoc/features/display-general.md.
-		a.Switch( "display.block_direct_scanout", "Block direct scanout",
-			ui::AnyBind::Of<bool>(
-				[]{ return Diagnostics_BlockScanout(); },
-				[]( bool b ) { Diagnostics_SetBlockScanout( b ); } ) )
-			.Key( "overlay.diagnostics_block_scanout" )
-			.ShownWhen( []{ return Diagnostics_ScanoutApplicable(); } )
-			.Help( "Stops the host from putting gamescope's window straight on the screen. This may "
-			       "help with picture corruption or artifacts. It costs frames with Frame generation, "
-			       "because the host then draws every frame again. Not verified to work on every "
-			       "host." )
-			.Default( false )
-			.Keywords( "scanout direct wayland host gnome mutter hyprland artifacts corruption "
-			           "block noise glitch plane" );
-
-		// Compress output images (2026-11-07): GLOBAL like the row above, Wayland only.
-		// Read once at startup (rendervulkan.cpp latches it), so it applies on the next
-		// launch. See superdoc/features/display-general.md.
-		a.Switch( "display.compress_output_images", "Compress output images",
-			ui::AnyBind::Of<bool>(
-				[]{ return Diagnostics_CompressOutputImages(); },
-				[]( bool b ) { Diagnostics_SetCompressOutputImages( b ); } ) )
-			.Key( "overlay.compress_output_images" )
-			.ShownWhen( []{ return Diagnostics_ScanoutApplicable(); } )
-			.Help( "On is gamescope's normal behaviour: the graphics driver may store the output "
-			       "images compressed (AMD DCC). Turn it Off if the host's direct scanout "
-			       "misbehaves: on RDNA 3 with Hyprland's direct scanout on, the driver picks a "
-			       "compression the screen refuses and Hyprland reconfigures the display on every "
-			       "frame. Applies on the next launch." )
-			.Default( true )
-			.Keywords( "dcc compress compression modifier amd rdna output images scanout wayland "
-			           "host gnome mutter scrambled noise corruption" );
 	}
 
 	static void RegisterUpscaling( ui::Registry &reg )
