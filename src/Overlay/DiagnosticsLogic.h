@@ -5,6 +5,7 @@
 // draws it. See superdoc/features/diagnostics.md.
 #pragma once
 
+#include <cctype>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,6 +24,103 @@ namespace gamescope::diagnostics
 		Unknown,        // could not be read: said plainly, never warned about as if Off
 		Blocked,        // "Block direct scanout" is on: gamescope keeps the host from scanning out; no warning
 	};
+
+	// ---- compatibility: host desktop and the recommended settings ------------
+	enum class Desktop { Other, Hyprland, Gnome, Kde };
+
+	// True when an entry of the colon-separated list (XDG_CURRENT_DESKTOP, e.g.
+	// "ubuntu:GNOME") starts with `sName`, case-insensitive ("GNOME-Classic" is GNOME).
+	inline bool DesktopListHas( std::string_view sList, std::string_view sName )
+	{
+		size_t nPos = 0;
+		while ( nPos <= sList.size() )
+		{
+			size_t nEnd = sList.find( ':', nPos );
+			if ( nEnd == std::string_view::npos )
+				nEnd = sList.size();
+			const std::string_view sItem = sList.substr( nPos, nEnd - nPos );
+			if ( sItem.size() >= sName.size() )
+			{
+				bool bMatch = true;
+				for ( size_t i = 0; i < sName.size() && bMatch; i++ )
+					bMatch = std::tolower( (unsigned char)sItem[ i ] ) == std::tolower( (unsigned char)sName[ i ] );
+				if ( bMatch )
+					return true;
+			}
+			nPos = nEnd + 1;
+		}
+		return false;
+	}
+
+	// From the HOST's HYPRLAND_INSTANCE_SIGNATURE and XDG_CURRENT_DESKTOP (null or
+	// empty = unset). Hyprland wins when both name a desktop.
+	inline Desktop DetectDesktop( const char *pszHyprlandSignature, const char *pszXdgCurrentDesktop )
+	{
+		const std::string_view sXdg = pszXdgCurrentDesktop ? pszXdgCurrentDesktop : "";
+		if ( ( pszHyprlandSignature && *pszHyprlandSignature ) || DesktopListHas( sXdg, "Hyprland" ) )
+			return Desktop::Hyprland;
+		if ( DesktopListHas( sXdg, "GNOME" ) )
+			return Desktop::Gnome;
+		if ( DesktopListHas( sXdg, "KDE" ) )
+			return Desktop::Kde;
+		return Desktop::Other;
+	}
+
+	inline const char *DesktopName( Desktop e )
+	{
+		switch ( e )
+		{
+			case Desktop::Hyprland: return "Hyprland";
+			case Desktop::Gnome:    return "GNOME";
+			case Desktop::Kde:      return "KDE";
+			case Desktop::Other:    break;
+		}
+		return "Other";
+	}
+
+	struct Recommendation
+	{
+		bool bBlockScanout = false;
+		bool bCompress = true;
+		bool operator==( const Recommendation &o ) const
+		{
+			return bBlockScanout == o.bBlockScanout && bCompress == o.bCompress;
+		}
+	};
+
+	// The D6 table. GPU plays no part. Compress On blacked out fullscreen under
+	// Hyprland; every other desktop keeps the shipped defaults.
+	inline Recommendation Recommend( Desktop e )
+	{
+		Recommendation r;
+		if ( e == Desktop::Hyprland )
+			r.bCompress = false;
+		return r;
+	}
+
+	// A key that is present is kept; an absent one takes the recommendation.
+	inline bool ResolveSwitch( std::optional<bool> oStored, bool bRecommended )
+	{
+		return oStored ? *oStored : bRecommended;
+	}
+
+	inline std::string RecommendationText( const Recommendation &r )
+	{
+		return std::string( "Block scanout " ) + ( r.bBlockScanout ? "On" : "Off" ) +
+		       " \xC2\xB7 Compress " + ( r.bCompress ? "On" : "Off" );
+	}
+
+	// The Compatibility area's "Backend" fact from the current connector's GetName().
+	inline std::string BackendDisplayName( std::string_view sConnector )
+	{
+		if ( sConnector.empty() )         return "unknown";
+		if ( sConnector == "Wayland" )    return "Wayland (nested)";
+		if ( sConnector == "SDLWindow" )  return "SDL";
+		if ( sConnector == "Headless" )   return "Headless";
+		if ( sConnector.find( '-' ) != std::string_view::npos )   // eDP-1, HDMI-A-1, DP-2
+			return "DRM";
+		return std::string( sConnector );
+	}
 
 	enum class RunOutcome { Ok, NotInstalled, TimedOut, Failed };
 

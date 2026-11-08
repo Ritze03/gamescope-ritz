@@ -453,15 +453,29 @@ TEST_CASE( "overlay.cursor_override_game round-trips", "[config]" )
     }
 }
 
-// "Compress output images" (Display > General) is On by default, so a global.json
-// from before the key existed must load as On.
-TEST_CASE( "overlay.compress_output_images defaults on and round-trips", "[config]" )
+// The two compatibility switches (Block direct scanout, Compress output images) are
+// UNSET unless written: a global.json from before the keys existed loads them
+// absent, a save of unset keys writes none, and a set key is written and kept.
+TEST_CASE( "overlay compatibility switches are unset unless written", "[config]" )
 {
     {
         TempConfigHome home;
         std::filesystem::create_directories( ConfigRoot() );
         std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": {} }";
-        REQUIRE( LoadGlobal().overlay.compress_output_images );
+        Settings s = LoadGlobal();
+        REQUIRE( !s.overlay.compress_output_images );
+        REQUIRE( !s.overlay.diagnostics_block_scanout );
+    }
+    {
+        // A save of untouched switches adds no key (so the file stays "absent").
+        TempConfigHome home;
+        Settings s{};
+        REQUIRE( SaveGlobal( s ) );
+        std::ifstream f( GlobalConfigPath() );
+        const std::string sText( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sText.find( "compress_output_images" ) == std::string::npos );
+        REQUIRE( sText.find( "diagnostics_block_scanout" ) == std::string::npos );
+        REQUIRE( !LoadGlobal().overlay.compress_output_images );
     }
     for ( bool bValue : { true, false } )
     {
@@ -469,8 +483,24 @@ TEST_CASE( "overlay.compress_output_images defaults on and round-trips", "[confi
 
         Settings s{};
         s.overlay.compress_output_images = bValue;
+        s.overlay.diagnostics_block_scanout = !bValue;
         REQUIRE( SaveGlobal( s ) );
+        Settings r = LoadGlobal();
+        REQUIRE( r.overlay.compress_output_images == bValue );
+        REQUIRE( r.overlay.diagnostics_block_scanout == !bValue );
+        // A later save of the loaded settings keeps them present.
+        REQUIRE( SaveGlobal( r ) );
         REQUIRE( LoadGlobal().overlay.compress_output_images == bValue );
+    }
+    {
+        // An old file that carries both keys keeps them.
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() )
+            << "{ \"overlay\": { \"compress_output_images\": false, \"diagnostics_block_scanout\": true } }";
+        Settings s = LoadGlobal();
+        REQUIRE( s.overlay.compress_output_images == false );
+        REQUIRE( s.overlay.diagnostics_block_scanout == true );
     }
 }
 

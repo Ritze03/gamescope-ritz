@@ -168,3 +168,45 @@ TEST_CASE( "diagnostics: Block direct scanout states the truth and never alerts"
 	REQUIRE( WithBlock( DecideDirectScanout( sdl, Ok( "" ) ), true ).eState == ScanoutState::NotApplicable );
 	REQUIRE( WithBlock( ScanoutResult{}, true ).eState == ScanoutState::Pending );
 }
+
+TEST_CASE( "diagnostics: the host desktop is detected from the launch environment", "[diagnostics]" )
+{
+	REQUIRE( DetectDesktop( "abc_123", "Hyprland" ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( "abc_123", nullptr ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( nullptr, "hyprland" ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( "", "GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "ubuntu:GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "gnome-classic:GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "KDE" ) == Desktop::Kde );
+	REQUIRE( DetectDesktop( nullptr, "X-Cinnamon" ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, "" ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, nullptr ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, "gamescope" ) == Desktop::Other );
+}
+
+TEST_CASE( "diagnostics: the D6 recommendation table", "[diagnostics]" )
+{
+	REQUIRE( Recommend( Desktop::Hyprland ) == Recommendation{ false, false } );
+	REQUIRE( Recommend( Desktop::Gnome ) == Recommendation{ false, true } );
+	REQUIRE( Recommend( Desktop::Kde ) == Recommendation{ false, true } );
+	REQUIRE( Recommend( Desktop::Other ) == Recommendation{ false, true } );
+	REQUIRE( RecommendationText( Recommend( Desktop::Hyprland ) ) == "Block scanout Off \xC2\xB7 Compress Off" );
+}
+
+TEST_CASE( "diagnostics: an absent key takes the recommendation, a present one is kept", "[diagnostics]" )
+{
+	const Recommendation hypr = Recommend( Desktop::Hyprland );
+	REQUIRE( ResolveSwitch( std::nullopt, hypr.bCompress ) == false );
+	REQUIRE( ResolveSwitch( std::nullopt, true ) == true );
+	REQUIRE( ResolveSwitch( true, hypr.bCompress ) == true );
+	REQUIRE( ResolveSwitch( false, true ) == false );
+}
+
+TEST_CASE( "diagnostics: backend display names", "[diagnostics]" )
+{
+	REQUIRE( BackendDisplayName( "Wayland" ) == "Wayland (nested)" );
+	REQUIRE( BackendDisplayName( "SDLWindow" ) == "SDL" );
+	REQUIRE( BackendDisplayName( "Headless" ) == "Headless" );
+	REQUIRE( BackendDisplayName( "eDP-1" ) == "DRM" );
+	REQUIRE( BackendDisplayName( "" ) == "unknown" );
+}
