@@ -16,6 +16,8 @@ The newest version below is the one this build reports.
   the list instead of pasted JSON, so settings copy from one profile to another directly.
 - **Import into several profiles**: Ctrl+click in the Import destination list selects
   more than one profile, so one set of settings can go into all of them at once.
+- **Cursor style**: The Cursor area has a new Style choice, Default or Pointy, for a
+  slimmer, sharper arrow pointer.
 - **Range select in Import destinations**: Shift+click (or Shift+Up/Down) selects every
   profile between two rows, Ctrl+Shift+click adds the range, like in a file manager.
 

@@ -1288,6 +1288,9 @@ namespace gamescope::config
         // already set their own value keeps it, only the out-of-the-box size
         // changed. Read every draw by CursorArt_Draw() via PanelCursor.h's
         // GetCursorAppearance() accessor.
+        // Pointer shape: "default" (the classic triangle) or "pointy" (a slimmer
+        // arrow with a notch, 2026-11-08). Unknown strings load as "default".
+        std::string cursor_style = "default";
         float cursor_scale = 0.8f;          // 0.5..3.0 -- multiplies CursorArt.cpp's whole silhouette (its kTipX/kFootY/kWingX geometry), same meaning as CursorArt_Draw()'s flScale parameter today. Default is 0.8, not 1.0 -- see comment above.
         float cursor_outline_width = 2.0f;  // 1.0..6.0 px -- stroke width before the scale above is applied; matches CursorArt.cpp's kOutlineWidth constant.
         // Unset (default) = the outline follows the live accent hue, exactly

@@ -673,6 +673,8 @@ namespace gamescope::config
                 // -- deliberately not read here any more.
 
                 // Cursor tab (ConfigSchema.h's OverlaySettings comment block).
+                s.overlay.cursor_style = JGetString( *pOverlay, "cursor_style", s.overlay.cursor_style ) == "pointy"
+                    ? "pointy" : "default";
                 s.overlay.cursor_scale = JGetFloat( *pOverlay, "cursor_scale", s.overlay.cursor_scale );
                 s.overlay.cursor_outline_width = JGetFloat( *pOverlay, "cursor_outline_width", s.overlay.cursor_outline_width );
                 s.overlay.cursor_outline_color = JGetOptInt( *pOverlay, "cursor_outline_color" );
@@ -1060,6 +1062,7 @@ namespace gamescope::config
 
             // Cursor tab (see the parse side above and ConfigSchema.h's
             // OverlaySettings comment block).
+            jOverlay[ "cursor_style" ] = o.cursor_style == "pointy" ? "pointy" : "default";
             jOverlay[ "cursor_scale" ] = o.cursor_scale;
             jOverlay[ "cursor_outline_width" ] = o.cursor_outline_width;
             jOverlay[ "cursor_outline_color" ] = o.cursor_outline_color.has_value()

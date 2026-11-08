@@ -453,6 +453,25 @@ TEST_CASE( "overlay.cursor_override_game round-trips", "[config]" )
     }
 }
 
+// Cursor Style: "pointy" persists, the default is "default", unknown strings load as default.
+TEST_CASE( "overlay.cursor_style round-trips and unknown loads as default", "[config]" )
+{
+    {
+        TempConfigHome home;
+        REQUIRE( Settings{}.overlay.cursor_style == "default" );
+        Settings s{};
+        s.overlay.cursor_style = "pointy";
+        REQUIRE( SaveGlobal( s ) );
+        REQUIRE( LoadGlobal().overlay.cursor_style == "pointy" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": { \"cursor_style\": \"sparkly\" } }";
+        REQUIRE( LoadGlobal().overlay.cursor_style == "default" );
+    }
+}
+
 // The two compatibility switches (Block direct scanout, Compress output images) are
 // UNSET unless written: a global.json from before the keys existed loads them
 // absent, a save of unset keys writes none, and a set key is written and kept.

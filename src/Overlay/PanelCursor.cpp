@@ -112,6 +112,15 @@ namespace gamescope
 		return a;
 	}
 
+	namespace overlay
+	{
+		bool CursorArt_IsPointy()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.overlay.cursor_style == "pointy";
+		}
+	}
+
 	void PanelCursor_RegisterArea( ui::Registry &reg )
 	{
 		ui::Area &a = reg.Add( "setup.cursor", "Cursor", ui::Section::Setup );
@@ -130,6 +139,21 @@ namespace gamescope
 		a.Badge( []{ return std::string( "global only" ); } );
 
 		a.Group( "Shape" );
+
+		static const ui::Option kStyleOptions[] = {
+			{ 0, "Default" },
+			{ 1, "Pointy" },
+		};
+		a.Choice( "cursor.style", "Style",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.overlay.cursor_style == "pointy" ? 1 : 0; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.overlay.cursor_style = n == 1 ? "pointy" : "default"; QueueSave(); } ),
+			kStyleOptions, std::size( kStyleOptions ) )
+			.Help( "Default is the classic triangle. Pointy is a slimmer, sharper arrow. Both use "
+			       "the outline and inlay colours below." )
+			.Key( "overlay.cursor_style" )
+			.Default( 0 )
+			.Keywords( "cursor style pointer arrow pointy shape" );
 
 		a.Slider( "cursor.scale", "Size",
 			ui::AnyBind::Of<float>(

@@ -131,6 +131,32 @@ namespace gamescope::overlay
 		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
 	}
 
+	void CursorArt_PointyTipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY )
+	{
+		// Edges leave the tip towards the last vertex and the first wing.
+		float x0, y0, x1, y1, x3, y3;
+		CursorArt_PointyVertex( 0, 0.0f, 0.0f, 1.0f, &x0, &y0 );
+		CursorArt_PointyVertex( 1, 0.0f, 0.0f, 1.0f, &x1, &y1 );
+		CursorArt_PointyVertex( kPointyCount - 1, 0.0f, 0.0f, 1.0f, &x3, &y3 );
+		const float l1 = std::sqrt( x1 * x1 + y1 * y1 ), l3 = std::sqrt( x3 * x3 + y3 * y3 );
+		float flDirX = 0.0f, flDirY = 0.0f, flMagnitude = 0.0f;
+		if ( l1 > 0.0001f && l3 > 0.0001f )
+		{
+			const float u1x = x1 / l1, u1y = y1 / l1, u3x = x3 / l3, u3y = y3 / l3;
+			const float flCos = std::clamp( u1x * u3x + u1y * u3y, -1.0f, 1.0f );
+			const float flSinHalf = std::sin( std::acos( flCos ) * 0.5f );
+			const float bx = -( u1x + u3x ), by = -( u1y + u3y );
+			const float bl = std::sqrt( bx * bx + by * by );
+			if ( bl > 0.0001f && flSinHalf > 0.0001f )
+			{
+				flDirX = bx / bl; flDirY = by / bl;
+				flMagnitude = ( flOutlineWidth * 0.5f ) / flSinHalf;
+			}
+		}
+		if ( pflOffsetX ) *pflOffsetX = flDirX * flMagnitude;
+		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
+	}
+
 	uint32_t CursorArt_AccentRgb()
 	{
 		// kAccent is ImU32, i.e. IM_COL32's little-endian R,G,B,A byte order.
@@ -170,9 +196,35 @@ namespace gamescope::overlay
 		// shifted back by that same offset (see CursorArt_TipMiterOffset()'s
 		// comment in the header).
 		float flOffsetX, flOffsetY;
-		CursorArt_TipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
+		const bool bPointy = CursorArt_IsPointy();
+		if ( bPointy )
+			CursorArt_PointyTipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
+		else
+			CursorArt_TipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
 		const float flOriginX = flTipX - flOffsetX;
 		const float flOriginY = flTipY - flOffsetY;
+
+		if ( bPointy )
+		{
+			ImVec2 v[ kPointyCount ];
+			for ( int i = 0; i < kPointyCount; i++ )
+			{
+				CursorArt_PointyVertex( i, flOriginX, flOriginY, flScale, &v[ i ].x, &v[ i ].y );
+			}
+			const ImU32 uInlay = PackOpaque( appearance.uInlayRgb );
+			// Concave (notch at v[2]): two triangles sharing the tip-notch
+			// diagonal. Anti-aliased fill is switched off for them so no
+			// faint seam shows along that interior edge; the outline stroke
+			// is centred on the true boundary and covers the hard edges.
+			const ImDrawListFlags uOldFlags = pDrawList->Flags;
+			pDrawList->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+			pDrawList->AddTriangleFilled( v[ 0 ], v[ 1 ], v[ 2 ], uInlay );
+			pDrawList->AddTriangleFilled( v[ 0 ], v[ 2 ], v[ 3 ], uInlay );
+			pDrawList->Flags = uOldFlags;
+			pDrawList->AddPolyline( v, kPointyCount, PackOpaque( appearance.uOutlineRgb ),
+			                        ImDrawFlags_Closed, flOutlineWidth * flScale );
+			return;
+		}
 
 		const ImVec2 vecPoints[ 3 ] =
 		{
