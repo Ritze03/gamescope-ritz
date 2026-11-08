@@ -555,6 +555,14 @@ namespace gamescope::ui
 		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false,
 		                     bool bLiftCharRule = false );
 
+		// A Multiselector that is ALWAYS segmented: Choice()'s segmented branch
+		// without the measure-and-downgrade. For a modal, which cannot host the
+		// Shell's dropdown popup (a downgraded Choice would be dead there).
+		// Cells are content-sized from rcGroup.Min.x, rcGroup's height. True on
+		// a change. Both labels must fit the pane; the caller owns that.
+		bool Segmented( const ImRect &rcGroup, const char *pszId, int *pnValue,
+		                const Option *pOptions, size_t nOptions );
+
 		// ---- Dropdown -- ui-design-guide.md's Dropdown entry ---------------
 		// A Choice FORCED to present as a dropdown, regardless of whether it
 		// would fit segmented -- Registry.h's Entry::Dropdown() is the
@@ -785,7 +793,16 @@ namespace gamescope::ui
 		// only that row. Ctrl toggles it, except that the `nExclusive` row (< 0:
 		// none) is alone when clicked, and an ordinary Ctrl-click replaces it.
 		// Never leaves the selection empty.
-		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive = -1 );
+		// RANGE (file-manager rules): `*pnAnchor` (nullptr = no anchor kept, a
+		// Shift click then acts as a plain one) is where the last plain or
+		// Ctrl click landed. Shift+click selects exactly anchor..nClicked
+		// inclusive, replacing the selection; Ctrl+Shift+click ADDS that range.
+		// The anchor moves on plain and Ctrl clicks only, never on Shift. The
+		// exclusive row never shares a multi-row range: it is dropped from it
+		// (a range that is only that row selects it alone). Anchor unset (< 0)
+		// or out of range: the click acts as a plain one and sets the anchor.
+		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive = -1,
+		                        bool bShift = false, int *pnAnchor = nullptr );
 
 		// Pure geometry for one item's row: where the tag, the label and the
 		// secondary text sit, at the priority the sketch implies -- the LABEL

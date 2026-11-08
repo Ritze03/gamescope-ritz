@@ -37,7 +37,7 @@ depends on the machine's display.
 
 ## Export dialog
 
-760 wide, title `Export '<profile>'`, left **What to export** (the tree, starts from
+900 wide (panes at least 400 x 360), title `Export '<profile>'`, left **What to export** (the tree, starts from
 `DefaultTicks()`; a parent shows Off / On / Mixed and sets all its children), right **Preview**
 (read-only text of exactly what will be copied, recomputed on a change only). For a game profile
 that inherits, **Include inherited values** (ticked by default): ticked writes the full resolved
@@ -47,7 +47,10 @@ N groups`. When Clipboard sync is off a muted note says the copy stays inside ga
 
 ## Import dialog
 
-760 wide, a 2 x 2 grid. **Source** (top left) has a Multiselector, `Paste JSON | From profile`.
+900 wide (panes at least 400 wide, 250 / 270 tall), a 2 x 2 grid. **Source** (top left) has a
+Multiselector, `Paste JSON | From profile`, always segmented (`controls::Segmented()`, both labels
+full). `Why:` `Choice` downgrades to a dropdown when cramped, and a modal does not run the
+Shell's popup machinery, so that dropdown could not open (user: *"I can't open the dropdown"*).
 *Paste JSON*: an editable field and a Paste button (Ctrl+V works); it parses on every change and an
 error shows inline in **orange** under the field. *From profile*: a list of the existing profiles
 (same labels as the destination list); picking one calls
@@ -59,7 +62,12 @@ the same for both.
 **Destination**: a multi-select list, `+ New profile` first, then every profile. Click selects
 only that row; Ctrl+click toggles a row; `+ New profile` is exclusive (clicking it, with or
 without Ctrl, selects only it; Ctrl+clicking an existing profile replaces it); the selection is
-never empty. Up/Down/Home/End stay single-select. Below the list: for a new profile a name field,
+never empty. Shift+click selects the range between the **anchor** (the row last clicked plain or
+with Ctrl) and the clicked row, replacing the selection; Ctrl+Shift+click adds that range. The
+anchor does not move on Shift. `+ New profile` never shares a multi-row range: it is dropped from
+it (only a range that is just that row selects it). Up/Down/Home/End stay single-select; with
+Shift they extend the range from the anchor instead (`ListBoxMultiClick()`, anchor kept in the
+list's ImGui state). Below the list: for a new profile a name field,
 prefilled from the pasted profile name and made free (`Comp 2`), with an error line only while
 the name is refused; otherwise `Imports into '<Name>'` or `Imports into N profiles`. Importing
 into the source profile itself is allowed (it shows 0 changes).
@@ -92,8 +100,8 @@ The overlay never enables ImGui nav, so each dialog owns a cursor over the tree 
 (`TreeCursorStep()` on `ListBoxStep()`, skipping greyed rows): Up/Down/Home/End move it, Space
 toggles, Esc closes. Over the Source and Destination lists, Up/Down/Home/End/Enter go to the
 hovered list and the tree ignores them; the mouse wheel scrolls a hovered list with no click
-needed. Ctrl+click is the multi-select gesture in the Destination list (a plain
-`ListBox` ignores it). Tree keys are ignored while a text field is active, and Enter never
+needed. Ctrl+click and Shift+click are the multi-select gestures in the Destination list (a plain
+`ListBox` ignores them). Tree keys are ignored while a text field is active, and Enter never
 confirms while the paste field has focus (the modal's own rule: no confirm with an active item).
 
 ## Why

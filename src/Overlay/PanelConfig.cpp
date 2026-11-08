@@ -787,7 +787,7 @@ namespace gamescope
 
 		float ExportBodyRows()
 		{
-			float fl = ( 22.0f + 300.0f + ui::tok::kM ) / ui::tok::kRowH + ClipboardNoteRows();
+			float fl = ( 22.0f + 360.0f + ui::tok::kM ) / ui::tok::kRowH + ClipboardNoteRows();
 			if ( s_Export.bOffersInherited )
 				fl += ( ui::tok::kRowH + 40.0f ) / ui::tok::kRowH;
 			return fl;
@@ -799,7 +799,7 @@ namespace gamescope
 			ClipboardOffNote( ctx, /* bExport */ true );
 
 			const char *apszTitles[ 2 ] = { "What to export", "Preview" };
-			const ui::ModalPaneRowLayout lay = ui::ModalPaneRow( ctx, apszTitles, 2, 330.0f, 300.0f );
+			const ui::ModalPaneRowLayout lay = ui::ModalPaneRow( ctx, apszTitles, 2, 400.0f, 360.0f );
 			if ( DrawSelectionTree( lay.rcBox[ 0 ], "extree", x.ticked, nullptr, x.nCursor,
 			                        !ImGui::IsAnyItemActive() ) )
 				x.bPreviewDirty = true;
@@ -851,7 +851,7 @@ namespace gamescope
 			ui::ModalSpec spec;
 			spec.sTitle            = "Export '" + s_Export.meta.name + "'";
 			spec.sPrimaryLabel     = "Copy to clipboard";
-			spec.flWidthBase       = 760.0f;
+			spec.flWidthBase       = 900.0f;
 			spec.bCloseOnBackdrop  = true;
 			spec.flMinBodyRows     = ExportBodyRows();
 			spec.fnBody            = DrawExportBody;
@@ -1027,15 +1027,15 @@ namespace gamescope
 			const float flXS  = ui::Px( ui::tok::kXS );
 			const float flLineH = ui::Px( 18.0f );
 
-			// The Multiselector: its control sits flXS below the pane's top.
+			// The Multiselector, ALWAYS segmented: ui::controls::Choice would
+			// downgrade to a dropdown when cramped, and a modal cannot host the
+			// Shell's dropdown popup, so that form would be dead here.
 			{
-				const ui::Lane lane = ui::Lane::ForColumn( rcBox.GetWidth() / std::max( ui::Scale(), 0.01f ) );
-				const float flShift = ( ui::Px( ui::tok::kRowH ) - ui::Px( ui::tok::kControlH ) ) * 0.5f;
-				const ui::RowCtx row = ui::RowCtx::ForRow( lane, rcBox.Min.x, rcBox.Min.y + flXS - flShift );
 				const ui::Option opts[ 2 ] = { { 0, "Paste JSON" }, { 1, "From profile" } };
+				const ImRect rcSeg( rcBox.Min.x + flPad, rcBox.Min.y + flXS,
+				                    rcBox.Max.x - flPad, rcBox.Min.y + flXS + ui::Px( ui::tok::kControlH ) );
 				int nMode = i.nSource;
-				if ( ui::controls::Choice( row, "srcmode", &nMode, opts, 2, false, /* bLiftCharRule */ true ).bChanged &&
-				     nMode != i.nSource )
+				if ( ui::controls::Segmented( rcSeg, "srcmode", &nMode, opts, 2 ) && nMode != i.nSource )
 				{
 					i.nSource = nMode;
 					ImportSourceChanged();
@@ -1246,12 +1246,12 @@ namespace gamescope
 			ClipboardOffNote( ctx, /* bExport */ false );
 
 			const char *apszTop[ 2 ] = { "Source", "Destination" };
-			const ui::ModalPaneRowLayout top = ui::ModalPaneRow( ctx, apszTop, 2, 330.0f, 210.0f );
+			const ui::ModalPaneRowLayout top = ui::ModalPaneRow( ctx, apszTop, 2, 400.0f, 250.0f );
 			DrawSourceBox( top.rcBox[ 0 ] );
 			DrawDestinationBox( top.rcBox[ 1 ] );
 
 			const char *apszBottom[ 2 ] = { "What to import", "Changes" };
-			const ui::ModalPaneRowLayout bot = ui::ModalPaneRow( ctx, apszBottom, 2, 330.0f, 220.0f );
+			const ui::ModalPaneRowLayout bot = ui::ModalPaneRow( ctx, apszBottom, 2, 400.0f, 270.0f );
 			const ImVec2 vMouse = ImGui::GetIO().MousePos;
 			const bool bKeys = !ImGui::IsAnyItemActive() && !i.rcDestList.Contains( vMouse ) &&
 			                   !i.rcSrcList.Contains( vMouse );
@@ -1357,9 +1357,9 @@ namespace gamescope
 			ui::ModalSpec spec;
 			spec.sTitle           = "Import settings";
 			spec.sPrimaryLabel    = "Import";
-			spec.flWidthBase      = 760.0f;
+			spec.flWidthBase      = 900.0f;
 			spec.bCloseOnBackdrop = true;
-			spec.flMinBodyRows    = ( 22.0f * 2.0f + 210.0f + 220.0f + ui::tok::kM * 2.0f ) / ui::tok::kRowH + ClipboardNoteRows();
+			spec.flMinBodyRows    = ( 22.0f * 2.0f + 250.0f + 270.0f + ui::tok::kM * 2.0f ) / ui::tok::kRowH + ClipboardNoteRows();
 			spec.fnBody           = DrawImportBody;
 			spec.fnPrimaryEnabled = ImportCanPress;
 			spec.fnValidate       = ImportValidate;

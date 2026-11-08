@@ -17,7 +17,13 @@ The newest version below is the one this build reports.
 - **Import into several profiles**: Ctrl+click in the Import destination list selects
   more than one profile, so one set of settings can go into all of them at once.
 
+- **Range select in Import destinations**: Shift+click (or Shift+Up/Down) selects every
+  profile between two rows, Ctrl+Shift+click adds the range, like in a file manager.
+
 ### Fixed
+- **Import Source switch**: It was a dropdown that would not open; it is now always the
+  two-button switch, fully readable.
+- **Bigger Export and Import dialogs**: Both dialogs are about 20% larger.
 - **Lists scroll with the wheel**: A list, like the Import destinations, now scrolls when
   the pointer is over it, without clicking it first.
 - **Empty space in the Import dialog**: The paste field and the destination list now fill

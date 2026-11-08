@@ -1198,6 +1198,57 @@ namespace gamescope::ui
 			return bChanged;
 		}
 
+		// The segmented cells themselves, shared by Choice() and Segmented():
+		// content-sized cells laid left to right from rcGroup.Min.x, rcGroup's
+		// height. True when a press moved *pnValue.
+		bool DrawSegmentedCells( const ImRect &rcGroup, const Option *pOptions, size_t nOptions,
+		                         const CellRun &run, int *pnValue )
+		{
+			bool bChanged = false;
+			const float flGap = Px( tok::kGapSeg );
+			float flX = rcGroup.Min.x;
+			for ( size_t i = 0; i < nOptions; ++i )
+			{
+				const ImRect rcCell( flX, rcGroup.Min.y, flX + run.widths[ i ], rcGroup.Max.y );
+				flX += run.widths[ i ] + flGap;
+
+				const bool bOn = ( *pnValue == pOptions[ i ].nValue );
+				const Atom a = Begin( rcCell, pOptions[ i ].pszLabel );
+				if ( a && a.bPressed && !bOn )
+				{
+					*pnValue = pOptions[ i ].nValue;
+					bChanged = true;
+					ImGui::MarkItemEdited( a.id );
+				}
+
+				const ImU32 colFill = bOn ? Accent( 0.24f )
+				                          : ( a.bHovered ? palette::White( 0.11f ) : palette::White( 0.04f ) );
+				Dl()->AddRectFilled( rcCell.Min, rcCell.Max, colFill );
+				Boundary( rcCell, bOn ? Accent( 0.60f ) : Col( Role::LineControl ) );
+
+				// B's inactive text is 50% (4.96:1) and its active cell is
+				// Mono 600; the weight change is carried by the face, so
+				// the active cell asks for a different role.
+				DrawText( rcCell, bOn ? TypeRole::Section : TypeRole::Meta,
+					bOn ? Col( Role::AccentSeg ) : Col( Role::TextSegInactive ),
+					pOptions[ i ].pszLabel, TextAlign::Center );
+			}
+			return bChanged;
+		}
+
+		// A Multiselector that is ALWAYS segmented (see Controls.h).
+		bool Segmented( const ImRect &rcGroup, const char *pszId, int *pnValue,
+		                const Option *pOptions, size_t nOptions )
+		{
+			if ( !pOptions || nOptions == 0 || !pnValue )
+				return false;
+			const CellRun run = MeasureCells( pOptions, nOptions, TypeRole::Meta, tok::kSegPadX, tok::kGapSeg );
+			ImGui::PushID( pszId );
+			const bool bChanged = DrawSegmentedCells( rcGroup, pOptions, nOptions, run, pnValue );
+			ImGui::PopID();
+			return bChanged;
+		}
+
 		// =================================================================
 		//  Choice -- segmented (SPEC §3.2) or dropdown (§3.3)
 		// =================================================================
@@ -1237,36 +1288,8 @@ namespace gamescope::ui
 				// deliberately NOT stretched to fill the lane -- a stretched
 				// cell set reads as a tab bar, and there is no tab bar in this
 				// product (SPEC §3.2).
-				const ImRect rcGroup = row.PlacePx( run.flTotal );
-				const float  flGap   = Px( tok::kGapSeg );
-
-				float flX = rcGroup.Min.x;
-				for ( size_t i = 0; i < nOptions; ++i )
-				{
-					const ImRect rcCell( flX, rcGroup.Min.y, flX + run.widths[ i ], rcGroup.Max.y );
-					flX += run.widths[ i ] + flGap;
-
-					const bool bOn = ( *pnValue == pOptions[ i ].nValue );
-					const Atom a = Begin( rcCell, pOptions[ i ].pszLabel );
-					if ( a && a.bPressed && !bOn )
-					{
-						*pnValue = pOptions[ i ].nValue;
-						res.bChanged = true;
-						ImGui::MarkItemEdited( a.id );
-					}
-
-					const ImU32 colFill = bOn ? Accent( 0.24f )
-					                          : ( a.bHovered ? palette::White( 0.11f ) : palette::White( 0.04f ) );
-					Dl()->AddRectFilled( rcCell.Min, rcCell.Max, colFill );
-					Boundary( rcCell, bOn ? Accent( 0.60f ) : Col( Role::LineControl ) );
-
-					// B's inactive text is 50% (4.96:1) and its active cell is
-					// Mono 600; the weight change is carried by the face, so
-					// the active cell asks for a different role.
-					DrawText( rcCell, bOn ? TypeRole::Section : TypeRole::Meta,
-						bOn ? Col( Role::AccentSeg ) : Col( Role::TextSegInactive ),
-						pOptions[ i ].pszLabel, TextAlign::Center );
-				}
+				if ( DrawSegmentedCells( row.PlacePx( run.flTotal ), pOptions, nOptions, run, pnValue ) )
+					res.bChanged = true;
 			}
 			else
 			{
@@ -2071,11 +2094,40 @@ namespace gamescope::ui
 			return ListBoxScrollForSelection( nScrollTop, -1, nVisibleRows, nCount );
 		}
 
-		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive )
+		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive,
+		                        bool bShift, int *pnAnchor )
 		{
 			if ( nClicked < 0 || nClicked >= (int)sel.size() )
 				return;
-			const bool bHasExclusive = nExclusive >= 0 && nExclusive < (int)sel.size();
+			const int  nSize = (int)sel.size();
+			const bool bHasExclusive = nExclusive >= 0 && nExclusive < nSize;
+
+			// Shift: a range from the anchor. The anchor itself never moves.
+			if ( bShift && pnAnchor && *pnAnchor >= 0 && *pnAnchor < nSize )
+			{
+				const int nLo = std::min( *pnAnchor, nClicked );
+				const int nHi = std::max( *pnAnchor, nClicked );
+				std::vector<bool> range( sel.size(), false );
+				for ( int n = nLo; n <= nHi; ++n )
+					range[ (size_t)n ] = true;
+				// The exclusive row never shares a multi-row range.
+				if ( bHasExclusive && nLo != nHi )
+					range[ (size_t)nExclusive ] = false;
+				if ( bCtrl )
+				{
+					if ( bHasExclusive && sel[ (size_t)nExclusive ] )
+						sel[ (size_t)nExclusive ] = false;
+					for ( size_t n = 0; n < sel.size(); ++n )
+						if ( range[ n ] )
+							sel[ n ] = true;
+				}
+				else
+					sel = range;
+				return;
+			}
+
+			if ( pnAnchor )
+				*pnAnchor = nClicked;
 			const bool bOnlyThis = !bCtrl || ( bHasExclusive && nClicked == nExclusive );
 			if ( bOnlyThis )
 			{
@@ -2147,6 +2199,7 @@ namespace gamescope::ui
 			ImGui::PushID( pszId );
 			const ImGuiID id = ImGui::GetID( "##scroll" );
 			ImGuiStorage *pStorage = ImGui::GetStateStorage();
+			const ImGuiID idAnchor = ImGui::GetID( "##anchor" );
 
 			const int   nCount  = (int)nItems;
 			const float flRowH  = Px( tok::kControlH );
@@ -2171,13 +2224,22 @@ namespace gamescope::ui
 				if ( bNav )
 				{
 					const int nNext = ListBoxStep( *pnSelected, nCount, eNav );
+					const int prevCursor = *pnSelected;
 					if ( nNext != *pnSelected )
 					{
 						*pnSelected = nNext;
 						out.bChanged = true;
-						// Up/Down stay single-select in multi mode.
+						// Up/Down stay single-select in multi mode; Shift
+						// extends the range from the anchor instead.
 						if ( pMulti && pMulti->size() == nItems )
-							ListBoxMultiClick( *pMulti, nNext, false, nExclusive );
+						{
+							int nAnchor = pStorage->GetInt( idAnchor, -1 );
+							if ( nAnchor < 0 )
+								nAnchor = prevCursor;
+							ListBoxMultiClick( *pMulti, nNext, false, nExclusive,
+							                   ImGui::GetIO().KeyShift, &nAnchor );
+							pStorage->SetInt( idAnchor, nAnchor );
+						}
 					}
 				}
 
@@ -2236,7 +2298,12 @@ namespace gamescope::ui
 					if ( bMulti )
 					{
 						const std::vector<bool> before = *pMulti;
-						ListBoxMultiClick( *pMulti, i, ImGui::GetIO().KeyCtrl, nExclusive );
+						int nAnchor = pStorage->GetInt( idAnchor, -1 );
+						if ( nAnchor < 0 )
+							nAnchor = *pnSelected;
+						ListBoxMultiClick( *pMulti, i, ImGui::GetIO().KeyCtrl, nExclusive,
+						                   ImGui::GetIO().KeyShift, &nAnchor );
+						pStorage->SetInt( idAnchor, nAnchor );
 						if ( before != *pMulti )
 							out.bChanged = true;
 					}

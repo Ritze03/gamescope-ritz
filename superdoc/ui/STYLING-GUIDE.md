@@ -173,7 +173,8 @@ geometry cannot diverge (the slider-grab bug class).
 - **Segmented vs dropdown**: `MeasureCells()` decides how wide a segmented group is, and both the
   fit test and the layout read it. Do NOT hand-measure a Choice. `Entry::Segmented()` lifts only the
   8-character label rule; the 5-option cap and the fit test stay, so a too-wide row is still a
-  dropdown.
+  dropdown. `controls::Segmented(rc, id, &v, opts, n)` is the same cells forced segmented, for a
+  modal (it cannot host the dropdown popup); the caller makes sure the labels fit.
 - **Stepper** is borderless `- +` glyphs; the number is in the value column and can be typed.
 - **Settings that resize the UI** (`overlay.display_scale`) must hand the reflowing half of their
   write to `controls::DeferToRelease()` while `ui::IsPointerDragActive()` is true. `Why:` the track is
