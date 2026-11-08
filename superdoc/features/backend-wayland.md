@@ -232,7 +232,7 @@ limit, scanout engaged on 298 of 300 each, 0 faults.
 
 **Still open:** the picture artifacts when entering and leaving fullscreen with scanout on, which
 sometimes show older frames. They persist with the fix and were reportedly absent under `allbos`;
-cause unknown ([TODO](../planning/TODO.md)). The Compatibility area's warning about scanout being off
+cause unknown. The Compatibility area's warning about scanout being off
 is back since the crash fix ([diagnostics.md](diagnostics.md)).
 
 ### Block direct scanout from gamescope

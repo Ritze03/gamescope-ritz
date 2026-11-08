@@ -283,7 +283,7 @@ there is nothing to block ([overlay-shell.md](overlay-shell.md#inspector-only-sw
 after tabbing out and back in, and this switch cured it, so host direct scanout is involved; GNOME has no
 reliable user switch for scanout, so the switch has to be on gamescope's side, both as a test and as a
 workaround. The brief artifacts on entering and leaving fullscreen under Hyprland and GNOME are the
-other reason ([TODO](../planning/TODO.md)). `Why it moved:` it first lived in the Inspector of the
+other reason. `Why it moved:` it first lived in the Inspector of the
 Direct scanout row, then in Display > General (the user asked for a normal GUI feature); on
 2026-11-08 it moved here, with the user's idea of machine-wide settings left and checks right.
 

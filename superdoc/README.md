@@ -203,7 +203,6 @@ About 8.6 MB of the total is 29 audit screenshots in
 casually. `planning/ui-design-guide.md` is partly behind the code: use
 [ui/STYLING-GUIDE.md](ui/STYLING-GUIDE.md) and the code tokens instead.
 
-- [TODO](planning/TODO.md) — open work with no feature doc yet.
 - [SPEC](planning/SPEC.md), [DECISIONS](planning/DECISIONS.md),
   [ISSUES](planning/ISSUES.md) — the original overlay master spec, decision record and issue
   breakdown (2026-08-21).
