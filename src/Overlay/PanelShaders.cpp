@@ -438,7 +438,7 @@ namespace gamescope
 			            + ( r.adaptive_gamma.enabled ? 1 : 0 )
 			            + ( r.adaptive_brightness_v2.enabled ? 1 : 0 )
 			            + ( r.shadow_lift.enabled ? 1 : 0 );
-			return std::to_string( n ) + " of 8 effects on";
+			return std::to_string( n ) + " of 9 effects on";
 		} );
 
 		// PREVIEW (SPLIT SCREEN) -- NEW 2026-09-14, the user's own testing
@@ -447,12 +447,12 @@ namespace gamescope
 		// the right half of the screen ... so you can judge what an effect
 		// you can actually achieve." Deliberately the FIRST row in the
 		// area, above the "Effects" band -- it is not itself one of the
-		// eight effects the Summary/GroupCount above count, it applies to
+		// nine effects the Summary/GroupCounts count, it applies to
 		// whichever of them are already on. An empty Group() first: without
 		// it this row's own m_nGroup (0, the "no Group() call yet" default)
-		// would coincide with the "Effects" GroupCount band pushed right
-		// below, which would draw the EFFECTS header above this row and
-		// count it as a ninth switch in that band's on/total badge.
+		// would coincide with the first effect GroupCount band pushed right
+		// below, which would draw that header above this row and count it
+		// as an extra switch in that band's on/total badge.
 		a.Group( "" );
 		a.Switch( "image.shaders.preview_split", "Preview (split screen)",
 			ui::AnyBind::Of<bool>(
@@ -471,7 +471,9 @@ namespace gamescope
 		// switch rows. Independent binaries are separate rows -- they are
 		// NOT a Bank, because they can be turned on for unrelated reasons
 		// (SPEC §3.12's governing rule).
-		a.GroupCount( "Effects" );
+		// Three effect bands (2026-11-08, "a page full of effect settings is
+		// really bad to actually look at"), each with its own n / m count.
+		a.GroupCount( "Colour" );
 
 		// Renamed from "Vibrancy" 2026-09-08 (see this file's Vibrancy switch
 		// just below, and superdoc/features/shader-effects.md's "Saturation
@@ -559,6 +561,7 @@ namespace gamescope
 				.Step( 0.05f )
 				.Default( 1.0f );
 
+		a.GroupCount( "Post-processing" );
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.pre_sharpen.enabled; },
@@ -669,6 +672,7 @@ namespace gamescope
 		// well under the six budget -- see this section's header comment.
 		// Neutral (0.0, identity) is the default, so an existing config is
 		// unaffected.
+		a.GroupCount( "Brightness control" );
 		a.Switch( "image.shaders.shadow_lift", "Shadow Control",
 			ui::AnyBind::Of<bool>(
 				[]{ return Cfg().reshade.shadow_lift.enabled; },
@@ -693,7 +697,7 @@ namespace gamescope
 		// comment for the raises and why each one happened; the ninth,
 		// "Leave dark scenes alone", folded in here 2026-09-16 once V2's
 		// 8 -> 10 raise freed the slot it had been denied).
-		// Back in the Effects GroupCount band as a plain Switch (request
+		// Back in the Brightness control GroupCount band as a plain Switch (request
 		// #17, 2026-09-07): the mode is now the row's first Param instead of
 		// the row's own value, so it shows in the Inspector's params column
 		// like the other eight.

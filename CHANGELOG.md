@@ -16,7 +16,6 @@ The newest version below is the one this build reports.
   the list instead of pasted JSON, so settings copy from one profile to another directly.
 - **Import into several profiles**: Ctrl+click in the Import destination list selects
   more than one profile, so one set of settings can go into all of them at once.
-
 - **Range select in Import destinations**: Shift+click (or Shift+Up/Down) selects every
   profile between two rows, Ctrl+Shift+click adds the range, like in a file manager.
 
@@ -28,6 +27,11 @@ The newest version below is the one this build reports.
   the pointer is over it, without clicking it first.
 - **Empty space in the Import dialog**: The paste field and the destination list now fill
   their panes instead of leaving a blank strip below them.
+- **Shaders summary**: The area now reads "n of 9 effects on" instead of "of 8".
+
+### Info
+- **Shaders regrouped**: The effect switches now sit under Colour, Post-processing and
+  Brightness control, each with its own on-count.
 
 ## [0.14.12] – 2026-11-07
 

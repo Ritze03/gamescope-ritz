@@ -20,6 +20,17 @@ and the install step that copied it, are gone (`superdoc/planning/DECISIONS.md` 
 The ReShade loader itself stays, for users' own `.fx` files — see
 [reshade-effects](reshade-effects.md), which is now third-party-only.
 
+**Layout (2026-11-08).** The area stays one column; each effect keeps its own settings in
+the Inspector. Only the switches are grouped, each effect band a `GroupCount` with its own
+`n / m` on-count (the shell counts the band's switch rows): an unheaded group with
+**Preview (split screen)**; **Colour** (Saturation, Vibrancy, Color Boost);
+**Post-processing** (Pre-Sharpen, Bloom); **Brightness control** (Shadow Control, Adaptive
+Brightness, Adaptive Gamma, Adaptive Brightness V2; their mutual exclusion is unchanged);
+**Diagnostics** (Pipeline). The area summary counts all nine effects ("n of 9 effects on";
+it said "of 8" until this date). `Why:` the user found one band of nine switches "really bad
+to actually look at" and asked for Pre-Sharpen and Bloom as post-processing and the four
+shadow/adaptive effects as brightness control.
+
 **Titles vs. identifiers.** The three multi-word switches were retitled 2026-09-05:
 "Shadow lift" → **Shadow Control**, "Adaptive brightness" → **Adaptive Brightness**,
 "Pre-sharpen" → **Pre-Sharpen**. `Why only the titles moved:` an entry id is what the
