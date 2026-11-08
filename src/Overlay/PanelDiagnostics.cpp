@@ -3,7 +3,6 @@
 #include "PanelDiagnostics.h"
 
 #include <string>
-#include <vector>
 
 #include "Diagnostics.h"
 #include "UI/Registry.h"
@@ -23,45 +22,19 @@ namespace gamescope
 			return v.scanout.sHeadline;
 		}
 
-		ui::ContentLine Line( ui::ContentKind eKind, std::string sText, int nSeverity = 0 )
-		{
-			ui::ContentLine l;
-			l.eKind = eKind;
-			l.sText = std::move( sText );
-			l.nSeverity = nSeverity;
-			return l;
-		}
-
-		// The body under the rows: the fix when there is one to apply, else the
-		// one sentence of why nothing is shown.
-		std::vector<ui::ContentLine> BodyLines()
+		// The check result under the rows, as ordinary rows (2026-11-08): an area with a
+		// content body cannot split into columns, so the former body made the whole area
+		// draw as one column.
+		bool ScanoutOff()
 		{
 			const DiagnosticsView v = Diagnostics_View();
-			std::vector<ui::ContentLine> out;
-			if ( !v.bEverChecked )
-				return out;
+			return v.bEverChecked && v.scanout.eState == ScanoutState::Off;
+		}
 
-			using K = ui::ContentKind;
-			const diagnostics::ScanoutResult &r = v.scanout;
-			if ( r.eState == ScanoutState::Off )
-			{
-				out.push_back( Line( K::Heading, "Hyprland: direct scanout is off", 2 ) );
-				out.push_back( Line( K::Plain, "Hyprland draws every frame itself, and that draw waits behind the game's GPU work," ) );
-				out.push_back( Line( K::Plain, "so frames made by Frame generation are lost before they reach the screen." ) );
-				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "Set render:direct_scanout to 1 or 2 and reload. 1 is on for a fullscreen window," ) );
-				out.push_back( Line( K::Plain, "2 is on only for windows with the game content type. Your choice." ) );
-				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "    Lua config:       render = { direct_scanout = 1 }  (or 2)" ) );
-				out.push_back( Line( K::Plain, "    hyprlang config:  render { direct_scanout = 1 }    (or 2)" ) );
-				out.push_back( Line( K::Plain, "" ) );
-				out.push_back( Line( K::Plain, "Screen capture turns scanout off again while it runs." ) );
-			}
-			else if ( !r.sReason.empty() )
-			{
-				out.push_back( Line( K::Plain, r.sReason ) );
-			}
-			return out;
+		std::string ReasonText()
+		{
+			const DiagnosticsView v = Diagnostics_View();
+			return v.bEverChecked ? v.scanout.sReason : std::string();
 		}
 	}
 
@@ -197,7 +170,26 @@ namespace gamescope
 			.Help( "Runs every diagnostic again and updates the rows. It never shows a pop-up." )
 			.Keywords( "recheck rerun refresh check again diagnostics" );
 
-		a.Content( []{ return BodyLines(); } );
-		a.FollowsTail( []{ return false; } );
+		// The result: the fix when scanout is off, else the one sentence of why nothing
+		// is shown. Rows, not a content body, so the area splits into two columns.
+		a.Facts( "diagnostics.scanout_off", "Direct scanout is off", []{ return std::string( "Costs frames" ); } )
+			.ShownWhen( []{ return ScanoutOff(); } )
+			.Help( "Hyprland draws every frame itself, and that draw waits behind the game's GPU work, "
+			       "so frames made by Frame generation are lost before they reach the screen. Screen "
+			       "capture turns scanout off again while it runs." )
+			.Keywords( "direct scanout off hyprland frames lost" );
+		a.Facts( "diagnostics.scanout_fix", "Fix", []{ return std::string( "Set render:direct_scanout to 1 or 2, reload" ); } )
+			.ShownWhen( []{ return ScanoutOff(); } )
+			.Help( "1 is on for a fullscreen window, 2 is on only for windows with the game content "
+			       "type. Your choice. Lua config: render = { direct_scanout = 1 } (or 2). hyprlang "
+			       "config: render { direct_scanout = 1 } (or 2)." )
+			.Keywords( "fix direct scanout lua hyprlang config render" );
+		a.Facts( "diagnostics.scanout_lua", "Lua config", []{ return std::string( "render = { direct_scanout = 1 }  (or 2)" ); } )
+			.ShownWhen( []{ return ScanoutOff(); } );
+		a.Facts( "diagnostics.scanout_hyprlang", "hyprlang config", []{ return std::string( "render { direct_scanout = 1 }  (or 2)" ); } )
+			.ShownWhen( []{ return ScanoutOff(); } );
+		a.Facts( "diagnostics.scanout_reason", "Detail", []{ return ReasonText(); } )
+			.ShownWhen( []{ return !ReasonText().empty() && !ScanoutOff(); } )
+			.Help( "Why the Direct scanout check shows what it shows." );
 	}
 }

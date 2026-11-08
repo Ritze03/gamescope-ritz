@@ -19,13 +19,19 @@ columns (`a.Columns( 2 )`, `GroupColumn`):
 | 0 | This machine | Block direct scanout, Compress output images (Wayland backend only, `ShownWhen`) |
 | 0 | Recommended settings | **Pick recommended settings** [Apply], **Re-detect** [Detect] |
 | 1 | Environment | read-only Facts Desktop, GPU, Backend, Recommended; then the Direct scanout check |
-| 1 | Actions | Recheck all, the check result body |
+| 1 | Actions | Recheck all; then the check result as rows (shown when relevant): when scanout is Off, Direct scanout is off / Fix / Lua config / hyprlang config, else Detail (the reason sentence) |
 
 `Why:` the user's idea (2026-11-08): machine-wide settings on the left, checks on the right, and
 defaults derived from the environment instead of one fixed default. The two switches left Display >
 General for it (General is one column again). The summary line is the Direct scanout headline. The
 GPU fact is filled from `rendervulkan.cpp` (`Diagnostics_SetGpuName( props.deviceName )`). The rail
 icon is unchanged (the pulse trace).
+
+`Why:` the check result is rows, not a content body (user test 2026-11-08: *"The compatibility tab is
+a single column instead of two."*). `Solve()` forces one column for an area with a content body
+(`AreaIsUnsplittable`, `Shell.cpp`), so the former body under Recheck all collapsed the pinned
+two-column layout. The text is the same; the area has no `Area::Content` now. Two columns also need
+a sheet of at least `kTwoColMin` (840 base px, `UI/Layout.h`) after rail and inspector column.
 
 ### Restart to apply
 
