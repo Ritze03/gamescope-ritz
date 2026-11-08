@@ -557,3 +557,23 @@ TEST_CASE( "parse: size and nesting limits", "[profile_export]" )
     WARN( "max dots in a settings key: " << nDots );
     CHECK( nDots + 2 <= 16 );
 }
+
+TEST_CASE( "check: the dry run refuses exactly what apply refuses and writes nothing", "[profile_export]" )
+{
+    TempHome home;
+    MakeGeneral( "Dest", Modified() );
+    const std::string sBefore = Slurp( ProfilePath( "Dest" ) );
+    MakeGeneral( "Src", Settings{} );
+    pe::ParsedExport good = pe::ParseExport( ExportOf( "Src", AllGroups() ) );
+    REQUIRE( good.valid );
+
+    CHECK( pe::CheckImport( good, "Dest", false, AllGroups() ).empty() );
+    CHECK( !pe::CheckImport( good, "Dest", false, {} ).empty() );
+    CHECK( !pe::CheckImport( good, "Ghost", false, AllGroups() ).empty() );
+    CHECK( !pe::CheckImport( pe::ParseExport( "nope" ), "Dest", false, AllGroups() ).empty() );
+    pe::ParsedExport part = pe::ParseExport( ExportOf( "Src", { "motion.blur" } ) );
+    CHECK( !pe::CheckImport( part, "Dest", false, { "motion.framegen" } ).empty() );
+
+    CHECK( Slurp( ProfilePath( "Dest" ) ) == sBefore );
+    CHECK( !std::filesystem::exists( ProfilePath( "Dest" ) + ".bak" ) );
+}

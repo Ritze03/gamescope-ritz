@@ -2064,6 +2064,38 @@ namespace gamescope::ui
 			return std::clamp( nScrollTop, 0, nMaxTop );
 		}
 
+		int ListBoxScrollTop( int nScrollTop, int nSelected, bool bSelectionMoved, int nVisibleRows, int nCount )
+		{
+			if ( bSelectionMoved )
+				return ListBoxScrollForSelection( nScrollTop, nSelected, nVisibleRows, nCount );
+			return ListBoxScrollForSelection( nScrollTop, -1, nVisibleRows, nCount );
+		}
+
+		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive )
+		{
+			if ( nClicked < 0 || nClicked >= (int)sel.size() )
+				return;
+			const bool bHasExclusive = nExclusive >= 0 && nExclusive < (int)sel.size();
+			const bool bOnlyThis = !bCtrl || ( bHasExclusive && nClicked == nExclusive );
+			if ( bOnlyThis )
+			{
+				std::fill( sel.begin(), sel.end(), false );
+				sel[ (size_t)nClicked ] = true;
+				return;
+			}
+			// Ctrl on an ordinary row: it replaces the exclusive row, else toggles.
+			if ( bHasExclusive && sel[ (size_t)nExclusive ] )
+			{
+				sel[ (size_t)nExclusive ] = false;
+				sel[ (size_t)nClicked ]   = true;
+				return;
+			}
+			sel[ (size_t)nClicked ] = !sel[ (size_t)nClicked ];
+			// Never empty: toggling off the last selected row leaves it on.
+			if ( std::none_of( sel.begin(), sel.end(), []( bool b ){ return b; } ) )
+				sel[ (size_t)nClicked ] = true;
+		}
+
 		ListBoxItemLayout LayoutListBoxItem( const ImRect &rcItem, float flTagWidthPx,
 		                                     float flSecondaryWidthPx, float flPadPx )
 		{
@@ -2105,7 +2137,8 @@ namespace gamescope::ui
 		}
 
 		ListBoxResult ListBox( const ImRect &rcBody, const char *pszId, int *pnSelected,
-		                      const ListBoxItem *pItems, size_t nItems, int nMaxVisibleRows )
+		                      const ListBoxItem *pItems, size_t nItems, int nMaxVisibleRows,
+		                      std::vector<bool> *pMulti, int nExclusive )
 		{
 			ListBoxResult out;
 			if ( !pnSelected )
@@ -2142,6 +2175,9 @@ namespace gamescope::ui
 					{
 						*pnSelected = nNext;
 						out.bChanged = true;
+						// Up/Down stay single-select in multi mode.
+						if ( pMulti && pMulti->size() == nItems )
+							ListBoxMultiClick( *pMulti, nNext, false, nExclusive );
 					}
 				}
 
@@ -2156,9 +2192,22 @@ namespace gamescope::ui
 			{
 				const float flWheel = ImGui::GetIO().MouseWheel;
 				if ( flWheel != 0.0f )
-					nScroll -= (int)flWheel;
+				{
+					// A notch is at least one row, however small the delta.
+					int nStep = (int)flWheel;
+					if ( nStep == 0 )
+						nStep = flWheel > 0.0f ? 1 : -1;
+					nScroll -= nStep;
+				}
 			}
-			nScroll = ListBoxScrollForSelection( nScroll, *pnSelected, nVisible, nCount );
+			// Keep the selection in view only on the frame it MOVED (click,
+			// keys, an outside change). Doing it every frame snapped the
+			// list back to the selection after each wheel notch, so a list
+			// could not be scrolled away from its selected row.
+			const ImGuiID idLastSel = ImGui::GetID( "##lastsel" );
+			const bool bSelMoved = *pnSelected != pStorage->GetInt( idLastSel, -2 );
+			nScroll = ListBoxScrollTop( nScroll, *pnSelected, bSelMoved, nVisible, nCount );
+			pStorage->SetInt( idLastSel, *pnSelected );
 
 			// ---- chrome: wire lines only, no fill, no rounding (the sketch) --
 			Dl()->AddRectFilled( rcBody.Min, rcBody.Max, palette::White( 0.03f ) );
@@ -2181,9 +2230,16 @@ namespace gamescope::ui
 				snprintf( szRowId, sizeof( szRowId ), "row%d", i );
 				const Atom a = Begin( rcItem, szRowId );
 
-				const bool bSelected = ( i == *pnSelected );
+				const bool bMulti = pMulti && pMulti->size() == nItems;
 				if ( a && a.bPressed )
 				{
+					if ( bMulti )
+					{
+						const std::vector<bool> before = *pMulti;
+						ListBoxMultiClick( *pMulti, i, ImGui::GetIO().KeyCtrl, nExclusive );
+						if ( before != *pMulti )
+							out.bChanged = true;
+					}
 					if ( *pnSelected != i )
 					{
 						*pnSelected = i;
@@ -2215,6 +2271,7 @@ namespace gamescope::ui
 				// segmented Choice cell's stronger 24% (that fill marks
 				// which of several buttons is "on", not which row of many
 				// is selected).
+				const bool bSelected = bMulti ? (bool)( *pMulti )[ (size_t)i ] : ( i == *pnSelected );
 				if ( bSelected )
 					Dl()->AddRectFilled( rcItem.Min, rcItem.Max, Accent( 0.10f ) );
 				else if ( a.bHovered )

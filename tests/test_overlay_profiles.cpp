@@ -601,3 +601,47 @@ TEST_CASE( "importing into the session profile reloads the panels and the values
 		bListed = bListed || m.name == "Friend";
 	REQUIRE( bListed );
 }
+
+TEST_CASE( "the import wording for several destinations", "[overlay_profiles]" )
+{
+	REQUIRE( ImportToastMulti( 3, 45, 0 ) == "Imported into 3 profiles: 45 settings" );
+	REQUIRE( ImportToastMulti( 2, 1, 2 ) == "Imported into 2 profiles: 1 setting, 2 skipped" );
+	REQUIRE( ImportTargetLine( { "Comp" } ) == "Imports into 'Comp'" );
+	REQUIRE( ImportTargetLine( { "Comp", "Rust", "Zed" } ) == "Imports into 3 profiles" );
+	REQUIRE( ImportSourceMessage( "Comp", 1 ) == "Settings of 'Comp': 1 group" );
+	REQUIRE( ImportSourceMessage( "Comp", 7 ) == "Settings of 'Comp': 7 groups" );
+	// One destination keeps the bare reason; several name the profile and the progress.
+	REQUIRE( ImportFailure( 1, 0, "Comp", "Could not write." ) == "Could not write." );
+	REQUIRE( ImportFailure( 3, 0, "Rust", "Gone." ) == "Could not import into 'Rust': Gone. Nothing was changed." );
+	REQUIRE( ImportFailure( 3, 1, "Rust", "Gone." ) == "Could not import into 'Rust': Gone. 1 profile was already written." );
+	REQUIRE( ImportFailure( 4, 2, "Rust", "Gone." ) == "Could not import into 'Rust': Gone. 2 profiles were already written." );
+}
+
+TEST_CASE( "applying to several destinations checks all before writing any", "[overlay_profiles]" )
+{
+	std::vector<size_t> written;
+	// A bad third destination: the first two are never written.
+	auto o = ApplyToAll( 3, []( size_t n ) { return n == 2 ? std::string( "bad" ) : std::string(); },
+	                     [ & ]( size_t n ) { written.push_back( n ); return std::string(); } );
+	REQUIRE( !o.ok );
+	REQUIRE( o.nFailedAt == 2 );
+	REQUIRE( o.error == "bad" );
+	REQUIRE( o.nWritten == 0 );
+	REQUIRE( written.empty() );
+
+	// All fine: every one is written, in order.
+	o = ApplyToAll( 3, []( size_t ) { return std::string(); },
+	                [ & ]( size_t n ) { written.push_back( n ); return std::string(); } );
+	REQUIRE( o.ok );
+	REQUIRE( o.nWritten == 3 );
+	REQUIRE( written == std::vector<size_t>{ 0, 1, 2 } );
+
+	// A write fails midway: stop there and say how many were written.
+	written.clear();
+	o = ApplyToAll( 3, []( size_t ) { return std::string(); },
+	                [ & ]( size_t n ) { if ( n == 1 ) return std::string( "io" ); written.push_back( n ); return std::string(); } );
+	REQUIRE( !o.ok );
+	REQUIRE( o.nFailedAt == 1 );
+	REQUIRE( o.nWritten == 1 );
+	REQUIRE( written == std::vector<size_t>{ 0 } );
+}

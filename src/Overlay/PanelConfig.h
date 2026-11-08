@@ -596,6 +596,83 @@ namespace gamescope
 			return s;
 		}
 
+		// "Imported into 3 profiles: 45 settings, 2 skipped" (several destinations;
+		// one destination keeps ImportToast's wording).
+		inline std::string ImportToastMulti( size_t nProfiles, int nApplied, int nSkipped )
+		{
+			std::string s = "Imported into " + std::to_string( nProfiles ) + " profiles: " +
+				std::to_string( nApplied ) + ( nApplied == 1 ? " setting" : " settings" );
+			if ( nSkipped > 0 )
+				s += ", " + std::to_string( nSkipped ) + " skipped";
+			return s;
+		}
+
+		// Under the destination list: "Imports into 'X'" or "Imports into 3 profiles".
+		inline std::string ImportTargetLine( const std::vector<std::string> &names )
+		{
+			if ( names.size() == 1 )
+				return "Imports into '" + names[ 0 ] + "'";
+			return "Imports into " + std::to_string( names.size() ) + " profiles";
+		}
+
+		// The Source pane's message for a profile picked as the source.
+		inline std::string ImportSourceMessage( const std::string &sName, size_t nGroups )
+		{
+			return "Settings of '" + sName + "': " + std::to_string( nGroups ) + ( nGroups == 1 ? " group" : " groups" );
+		}
+
+		// A refused press over several destinations: which one, how many were
+		// already written. One destination keeps the bare reason.
+		inline std::string ImportFailure( size_t nTotal, size_t nWritten, const std::string &sName,
+		                                  const std::string &sReason )
+		{
+			if ( nTotal <= 1 )
+				return sReason;
+			std::string s = "Could not import into '" + sName + "': " + sReason;
+			if ( nWritten == 0 )
+				s += " Nothing was changed.";
+			else
+				s += " " + std::to_string( nWritten ) + ( nWritten == 1 ? " profile was" : " profiles were" ) +
+					" already written.";
+			return s;
+		}
+
+		// The press over N destinations: check ALL first (fnCheck returns the
+		// refusal or ""), write none unless every check passes, then write each
+		// (fnApply returns the refusal or ""), stopping at the first failure.
+		struct MultiApplyOutcome
+		{
+			bool        ok = true;
+			size_t      nWritten = 0;
+			size_t      nFailedAt = 0;   // index of the destination that refused
+			std::string error;           // its reason
+		};
+		template <typename FnCheck, typename FnApply>
+		inline MultiApplyOutcome ApplyToAll( size_t nDests, FnCheck &&fnCheck, FnApply &&fnApply )
+		{
+			MultiApplyOutcome o;
+			for ( size_t n = 0; n < nDests; ++n )
+			{
+				std::string sErr = fnCheck( n );
+				if ( !sErr.empty() )
+				{
+					o.ok = false; o.nFailedAt = n; o.error = std::move( sErr );
+					return o;
+				}
+			}
+			for ( size_t n = 0; n < nDests; ++n )
+			{
+				std::string sErr = fnApply( n );
+				if ( !sErr.empty() )
+				{
+					o.ok = false; o.nFailedAt = n; o.error = std::move( sErr );
+					return o;
+				}
+				++o.nWritten;
+			}
+			return o;
+		}
+
 		// ---- Changes lines ---------------------------------------------------
 		// A row's label: what the lookup (the registry) calls its key, else the
 		// key itself.

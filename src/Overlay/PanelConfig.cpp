@@ -862,36 +862,65 @@ namespace gamescope
 		}
 
 		// ---- Import -------------------------------------------------------
+		struct ImportDest
+		{
+			std::string       name;
+			bool              bNew = false;
+			pe::DiffResult    diff;
+			std::vector<std::string> labels;
+		};
+
 		struct ImportState
 		{
+			// The source: pasted text, or the export of one profile. `sText` is
+			// what is parsed; `sPaste` is only what the paste field holds.
+			int                  nSource = 0;            // 0 = Paste JSON, 1 = From profile
+			std::string          sPaste;
 			std::string          sText;
+			std::string          sSrcText;               // the picked profile's export
+			std::string          sSrcError;
+			int                  nSrc = -1;              // the list's cursor, -1 = none picked
+			std::string          sSrcName;
+			std::vector<ui::controls::ListBoxItem> srcItems;
+			ImRect               rcSrcList;              // empty unless the list is shown
+
 			pe::ParsedExport     parsed;
 			bool                 bBlank = true;       // nothing (but whitespace) pasted yet
 			pe::GroupSet         ticked, usable;
 			int                  nCursor = -1;
 
 			std::vector<config::ProfileMeta> existing;   // the destinations after "+ New profile"
-			std::vector<std::string>         destLabel, destTag, destSecondary;
+			std::vector<std::string> destLabel, destTag, destSecondary;
 			std::vector<ui::controls::ListBoxItem> destItems;
-			int                  nDest = 0;              // 0 = a new profile, i = existing[ i - 1 ]
+			int                  nDest = 0;              // the list's cursor; 0 = "+ New profile"
+			std::vector<bool>    destSel;                // the selected rows; [0] alone = a new profile
+			ImRect               rcDestList;
 			std::string          sNewName;
 			bool                 bEditingName = false;
 			bool                 bNameTouched = false;
 
-			pe::DiffResult           diff;
-			std::vector<std::string> diffLabels;
+			std::vector<ImportDest>  dests;              // the Changes, one per selected row
 			bool                     bDiffDirty = true;
-			std::string              sError;             // the last ApplyImport refusal
-			pe::ApplyResult          result;
+			std::string              sError;             // the last refusal
+			std::vector<pe::ApplyResult> results;
 		};
 		ImportState s_Import;
 
 		bool ImportValid()          { return !s_Import.bBlank && s_Import.parsed.valid; }
-		bool ImportIsNew()          { return s_Import.nDest == 0; }
-		std::string ImportDestName()
+		bool ImportIsNew()          { return !s_Import.destSel.empty() && s_Import.destSel[ 0 ]; }
+		std::string ImportNameOf( int nIdx )
 		{
 			const ImportState &i = s_Import;
-			return i.nDest == 0 ? i.sNewName : i.existing[ (size_t)i.nDest - 1 ].name;
+			return nIdx == 0 ? i.sNewName : i.existing[ (size_t)nIdx - 1 ].name;
+		}
+		// The selected rows, ascending.
+		std::vector<int> ImportDestIdx()
+		{
+			std::vector<int> out;
+			for ( size_t n = 0; n < s_Import.destSel.size(); ++n )
+				if ( s_Import.destSel[ n ] )
+					out.push_back( (int)n );
+			return out;
 		}
 		pe::GroupSet ImportTicks()  { return panelconfig::TicksWithin( s_Import.ticked, s_Import.usable ); }
 		std::string ImportNameError()
@@ -904,7 +933,8 @@ namespace gamescope
 			                                          ImportNameError().empty() );
 		}
 
-		// The paste changed: parse it, start the ticks and the new name over.
+		// The source or its text changed: parse it, start the ticks and the new
+		// name over.
 		void ImportTextChanged()
 		{
 			ImportState &i = s_Import;
@@ -926,85 +956,189 @@ namespace gamescope
 			i.bDiffDirty = true;
 		}
 
+		// The mode or the picked profile changed: take the matching text.
+		void ImportSourceChanged()
+		{
+			ImportState &i = s_Import;
+			i.sText = i.nSource == 0 ? i.sPaste : i.sSrcText;
+			ImportTextChanged();
+		}
+
+		// A profile was picked as the source: its export with every group and
+		// the inherited values, in memory, through the same path as a paste.
+		void ImportPickSource( int nIdx )
+		{
+			ImportState &i = s_Import;
+			i.nSrc = nIdx;
+			i.sSrcText.clear();
+			i.sSrcError.clear();
+			i.sSrcName.clear();
+			if ( nIdx >= 0 && (size_t)nIdx < i.existing.size() )
+			{
+				i.sSrcName = i.existing[ (size_t)nIdx ].name;
+				pe::GroupSet all;
+				for ( const pe::ExportGroup &g : pe::Groups() )
+					all.insert( g.id );
+				const pe::ExportResult r = pe::ExportSettings( i.sSrcName, all, /* bResolved */ true );
+				if ( r.ok )
+					i.sSrcText = r.text;
+				else
+					i.sSrcError = r.error.empty() ? std::string( "Could not read the profile" ) : r.error;
+			}
+			ImportSourceChanged();
+		}
+
 		// The Changes lines, recomputed on a change only: DiffImport() reads
-		// the destination profile from disk.
+		// each destination profile from disk.
 		void RefreshImportDiff()
 		{
 			ImportState &i = s_Import;
 			if ( !i.bDiffDirty )
 				return;
 			i.bDiffDirty = false;
-			i.diff = pe::DiffResult{};
-			i.diffLabels.clear();
+			i.dests.clear();
 			const pe::GroupSet ticks = ImportTicks();
 			if ( !ImportValid() || ticks.empty() )
 				return;
-			i.diff = pe::DiffImport( i.parsed, ImportIsNew() ? std::string() : ImportDestName(), ticks );
 			const auto labels = BuildLabelMap();
-			for ( const pe::DiffRow &r : i.diff.rows )
-				i.diffLabels.push_back( panelconfig::DiffLabel( r.key, [ &labels ]( const std::string &sKey )
-				{
-					auto it = labels.find( sKey );
-					return it == labels.end() ? std::string() : it->second;
-				} ) );
+			for ( int nIdx : ImportDestIdx() )
+			{
+				ImportDest d;
+				d.name = ImportNameOf( nIdx );
+				d.bNew = nIdx == 0;
+				d.diff = pe::DiffImport( i.parsed, d.bNew ? std::string() : d.name, ticks );
+				for ( const pe::DiffRow &r : d.diff.rows )
+					d.labels.push_back( panelconfig::DiffLabel( r.key, [ &labels ]( const std::string &sKey )
+					{
+						auto it = labels.find( sKey );
+						return it == labels.end() ? std::string() : it->second;
+					} ) );
+				i.dests.push_back( std::move( d ) );
+			}
 		}
 
-		// Paste JSON (top left): the field, the Paste button, the message.
-		void DrawPasteBox( const ImRect &rcBox )
+		// The Source pane (top left): a Multiselector (Paste JSON | From
+		// profile), then the paste field and Paste button, or the profile list.
+		// The message sits under both; every strip is sized to its content.
+		void DrawSourceBox( const ImRect &rcBox )
 		{
 			ImportState &i = s_Import;
-			const float flStrip = ui::Px( 60.0f );
-			const ImRect rcText( rcBox.Min.x, rcBox.Min.y, rcBox.Max.x, rcBox.Max.y - flStrip );
-			bool bChanged = ui::controls::TextMultiline( rcText, "pastejson", &i.sText, false,
-				"Paste the exported JSON here", !i.bBlank && !i.parsed.valid );
-
-			const ImRect rcStrip( rcBox.Min.x, rcText.Max.y, rcBox.Max.x, rcBox.Max.y );
 			const float flPad = ui::Px( ui::tok::kS );
-			const float flChipW = ui::MeasureText( ui::TypeRole::Meta, "Paste" ).x + ui::Px( ui::tok::kVerbPadX ) * 2.0f;
-			const ImRect rcChip( rcStrip.Max.x - flPad - flChipW, rcStrip.Min.y + ui::Px( ui::tok::kXS ),
-			                     rcStrip.Max.x - flPad, rcStrip.Min.y + ui::Px( ui::tok::kXS + ui::tok::kControlH ) );
-			const ui::controls::VerbSpec spec{ "Paste", ui::controls::Intent::Neutral, true };
-			if ( ui::controls::VerbStrip( rcChip, "pastebtn", &spec, 1 ) == 0 )
+			const float flXS  = ui::Px( ui::tok::kXS );
+			const float flLineH = ui::Px( 18.0f );
+
+			// The Multiselector: its control sits flXS below the pane's top.
 			{
-				i.sText = ui::controls::ClipboardRead();
-				bChanged = true;
+				const ui::Lane lane = ui::Lane::ForColumn( rcBox.GetWidth() / std::max( ui::Scale(), 0.01f ) );
+				const float flShift = ( ui::Px( ui::tok::kRowH ) - ui::Px( ui::tok::kControlH ) ) * 0.5f;
+				const ui::RowCtx row = ui::RowCtx::ForRow( lane, rcBox.Min.x, rcBox.Min.y + flXS - flShift );
+				const ui::Option opts[ 2 ] = { { 0, "Paste JSON" }, { 1, "From profile" } };
+				int nMode = i.nSource;
+				if ( ui::controls::Choice( row, "srcmode", &nMode, opts, 2, false, /* bLiftCharRule */ true ).bChanged &&
+				     nMode != i.nSource )
+				{
+					i.nSource = nMode;
+					ImportSourceChanged();
+				}
 			}
-			if ( bChanged )
-				ImportTextChanged();
+			const float flHeadH = ui::Px( ui::tok::kControlH ) + flXS * 2.0f;
+			const float flTop   = rcBox.Min.y + flHeadH;
 
 			// The message: nothing while blank, the parse error in orange when
 			// invalid, what was recognised when valid.
 			std::string sMsg;
 			ui::Role eRole = ui::Role::TextMeta;
-			if ( !i.bBlank && !i.parsed.valid )
+			if ( i.nSource == 1 && i.nSrc < 0 )
+				sMsg = "Pick the profile to copy settings from";
+			else if ( i.nSource == 1 && !i.sSrcError.empty() )
+			{
+				sMsg  = i.sSrcError;
+				eRole = ui::Role::WarnText;
+			}
+			else if ( !i.bBlank && !i.parsed.valid )
 			{
 				sMsg  = i.parsed.error;
 				eRole = ui::Role::WarnText;
 			}
 			else if ( ImportValid() )
-				sMsg = "Export of '" + ( i.parsed.profile.empty() ? std::string( "?" ) : i.parsed.profile ) + "': " +
-					std::to_string( i.parsed.groups_present.size() ) + ( i.parsed.groups_present.size() == 1 ? " group" : " groups" );
-			const float flTextW = rcChip.Min.x - rcStrip.Min.x - flPad * 2.0f;
-			const std::vector<std::string> lines = panelconfig::WrapWords( sMsg, MetaColumns( flTextW ) );
-			const float flLineH = ui::Px( 18.0f );
-			for ( size_t n = 0; n < lines.size() && n < 3; ++n )
 			{
-				const float y = rcStrip.Min.y + ui::Px( ui::tok::kXS ) + flLineH * (float)n;
-				ui::DrawText( ImRect( rcStrip.Min.x + flPad, y, rcChip.Min.x - flPad, y + flLineH ),
+				if ( i.nSource == 1 )
+					sMsg = panelconfig::ImportSourceMessage( i.sSrcName, i.parsed.groups_present.size() );
+				else
+					sMsg = "Export of '" + ( i.parsed.profile.empty() ? std::string( "?" ) : i.parsed.profile ) + "': " +
+						std::to_string( i.parsed.groups_present.size() ) + ( i.parsed.groups_present.size() == 1 ? " group" : " groups" );
+			}
+
+			const bool  bPaste = i.nSource == 0;
+			const float flChipW = ui::MeasureText( ui::TypeRole::Meta, "Paste" ).x + ui::Px( ui::tok::kVerbPadX ) * 2.0f;
+			const float flTextW = rcBox.GetWidth() - flPad * 2.0f - ( bPaste ? flChipW + flPad : 0.0f );
+			const std::vector<std::string> lines = panelconfig::WrapWords( sMsg, MetaColumns( flTextW ) );
+			const size_t nLines = std::min<size_t>( lines.size(), 3 );
+			// Strip height: the chip or the message lines, whichever is taller,
+			// plus padding; none at all for an empty message without the chip.
+			float flStripH = flLineH * (float)nLines;
+			if ( bPaste )
+				flStripH = std::max( flStripH, ui::Px( ui::tok::kControlH ) );
+			if ( flStripH > 0.0f )
+				flStripH += flXS * 2.0f;
+			const ImRect rcMain( rcBox.Min.x, flTop, rcBox.Max.x, rcBox.Max.y - flStripH );
+			const ImRect rcStrip( rcBox.Min.x, rcMain.Max.y, rcBox.Max.x, rcBox.Max.y );
+
+			i.rcSrcList = ImRect();
+			float flMsgRight = rcBox.Max.x - flPad;
+			if ( bPaste )
+			{
+				const bool bChanged = ui::controls::TextMultiline( rcMain, "pastejson", &i.sPaste, false,
+					"Paste the exported JSON here", !i.bBlank && !i.parsed.valid );
+				const ImRect rcChip( rcStrip.Max.x - flPad - flChipW, rcStrip.Min.y + flXS,
+				                     rcStrip.Max.x - flPad, rcStrip.Min.y + flXS + ui::Px( ui::tok::kControlH ) );
+				const ui::controls::VerbSpec spec{ "Paste", ui::controls::Intent::Neutral, true };
+				bool bPasted = false;
+				if ( ui::controls::VerbStrip( rcChip, "pastebtn", &spec, 1 ) == 0 )
+				{
+					i.sPaste = ui::controls::ClipboardRead();
+					bPasted = true;
+				}
+				if ( bChanged || bPasted )
+					ImportSourceChanged();
+				flMsgRight = rcChip.Min.x - flPad;
+			}
+			else
+			{
+				i.rcSrcList = rcMain;
+				int nSel = i.nSrc;
+				const ui::controls::ListBoxResult res = ui::controls::ListBox( rcMain, "srclist", &nSel,
+					i.srcItems.data(), i.srcItems.size(), 10 );
+				if ( res.bChanged && nSel != i.nSrc )
+					ImportPickSource( nSel );
+			}
+
+			for ( size_t n = 0; n < nLines; ++n )
+			{
+				const float y = rcStrip.Min.y + flXS + flLineH * (float)n;
+				ui::DrawText( ImRect( rcStrip.Min.x + flPad, y, flMsgRight, y + flLineH ),
 				              ui::TypeRole::Meta, ui::Col( eRole ), lines[ n ].c_str() );
 			}
 		}
 
-		// Destination (top right): the list, then a name field when new.
-		// Returns the list's rect (the keyboard goes to it while hovered).
-		ImRect DrawDestinationBox( const ImRect &rcBox )
+		// Destination (top right): the multi-select list, then a name field
+		// when new, else a line saying where it imports.
+		void DrawDestinationBox( const ImRect &rcBox )
 		{
 			ImportState &i = s_Import;
-			const float flBelow = ui::Px( ui::tok::kRowH + 22.0f );
+			const float flPad   = ui::Px( ui::tok::kS );
+			const bool  bNew    = ImportIsNew();
+			const std::string sErr = bNew ? ImportNameError() : std::string();
+			const float flNoteH = ui::Px( 18.0f + ui::tok::kXS * 2.0f );
+			// Below the list: the Name row (+ the error line only when there is
+			// one), or one note line.
+			const float flBelow = bNew ? ui::Px( ui::tok::kRowH ) + ( sErr.empty() ? 0.0f : flNoteH ) : flNoteH;
 			const ImRect rcList( rcBox.Min.x, rcBox.Min.y, rcBox.Max.x, rcBox.Max.y - flBelow );
+			i.rcDestList = rcList;
+
 			int nSel = i.nDest;
 			const ui::controls::ListBoxResult res = ui::controls::ListBox( rcList, "destlist", &nSel,
-				i.destItems.data(), i.destItems.size(), 10 );
+				i.destItems.data(), i.destItems.size(), 10, &i.destSel, /* nExclusive */ 0 );
 			if ( res.bChanged || nSel != i.nDest )
 			{
 				i.nDest      = nSel;
@@ -1012,10 +1146,8 @@ namespace gamescope
 				i.sError.clear();
 			}
 
-			const float flPad = ui::Px( ui::tok::kS );
 			const ImRect rcRow( rcBox.Min.x + flPad, rcList.Max.y, rcBox.Max.x - flPad, rcList.Max.y + ui::Px( ui::tok::kRowH ) );
-			const ImRect rcNote( rcRow.Min.x, rcRow.Max.y, rcRow.Max.x, rcRow.Max.y + ui::Px( 22.0f ) );
-			if ( ImportIsNew() )
+			if ( bNew )
 			{
 				const ui::Lane lane = ui::Lane::ForColumn( rcRow.GetWidth() / std::max( ui::Scale(), 0.01f ) );
 				const ui::RowCtx row = ui::RowCtx::ForRow( lane, rcRow.Min.x, rcRow.Min.y );
@@ -1028,19 +1160,25 @@ namespace gamescope
 					i.bDiffDirty   = true;
 					i.sError.clear();
 				}
-				const std::string sErr = ImportNameError();
 				if ( !sErr.empty() )
+				{
+					const ImRect rcNote( rcRow.Min.x, rcRow.Max.y, rcRow.Max.x, rcRow.Max.y + flNoteH );
 					ui::DrawText( rcNote, ui::TypeRole::Meta, ui::Col( ui::Role::WarnText ), sErr.c_str() );
+				}
 			}
 			else
 			{
+				std::vector<std::string> names;
+				for ( int nIdx : ImportDestIdx() )
+					names.push_back( ImportNameOf( nIdx ) );
+				const ImRect rcNote( rcBox.Min.x + flPad, rcList.Max.y, rcBox.Max.x - flPad, rcBox.Max.y );
 				ui::DrawText( rcNote, ui::TypeRole::Meta, ui::Col( ui::Role::TextMeta ),
-				              ( "Imports into '" + ImportDestName() + "'" ).c_str() );
+				              panelconfig::ImportTargetLine( names ).c_str() );
 			}
-			return rcList;
 		}
 
-		// Changes (bottom right): headline, backup note, skipped, the lines.
+		// Changes (bottom right): per destination a headline, the backup note,
+		// skipped, then the lines. One destination reads as it always did.
 		void DrawChangesBox( const ImRect &rcBox )
 		{
 			ImportState &i = s_Import;
@@ -1067,18 +1205,36 @@ namespace gamescope
 				else
 				{
 					RefreshImportDiff();
-					Lines( panelconfig::ChangesSummary( ImportIsNew(), ImportDestName(), i.diff.count ),
-					       ui::Role::TextPrimary );
-					if ( !ImportIsNew() && i.diff.count > 0 )
-						Lines( panelconfig::ImportBackupNote( ImportDestName() ), ui::Role::TextMeta );
-					if ( !i.sError.empty() )
-						Lines( i.sError, ui::Role::WarnText );
-					if ( !i.diff.skipped_keys.empty() )
-						Lines( panelconfig::UnreadableLine( i.diff.skipped_keys.size() ), ui::Role::WarnText );
-					if ( i.parsed.unknown_count > 0 )
-						Lines( panelconfig::UnknownLine( i.parsed.unknown_count ), ui::Role::WarnText );
-					for ( size_t n = 0; n < i.diff.rows.size(); ++n )
-						Lines( panelconfig::DiffLine( i.diff.rows[ n ], i.diffLabels[ n ] ), ui::Role::TextBody, "  " );
+					const bool bMany = i.dests.size() > 1;
+					auto Unknown = [ & ]()
+					{
+						if ( i.parsed.unknown_count > 0 )
+							Lines( panelconfig::UnknownLine( i.parsed.unknown_count ), ui::Role::WarnText );
+					};
+					if ( bMany )
+					{
+						if ( !i.sError.empty() )
+							Lines( i.sError, ui::Role::WarnText );
+						Unknown();
+					}
+					for ( size_t d = 0; d < i.dests.size(); ++d )
+					{
+						const ImportDest &dst = i.dests[ d ];
+						if ( bMany && d > 0 )
+							ui::ModalPaneNextRow( pane, 8.0f );
+						Lines( panelconfig::ChangesSummary( dst.bNew, dst.name, dst.diff.count ),
+						       ui::Role::TextPrimary );
+						if ( !dst.bNew && dst.diff.count > 0 )
+							Lines( panelconfig::ImportBackupNote( dst.name ), ui::Role::TextMeta );
+						if ( !bMany && !i.sError.empty() )
+							Lines( i.sError, ui::Role::WarnText );
+						if ( !dst.diff.skipped_keys.empty() )
+							Lines( panelconfig::UnreadableLine( dst.diff.skipped_keys.size() ), ui::Role::WarnText );
+						if ( !bMany )
+							Unknown();
+						for ( size_t n = 0; n < dst.diff.rows.size(); ++n )
+							Lines( panelconfig::DiffLine( dst.diff.rows[ n ], dst.labels[ n ] ), ui::Role::TextBody, "  " );
+					}
 				}
 			}
 			ui::ModalPaneEnd( pane );
@@ -1089,14 +1245,16 @@ namespace gamescope
 			ImportState &i = s_Import;
 			ClipboardOffNote( ctx, /* bExport */ false );
 
-			const char *apszTop[ 2 ] = { "Paste JSON", "Destination" };
+			const char *apszTop[ 2 ] = { "Source", "Destination" };
 			const ui::ModalPaneRowLayout top = ui::ModalPaneRow( ctx, apszTop, 2, 330.0f, 210.0f );
-			DrawPasteBox( top.rcBox[ 0 ] );
-			const ImRect rcDestList = DrawDestinationBox( top.rcBox[ 1 ] );
+			DrawSourceBox( top.rcBox[ 0 ] );
+			DrawDestinationBox( top.rcBox[ 1 ] );
 
 			const char *apszBottom[ 2 ] = { "What to import", "Changes" };
 			const ui::ModalPaneRowLayout bot = ui::ModalPaneRow( ctx, apszBottom, 2, 330.0f, 220.0f );
-			const bool bKeys = !ImGui::IsAnyItemActive() && !rcDestList.Contains( ImGui::GetIO().MousePos );
+			const ImVec2 vMouse = ImGui::GetIO().MousePos;
+			const bool bKeys = !ImGui::IsAnyItemActive() && !i.rcDestList.Contains( vMouse ) &&
+			                   !i.rcSrcList.Contains( vMouse );
 			if ( DrawSelectionTree( bot.rcBox[ 0 ], "imtree", i.ticked, &i.usable, i.nCursor, bKeys ) )
 			{
 				i.bDiffDirty = true;
@@ -1105,23 +1263,41 @@ namespace gamescope
 			DrawChangesBox( bot.rcBox[ 1 ] );
 		}
 
-		// The press: the last gate before ApplyImport. A refusal keeps the
-		// dialog open with the reason inline and as a toast.
+		// The press: the last gate before ApplyImport. Every destination is
+		// checked first and nothing is written unless all pass; a refusal keeps
+		// the dialog open with the reason inline and as a toast.
 		bool ImportValidate()
 		{
 			ImportState &i = s_Import;
 			i.sError.clear();
+			i.results.clear();
 			if ( !ImportCanPress() )
 				return false;
-			const pe::ApplyResult r = pe::ApplyImport( i.parsed, ImportDestName(), ImportIsNew(), ImportTicks() );
-			if ( !r.success )
+			const std::vector<int> idx = ImportDestIdx();
+			const pe::GroupSet ticks = ImportTicks();
+			const panelconfig::MultiApplyOutcome out = panelconfig::ApplyToAll( idx.size(),
+				[ & ]( size_t n )
+				{
+					return pe::CheckImport( i.parsed, ImportNameOf( idx[ n ] ), idx[ n ] == 0, ticks );
+				},
+				[ & ]( size_t n )
+				{
+					const pe::ApplyResult r = pe::ApplyImport( i.parsed, ImportNameOf( idx[ n ] ), idx[ n ] == 0, ticks );
+					if ( !r.success )
+						return r.error.empty() ? std::string( "Could not import" ) : r.error;
+					i.results.push_back( r );
+					return std::string();
+				} );
+			if ( !out.ok )
 			{
-				i.sError = r.error.empty() ? std::string( "Could not import" ) : r.error;
+				i.sError = panelconfig::ImportFailure( idx.size(), out.nWritten, ImportNameOf( idx[ out.nFailedAt ] ),
+				                                       out.error );
 				Toast( i.sError, Notifications::Kind::Error );
 				i.bDiffDirty = true;
+				if ( out.nWritten > 0 )
+					s_nListDirty++;
 				return false;
 			}
-			i.result = r;
 			return true;
 		}
 
@@ -1131,8 +1307,19 @@ namespace gamescope
 			// ApplyImport bumped the config generation when it wrote an existing
 			// profile (so every panel reloads, and the live-apply hook pushes the
 			// values when it is the session's); a new profile is only listed.
-			Toast( panelconfig::ImportToast( i.result.destination, ImportIsNew(), i.result.applied,
-			                                 i.result.skipped + i.result.unknown ) );
+			if ( i.results.size() == 1 )
+				Toast( panelconfig::ImportToast( i.results[ 0 ].destination, ImportIsNew(), i.results[ 0 ].applied,
+				                                 i.results[ 0 ].skipped + i.results[ 0 ].unknown ) );
+			else
+			{
+				int nApplied = 0, nSkipped = 0;
+				for ( const pe::ApplyResult &r : i.results )
+				{
+					nApplied += r.applied;
+					nSkipped += r.skipped + r.unknown;
+				}
+				Toast( panelconfig::ImportToastMulti( i.results.size(), nApplied, nSkipped ) );
+			}
 			s_nListDirty++;
 			force_repaint();
 		}
@@ -1160,6 +1347,11 @@ namespace gamescope
 					i.destLabel[ n ].c_str(),
 					i.destTag[ n ].empty() ? nullptr : i.destTag[ n ].c_str(),
 					i.destSecondary[ n ].empty() ? nullptr : i.destSecondary[ n ].c_str() } );
+			// The source list: the same labels, without "+ New profile".
+			for ( size_t n = 1; n < i.destItems.size(); ++n )
+				i.srcItems.push_back( i.destItems[ n ] );
+			i.destSel.assign( i.destItems.size(), false );
+			i.destSel[ 0 ] = true;
 			i.sNewName = panelconfig::ImportSuggestedName( {}, i.existing );
 
 			ui::ModalSpec spec;

@@ -471,6 +471,17 @@ namespace gamescope::config::profile_export
         return d;
     }
 
+    std::string CheckImport( const ParsedExport &parsed, const std::string &sDest, bool bNewProfile,
+                             const GroupSet &ticked )
+    {
+        Plan plan = MakePlan( parsed, sDest, bNewProfile, ticked );
+        if ( !plan.ok )
+            return plan.error.empty() ? std::string( "Could not import" ) : plan.error;
+        if ( plan.touched == 0 )
+            return "Nothing in the selected groups is in this export.";
+        return {};
+    }
+
     ApplyResult ApplyImport( const ParsedExport &parsed, const std::string &sDest, bool bNewProfile,
                              const GroupSet &ticked )
     {

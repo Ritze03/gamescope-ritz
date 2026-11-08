@@ -9,6 +9,20 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.13] – 2026-11-08
+
+### Added
+- **Import from another profile**: The Import dialog's Source can now be a profile from
+  the list instead of pasted JSON, so settings copy from one profile to another directly.
+- **Import into several profiles**: Ctrl+click in the Import destination list selects
+  more than one profile, so one set of settings can go into all of them at once.
+
+### Fixed
+- **Lists scroll with the wheel**: A list, like the Import destinations, now scrolls when
+  the pointer is over it, without clicking it first.
+- **Empty space in the Import dialog**: The paste field and the destination list now fill
+  their panes instead of leaving a blank strip below them.
+
 ## [0.14.12] – 2026-11-07
 
 ### Added

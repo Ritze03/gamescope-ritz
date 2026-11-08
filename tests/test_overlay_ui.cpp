@@ -4032,3 +4032,50 @@ TEST_CASE( "an Entry's ValueText() hook and Preview() are plain declarations", "
 	REQUIRE( boxed.ValueTextOf()( ui::Value{ 3.0f } ) == "3 px" );
 	REQUIRE( boxed.PreviewOf() == ui::Entry::PreviewKind::UiBox );
 }
+
+TEST_CASE( "listbox: multi-select click rules (plain, Ctrl, exclusive row, never empty)", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	std::vector<bool> sel{ true, false, false, false };
+
+	// Plain click: only that row.
+	ListBoxMultiClick( sel, 2, false, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, false } );
+
+	// Ctrl+click adds, then removes.
+	ListBoxMultiClick( sel, 3, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, true } );
+	ListBoxMultiClick( sel, 2, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, false, true } );
+
+	// Ctrl on the last selected row leaves it selected.
+	ListBoxMultiClick( sel, 3, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, false, true } );
+
+	// The exclusive row, with or without Ctrl, is alone.
+	ListBoxMultiClick( sel, 1, true, 0 );
+	ListBoxMultiClick( sel, 0, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ true, false, false, false } );
+
+	// Ctrl on an ordinary row while the exclusive row is selected replaces it.
+	ListBoxMultiClick( sel, 2, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, false } );
+
+	// No exclusive row: Ctrl toggles any row; out-of-range clicks are ignored.
+	std::vector<bool> any{ true, false };
+	ListBoxMultiClick( any, 1, true, -1 );
+	REQUIRE( any == std::vector<bool>{ true, true } );
+	ListBoxMultiClick( any, 5, false, -1 );
+	REQUIRE( any == std::vector<bool>{ true, true } );
+}
+
+TEST_CASE( "listbox: the wheel scrolls away from the selection; only a moved selection pulls the view", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	// Selection at row 0, wheel scrolled the top to 3: it stays there.
+	REQUIRE( ListBoxScrollTop( 3, 0, false, 4, 10 ) == 3 );
+	// The selection moved this frame (click / key): it is brought into view.
+	REQUIRE( ListBoxScrollTop( 3, 0, true, 4, 10 ) == 0 );
+	// Still clamped to the last page.
+	REQUIRE( ListBoxScrollTop( 99, 0, false, 4, 10 ) == 6 );
+}

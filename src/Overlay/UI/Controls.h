@@ -775,6 +775,18 @@ namespace gamescope::ui
 		int ListBoxScrollForSelection( int nScrollTop, int nSelected,
 		                               int nVisibleRows, int nCount );
 
+		// Pure: the scroll top for this frame. The selection is pulled into
+		// view only when it moved this frame (`bSelectionMoved`); otherwise the
+		// offset is just clamped, so the wheel can scroll away from it.
+		int ListBoxScrollTop( int nScrollTop, int nSelected, bool bSelectionMoved,
+		                      int nVisibleRows, int nCount );
+
+		// Pure: a click on row `nClicked` of a multi-select list. Plain click =
+		// only that row. Ctrl toggles it, except that the `nExclusive` row (< 0:
+		// none) is alone when clicked, and an ordinary Ctrl-click replaces it.
+		// Never leaves the selection empty.
+		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive = -1 );
+
 		// Pure geometry for one item's row: where the tag, the label and the
 		// secondary text sit, at the priority the sketch implies -- the LABEL
 		// is never sacrificed; the secondary is the one dropped
@@ -833,9 +845,15 @@ namespace gamescope::ui
 		// flagged in this task's report). Hover-to-navigate is therefore the
 		// whole of it; a future panel that wants Up/Down to reach the list
 		// from elsewhere has to forward those keys itself.
+		//
+		// MULTI-SELECT (optional): pass `pMulti`, one flag per item, and the
+		// rows drawn selected are those flags; *pnSelected stays the cursor
+		// (last click, Up/Down). Click / Ctrl+click follow ListBoxMultiClick();
+		// Up/Down/Home/End collapse to a single selection. nullptr = as before.
 		ListBoxResult ListBox( const ImRect &rcBody, const char *pszId, int *pnSelected,
 		                      const ListBoxItem *pItems, size_t nItems,
-		                      int nMaxVisibleRows = 10 );
+		                      int nMaxVisibleRows = 10,
+		                      std::vector<bool> *pMulti = nullptr, int nExclusive = -1 );
 
 		// ---- SPEC §4.3 -- the anchor grid, a composite body ---------------
 		// 3x3 cells on the control module, so the grid agrees with every other

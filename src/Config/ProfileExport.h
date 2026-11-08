@@ -90,6 +90,11 @@ namespace gamescope::config::profile_export
     // the pasted text count.
     DiffResult DiffImport( const ParsedExport &parsed, const std::string &sDestProfile, const GroupSet &ticked );
 
+    // The dry run of ApplyImport(): every refusal it would give, "" when it would
+    // go ahead. Touches nothing; lets a caller check all destinations first.
+    std::string CheckImport( const ParsedExport &parsed, const std::string &sDest, bool bNewProfile,
+                             const GroupSet &ticked );
+
     // ---- apply --------------------------------------------------------------------
     struct ApplyResult
     {
