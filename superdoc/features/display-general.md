@@ -3,7 +3,7 @@
 The Display > **General** area (`display.general`, `src/Overlay/PanelDisplay.cpp`,
 `RegisterGeneral()`) holds the switches a user flips mid-game, so it is registered first and sits above
 the other Display areas. Its Summary line reads like `VRR off · tearing off`, plus
-` · nested windows maximized` when that switch is on. Four switches, each persisted per profile in the
+` · nested windows maximized` when that switch is on. Four switches persisted per profile in the
 `gamescope.*` config block and mirrored into a live global:
 
 | Row id | Label | Config key | Live target | Launch flag (locks the row) |
@@ -12,6 +12,10 @@ the other Display areas. Its Summary line reads like `VRR off · tearing off`, p
 | `display.allow_tearing` | Allow tearing | `gamescope.tearing_enabled` | `cv_tearing_enabled` | `--immediate-flips` |
 | `display.low_latency_wakeup` | Low-latency wake-up | `gamescope.low_latency_wakeup` | `vblank_measured_lead` | none |
 | `display.force_windows_fullscreen` | Force maximize nested window | `gamescope.force_windows_fullscreen` | `steamcompmgr_set_force_windows_fullscreen()` | `--force-windows-fullscreen` |
+
+Block direct scanout and Compress output images lived here until 2026-11-08; they moved to the
+Compatibility area ([diagnostics.md](diagnostics.md)) with their history. General is one column of
+"Quick toggles" again.
 
 The locks are the `Adaptive sync`, `Allow tearing` and `Force maximize` rows of the flag table in
 [launch-option-lock.md](launch-option-lock.md). `Force grab cursor` used to be a fifth switch here; it

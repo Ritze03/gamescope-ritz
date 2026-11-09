@@ -34,8 +34,10 @@ namespace gamescope::ui
 		bool   bSpansRow = false;
 	};
 
-	// API.md §7's kSpecs, verbatim.
-	BandSpec Band( CompositeKind eKind );
+	// API.md §7's kSpecs, verbatim. `nListStrips` only matters for a List: 1
+	// is the classic band (list rows plus one verb line), 2 adds a second
+	// 44-unit verb line, so the band grows by exactly one line.
+	BandSpec Band( CompositeKind eKind, int nListStrips = 1 );
 
 	struct BandLayout
 	{
@@ -46,6 +48,9 @@ namespace gamescope::ui
 		// width as rcBody, kControlH tall and centred in that line. Zero for
 		// every other composite.
 		ImRect rcStrip;
+		// List only, and only when the list has a second strip: that strip
+		// on the line below the first. Zero otherwise.
+		ImRect rcStrip2;
 	};
 
 	// The four clauses, all mechanical, all satisfied here:
@@ -56,5 +61,6 @@ namespace gamescope::ui
 	//      lines 1..n;
 	//   4. nothing may occupy the label column on lines 2..n -- "it is air".
 	//      Needs no enforcement: no allocator here ever produces a rect there.
-	BandLayout LayOutBand( const Lane &laneBase, float flOriginPx, float flTopPx, CompositeKind eKind );
+	BandLayout LayOutBand( const Lane &laneBase, float flOriginPx, float flTopPx, CompositeKind eKind,
+	                       int nListStrips = 1 );
 }

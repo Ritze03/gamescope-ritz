@@ -4,8 +4,12 @@ FPS shown, update modes, Hide-if-above hysteresis, the removed backdrop, outline
 
 ## FPS shown (2026-10-04)
 
-`fps_display.fps_shown` (row `hud.fps_shown`, a Choice: **Game** / **Output** /
-**Both**, stored as `"game"` / `"output"` / `"both"`, default **Game**, per
+Labels (2026-11-08): **Game**, **Frame gen**, **Game + FG** (were Game / Output /
+Both); stored values unchanged. Why: "Output" was unclear to the user. Sections
+below still use the old names in the user's quotes.
+
+`fps_display.fps_shown` (row `hud.fps_shown`, a Choice: **Game** / **Frame gen** /
+**Game + FG**, stored as `"game"` / `"output"` / `"both"`, default **Game**, per
 profile like its siblings, additive — schema stays 5). Same Show-HUD-only gate
 as its siblings, never gated on frame generation being on. It replaced the
 morning's `count_generated_frames` switch. The user, first: *"for the HUD, make
@@ -17,11 +21,11 @@ to show the original and the framegen FPS. <OriginalFPS>-><FrameGenFPS>
 
 - **Game**: the game's real frame rate (the commit counter); exactly the HUD as
   it was before this option.
-- **Output**: what `count_generated_frames=true` did. The pacer's `presentedFps`
+- **Frame gen** (stored `"output"`): what `count_generated_frames=true` did. The pacer's `presentedFps`
   while Frame generation is *generating* (the latched signal below), the game's own
   rate otherwise: a 340 fps game passed through on a 280 Hz display reads 340, not
   about 280.
-- **Both**: `<game> > <output>` (e.g. `120 > 280`) while Frame generation is
+- **Game + FG** (stored `"both"`): `<game> > <output>` (e.g. `120 > 280`) while Frame generation is
   generating, `<game> - <output>` (e.g. `340 - 340`) while the Frame generation
   **switch** is on but it passes the game through. With the switch **off** it is
   the lone game number, exactly like Game mode, even when Motion blur or the Lag

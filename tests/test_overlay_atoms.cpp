@@ -650,6 +650,42 @@ TEST_CASE( "atoms: Choice downgrades to a dropdown when segmented will not fit",
 	h.EndFrame();
 }
 
+TEST_CASE( "atoms: Segmented lifts the 8-character rule but keeps the fit test", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.BeginFrame();
+
+	int nValue = 0;
+	static constexpr ui::Option kLong[] = { { 0, "auto" }, { 1, "nearest-neighbour" } };
+
+	SECTION( "long labels segment when the char rule is lifted" )
+	{
+		const auto res = ui::controls::Choice( MakeRow(), "lift", &nValue, kLong,
+		                                       IM_ARRAYSIZE( kLong ), false, true );
+		REQUIRE( res.bSegmented );
+	}
+	SECTION( "the option-count cap still applies" )
+	{
+		static constexpr ui::Option kMany[] = {
+			{ 0, "a" }, { 1, "b" }, { 2, "c" }, { 3, "d" }, { 4, "e" }, { 5, "f" },
+		};
+		const auto res = ui::controls::Choice( MakeRow(), "many2", &nValue, kMany,
+		                                       IM_ARRAYSIZE( kMany ), false, true );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+	SECTION( "a lane too narrow still falls back to a dropdown" )
+	{
+		const ui::RowCtx narrow = ui::RowCtx::ForRow( ui::Lane::ForColumn( 420.0f ), 40.0f, 300.0f );
+		ScopedScale big( 2.0f );
+		const auto res = ui::controls::Choice( narrow, "narrow2", &nValue, kLong,
+		                                       IM_ARRAYSIZE( kLong ), false, true );
+		REQUIRE_FALSE( res.bSegmented );
+	}
+
+	h.EndFrame();
+}
+
 TEST_CASE( "atoms: a segmented group's cells are right-bound and never overlap", "[overlay_atoms]" )
 {
 	// The measured atoms are the ones where a fit test and a layout could
@@ -1752,4 +1788,459 @@ TEST_CASE( "atoms: dropdown click outside cancels", "[overlay_atoms]" )
 	h.EndFrame();
 	REQUIRE_FALSE( res.bChanged );
 	REQUIRE( nValue == 0 );   // unchanged
+}
+
+// =========================================================================
+//  Export / Import dialog parts (2026-11): wide modal, backdrop, disabled
+//  primary, panes, three-state checkbox, multi-line text, clipboard, and the
+//  second list strip.
+// =========================================================================
+#include "Overlay/UI/Band.h"
+
+#include <functional>
+
+namespace
+{
+	// A click is move, press, release.
+	void ClickAt( Headless &h, const ImVec2 &v, const std::function<void()> &fnDraw )
+	{
+		h.MoveMouse( v );
+		h.BeginFrame(); fnDraw(); h.EndFrame();
+		h.MouseButton( true );
+		h.BeginFrame(); fnDraw(); h.EndFrame();
+		h.MouseButton( false );
+		h.BeginFrame(); fnDraw(); h.EndFrame();
+	}
+
+	std::string g_sFakeClipboard;
+	std::string FakeClipRead() { return g_sFakeClipboard; }
+	void FakeClipWrite( std::string s ) { g_sFakeClipboard = std::move( s ); }
+}
+
+TEST_CASE( "checkbox: a click cycles off to on to off, and mixed goes to on", "[overlay_atoms]" )
+{
+	using ui::controls::CheckState;
+	REQUIRE( ui::controls::CheckNext( CheckState::Off )   == CheckState::On );
+	REQUIRE( ui::controls::CheckNext( CheckState::On )    == CheckState::Off );
+	REQUIRE( ui::controls::CheckNext( CheckState::Mixed ) == CheckState::On );
+
+	// A parent's state from its children.
+	REQUIRE( ui::controls::CheckAggregate( 0, 3 ) == CheckState::Off );
+	REQUIRE( ui::controls::CheckAggregate( 3, 3 ) == CheckState::On );
+	REQUIRE( ui::controls::CheckAggregate( 1, 3 ) == CheckState::Mixed );
+	REQUIRE( ui::controls::CheckAggregate( 0, 0 ) == CheckState::Off );
+}
+
+TEST_CASE( "checkbox: the registered hit box is the rect given, a press toggles it once",
+           "[overlay_atoms]" )
+{
+	using ui::controls::CheckState;
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	CheckState eState = CheckState::Mixed;
+	const ImRect rc( 100.0f, 300.0f, 100.0f + ui::Px( 220.0f ), 300.0f + ui::Px( 28.0f ) );
+	ImRect rcSeen;
+	auto Draw = [ & ]
+	{
+		ui::controls::CheckboxAt( rc, "cb", &eState, "Frame generation" );
+		rcSeen = LastItemRect();
+	};
+
+	ClickAt( h, rc.GetCenter(), Draw );
+	RequireSameRect( rcSeen, rc );
+	REQUIRE( eState == CheckState::On );   // mixed -> on, once
+
+	ClickAt( h, rc.GetCenter(), Draw );
+	REQUIRE( eState == CheckState::Off );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "checkbox: a disabled one ignores a click and Space", "[overlay_atoms]" )
+{
+	using ui::controls::CheckState;
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	CheckState eState = CheckState::Off;
+	const ImRect rc( 100.0f, 300.0f, 100.0f + ui::Px( 220.0f ), 300.0f + ui::Px( 28.0f ) );
+	bool bChanged = false;
+	auto Draw = [ & ] { bChanged |= ui::controls::CheckboxAt( rc, "cbd", &eState, "Resolution", true, true ); };
+
+	ClickAt( h, rc.GetCenter(), Draw );
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Space, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Space, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	REQUIRE_FALSE( bChanged );
+	REQUIRE( eState == CheckState::Off );
+
+	// The pure rule behind it.
+	REQUIRE_FALSE( ui::controls::CheckboxActivates( true, true, true, true ) );
+	REQUIRE( ui::controls::CheckboxActivates( true, false, false, false ) );
+	REQUIRE( ui::controls::CheckboxActivates( false, true, true, false ) );          // Space on the focused box
+	REQUIRE_FALSE( ui::controls::CheckboxActivates( false, false, true, false ) );   // Space unfocused
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "checkbox: Space toggles the keyboard-focused box", "[overlay_atoms]" )
+{
+	using ui::controls::CheckState;
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	CheckState eState = CheckState::Off;
+	const ImRect rc( 100.0f, 300.0f, 100.0f + ui::Px( 220.0f ), 300.0f + ui::Px( 28.0f ) );
+	auto Draw = [ & ] { ui::controls::CheckboxAt( rc, "cbk", &eState, "HUD", false, true ); };
+
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Space, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Space, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	REQUIRE( eState == CheckState::On );
+}
+
+TEST_CASE( "modal: the default width is unchanged and a wide one is clamped to the screen",
+           "[overlay_atoms]" )
+{
+	for ( float flScale : { 0.5f, 1.0f, 2.0f } )
+	{
+		ScopedScale s( flScale );
+		INFO( "display_scale " << flScale );
+		const float flXL = ui::Px( ui::tok::kXL );
+
+		// Default: the old clamp( slab - 2 kXL, 240, 420 ), byte for byte.
+		for ( float flSlab : { 200.0f, 400.0f, 600.0f, 1920.0f } )
+		{
+			const float flOld = std::clamp( flSlab - flXL * 2.0f, ui::Px( 240.0f ), ui::Px( 420.0f ) );
+			REQUIRE_THAT( ui::ModalWidthPx( flSlab, 0.0f ), WithinAbs( flOld, 1e-3f ) );
+		}
+
+		// Wide: the asked width on a big slab...
+		REQUIRE_THAT( ui::ModalWidthPx( 4000.0f * flScale, 760.0f ), WithinAbs( ui::Px( 760.0f ), 1e-3f ) );
+		// ...never past the slab's room on a small one...
+		const float flSmallSlab = ui::Px( 600.0f );
+		REQUIRE_THAT( ui::ModalWidthPx( flSmallSlab, 760.0f ), WithinAbs( flSmallSlab - flXL * 2.0f, 1e-3f ) );
+		// ...and never below the default floor.
+		REQUIRE_THAT( ui::ModalWidthPx( ui::Px( 100.0f ), 760.0f ), WithinAbs( ui::Px( 240.0f ), 1e-3f ) );
+	}
+}
+
+TEST_CASE( "modal: a wide dialog draws at the wide width, a default one does not move",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	ImRect rcBodySeen;
+	ui::ModalSpec spec;
+	spec.sTitle      = "Export profile";
+	spec.flWidthBase = 760.0f;
+	spec.fnBody      = [ & ]( ui::ModalBodyCtx &ctx ) { rcBodySeen = ctx.rcBody; ui::ModalNextRow( ctx ); };
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	// Body = panel minus 2 x kL padding.
+	REQUIRE_THAT( rcBodySeen.GetWidth(), WithinAbs( ui::Px( 760.0f ) - ui::Px( ui::tok::kL ) * 2.0f, 1e-3f ) );
+	ui::CloseModal();
+
+	ui::ModalSpec def;
+	def.sTitle = "Create profile";
+	def.fnBody = [ & ]( ui::ModalBodyCtx &ctx ) { rcBodySeen = ctx.rcBody; ui::ModalNextRow( ctx ); };
+	ui::OpenModal( def );
+	h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	REQUIRE_THAT( rcBodySeen.GetWidth(), WithinAbs( ui::Px( 420.0f ) - ui::Px( ui::tok::kL ) * 2.0f, 1e-3f ) );
+	ui::CloseModal();
+}
+
+TEST_CASE( "modal: two panes split the width with a gap, one pane takes it all", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	const ImRect rcBody( 100.0f, 0.0f, 100.0f + 728.0f, 500.0f );
+
+	const ui::ModalPaneRowLayout two = ui::LayOutModalPaneRow( rcBody, 50.0f, 2, 340.0f, 444.0f );
+	REQUIRE( two.nPanes == 2 );
+	REQUIRE_THAT( two.rcBox[ 0 ].GetWidth(), WithinAbs( 340.0f, 1e-3f ) );
+	REQUIRE_THAT( two.rcBox[ 1 ].Min.x - two.rcBox[ 0 ].Max.x, WithinAbs( ui::Px( ui::tok::kL ), 1e-3f ) );
+	REQUIRE_THAT( two.rcBox[ 1 ].Max.x, WithinAbs( rcBody.Max.x, 1e-3f ) );
+	REQUIRE_THAT( two.rcBox[ 0 ].GetHeight(), WithinAbs( 444.0f, 1e-3f ) );
+	REQUIRE( two.rcBox[ 0 ].Min.y > two.rcTitle[ 0 ].Min.y );   // title strip above the box
+	REQUIRE( two.flBottom > two.rcBox[ 0 ].Max.y );
+
+	// A narrowed dialog keeps the second pane readable: the first is capped.
+	const ImRect rcNarrow( 0.0f, 0.0f, 400.0f, 500.0f );
+	const ui::ModalPaneRowLayout nar = ui::LayOutModalPaneRow( rcNarrow, 0.0f, 2, 340.0f, 200.0f );
+	REQUIRE( nar.rcBox[ 0 ].GetWidth() <= ( 400.0f - ui::Px( ui::tok::kL ) ) * 0.55f + 1e-3f );
+	REQUIRE( nar.rcBox[ 1 ].GetWidth() > 100.0f );
+
+	const ui::ModalPaneRowLayout one = ui::LayOutModalPaneRow( rcBody, 0.0f, 1, 0.0f, 100.0f );
+	REQUIRE( one.nPanes == 1 );
+	REQUIRE_THAT( one.rcBox[ 0 ].GetWidth(), WithinAbs( rcBody.GetWidth(), 1e-3f ) );
+}
+
+TEST_CASE( "modal: a pane row in a live dialog scrolls its own content and balances ImGui",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	using ui::controls::CheckState;
+	CheckState aeState[ 40 ] = {};
+	float flContentBottom = 0.0f, flBoxBottom = 0.0f;
+
+	ui::ModalSpec spec;
+	spec.sTitle      = "Export profile";
+	spec.flWidthBase = 760.0f;
+	spec.fnBody      = [ & ]( ui::ModalBodyCtx &ctx )
+	{
+		const char *const apszTitles[ 2 ] = { "What to export", "Preview" };
+		const ui::ModalPaneRowLayout lay = ui::ModalPaneRow( ctx, apszTitles, 2, 340.0f, 300.0f );
+		flBoxBottom = lay.rcBox[ 0 ].Max.y;
+		ui::ModalPane pane = ui::ModalPaneBegin( lay.rcBox[ 0 ], "tree" );
+		if ( pane.bOpen )
+		{
+			for ( int i = 0; i < 40; ++i )
+			{
+				char sz[ 16 ];
+				snprintf( sz, sizeof( sz ), "cb%d", i );
+				ui::controls::CheckboxAt( ui::ModalPaneNextRow( pane ), sz, &aeState[ i ], "Area" );
+			}
+			flContentBottom = pane.flCursorY;
+		}
+		ui::ModalPaneEnd( pane );
+	};
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+	for ( int i = 0; i < 3; ++i )
+	{
+		h.BeginFrame(); ui::DrawModal( rcSlab ); h.EndFrame();
+	}
+	// 40 rows of 28 do not fit a 300-high box: the content runs past it, which
+	// is what makes the child scroll.
+	REQUIRE( flContentBottom > flBoxBottom );
+	ui::CloseModal();
+}
+
+TEST_CASE( "modal: a press on the scrim closes only a modal that opted in", "[overlay_atoms]" )
+{
+	// The pure rule.
+	const ImRect rcPanel( 400.0f, 300.0f, 1000.0f, 700.0f );
+	REQUIRE( ui::ModalBackdropCloses( true, true, ImVec2( 10.0f, 10.0f ), rcPanel ) );
+	REQUIRE_FALSE( ui::ModalBackdropCloses( true, true, ImVec2( 500.0f, 400.0f ), rcPanel ) );   // inside
+	REQUIRE_FALSE( ui::ModalBackdropCloses( false, true, ImVec2( 10.0f, 10.0f ), rcPanel ) );    // no opt-in
+	REQUIRE_FALSE( ui::ModalBackdropCloses( true, false, ImVec2( 10.0f, 10.0f ), rcPanel ) );    // no press
+
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MouseButton( false );
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+
+	for ( bool bOptIn : { false, true } )
+	{
+		int nCancel = 0;
+		ui::ModalSpec spec;
+		spec.sTitle           = "Import profile";
+		spec.bCloseOnBackdrop = bOptIn;
+		spec.fnCancel         = [ & ] { ++nCancel; };
+		ui::OpenModal( spec );
+
+		ClickAt( h, ImVec2( 4.0f, 4.0f ), [ & ] { ui::DrawModal( rcSlab ); } );
+
+		INFO( "opt-in " << bOptIn );
+		REQUIRE( ui::IsModalOpen() == !bOptIn );
+		REQUIRE( nCancel == ( bOptIn ? 1 : 0 ) );
+		ui::CloseModal();
+	}
+
+	// A click inside the panel never closes it.
+	int nCancel = 0;
+	ui::ModalSpec spec;
+	spec.sTitle           = "Import profile";
+	spec.bCloseOnBackdrop = true;
+	spec.fnCancel         = [ & ] { ++nCancel; };
+	ui::OpenModal( spec );
+	ClickAt( h, rcSlab.GetCenter(), [ & ] { ui::DrawModal( rcSlab ); } );
+	REQUIRE( ui::IsModalOpen() );
+	REQUIRE( nCancel == 0 );
+	ui::CloseModal();
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "modal: a disabled primary ignores click and Enter until it is enabled", "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	bool bValid = false;
+	int nPrimary = 0;
+	ui::ModalSpec spec;
+	spec.sTitle           = "Import profile";
+	spec.sPrimaryLabel    = "Import";
+	spec.fnPrimaryEnabled = [ & ] { return bValid; };
+	spec.fnPrimary        = [ & ] { ++nPrimary; };
+	ui::OpenModal( spec );
+
+	const ImRect rcSlab( ImVec2( 0.0f, 0.0f ), ImGui::GetIO().DisplaySize );
+	const ImRect rcPrimary = ModalPrimaryButtonRect( rcSlab, "Import" );
+	auto Draw = [ & ] { ui::DrawModal( rcSlab ); };
+
+	ClickAt( h, rcPrimary.GetCenter(), Draw );
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	ImGui::GetIO().AddKeyEvent( ImGuiKey_Enter, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	REQUIRE( ui::IsModalOpen() );
+	REQUIRE( nPrimary == 0 );
+
+	bValid = true;
+	ClickAt( h, rcPrimary.GetCenter(), Draw );
+	REQUIRE_FALSE( ui::IsModalOpen() );
+	REQUIRE( nPrimary == 1 );
+
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "text multiline: the buffer grows past 256 bytes and survives odd text", "[overlay_atoms]" )
+{
+	// The pure resize rule.
+	std::string s( 10, 'a' );
+	char *p = ui::controls::TextBufferResize( s, 5000 );
+	REQUIRE( s.size() == 5000 );
+	REQUIRE( p == s.data() );
+	REQUIRE( s[ 4999 ] == '\0' );
+
+	ScopedScale sc( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	// 60 KB of pretty JSON-ish text, a stray invalid UTF-8 byte pair and a
+	// non-Latin-1 character: drawn for several frames, editable and read-only.
+	std::string sText;
+	while ( sText.size() < 60000 )
+		sText += "  \"gamescope\": { \"nested_width\": 2560, \"name\": \"caf\xc3\xa9 \xe6\x97\xa5\" },\n";
+	sText += "\xff\xfe broken";
+	const ImRect rc( 100.0f, 100.0f, 100.0f + ui::Px( 400.0f ), 100.0f + ui::Px( 300.0f ) );
+	for ( bool bRo : { false, true } )
+	{
+		std::string sCopy = sText;
+		for ( int i = 0; i < 3; ++i )
+		{
+			h.BeginFrame();
+			ui::controls::TextMultiline( rc, "ml", &sCopy, bRo );
+			h.EndFrame();
+		}
+		REQUIRE( sCopy == sText );   // drawing never edits it
+	}
+}
+
+TEST_CASE( "text multiline: Ctrl+V pastes through the hooked clipboard past 256 bytes",
+           "[overlay_atoms]" )
+{
+	ScopedScale sc( 1.0f );
+	Headless &h = Headless::Get();
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+
+	ui::controls::SetClipboardHooks( &FakeClipRead, &FakeClipWrite );
+	ui::controls::InstallImGuiClipboard();
+	g_sFakeClipboard = std::string( 1000, 'x' );
+	REQUIRE( ui::controls::ClipboardRead().size() == 1000 );
+	REQUIRE( std::string( ImGui::GetClipboardText() ) == g_sFakeClipboard );
+
+	// Copy goes the other way.
+	ImGui::SetClipboardText( "copied out" );
+	REQUIRE( g_sFakeClipboard == "copied out" );
+	g_sFakeClipboard = std::string( 1000, 'x' );
+
+	std::string sValue;
+	const ImRect rc( 100.0f, 100.0f, 100.0f + ui::Px( 400.0f ), 100.0f + ui::Px( 300.0f ) );
+	auto Draw = [ & ] { ui::controls::TextMultiline( rc, "paste", &sValue, false, "Paste JSON here" ); };
+
+	ClickAt( h, rc.GetCenter(), Draw );   // focus the field
+
+	ImGuiIO &io = ImGui::GetIO();
+	io.AddKeyEvent( ImGuiMod_Ctrl, true );
+	io.AddKeyEvent( ImGuiKey_V, true );
+	h.BeginFrame(); Draw(); h.EndFrame();
+	io.AddKeyEvent( ImGuiKey_V, false );
+	io.AddKeyEvent( ImGuiMod_Ctrl, false );
+	h.BeginFrame(); Draw(); h.EndFrame();
+
+	REQUIRE( sValue.size() == 1000 );
+	REQUIRE( sValue == g_sFakeClipboard );
+
+	ui::controls::SetClipboardHooks( nullptr, nullptr );
+	REQUIRE( ui::controls::ClipboardRead().empty() );
+	h.MoveMouse( ImVec2( 4.0f, 4.0f ) );
+	h.MouseButton( false );
+	h.BeginFrame(); h.EndFrame();
+}
+
+TEST_CASE( "band: a second verb strip adds exactly one 44-unit line; without one nothing changes",
+           "[overlay_atoms]" )
+{
+	ScopedScale s( 1.0f );
+	const ui::Lane lane = ui::Lane::ForColumn( 804.0f );
+
+	const ui::BandSpec one = ui::Band( ui::CompositeKind::List );
+	const ui::BandSpec two = ui::Band( ui::CompositeKind::List, 2 );
+	REQUIRE( one.nLines == ui::tok::kListBandLines );
+	REQUIRE( two.nLines == one.nLines + 1 );
+
+	const ui::BandLayout a = ui::LayOutBand( lane, 0.0f, 0.0f, ui::CompositeKind::List );
+	const ui::BandLayout b = ui::LayOutBand( lane, 0.0f, 0.0f, ui::CompositeKind::List, 2 );
+	REQUIRE_THAT( a.rcBand.GetHeight(), WithinAbs( (float)one.nLines * ui::Px( ui::tok::kRowH ), 1e-3f ) );
+	REQUIRE_THAT( b.rcBand.GetHeight() - a.rcBand.GetHeight(), WithinAbs( ui::Px( ui::tok::kRowH ), 1e-3f ) );
+
+	// The list itself and the first strip keep their place; the second strip
+	// sits one line lower; a list without one has none.
+	RequireSameRect( a.rcBody, b.rcBody );
+	RequireSameRect( a.rcStrip, b.rcStrip );
+	REQUIRE( a.rcStrip2.GetWidth() == 0.0f );
+	REQUIRE_THAT( b.rcStrip2.Min.y - b.rcStrip.Min.y, WithinAbs( ui::Px( ui::tok::kRowH ), 1e-3f ) );
+	REQUIRE_THAT( b.rcStrip2.GetHeight(), WithinAbs( b.rcStrip.GetHeight(), 1e-3f ) );
+	REQUIRE( b.rcStrip2.Max.y <= b.rcBand.Max.y + 1e-3f );
+}
+
+TEST_CASE( "registry: a list's second-strip verbs are counted and tagged", "[overlay_atoms]" )
+{
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "test.list", "List", ui::Section::System );
+	int nSel = 0;
+	ui::Entry &e = a.Composite( "test.list.profiles", "Profiles", ui::CompositeKind::List,
+	                            ui::AnyBind::Of<int>( &nSel ) );
+	REQUIRE( e.ListStripCount() == 1 );
+	e.ListAction( "Create", [] {} );
+	REQUIRE( e.ListStripCount() == 1 );
+	e.ListActionRow2( "Export", [] {} );
+	e.ListActionRow2( "Import", [] {} );
+	REQUIRE( e.ListStripCount() == 2 );
+	REQUIRE( e.ListActionAt( 0 ).nRow == 0 );
+	REQUIRE( e.ListActionAt( 1 ).nRow == 1 );
+	REQUIRE( e.ListActionAt( 2 ).nRow == 1 );
 }

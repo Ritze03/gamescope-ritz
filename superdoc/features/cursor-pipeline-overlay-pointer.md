@@ -78,6 +78,46 @@ look `CursorArt_Draw()` uses, so it follows the icon set's own single-colour
 selected/dimmed convention instead of standing out as the one glyph hardcoded to the
 accent.
 
+### Style: Default and Pointy (2026-11-08)
+
+The Cursor tab's first row is **Style**, a Multiselector (`cursor.style`):
+`Default` (the classic triangle above, still the default) or `Pointy`. Stored as
+`OverlaySettings::cursor_style`, JSON key `overlay.cursor_style`, `"default"` or
+`"pointy"`; any other string loads as `"default"`. `CursorArt_Draw()` reads it through
+`CursorArt_IsPointy()` (declared in `CursorArt.h`, defined in `PanelCursor.cpp` beside
+the setting, since `CursorAppearance` lives in `PanelCursor.h`).
+
+Pointy is the design workbench's icon path `M5 3 L15 9 L10.5 10.5 L8.5 15 Z` (20x20
+box): tip, right wing, inner notch, bottom wing. The vertices (`kPointyX/Y`) are
+translated so the tip is the origin and scaled by `kPointyFit = kFootY / 12`, so it is
+exactly as tall as the Default pointer at the same scale. It is concave, and the
+bundled ImGui has no concave fill, so the inlay is two triangles (tip/wing/notch and
+tip/notch/bottom wing) drawn with the draw list's anti-aliased fill flag cleared so no
+seam shows on the shared diagonal; the closed `AddPolyline` outline, centred on the
+true edge, covers the hard fill edges. The hotspot is the visible tip: the path is
+shifted back by the Pointy tip's own miter offset (`CursorArt_PointyTipMiterOffset()`,
+same formula as the Default's). Colours, outline width and scale are shared with
+Default. The rail icon still draws the Default shape.
+
+**In-game (fix, 2026-11-08).** The first version only changed `CursorArt_Draw()`, so
+the Pointy never showed over the game. `CursorArt_Rasterise()` (the "Use everywhere" /
+"Override game cursor" bitmap; its only callers are `steamcompmgr.cpp`'s
+`SetDefaultCursorImage()` and the override-game branch of the cursor repaint) now
+rasterises the same four vertices when `CursorArt_IsPointy()`. It is a per-pixel
+signed-distance fill, so the concave notch uses a polygon distance with an even-odd
+inside test (`SignedDistanceToPolygon()`) instead of the triangle routine; the inlay/
+outline split and one-pixel anti-aliasing are the Default path's. The bitmap is sized
+from the polygon's own extent, and the hotspot is the tip vertex plus the rounded-join
+offset (`flOutlineWidth/2` along the tip bisector), as for Default. A Style change
+reaches the game cursor through `QueueSave()` -> `steamcompmgr_notify_cursor_appearance_changed()`
+(the same dirty flag as scale/colours), which re-runs `SetDefaultCursorImage()`.
+
+Why: the user's test finding, "The pointy cursor doesnt render ingame."
+
+Why: the user saw this icon in the design workbench and asked for it "only as an
+option, so the current one should still be the default ... like a pointy version. So
+add like a style selector."
+
 ## Three attempts at the overlay pointer
 
 All three were on the same underlying question -- what should the pointer be while

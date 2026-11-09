@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include <nlohmann/json_fwd.hpp>
+
 #include "ConfigSchema.h"
 
 // Load/save/resolve for gamescope-ritz's config directory
@@ -154,6 +156,13 @@ namespace gamescope::config
     // loaded at and reloads via ResolvedSettings() when they differ.
     uint64_t ConfigGeneration();
     void BumpConfigGeneration();
+
+    // Settings <-> the per-layer sections exactly as a profile file nests them
+    // (no schema_version, no metadata). Pure, no file is touched; the settings
+    // export/import (ProfileExport) uses them. FromJson reads leniently, as a
+    // profile load does: a missing or wrongly typed value becomes the default.
+    nlohmann::json SettingsToSectionsJson( const Settings &s );
+    Settings SettingsFromSectionsJson( const nlohmann::json &jSections );
 
     // The live half of a generation bump (2026-09-06). Panels reload
     // lazily -- the first time they draw after the bump -- and the Display

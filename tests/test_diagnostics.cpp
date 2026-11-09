@@ -135,3 +135,78 @@ TEST_CASE( "diagnostics: Silence warning mutes the alerts but not the state", "[
 	REQUIRE( AnyWarns( &off, &off + 1, false ) );
 	REQUIRE( !AnyWarns( &off, &off + 1, true ) );
 }
+
+TEST_CASE( "diagnostics: Block direct scanout states the truth and never alerts", "[diagnostics]" )
+{
+	// Off would warn; with blocking on, the area says gamescope blocks it and nothing alerts.
+	const ScanoutResult off = DecideDirectScanout( Nested(), Ok( R"({"int": 0})" ) );
+	REQUIRE( Alerts( off.eState, false ) );
+	const ScanoutResult blockedOff = WithBlock( off, true );
+	REQUIRE( blockedOff.eState == ScanoutState::Blocked );
+	REQUIRE( blockedOff.sHeadline == "Blocked by gamescope" );
+	REQUIRE( blockedOff.nValue == 0 );
+	REQUIRE( blockedOff.sReason.find( "This machine" ) != std::string::npos );
+	REQUIRE( !WarnsAbout( blockedOff.eState ) );
+	REQUIRE( !Alerts( blockedOff.eState, false ) );
+	REQUIRE( !AnyWarns( &blockedOff, &blockedOff + 1, false ) );
+
+	// Every applicable state reads as Blocked, on any host (GNOME has no hyprctl).
+	Facts gnome = Nested();
+	gnome.bHyprland = false;
+	REQUIRE( WithBlock( DecideDirectScanout( gnome, Ok( "" ) ), true ).eState == ScanoutState::Blocked );
+	REQUIRE( WithBlock( DecideDirectScanout( Nested(), Ok( R"({"int": 1})" ) ), true ).eState == ScanoutState::Blocked );
+	REQUIRE( WithBlock( DecideDirectScanout( Nested(), Out( RunOutcome::Failed, 1 ) ), true ).eState == ScanoutState::Blocked );
+
+	// Off by default: the result passes through untouched.
+	const ScanoutResult same = WithBlock( off, false );
+	REQUIRE( same.eState == ScanoutState::Off );
+	REQUIRE( same.sHeadline == off.sHeadline );
+	REQUIRE( Alerts( same.eState, false ) );
+
+	// Nothing to block where the host cannot scan out, and nothing known before a check.
+	Facts sdl;
+	REQUIRE( WithBlock( DecideDirectScanout( sdl, Ok( "" ) ), true ).eState == ScanoutState::NotApplicable );
+	REQUIRE( WithBlock( ScanoutResult{}, true ).eState == ScanoutState::Pending );
+}
+
+TEST_CASE( "diagnostics: the host desktop is detected from the launch environment", "[diagnostics]" )
+{
+	REQUIRE( DetectDesktop( "abc_123", "Hyprland" ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( "abc_123", nullptr ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( nullptr, "hyprland" ) == Desktop::Hyprland );
+	REQUIRE( DetectDesktop( "", "GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "ubuntu:GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "gnome-classic:GNOME" ) == Desktop::Gnome );
+	REQUIRE( DetectDesktop( nullptr, "KDE" ) == Desktop::Kde );
+	REQUIRE( DetectDesktop( nullptr, "X-Cinnamon" ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, "" ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, nullptr ) == Desktop::Other );
+	REQUIRE( DetectDesktop( nullptr, "gamescope" ) == Desktop::Other );
+}
+
+TEST_CASE( "diagnostics: the D6 recommendation table", "[diagnostics]" )
+{
+	REQUIRE( Recommend( Desktop::Hyprland ) == Recommendation{ false, false } );
+	REQUIRE( Recommend( Desktop::Gnome ) == Recommendation{ false, true } );
+	REQUIRE( Recommend( Desktop::Kde ) == Recommendation{ false, true } );
+	REQUIRE( Recommend( Desktop::Other ) == Recommendation{ false, true } );
+	REQUIRE( RecommendationText( Recommend( Desktop::Hyprland ) ) == "Block scanout Off \xC2\xB7 Compress Off" );
+}
+
+TEST_CASE( "diagnostics: an absent key takes the recommendation, a present one is kept", "[diagnostics]" )
+{
+	const Recommendation hypr = Recommend( Desktop::Hyprland );
+	REQUIRE( ResolveSwitch( std::nullopt, hypr.bCompress ) == false );
+	REQUIRE( ResolveSwitch( std::nullopt, true ) == true );
+	REQUIRE( ResolveSwitch( true, hypr.bCompress ) == true );
+	REQUIRE( ResolveSwitch( false, true ) == false );
+}
+
+TEST_CASE( "diagnostics: backend display names", "[diagnostics]" )
+{
+	REQUIRE( BackendDisplayName( "Wayland" ) == "Wayland (nested)" );
+	REQUIRE( BackendDisplayName( "SDLWindow" ) == "SDL" );
+	REQUIRE( BackendDisplayName( "Headless" ) == "Headless" );
+	REQUIRE( BackendDisplayName( "eDP-1" ) == "DRM" );
+	REQUIRE( BackendDisplayName( "" ) == "unknown" );
+}

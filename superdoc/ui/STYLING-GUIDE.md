@@ -158,7 +158,11 @@ Every atom has one shape, `bool Atom( const RowCtx &row, const char *pszId, <bin
 registers **one rect** with ImGui and draws inside **that same rect**, so the drawn and hit-tested
 geometry cannot diverge (the slider-grab bug class).
 
-- There is **no Checkbox** and there will not be one: `Switch` is every binary in the product.
+- `Switch` is every binary in a settings row. `controls::Checkbox` / `CheckboxAt` exist **only**
+  for selection trees in dialogs (Export / Import) and the one option beside such a tree; do NOT
+  use one for a setting. `Why:` a Switch cannot show a partly ticked parent (`CheckState::Mixed`),
+  and the user approved the tree and asked for a checkbox. Three states, one rect, a click cycles
+  Mixed to On (`CheckNext()`), a parent's state is `CheckAggregate()`, disabled greys it.
 - **Sliders**: the fill end, the handle centre and the default tick all come from
   `SliderValueX()`, and `SliderGrab()` always drives `SliderBehavior` with a float (`SliderInt`
   rounds). Do NOT paint a handle at a different x than the one that is hit-tested, and do NOT use
@@ -167,7 +171,10 @@ geometry cannot diverge (the slider-grab bug class).
   the user: *"the dragger is wrong compared to where the line actually fills to"*). The handle is a
   constant `kHandleW` wide whatever the range. Do NOT make a slider's width depend on its range.
 - **Segmented vs dropdown**: `MeasureCells()` decides how wide a segmented group is, and both the
-  fit test and the layout read it. Do NOT hand-measure a Choice.
+  fit test and the layout read it. Do NOT hand-measure a Choice. `Entry::Segmented()` lifts only the
+  8-character label rule; the 5-option cap and the fit test stay, so a too-wide row is still a
+  dropdown. `controls::Segmented(rc, id, &v, opts, n)` is the same cells forced segmented, for a
+  modal (it cannot host the dropdown popup); the caller makes sure the labels fit.
 - **Stepper** is borderless `- +` glyphs; the number is in the value column and can be typed.
 - **Settings that resize the UI** (`overlay.display_scale`) must hand the reflowing half of their
   write to `controls::DeferToRelease()` while `ui::IsPointerDragActive()` is true. `Why:` the track is
@@ -181,10 +188,21 @@ geometry cannot diverge (the slider-grab bug class).
 - **Dialogs**: `ui::OpenModal( ModalSpec )`, one at a time; the body is ordinary rows from
   `ModalNextRow( ctx )` using the unmodified atoms, with errors drawn inline (`fnValidate`) rather
   than as a toast. State `flMinBodyRows` if you know the row count, or it opens one row tall and grows.
+  Dialog errors and warnings use the orange `Role::Warn`, never red (red stays for destructive
+  confirmations). A **wide** dialog sets `ModalSpec::flWidthBase` (760 for Export / Import) and lays
+  out titled panes with `ModalPaneRow()` (one row = 1 or 2 panes; call it twice for a 2x2 grid);
+  each pane's content scrolls through `ModalPaneBegin()` / `ModalPaneNextRow()` / `ModalPaneEnd()`
+  (a child over `ui::ScrollView`). `bCloseOnBackdrop` lets a click outside close a dialog that is
+  safe to dismiss; leave it off for confirmations. `fnPrimaryEnabled` greys the primary button
+  while the input is not usable (`fnValidate` is the press-time gate with an inline message).
+  Multi-line input is `controls::TextMultiline` (no 256-byte limit; read-only mode selects and
+  scrolls), not `Text`.
 - **Composites** (a control taller than one row) are full-width bands of exactly n x 44
   (`Band( CompositeKind )`, `LayOutBand()`), with line 1 reading as a normal row and the body
   right-bound to the control lane. Do NOT put anything in the label column on lines 2..n, and do NOT
-  choose n or the body size yourself.
+  choose n or the body size yourself. A **List** may declare verbs on a second strip
+  (`Entry::ListActionRow2()`); that makes the band exactly one 44-unit line taller (`Band( kind,
+  nListStrips )`) and a list without one is unchanged.
 
 ## Scrolling bodies and frame rules
 

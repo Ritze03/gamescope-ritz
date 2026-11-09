@@ -577,6 +577,10 @@ namespace gamescope::config
         bool same_as_framegen = true;
         std::string motion_version = "v1";
         std::string quality = "quality";
+        // "Pause while cursor visible" (2026-11-07): while the game's mouse cursor is
+        // visible the blur stops and the game's own frames show. Independent of
+        // framegen.pause_when_cursor_visible. ADDITIVE: absent loads off.
+        bool pause_when_cursor_visible = false;
     };
 
     // Game audio capture (2026-10-07, Audio/Capture.{h,cpp}): the per-profile switch for
@@ -1197,6 +1201,21 @@ namespace gamescope::config
         // its checks. Global (the host setup is per machine); default off.
         bool diagnostics_silence_warning = false;
 
+        // Compatibility's "Block direct scanout": gamescope keeps a transparent 1x1
+        // subsurface on top so a nested Wayland host cannot scan its window out.
+        // Global (the host setup is per machine). UNSET (key absent) until the user
+        // sets it or "Pick recommended settings" writes it: unset takes the
+        // recommendation for the host desktop (Diagnostics_*, DiagnosticsLogic.h).
+        std::optional<bool> diagnostics_block_scanout;
+
+        // Compatibility's "Compress output images": lets the driver pick an AMD DCC
+        // modifier for gamescope's output images under a nested Wayland host (Off
+        // filters them out). Global (the GPU and host are per machine); read once at
+        // startup, so a change applies on the next launch. UNSET (key absent) until
+        // the user sets it or "Pick recommended settings" writes it: unset takes the
+        // recommendation for the host desktop, written to nowhere.
+        std::optional<bool> compress_output_images;
+
         // Keyboard-control toggles for the overlay's own input capture (M2)
         // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
         // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also
@@ -1269,6 +1288,9 @@ namespace gamescope::config
         // already set their own value keeps it, only the out-of-the-box size
         // changed. Read every draw by CursorArt_Draw() via PanelCursor.h's
         // GetCursorAppearance() accessor.
+        // Pointer shape: "default" (the classic triangle) or "pointy" (a slimmer
+        // arrow with a notch, 2026-11-08). Unknown strings load as "default".
+        std::string cursor_style = "default";
         float cursor_scale = 0.8f;          // 0.5..3.0 -- multiplies CursorArt.cpp's whole silhouette (its kTipX/kFootY/kWingX geometry), same meaning as CursorArt_Draw()'s flScale parameter today. Default is 0.8, not 1.0 -- see comment above.
         float cursor_outline_width = 2.0f;  // 1.0..6.0 px -- stroke width before the scale above is applied; matches CursorArt.cpp's kOutlineWidth constant.
         // Unset (default) = the outline follows the live accent hue, exactly

@@ -83,7 +83,7 @@ indented under it.
 - [Motion blur](features/motion-blur.md) — interpolation-based blur, with or without frame
   generation; the shared-timeline composition model.
 - [Lag spike buffer](features/lag-spike-buffer.md) — bridges frame-time spikes by running
-  slightly behind real time; independent of frame generation.
+  slightly behind real time; independent of frame generation. Disabled since 2026-11-07.
 
 ### Settings overlay (UI framework)
 
@@ -100,8 +100,8 @@ indented under it.
   changelog and licences.
 - [System](features/system-general.md) — the SETTINGS > System area (clipboard-sync switch).
 - [Appearance](features/appearance.md) — the SETTINGS > Appearance area (global, not per profile).
-- [Diagnostics](features/diagnostics.md) — the OTHER > Diagnostics area: Hyprland direct
-  scanout check, the Silence warning switch, the Recheck button.
+- [Compatibility](features/diagnostics.md) — the OTHER > Compatibility area (was Diagnostics): Hyprland direct
+  scanout check, the two machine-wide host switches and the recommended settings.
 
 ### Settings & config
 
@@ -109,6 +109,8 @@ indented under it.
   migrations.
 - [Profiles](features/profiles.md) — general vs game profiles, diff-based inheritance, the
   Profiles area, `--profile` / `ritz_profile`, the schema 2 -> 3 migration.
+- [Settings export / import](features/profile-export.md) — share chosen settings as JSON text
+  through the clipboard: format, groups, exclusions, the Export and Import dialogs, backup.
 - [Keybinds](features/keybinds.md) — the editable hotkeys: chord grammar, tap-vs-press
   rules, `overlay.keybinds`, the conflict rule and the ways back from a lock-out.
 
@@ -201,7 +203,6 @@ About 8.6 MB of the total is 29 audit screenshots in
 casually. `planning/ui-design-guide.md` is partly behind the code: use
 [ui/STYLING-GUIDE.md](ui/STYLING-GUIDE.md) and the code tokens instead.
 
-- [TODO](planning/TODO.md) — open work with no feature doc yet.
 - [SPEC](planning/SPEC.md), [DECISIONS](planning/DECISIONS.md),
   [ISSUES](planning/ISSUES.md) — the original overlay master spec, decision record and issue
   breakdown (2026-08-21).

@@ -65,6 +65,7 @@
 #include "Config/AppId.h"
 #include "Config/NestedDefault.h"
 #include "LaunchOptions.h"
+#include "Diagnostics.h"
 #include "FpsLimitApply.h"
 #include "Fonts.h"
 #include "Widgets.h"

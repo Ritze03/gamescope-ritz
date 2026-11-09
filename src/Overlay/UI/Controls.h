@@ -156,6 +156,12 @@ namespace gamescope::ui
 		ImRect rcBody;             // the modal's content rect, already inset from its chrome
 		Lane   lane;               // ForColumn() over rcBody's width -- built once, before fnBody runs
 		float  flCursorY = 0.0f;   // next row's top, screen space; starts at rcBody.Min.y
+		// How tall the body may grow before the dialog would not fit the
+		// surface (the slab minus the title, footer and margins); set by
+		// DrawModal() before fnBody runs, 0 = no limit known. ModalPaneRow()
+		// shortens its panes to fit it, so a tall pane never pushes the
+		// footer off screen.
+		float  flMaxBodyPx = 0.0f;
 	};
 
 	// Advances ctx.flCursorY by one row and returns the RowCtx for it -- a
@@ -167,6 +173,64 @@ namespace gamescope::ui
 	// A free-form block below the last row -- the Delete confirmation's
 	// prompt paragraph -- at whatever height the caller measured for it.
 	ImRect ModalNextBlock( ModalBodyCtx &ctx, float flHeightPx );
+
+	// ---- wide dialogs and two-pane bodies (Export / Import, 2026-11) --------
+	// A default modal is 240..420 base wide and its body is single-column
+	// rows. A dialog that holds a tree beside a preview opts into a wider
+	// panel with ModalSpec::flWidthBase and lays out panes with
+	// ModalPaneRow(). All three functions below are pure so a test can pin
+	// them without a frame.
+
+	// The panel width DrawModal() uses. `flWantedBase == 0` is the default
+	// dialog: the slab minus 2 x kXL, clamped to 240..420 base (unchanged
+	// since the first modal). A positive value is a WIDE dialog: that many
+	// base units, scaled, never wider than the slab minus 2 x kXL and never
+	// narrower than 240 base.
+	float ModalWidthPx( float flSlabWidthPx, float flWantedBase );
+
+	// True when a press landed on the scrim, outside the panel, in a modal
+	// that opted in (ModalSpec::bCloseOnBackdrop). A press inside the panel,
+	// or in any modal that did not opt in, never closes it.
+	bool ModalBackdropCloses( bool bOptIn, bool bPressedThisFrame, ImVec2 vMouse, const ImRect &rcPanel );
+
+	// One row of titled panes: a 22-unit title strip above each framed box.
+	// One pane takes the whole width; two panes sit side by side with a kL
+	// gap, the first `flFirstColBase` wide (0 = an even split) but never more
+	// than 55% of the width, so a narrowed dialog keeps both readable.
+	struct ModalPaneRowLayout
+	{
+		ImRect rcTitle[ 2 ];
+		ImRect rcBox[ 2 ];
+		int    nPanes  = 0;
+		float  flBottom = 0.0f;   // y after the boxes plus the kM gap below the row
+	};
+	ModalPaneRowLayout LayOutModalPaneRow( const ImRect &rcBody, float flTopPx, int nPanes,
+	                                       float flFirstColBase, float flBoxHeightPx );
+
+	// Draws the titles (UPPER, Meta) and the box frames of one pane row at
+	// ctx.flCursorY, advances the cursor past it, and returns the layout.
+	// `flBoxHeightBase` is shortened to fit ctx.flMaxBodyPx when that is set,
+	// but never below 3 rows. `ppszTitles` holds nPanes strings (1 or 2).
+	// For the Import dialog's 2x2 grid call it twice.
+	ModalPaneRowLayout ModalPaneRow( ModalBodyCtx &ctx, const char *const *ppszTitles, int nPanes,
+	                                 float flFirstColBase, float flBoxHeightBase );
+
+	// A pane's own scrolling content. Begin hands back absolute-y state in the
+	// shape ui::ScrollView prescribes (start at the child's cursor, report the
+	// height used); End closes the child. Rows go through ModalPaneNextRow().
+	// Always call End when Begin returned, whatever bOpen says.
+	struct ModalPane
+	{
+		bool   bOpen    = false;   // false: the child is clipped away, skip the body
+		ImRect rcInner;            // the box minus its frame; rows span its width
+		float  flOriginY = 0.0f;   // the child's cursor y this frame (scroll applied)
+		float  flCursorY = 0.0f;   // next row's top
+	};
+	ModalPane ModalPaneBegin( const ImRect &rcBox, const char *pszId );
+	// The next row: full inner width, `flHeightBase` tall (default one
+	// control height, 28 base); advances the pane's cursor.
+	ImRect ModalPaneNextRow( ModalPane &pane, float flHeightBase = 0.0f );
+	void ModalPaneEnd( ModalPane &pane );
 
 	struct ModalSpec
 	{
@@ -218,6 +282,23 @@ namespace gamescope::ui
 		// can skip the flash by stating it. 0 (default) keeps the old
 		// one-row-then-grow behaviour.
 		float flMinBodyRows = 0.0f;
+
+		// OPTIONAL: a WIDE dialog, in base units (the Export / Import mock-up
+		// is 760). 0 keeps the 240..420 default. See ModalWidthPx().
+		float flWidthBase = 0.0f;
+
+		// OPTIONAL: a press on the scrim outside the panel closes the modal
+		// exactly as Cancel does (fnCancel runs). Default false: a Delete
+		// confirmation must not be dismissed by a stray click. Esc and Cancel
+		// work either way.
+		bool bCloseOnBackdrop = false;
+
+		// OPTIONAL: while this answers false the primary button is drawn
+		// dimmed, ignores clicks and Enter, and fnValidate is not consulted
+		// (Import: no valid JSON yet). Asked every frame, so it must be a
+		// cheap read. fnValidate is a different tool: it runs on the press
+		// and keeps the modal open with an inline message.
+		std::function<bool()> fnPrimaryEnabled;
 	};
 
 	// Only one modal at a time. A second OpenModal() while one is already
@@ -471,7 +552,16 @@ namespace gamescope::ui
 			bool bSegmented  = false;  // which form was drawn, for the shell's popup anchor
 		};
 		ChoiceResult Choice( const RowCtx &row, const char *pszId, int *pnValue,
-		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false );
+		                     const Option *pOptions, size_t nOptions, bool bPopupOpen = false,
+		                     bool bLiftCharRule = false );
+
+		// A Multiselector that is ALWAYS segmented: Choice()'s segmented branch
+		// without the measure-and-downgrade. For a modal, which cannot host the
+		// Shell's dropdown popup (a downgraded Choice would be dead there).
+		// Cells are content-sized from rcGroup.Min.x, rcGroup's height. True on
+		// a change. Both labels must fit the pane; the caller owns that.
+		bool Segmented( const ImRect &rcGroup, const char *pszId, int *pnValue,
+		                const Option *pOptions, size_t nOptions );
 
 		// ---- Dropdown -- ui-design-guide.md's Dropdown entry ---------------
 		// A Choice FORCED to present as a dropdown, regardless of whether it
@@ -534,6 +624,83 @@ namespace gamescope::ui
 		bool Text( const RowCtx &row, const char *pszId, std::string *psValue,
 		           bool *pbEditing, const char *pszPlaceholder = nullptr,
 		           const char *pszError = nullptr );
+
+		// ---- multi-line text (Export / Import dialogs) --------------------
+		// A framed, scrolling text area in a rect the caller owns (a pane's
+		// box), backed by a std::string that grows as needed: unlike Text()
+		// there is no 256-byte limit. The buffer is the caller's, edited in
+		// place; ImGui's resize callback keeps std::string::size() equal to
+		// the text length, so psValue is always the exact content.
+		//
+		// bReadOnly: selection (mouse, Shift+arrows, Ctrl+A) and Ctrl+C work,
+		// typing does not -- the Export preview. Editable: typing and Ctrl+V
+		// paste. Returns true on the frame the content changed.
+		//
+		// Mono Meta text, no wrapping (a pretty-printed JSON line is short and
+		// a wrapped one would read as two lines), horizontal and vertical
+		// scrolling inside the rect. `bError` paints the frame in the warning
+		// orange (never red: red is for destructive confirmations).
+		//
+		// Text outside Basic Latin + Latin-1 is kept in the string and shown
+		// as the atlas's fallback glyph; nothing here can crash on it.
+		// Expect ~100 KB to be fine: ImGui only draws the visible lines.
+		bool TextMultiline( const ImRect &rc, const char *pszId, std::string *psValue,
+		                    bool bReadOnly = false, const char *pszPlaceholder = nullptr,
+		                    bool bError = false );
+
+		// The resize rule behind TextMultiline(), pure so a test can reach it:
+		// make `s` exactly nLen long (new bytes zero) and return its data.
+		char *TextBufferResize( std::string &s, int nLen );
+
+		// ---- checkbox (selection trees in dialogs ONLY) -------------------
+		// Three states. `Switch` stays every binary setting in a sheet row;
+		// this exists for a tree of "include this part" choices, where a parent
+		// must show "some of my children are on" (Mixed), which a Switch
+		// cannot. See STYLING-GUIDE "Controls".
+		enum class CheckState : unsigned char { Off, On, Mixed };
+
+		// What a click does: Off -> On, On -> Off, Mixed -> On.
+		CheckState CheckNext( CheckState e );
+		// A parent's state from its children: none on = Off, all on = On,
+		// otherwise Mixed. nTotal == 0 is Off.
+		CheckState CheckAggregate( size_t nOn, size_t nTotal );
+		// The one activation rule: a press or Space on the keyboard-focused
+		// box toggles it, unless it is disabled.
+		bool CheckboxActivates( bool bPressed, bool bKeyFocus, bool bSpacePressed, bool bDisabled );
+
+		// A box with an optional label, in a rect the caller owns (a tree row).
+		// The whole rect is the hit box; the 16-unit box sits at its left,
+		// the label (Label role) to its right. bDisabled greys the whole thing
+		// (a group the user cannot change) and ignores input. bKeyFocus is the
+		// caller's keyboard cursor: it draws the accent focus ring and lets
+		// Space toggle. (The overlay never enables ImGui keyboard navigation,
+		// so a dialog owns its cursor; ListBoxStep() steps an index.)
+		// Returns true when *peState changed.
+		bool CheckboxAt( const ImRect &rc, const char *pszId, CheckState *peState,
+		                 const char *pszLabel = nullptr, bool bDisabled = false,
+		                 bool bKeyFocus = false );
+
+		// The same box as a row's control, right-anchored in the control lane
+		// like a Switch (the label is the row's). For an option beside a tree.
+		bool Checkbox( const RowCtx &row, const char *pszId, CheckState *peState,
+		               bool bDisabled = false );
+
+		// ---- clipboard (read AND write) -----------------------------------
+		// The shell cannot link steamcompmgr.cpp's clipboard in a unit test, so
+		// both directions go through hooks installed once by Shell.cpp
+		// (gamescope_clipboard_text() / gamescope_post_selection()). Without a
+		// hook, read returns "" and write is dropped.
+		using ClipboardReadFn  = std::string ( * )();
+		using ClipboardWriteFn = void ( * )( std::string );
+		void SetClipboardHooks( ClipboardReadFn fnRead, ClipboardWriteFn fnWrite );
+		// What a Paste button reads: gamescope's own CLIPBOARD. The host's
+		// clipboard only gets there when System > Clipboard sync is on.
+		std::string ClipboardRead();
+		void        ClipboardWrite( std::string sText );
+		// Points ImGui's platform clipboard at the two above, so Ctrl+V /
+		// Ctrl+C / Ctrl+X work in every text field. Idempotent; call each
+		// frame from the context that owns the overlay's ImGui.
+		void InstallImGuiClipboard();
 
 		// ---- a key chord, captured rather than typed (2026-09-08) ----------
 		// The atom for Entry::Chord() (a Kind::Text row holding a keybind).
@@ -616,6 +783,27 @@ namespace gamescope::ui
 		int ListBoxScrollForSelection( int nScrollTop, int nSelected,
 		                               int nVisibleRows, int nCount );
 
+		// Pure: the scroll top for this frame. The selection is pulled into
+		// view only when it moved this frame (`bSelectionMoved`); otherwise the
+		// offset is just clamped, so the wheel can scroll away from it.
+		int ListBoxScrollTop( int nScrollTop, int nSelected, bool bSelectionMoved,
+		                      int nVisibleRows, int nCount );
+
+		// Pure: a click on row `nClicked` of a multi-select list. Plain click =
+		// only that row. Ctrl toggles it, except that the `nExclusive` row (< 0:
+		// none) is alone when clicked, and an ordinary Ctrl-click replaces it.
+		// Never leaves the selection empty.
+		// RANGE (file-manager rules): `*pnAnchor` (nullptr = no anchor kept, a
+		// Shift click then acts as a plain one) is where the last plain or
+		// Ctrl click landed. Shift+click selects exactly anchor..nClicked
+		// inclusive, replacing the selection; Ctrl+Shift+click ADDS that range.
+		// The anchor moves on plain and Ctrl clicks only, never on Shift. The
+		// exclusive row never shares a multi-row range: it is dropped from it
+		// (a range that is only that row selects it alone). Anchor unset (< 0)
+		// or out of range: the click acts as a plain one and sets the anchor.
+		void ListBoxMultiClick( std::vector<bool> &sel, int nClicked, bool bCtrl, int nExclusive = -1,
+		                        bool bShift = false, int *pnAnchor = nullptr );
+
 		// Pure geometry for one item's row: where the tag, the label and the
 		// secondary text sit, at the priority the sketch implies -- the LABEL
 		// is never sacrificed; the secondary is the one dropped
@@ -674,9 +862,15 @@ namespace gamescope::ui
 		// flagged in this task's report). Hover-to-navigate is therefore the
 		// whole of it; a future panel that wants Up/Down to reach the list
 		// from elsewhere has to forward those keys itself.
+		//
+		// MULTI-SELECT (optional): pass `pMulti`, one flag per item, and the
+		// rows drawn selected are those flags; *pnSelected stays the cursor
+		// (last click, Up/Down). Click / Ctrl+click follow ListBoxMultiClick();
+		// Up/Down/Home/End collapse to a single selection. nullptr = as before.
 		ListBoxResult ListBox( const ImRect &rcBody, const char *pszId, int *pnSelected,
 		                      const ListBoxItem *pItems, size_t nItems,
-		                      int nMaxVisibleRows = 10 );
+		                      int nMaxVisibleRows = 10,
+		                      std::vector<bool> *pMulti = nullptr, int nExclusive = -1 );
 
 		// ---- SPEC §4.3 -- the anchor grid, a composite body ---------------
 		// 3x3 cells on the control module, so the grid agrees with every other

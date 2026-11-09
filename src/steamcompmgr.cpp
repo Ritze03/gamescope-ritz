@@ -194,6 +194,10 @@ static std::shared_ptr<gamescope::BackendBlob> s_scRGB709To2020Matrix;
 
 std::string clipboard;
 std::string primarySelection;
+// `clipboard` is written on the steamcompmgr thread (gamescope_set_selection)
+// and read there too (handle_selection_request), but the overlay's draw thread
+// reads it for Ctrl+V and the Paste button, so every access takes this.
+static std::mutex g_ClipboardMutex;
 
 std::string g_reshade_effect{};
 extern ReshadeEffectPipeline *g_pLastReshadeEffect;
@@ -6477,6 +6481,7 @@ void gamescope_set_selection(std::string contents, GamescopeSelection eSelection
 {
 	if (eSelection == GAMESCOPE_SELECTION_CLIPBOARD)
 	{
+		std::scoped_lock lock{ g_ClipboardMutex };
 		clipboard = contents;
 	}
 	else if (eSelection == GAMESCOPE_SELECTION_PRIMARY)
@@ -6492,6 +6497,12 @@ void gamescope_set_selection(std::string contents, GamescopeSelection eSelection
 		if (ctx)
 			x11_set_selection_owner(ctx, contents, eSelection);
 	}
+}
+
+std::string gamescope_clipboard_text()
+{
+	std::scoped_lock lock{ g_ClipboardMutex };
+	return clipboard;
 }
 
 // Clipboard sync: the cross-thread inbox, drained once per steamcompmgr loop.
@@ -6565,7 +6576,18 @@ void gamescope_clear_reshade_effect() {
 static void
 handle_selection_request(xwayland_ctx_t *ctx, XSelectionRequestEvent *ev)
 {
-	std::string *selection = ev->selection == ctx->atoms.primarySelection ? &primarySelection : &clipboard;
+	// A copy, taken under the lock: the overlay thread reads `clipboard` too.
+	std::string selectionCopy;
+	if ( ev->selection == ctx->atoms.primarySelection )
+	{
+		selectionCopy = primarySelection;
+	}
+	else
+	{
+		std::scoped_lock lock{ g_ClipboardMutex };
+		selectionCopy = clipboard;
+	}
+	std::string *selection = &selectionCopy;
 
 	const char *targetString = XGetAtomName(ctx->dpy, ev->target);
 
@@ -8385,15 +8407,16 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	// "Pause while cursor visible": the same signal as the Crosshair's hide (cursor
 	// image set and the pointer not locked), read here on the steamcompmgr thread
 	// where bCursorHasImage is written. Real-rate planning, nothing else changes.
-	const bool bCursorPause = cfg.pauseWhenCursorVisible && wlserver.bCursorHasImage &&
+	const bool bCursorShown = wlserver.bCursorHasImage &&
 		!wlserver.bMouseConstraintLocked.load( std::memory_order_relaxed );
+	const bool bCursorPause = cfg.pauseWhenCursorVisible && bCursorShown;
 	in.frameGen = cfg.enabled && !bCursorPause;
 	in.extraDelayNs = 0;
 	in.lagBuffer.enabled = lagCfg.enabled;
 	in.lagBuffer.lookbackSec = double( lagCfg.lookbackMin ) * 60.0;
 	in.lagBuffer.maxBufferMs = double( lagCfg.maxBufferMs );
 	in.lagBuffer.testMode = fgpacing::LagTestMode( uint8_t( lagCfg.testMode ) );
-	in.blur = blurCfg.enabled;
+	in.blur = blurCfg.enabled && !( blurCfg.pauseWhenCursorVisible && bCursorShown );
 	in.blurSamples = blurCfg.samples;
 	in.blurAmount = double( blurCfg.amountPercent ) / 100.0;
 	in.blurRelative = fgpacing::BlurRelative( uint8_t( blurCfg.relative ) );

@@ -42,6 +42,71 @@ namespace gamescope
 	bool Diagnostics_Silenced();
 	void Diagnostics_SetSilenced( bool bSilenced );
 
+	// ---- compatibility settings -------------------------------------------
+	// The two switches below are global.json keys that may be ABSENT. An absent key
+	// takes the recommendation for the HOST desktop (Recommend(), DiagnosticsLogic.h)
+	// and is never written back by a save; a key the user set, or "Pick recommended
+	// settings" wrote, is kept as is. Resolved on the first getter call (once, with
+	// the host environment Diagnostics_CaptureHostEnv() kept): for Compress that is
+	// rendervulkan.cpp's first output image, long after main() captured the env, so
+	// the very first launch already runs with the recommendation.
+
+	// The "Block direct scanout" setting (global.json overlay.diagnostics_block_scanout):
+	// the Wayland connector keeps a transparent 1x1 subsurface on its
+	// top plane so a nested host cannot scan the window out (WaylandBackend.cpp). Any
+	// thread; the getter is an atomic read, safe on the present path. The setter
+	// persists (making the key present), then repaints so the plane appears or goes
+	// on the next frame.
+	bool Diagnostics_BlockScanout();
+	void Diagnostics_SetBlockScanout( bool bBlock );
+
+	// The "Compress output images" setting (global.json overlay.compress_output_images):
+	// lets the driver pick an AMD DCC modifier for the output images under a nested
+	// Wayland host. rendervulkan.cpp latches the getter at the first output image, so
+	// a change applies on the next launch. Any thread.
+	bool Diagnostics_CompressOutputImages();
+	void Diagnostics_SetCompressOutputImages( bool bCompress );
+
+	// The Compress value this process STARTED with (what the first getter call
+	// resolved, i.e. what rendervulkan.cpp latched). The UI shows "Restart to apply"
+	// while Diagnostics_CompressOutputImages() differs from it. Any thread.
+	bool Diagnostics_CompressOutputImagesAtLaunch();
+
+	// The host desktop, detected once from the launch environment (not the
+	// XDG_CURRENT_DESKTOP gamescope sets for itself), and what the D6 table
+	// recommends for it. Any thread.
+	diagnostics::Desktop        Diagnostics_HostDesktop();
+	diagnostics::Recommendation Diagnostics_Recommended();
+	// "Block scanout Off \xC2\xB7 Compress Off", for the Pick recommended settings row.
+	std::string                 Diagnostics_RecommendationText();
+
+	// Pick recommended settings: writes the recommended value of BOTH keys to
+	// global.json (making them present). Block applies live; Compress on the next
+	// launch. Any thread.
+	void Diagnostics_ApplyRecommended();
+
+	// Re-detect: refreshes the displayed facts (backend, GPU) and re-reads nothing
+	// the launch fixed. Changes no setting. Any thread.
+	void Diagnostics_Redetect();
+
+	// Read-only environment facts for the Compatibility area. Desktop is the
+	// DesktopName() of the host desktop ("Other" when unknown); Backend is e.g.
+	// "Wayland (nested)", "SDL", "DRM", "Headless" ("unknown" before the backend
+	// exists); Gpu is "unknown" until Diagnostics_SetGpuName() is called (the Vulkan
+	// physical device name; nothing waits for it).
+	struct CompatFacts
+	{
+		std::string sDesktop;
+		std::string sBackend;
+		std::string sGpu;
+	};
+	CompatFacts Diagnostics_Facts();
+	void        Diagnostics_SetGpuName( const char *pszName );
+
+	// Whether this backend can be scanned out by a host at all (Wayland): where the
+	// Block switch is shown.
+	bool Diagnostics_ScanoutApplicable();
+
 	struct DiagnosticsView
 	{
 		bool                          bRunning = false;

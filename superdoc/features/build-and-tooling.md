@@ -229,6 +229,15 @@ To iterate against the remote test laptop instead, run `scripts/remote-test.sh s
 `scripts/remote-test.sh run -- ...` ([remote-test-rig.md](remote-test-rig.md)). Agents' own
 test builds: [gentle-build.md](gentle-build.md); unit tests: [unit-tests.md](unit-tests.md).
 
+## User-settable environment variables in `--help`
+
+`src/main.cpp:usage` has an "Environment variables (gamescope-ritz)" section listing the
+variables this fork adds for users: `GS_RITZ_PROFILE`, `RITZ_GS_APPID`,
+`GAMESCOPE_RITZ_USE_SYSTEM_WSI`, `GS_RITZ_STEAMCLIENT`. Add a line there when a new
+user-facing one appears. *Why not the rest:* `GAMESCOPE_RITZ_AB_*` are A/B test switches,
+`GS_RITZ_DIAGNOSTICS_ASSUME_WAYLAND` is a test hook, and the deprecated `GS_RITZ_APPID`
+is left out so the old name is not advertised.
+
 ## Related links
 
 - [input-emulation](input-emulation.md) — gated by the `input_emulation` feature flag.

@@ -70,10 +70,19 @@ config section `motion_blur` (schema stays 5; additive; absent loads the default
 | `motion_blur.motion_version` | `v1` (default) / `v2` / `learned` | the row "Motion version": the blur's own version, used only while the switch is off (see "The interpolator's version and quality"); additive, an unknown string keeps `v1`. `learned` (2026-10-26) borrows Frame generation's `framegen.learned_net` / `learned_half` / `learned_zero_test` / `learned_static_guard` -- the blur has no Learned rows of its own ([Learned motion](frame-generation-learned.md#learned-motion)) |
 | `motion_blur.quality` | `quality` (default) / `performance` | the row "Quality": the blur's own, used only while the switch is off; on V2 it is V2's mode; additive |
 | `motion_blur.weights` | `even` / `gaussian` (default) | the row "Weighting": `BlurWeights::Even` (a box shutter, hard-edged smear like a camera) / `Gaussian` (the ends carry 13.5% of the centre's weight: softer, effectively shorter) |
+| `motion_blur.pause_when_cursor_visible` | `false` (default) / `true` | the row "Pause while cursor visible" (switch, 2026-11-07): while the game's mouse cursor is visible the blur stops and the game's frames show, resuming by itself when the cursor hides; additive, absent loads off |
 
-Rows, in order: **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
-(slider 0..100 %), **Measured against**, **Weighting**, then (group "Interpolation") **Use Frame
-generation's settings** (switch, default on), **Quality** and **Motion version**, and **Status**.
+The area is two columns (`a.Columns( 2 )`, groups pinned with `GroupColumn()`). Column 0, group
+"Motion blur": **Motion blur** (switch), **Samples** (slider 2..8 step 1), **Blur amount**
+(slider 0..100 %), **Measured against** (buttons), **Weighting**. Column 1, top to bottom: group
+"Pausing" with **Pause while cursor visible** (switch), group "Interpolation" with **Use Frame
+generation's settings** (switch, default on), **Motion version**, **Quality** (buttons), and group
+"Status" with **Status**. Measured against and Quality use `Entry::Segmented()` and fall back to a
+dropdown when the column is too narrow. Quality's help now points at Frame generation's Quality
+help for the V1 and V2 figures instead of repeating them.
+
+`Why:` the user laid these groups, the order (Motion version before Quality) and the buttons out
+on a visual workbench; the Shell now matches that layout.
 The other rows are disabled while the Motion blur switch is off; Quality and Motion version are
 also disabled while "Use Frame generation's settings" is on (greyed out, showing Frame
 generation's values). The rail summary reads `off` or `N samples`. The help
@@ -128,6 +137,21 @@ The **UI protection** setting lives in the Frame generation area and applies to 
 even with Frame generation itself off. `Why:` UI protection pastes the real pixels of a still
 crosshair / HUD *after* the average (the library's `ui_patch`), so the crosshair stays exact
 while the world around it is blurred.
+
+**Pause while cursor visible** (2026-11-07). In `FrameGen_PrePaint()` the blur flag handed to
+the pacer is `blurCfg.enabled && !( blurCfg.pauseWhenCursorVisible && bCursorShown )`, where
+`bCursorShown` is `wlserver.bCursorHasImage` and the pointer not locked (the signal Frame
+generation's pause and the Crosshair's hide use). Paused, `Inputs::blur` is false: the planner
+gives `t0 == t1`, i.e. no blur, and the real frame shows; with Frame generation off the pacer
+keeps planning real-rate, so nothing stalls. The renderer's resource gating still counts the blur as
+enabled. The setting is bit 18 of the packed blur word (`g_uBlur`), read only by steamcompmgr and
+masked out of the library-config key, so toggling it never reconfigures the library.
+- With **both** on and both pause switches on, the cursor stops blur and generation together;
+  with only one switch on, only that feature pauses (generation keeps running under a paused
+  blur, and the blur keeps running on the real-rate or generated frames under a paused generation).
+- `Why:` the user wanted the same pause Frame generation has, so menus stay sharp. `Why a separate
+  switch:` user decision (D2): each feature follows only its own switch
+  (`framegen.pause_when_cursor_visible` is untouched), so either can pause alone.
 
 **Status line** (always one line): `4 samples · 1.8 ms window` while applied (the window is
 the last output's shutter length in ms of content time, the pacer's `Report::blurWindowMs`;

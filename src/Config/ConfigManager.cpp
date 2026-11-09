@@ -391,6 +391,7 @@ namespace gamescope::config
                 const std::string sQuality = JGetString( *pBlur, "quality", m.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     m.quality = sQuality;
+                m.pause_when_cursor_visible = JGetBool( *pBlur, "pause_when_cursor_visible", m.pause_when_cursor_visible );
             }
 
             // Lag spike buffer (2026-10-04). Additive: look-back and max are clamped,
@@ -614,6 +615,12 @@ namespace gamescope::config
 
                 s.overlay.startup_announce_enabled = JGetBool( *pOverlay, "startup_announce_enabled", s.overlay.startup_announce_enabled );
                 s.overlay.diagnostics_silence_warning = JGetBool( *pOverlay, "diagnostics_silence_warning", s.overlay.diagnostics_silence_warning );
+                // Unset unless present (compatibility recommendations, D7).
+                // A wrong-typed value counts as absent.
+                if ( auto it = pOverlay->find( "diagnostics_block_scanout" ); it != pOverlay->end() && it->is_boolean() )
+                    s.overlay.diagnostics_block_scanout = it->get<bool>();
+                if ( auto it = pOverlay->find( "compress_output_images" ); it != pOverlay->end() && it->is_boolean() )
+                    s.overlay.compress_output_images = it->get<bool>();
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
                 s.overlay.profiles_filter_other_games = JGetBool( *pOverlay, "profiles_filter_other_games", s.overlay.profiles_filter_other_games );
@@ -666,6 +673,8 @@ namespace gamescope::config
                 // -- deliberately not read here any more.
 
                 // Cursor tab (ConfigSchema.h's OverlaySettings comment block).
+                s.overlay.cursor_style = JGetString( *pOverlay, "cursor_style", s.overlay.cursor_style ) == "pointy"
+                    ? "pointy" : "default";
                 s.overlay.cursor_scale = JGetFloat( *pOverlay, "cursor_scale", s.overlay.cursor_scale );
                 s.overlay.cursor_outline_width = JGetFloat( *pOverlay, "cursor_outline_width", s.overlay.cursor_outline_width );
                 s.overlay.cursor_outline_color = JGetOptInt( *pOverlay, "cursor_outline_color" );
@@ -861,6 +870,7 @@ namespace gamescope::config
             jMotionBlur[ "same_as_framegen" ] = mb.same_as_framegen;
             jMotionBlur[ "motion_version" ] = mb.motion_version;
             jMotionBlur[ "quality" ] = mb.quality;
+            jMotionBlur[ "pause_when_cursor_visible" ] = mb.pause_when_cursor_visible;
 
             const auto &lb = s.lag_buffer;
             nlohmann::json jLagBuffer = nlohmann::json::object();
@@ -1021,6 +1031,12 @@ namespace gamescope::config
 
             jOverlay[ "startup_announce_enabled" ] = o.startup_announce_enabled;
             jOverlay[ "diagnostics_silence_warning" ] = o.diagnostics_silence_warning;
+            // Written only once set, so an untouched switch keeps following the
+            // host-desktop recommendation.
+            if ( o.diagnostics_block_scanout )
+                jOverlay[ "diagnostics_block_scanout" ] = *o.diagnostics_block_scanout;
+            if ( o.compress_output_images )
+                jOverlay[ "compress_output_images" ] = *o.compress_output_images;
             jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
             jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
             jOverlay[ "profiles_filter_other_games" ] = o.profiles_filter_other_games;
@@ -1046,6 +1062,7 @@ namespace gamescope::config
 
             // Cursor tab (see the parse side above and ConfigSchema.h's
             // OverlaySettings comment block).
+            jOverlay[ "cursor_style" ] = o.cursor_style == "pointy" ? "pointy" : "default";
             jOverlay[ "cursor_scale" ] = o.cursor_scale;
             jOverlay[ "cursor_outline_width" ] = o.cursor_outline_width;
             jOverlay[ "cursor_outline_color" ] = o.cursor_outline_color.has_value()
@@ -2710,6 +2727,16 @@ namespace gamescope::config
         Settings merged = SettingsFromJson( out );
         merged.overlay = settings.overlay; // ignored by the profile write either way
         EnqueueProfileWrite( s_SessionMeta, merged );
+    }
+
+    nlohmann::json SettingsToSectionsJson( const Settings &s )
+    {
+        return SectionsToJson( s );
+    }
+
+    Settings SettingsFromSectionsJson( const nlohmann::json &jSections )
+    {
+        return SettingsFromJson( jSections );
     }
 
     uint64_t ConfigGeneration()

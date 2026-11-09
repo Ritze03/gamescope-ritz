@@ -26,7 +26,7 @@ The features below are this fork's own; upstream gamescope does not have them. E
 links to its page in the docs.
 
 <p align="center">
-  <img src="docs/images/shell-framegen.png" width="820" alt="gamescope-ritz's settings Shell with the MOTION group expanded (Frame generation, Motion blur, Lag spike buffer); Frame generation is on at 2x and its status line reads 30->55, 2x, +21 ms">
+  <img src="docs/images/shell-framegen.png" width="820" alt="gamescope-ritz's settings Shell with the MOTION group expanded (Frame generation, Motion blur, and formerly a Lag spike buffer); Frame generation is on at 2x and its status line reads 30->55, 2x, +21 ms">
 </p>
 
 **Motion** (the MOTION group in the Shell)
@@ -42,7 +42,8 @@ links to its page in the docs.
 - **[Motion blur](superdoc/features/motion-blur.md)**: blends interpolated in-between
   frames into each shown frame like a camera shutter, with or without frame generation.
 - **[Lag spike buffer](superdoc/features/lag-spike-buffer.md)**: bridges repeating game
-  stutters with generated frames, at the cost of a small adaptive delay.
+  stutters with generated frames, at the cost of a small adaptive delay. Disabled since
+  2026-11-07 (barely worked); the code is kept.
 
 <p align="center">
   <img src="docs/images/shell-motionblur.png" width="820" alt="gamescope-ritz's settings Shell on Motion > Motion blur, switched on with 4 samples; the status line reads 4 samples, 8.3 ms window">

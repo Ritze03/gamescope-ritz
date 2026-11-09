@@ -70,6 +70,31 @@ namespace gamescope::overlay
 
 	namespace
 	{
+		// Signed distance to an arbitrary (possibly concave) closed polygon,
+		// negative inside (even-odd). Used for the Pointy style, whose notch
+		// the three-edge triangle routine above cannot express.
+		float SignedDistanceToPolygon( float px, float py, const float *pfX, const float *pfY, int nCount )
+		{
+			float flDistSq = 1e30f;
+			bool bInside = false;
+			for ( int i = 0, j = nCount - 1; i < nCount; j = i++ )
+			{
+				const float ex = pfX[ i ] - pfX[ j ], ey = pfY[ i ] - pfY[ j ];
+				const float vx = px - pfX[ j ], vy = py - pfY[ j ];
+				const float flLenSq = ex * ex + ey * ey;
+				const float flT = flLenSq > 0.0f ? std::clamp( ( vx * ex + vy * ey ) / flLenSq, 0.0f, 1.0f ) : 0.0f;
+				const float dx = vx - ex * flT, dy = vy - ey * flT;
+				flDistSq = std::min( flDistSq, dx * dx + dy * dy );
+				if ( ( pfY[ i ] > py ) != ( pfY[ j ] > py ) &&
+				     px < pfX[ j ] + ex * ( py - pfY[ j ] ) / ey )
+					bInside = !bInside;
+			}
+			return std::sqrt( flDistSq ) * ( bInside ? -1.0f : 1.0f );
+		}
+	}
+
+	namespace
+	{
 		// The tip corner's outward bisector direction and sin(interior
 		// angle/2) -- everything both CursorArt_TipMiterOffset() and
 		// CursorArt_TipRoundOffset() need, computed once from the shared
@@ -131,6 +156,46 @@ namespace gamescope::overlay
 		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
 	}
 
+	void CursorArt_PointyTipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY )
+	{
+		// Edges leave the tip towards the last vertex and the first wing.
+		float x0, y0, x1, y1, x3, y3;
+		CursorArt_PointyVertex( 0, 0.0f, 0.0f, 1.0f, &x0, &y0 );
+		CursorArt_PointyVertex( 1, 0.0f, 0.0f, 1.0f, &x1, &y1 );
+		CursorArt_PointyVertex( kPointyCount - 1, 0.0f, 0.0f, 1.0f, &x3, &y3 );
+		const float l1 = std::sqrt( x1 * x1 + y1 * y1 ), l3 = std::sqrt( x3 * x3 + y3 * y3 );
+		float flDirX = 0.0f, flDirY = 0.0f, flMagnitude = 0.0f;
+		if ( l1 > 0.0001f && l3 > 0.0001f )
+		{
+			const float u1x = x1 / l1, u1y = y1 / l1, u3x = x3 / l3, u3y = y3 / l3;
+			const float flCos = std::clamp( u1x * u3x + u1y * u3y, -1.0f, 1.0f );
+			const float flSinHalf = std::sin( std::acos( flCos ) * 0.5f );
+			const float bx = -( u1x + u3x ), by = -( u1y + u3y );
+			const float bl = std::sqrt( bx * bx + by * by );
+			if ( bl > 0.0001f && flSinHalf > 0.0001f )
+			{
+				flDirX = bx / bl; flDirY = by / bl;
+				flMagnitude = ( flOutlineWidth * 0.5f ) / flSinHalf;
+			}
+		}
+		if ( pflOffsetX ) *pflOffsetX = flDirX * flMagnitude;
+		if ( pflOffsetY ) *pflOffsetY = flDirY * flMagnitude;
+	}
+
+	// Rounded-join (signed-distance fill) tip offset for Pointy: along the
+	// same bisector as the miter offset, but only flOutlineWidth/2 long.
+	static void PointyTipRoundOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY )
+	{
+		float x1, y1, x3, y3;
+		CursorArt_PointyVertex( 1, 0.0f, 0.0f, 1.0f, &x1, &y1 );
+		CursorArt_PointyVertex( kPointyCount - 1, 0.0f, 0.0f, 1.0f, &x3, &y3 );
+		const float l1 = std::sqrt( x1 * x1 + y1 * y1 ), l3 = std::sqrt( x3 * x3 + y3 * y3 );
+		const float bx = -( x1 / l1 + x3 / l3 ), by = -( y1 / l1 + y3 / l3 );
+		const float bl = std::sqrt( bx * bx + by * by );
+		*pflOffsetX = bl > 0.0001f ? bx / bl * flOutlineWidth * 0.5f : 0.0f;
+		*pflOffsetY = bl > 0.0001f ? by / bl * flOutlineWidth * 0.5f : 0.0f;
+	}
+
 	uint32_t CursorArt_AccentRgb()
 	{
 		// kAccent is ImU32, i.e. IM_COL32's little-endian R,G,B,A byte order.
@@ -170,9 +235,35 @@ namespace gamescope::overlay
 		// shifted back by that same offset (see CursorArt_TipMiterOffset()'s
 		// comment in the header).
 		float flOffsetX, flOffsetY;
-		CursorArt_TipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
+		const bool bPointy = CursorArt_IsPointy();
+		if ( bPointy )
+			CursorArt_PointyTipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
+		else
+			CursorArt_TipMiterOffset( flOutlineWidth * flScale, &flOffsetX, &flOffsetY );
 		const float flOriginX = flTipX - flOffsetX;
 		const float flOriginY = flTipY - flOffsetY;
+
+		if ( bPointy )
+		{
+			ImVec2 v[ kPointyCount ];
+			for ( int i = 0; i < kPointyCount; i++ )
+			{
+				CursorArt_PointyVertex( i, flOriginX, flOriginY, flScale, &v[ i ].x, &v[ i ].y );
+			}
+			const ImU32 uInlay = PackOpaque( appearance.uInlayRgb );
+			// Concave (notch at v[2]): two triangles sharing the tip-notch
+			// diagonal. Anti-aliased fill is switched off for them so no
+			// faint seam shows along that interior edge; the outline stroke
+			// is centred on the true boundary and covers the hard edges.
+			const ImDrawListFlags uOldFlags = pDrawList->Flags;
+			pDrawList->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+			pDrawList->AddTriangleFilled( v[ 0 ], v[ 1 ], v[ 2 ], uInlay );
+			pDrawList->AddTriangleFilled( v[ 0 ], v[ 2 ], v[ 3 ], uInlay );
+			pDrawList->Flags = uOldFlags;
+			pDrawList->AddPolyline( v, kPointyCount, PackOpaque( appearance.uOutlineRgb ),
+			                        ImDrawFlags_Closed, flOutlineWidth * flScale );
+			return;
+		}
 
 		const ImVec2 vecPoints[ 3 ] =
 		{
@@ -203,8 +294,28 @@ namespace gamescope::overlay
 		// pixel for the antialiased falloff to land in.
 		const float flPad = flOutlineHalf + 1.0f;
 
-		const int nWidth  = (int)std::ceil( kWingX * flScale + flPad * 2.0f );
-		const int nHeight = (int)std::ceil( kFootY * flScale + flPad * 2.0f );
+		// Pointy: polygon vertices (tip at the origin) instead of the triangle.
+		const bool bPointy = CursorArt_IsPointy();
+		float flPolyX[ kPointyCount ], flPolyY[ kPointyCount ];
+		float flMaxX = kWingX, flMaxY = kFootY;
+		if ( bPointy )
+		{
+			flMaxX = flMaxY = 0.0f;
+			for ( int i = 0; i < kPointyCount; i++ )
+			{
+				CursorArt_PointyVertex( i, 0.0f, 0.0f, 1.0f, &flPolyX[ i ], &flPolyY[ i ] );
+				flMaxX = std::max( flMaxX, flPolyX[ i ] );
+				flMaxY = std::max( flMaxY, flPolyY[ i ] );
+			}
+			for ( int i = 0; i < kPointyCount; i++ )
+			{
+				flPolyX[ i ] = flPolyX[ i ] * flScale + flPad;
+				flPolyY[ i ] = flPolyY[ i ] * flScale + flPad;
+			}
+		}
+
+		const int nWidth  = (int)std::ceil( flMaxX * flScale + flPad * 2.0f );
+		const int nHeight = (int)std::ceil( flMaxY * flScale + flPad * 2.0f );
 		if ( nWidth <= 0 || nHeight <= 0 )
 			return false;
 
@@ -231,8 +342,9 @@ namespace gamescope::overlay
 			{
 				const float px = (float)x + 0.5f;
 				const float py = (float)y + 0.5f;
-				const float flDist =
-					SignedDistanceToTriangle( px, py, ax, ay, bx, by, cx, cy );
+				const float flDist = bPointy
+					? SignedDistanceToPolygon( px, py, flPolyX, flPolyY, kPointyCount )
+					: SignedDistanceToTriangle( px, py, ax, ay, bx, by, cx, cy );
 
 				// Silhouette coverage: fades out across the one pixel
 				// straddling the stroke's outer edge.
@@ -275,7 +387,11 @@ namespace gamescope::overlay
 		// path vertex and the offset points outward from it towards the
 		// drawn point.
 		float flOffsetX, flOffsetY;
-		CursorArt_TipRoundOffset( flOutlineWidth, &flOffsetX, &flOffsetY );
+		if ( bPointy )
+			PointyTipRoundOffset( flOutlineWidth, &flOffsetX, &flOffsetY );
+		else
+			CursorArt_TipRoundOffset( flOutlineWidth, &flOffsetX, &flOffsetY );
+		// Pointy's tip vertex is also at (flPad, flPad): tip at the origin.
 		if ( pnHotX ) *pnHotX = (int)std::lround( kTipX * flScale + flPad + flOffsetX );
 		if ( pnHotY ) *pnHotY = (int)std::lround( kTipY * flScale + flPad + flOffsetY );
 		return true;

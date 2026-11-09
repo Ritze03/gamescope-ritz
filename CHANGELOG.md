@@ -9,17 +9,90 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.14] – 2026-11-09
+
+### Fixed
+- **Autoclicker stuck button**: the clicked mouse button no longer stays held down in
+  the game after you click it yourself while the autoclicker runs; clicks the system
+  can't keep up with are now skipped instead of piling up.
+
+## [0.14.13] – 2026-11-08
+
+### Added
+- **Compatibility area**: Other > Compatibility shows your desktop, GPU and backend,
+  holds the machine-wide host switches and can pick the recommended settings for them.
+- **Restart to apply**: Compress output images shows an orange "Restart to apply" while
+  it differs from the value this run started with.
+- **Import from another profile**: The Import dialog's Source can now be a profile from
+  the list instead of pasted JSON, so settings copy from one profile to another
+  directly.
+- **Import into several profiles**: Ctrl+click in the Import destination list selects
+  more than one profile, so one set of settings can go into all of them at once.
+- **Cursor style**: The Cursor area has a new Style choice, Default or Pointy, for a
+  slimmer, sharper arrow pointer.
+- **Range select in Import destinations**: Shift+click (or Shift+Up/Down) selects every
+  profile between two rows, Ctrl+Shift+click adds the range, like in a file manager.
+
+### Fixed
+- **Audio capture shutdown**: Closing gamescope no longer risks a crash while the game-audio
+  capture shuts down.
+- **Import Source switch**: It was a dropdown that would not open; it is now always the
+  two-button switch, fully readable.
+- **Bigger Export and Import dialogs**: Both dialogs are about 20% larger.
+- **Lists scroll with the wheel**: A list, like the Import destinations, now scrolls
+  when the pointer is over it, without clicking it first.
+- **Empty space in the Import dialog**: The paste field and the destination list now
+  fill their panes instead of leaving a blank strip below them.
+- **Right defaults on first launch**: Block direct scanout and Compress output images
+  now start from a recommendation for your desktop (Hyprland: both Off), with no
+  restart.
+- **Shaders summary**: The area now reads "n of 9 effects on" instead of "of 8".
+
+### Info
+- **Diagnostics is now Compatibility**: The area is renamed and is the first entry under
+  Other.
+- **Host switches moved**: Block direct scanout and Compress output images moved from
+  Display > General to Other > Compatibility.
+- **Shaders regrouped**: The effect switches now sit under Colour, Post-processing and
+  Brightness control, each with its own on-count.
+- **HUD settings layout**: The HUD area now has two columns, and the margins and the
+  hide-above Threshold are ordinary rows instead of sub-settings.
+- **Clearer FPS shown names**: The options are now Game, Frame gen and Game + FG (were
+  Game, Output and Both); your saved choice is unchanged.
+
 ## [0.14.12] – 2026-11-07
 
 ### Added
+- **Motion blur: Pause while cursor visible**: A switch, off by default, that shows the
+  game's frames without blur while its mouse cursor is visible and resumes by itself.
+- **Compress output images**: A Display > General switch, shown on Wayland only, for
+  AMD's image compression (DCC) on gamescope's output images; it is on by default, so
+  output images are compressed again, and turning it off, on the next launch, avoids
+  display trouble with Hyprland's direct scanout on RDNA 3.
+- **Block direct scanout**: A Display > General switch, shown on Wayland only,
+  that stops the host from putting the window straight on the screen; off by default.
 - **Silence warning**: A switch in the Inspector of Diagnostics' Direct scanout row
   mutes its startup toast and rail dot while the area still shows the true state.
+- **Export and import settings**: The Profiles area has Export and Import buttons that
+  share chosen settings as text through the clipboard, for friends or between your own
+  profiles; Import previews every change and keeps a backup of the profile it changes.
+- **Environment variables in `--help`**: `--help` now lists the environment variables
+  gamescope-ritz reads, such as `GS_RITZ_PROFILE` and `RITZ_GS_APPID`.
 
 ### Fixed
 - **Direct scanout crash**: Fixed the GPU crash that could happen when entering
   fullscreen with the host's direct scanout on.
 - **Diagnostics direct-scanout warning**: Diagnostics warns again when Hyprland's direct
   scanout is off, now that the crash is fixed.
+
+### Removed
+- **Lag spike buffer**: Switched off and removed from the settings menu because it
+  barely worked; saved values are ignored.
+
+### Info
+- **Two-column settings**: Frame generation, Motion blur and Display > General are
+  regrouped into two columns, and four rows (Priority, Quality, Measured against and
+  Motion blur's Quality) now use buttons.
 
 ## [0.14.11] – 2026-11-06
 

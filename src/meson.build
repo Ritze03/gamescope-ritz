@@ -312,6 +312,7 @@ src = [
   'Utils/Process.cpp',
   'Config/AppId.cpp',
   'Config/ConfigManager.cpp',
+  'Config/ProfileExport.cpp',
   'Audio/Volume.cpp',
   'Audio/Capture.cpp',
   'Audio/Dynamics.cpp',

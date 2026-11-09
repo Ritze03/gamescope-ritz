@@ -453,6 +453,76 @@ TEST_CASE( "overlay.cursor_override_game round-trips", "[config]" )
     }
 }
 
+// Cursor Style: "pointy" persists, the default is "default", unknown strings load as default.
+TEST_CASE( "overlay.cursor_style round-trips and unknown loads as default", "[config]" )
+{
+    {
+        TempConfigHome home;
+        REQUIRE( Settings{}.overlay.cursor_style == "default" );
+        Settings s{};
+        s.overlay.cursor_style = "pointy";
+        REQUIRE( SaveGlobal( s ) );
+        REQUIRE( LoadGlobal().overlay.cursor_style == "pointy" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": { \"cursor_style\": \"sparkly\" } }";
+        REQUIRE( LoadGlobal().overlay.cursor_style == "default" );
+    }
+}
+
+// The two compatibility switches (Block direct scanout, Compress output images) are
+// UNSET unless written: a global.json from before the keys existed loads them
+// absent, a save of unset keys writes none, and a set key is written and kept.
+TEST_CASE( "overlay compatibility switches are unset unless written", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": {} }";
+        Settings s = LoadGlobal();
+        REQUIRE( !s.overlay.compress_output_images );
+        REQUIRE( !s.overlay.diagnostics_block_scanout );
+    }
+    {
+        // A save of untouched switches adds no key (so the file stays "absent").
+        TempConfigHome home;
+        Settings s{};
+        REQUIRE( SaveGlobal( s ) );
+        std::ifstream f( GlobalConfigPath() );
+        const std::string sText( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sText.find( "compress_output_images" ) == std::string::npos );
+        REQUIRE( sText.find( "diagnostics_block_scanout" ) == std::string::npos );
+        REQUIRE( !LoadGlobal().overlay.compress_output_images );
+    }
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+
+        Settings s{};
+        s.overlay.compress_output_images = bValue;
+        s.overlay.diagnostics_block_scanout = !bValue;
+        REQUIRE( SaveGlobal( s ) );
+        Settings r = LoadGlobal();
+        REQUIRE( r.overlay.compress_output_images == bValue );
+        REQUIRE( r.overlay.diagnostics_block_scanout == !bValue );
+        // A later save of the loaded settings keeps them present.
+        REQUIRE( SaveGlobal( r ) );
+        REQUIRE( LoadGlobal().overlay.compress_output_images == bValue );
+    }
+    {
+        // An old file that carries both keys keeps them.
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() )
+            << "{ \"overlay\": { \"compress_output_images\": false, \"diagnostics_block_scanout\": true } }";
+        Settings s = LoadGlobal();
+        REQUIRE( s.overlay.compress_output_images == false );
+        REQUIRE( s.overlay.diagnostics_block_scanout == true );
+    }
+}
+
 // The drop shadow the outline replaced (2026-09-03): an old config still
 // carrying shadow_strength must load cleanly and simply take
 // outline_strength's default, not error and not inherit the old value.
@@ -2188,6 +2258,7 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( Settings{}.motion_blur.same_as_framegen == true );
     REQUIRE( Settings{}.motion_blur.motion_version == "v1" );
     REQUIRE( Settings{}.motion_blur.quality == "quality" );
+    REQUIRE( Settings{}.motion_blur.pause_when_cursor_visible == false );
 
     // A profile written before the section existed loads the defaults.
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -2203,9 +2274,11 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.same_as_framegen == true );   // absent: follows Frame generation
     REQUIRE( loaded.motion_blur.motion_version == "v1" );
     REQUIRE( loaded.motion_blur.quality == "quality" );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == false );   // absent: off
 
     Settings s{};
     s.motion_blur.enabled = true;
+    s.motion_blur.pause_when_cursor_visible = true;
     s.motion_blur.samples = 7;            // every whole number 2..8 is a real choice
     s.motion_blur.amount = 85;
     s.motion_blur.relative = "game";
@@ -2224,6 +2297,10 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( loaded.motion_blur.same_as_framegen == false );
     REQUIRE( loaded.motion_blur.motion_version == "v2" );
     REQUIRE( loaded.motion_blur.quality == "performance" );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == true );
+
+    // Independent of Frame generation's own switch of the same name.
+    REQUIRE( loaded.framegen.pause_when_cursor_visible == false );
 
     // The keys the Motion blur area's rows are bound to (the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this).
@@ -2235,6 +2312,7 @@ TEST_CASE( "motion_blur: every field round-trips, and an absent section is off/4
     REQUIRE( IsSettingsKey( "motion_blur.same_as_framegen" ) );
     REQUIRE( IsSettingsKey( "motion_blur.motion_version" ) );
     REQUIRE( IsSettingsKey( "motion_blur.quality" ) );
+    REQUIRE( IsSettingsKey( "motion_blur.pause_when_cursor_visible" ) );
 }
 
 TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum string keeps its default", "[config]" )
@@ -2265,6 +2343,7 @@ TEST_CASE( "motion_blur: samples and amount are clamped on load, an unknown enum
     REQUIRE( loaded.motion_blur.samples == 8 );          // the library takes 16, the UI offers 2..8
     REQUIRE( loaded.motion_blur.amount == 0 );
     REQUIRE( loaded.motion_blur.enabled == false );
+    REQUIRE( loaded.motion_blur.pause_when_cursor_visible == false );   // key absent in a present object
 }
 
 // ---------------------------------------------------------------------

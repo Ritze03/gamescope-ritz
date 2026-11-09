@@ -2187,8 +2187,8 @@ namespace gamescope
 
 		constexpr ui::Option kFpsShownOptions[] = {
 			{ 0, "Game" },
-			{ 1, "Output" },
-			{ 2, "Both" },
+			{ 1, "Frame gen" },
+			{ 2, "Game + FG" },
 		};
 
 		int ColorModeToInt( const std::string &s ) { return s == "inverted" ? 1 : 0; }
@@ -2216,6 +2216,8 @@ namespace gamescope
 		auto MonitorOn = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled; };
 		constexpr const char *kOffReason = "the HUD is off";
 
+		auto HideAboveOn = []{ EnsureConfigLoaded(); return s_Settings.fps_display.enabled && s_Settings.fps_display.hide_above_enabled; };
+
 		// Number colour and Text opacity (below) only ever affect Fixed
 		// mode: Inverted mode draws the digits as an opaque marker colour
 		// that alphamode.h's shader replaces per-pixel (see
@@ -2229,7 +2231,10 @@ namespace gamescope
 		// =================================================================
 		//  HUD
 		// =================================================================
+		a.Columns( 2 );
+
 		a.Group( "HUD" );
+		a.GroupColumn( 0 );
 
 		a.Switch( "hud.enabled", "Show HUD",
 			ui::AnyBind::Of<bool>(
@@ -2256,6 +2261,7 @@ namespace gamescope
 		//  Placement
 		// =================================================================
 		a.Group( "Placement" );
+		a.GroupColumn( 0 );
 
 		// The stored format is the same "top-right"/"center-left" string
 		// kPlacements has always written. The two axes are a VIEW of that
@@ -2300,40 +2306,101 @@ namespace gamescope
 			       "from that corner." )
 			.Default( 0, 2 )
 			.Keywords( "anchor placement position corner where margin offset" )
-			.DisabledUnless( MonitorOn, kOffReason )
-			.Param( "margin_x", "Horizontal margin",
-				ui::AnyBind::Of<int>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_x; },
-					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_x = n; PersistSettings(); } ) )
-				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
-				.Default( config::FpsDisplaySettings{}.margin_x )
-				.Key( "fps_display.margin_x" )
-				.Help( "How far the HUD sits from the left or right edge." )
-			.Param( "margin_y", "Vertical margin",
-				ui::AnyBind::Of<int>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_y; },
-					[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_y = n; PersistSettings(); } ) )
-				.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
-				.Default( config::FpsDisplaySettings{}.margin_y )
-				.Key( "fps_display.margin_y" )
-				.Help( "How far the HUD sits from the top or bottom edge." );
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.margin_x", "Horizontal margin",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_x; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_x = n; PersistSettings(); } ) )
+			.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+			.Default( config::FpsDisplaySettings{}.margin_x )
+			.Key( "fps_display.margin_x" )
+			.Help( "How far the HUD sits from the left or right edge." )
+			.Keywords( "margin horizontal offset edge distance x hud" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.margin_y", "Vertical margin",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.margin_y; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.margin_y = n; PersistSettings(); } ) )
+			.Range( 0.0f, 128.0f ).Step( 4.0f ).Unit( "px" )
+			.Default( config::FpsDisplaySettings{}.margin_y )
+			.Key( "fps_display.margin_y" )
+			.Help( "How far the HUD sits from the top or bottom edge." )
+			.Keywords( "margin vertical offset edge distance y hud" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		// "Backdrop opacity" (hud.backdrop_opacity) sat here until
+		// 2026-09-09. The user asked for the backdrop to go, so the row
+		// went with the drawing rather than being defaulted to 0 -- see
+		// superdoc/features/fps-display.md. "Outline size" below is what
+		// makes the number read over busy content now.
 
 		// =================================================================
-		//  Appearance
+		//  Visibility
 		// =================================================================
-		a.Group( "Appearance" );
+		a.Group( "Visibility" );
+		a.GroupColumn( 0 );
 
-		a.Slider( "hud.font_size", "Font size",
+		// "Hide if FPS above X" -- a Switch followed by its own Threshold
+		// sheet row (a Param until 2026-11-08).
+		// The hysteresis band that stops this flickering right at the
+		// threshold is a fixed constant in DrawReadout(), not a setting --
+		// see that function's own comment for the band and why.
+		a.Switch( "hud.hide_above", "Hide above X",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_enabled = b; PersistSettings(); } ) )
+			.Key( "fps_display.hide_above_enabled" )
+			.Help( "Hides the HUD while your frame rate is comfortably high, and brings it back "
+			       "once it drops." )
+			.Default( config::FpsDisplaySettings{}.hide_above_enabled )
+			.Keywords( "hide above threshold fps high framerate autohide" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.hide_above_fps", "Threshold",
 			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.font_size; },
-				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.font_size = f; PersistSettings(); } ) )
-			.Key( "fps_display.font_size" )
-			.Help( "How big the HUD's text is." )
-			.Range( 10.0f, 48.0f )
-			.Step( 1.0f )
-			.Unit( "px" )
-			.Default( config::FpsDisplaySettings{}.font_size )
-			.Keywords( "font size text scale hud" )   // 39 positions, whole px
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_fps; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_fps = f; PersistSettings(); } ) )
+			.Range( 30.0f, 300.0f )
+			.Step( 5.0f )
+			.Unit( "fps" )
+			.Default( config::FpsDisplaySettings{}.hide_above_fps )
+			.Key( "fps_display.hide_above_fps" )
+			.Help( "The frame rate the HUD disappears above." )
+			.Keywords( "hide above threshold fps limit autohide" )
+			.DisabledUnless( HideAboveOn, "Hide above X is off" );
+
+		a.Switch( "hud.lag_detection", "Lag spike detection",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.lag_detection_enabled; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.lag_detection_enabled = b; PersistSettings(); } ) )
+			.Key( "fps_display.lag_detection_enabled" )
+			.Help( "Reacts for a moment when a frame takes far longer than the ones around it. "
+			       "The number flips colour for a moment. Only in Fixed text mode -- an "
+			       "inverted number has no second colour to flip to." )
+			.Default( config::FpsDisplaySettings{}.lag_detection_enabled )
+			.Keywords( "lag spike stutter hitch detection warning frametime" )
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		// =================================================================
+		//  Readout
+		// =================================================================
+		a.Group( "Readout" );
+		a.GroupColumn( 0 );
+
+		a.Choice( "hud.fps_shown", "FPS shown",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return fpsmath::FpsShownToInt( s_Settings.fps_display.fps_shown ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_shown = fpsmath::FpsShownFromInt( n ); PersistSettings(); } ),
+			kFpsShownOptions, std::size( kFpsShownOptions ) )
+			.Key( "fps_display.fps_shown" )
+			.Help( "Game: the game's own frame rate. Frame gen: what is actually sent to the "
+			       "display (the game's own rate unless Frame generation is generating). Game + FG: with "
+			       "the Frame generation switch on, two numbers, game > output while it is generating, "
+			       "game - output while it passes frames through; with it off, just the game's number." )
+			.Default( 0 )
+			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
 		a.Choice( "hud.update_mode", "Update mode",
@@ -2349,37 +2416,39 @@ namespace gamescope
 			.Keywords( "update mode smoothing immediate every second refresh rate glide hold" )
 			.DisabledUnless( MonitorOn, kOffReason );
 
-		// "Hide if FPS above X" -- a Switch with a threshold Param, the
-		// same `.Param()` idiom hud.anchor's margin_x/margin_y use above.
-		// The hysteresis band that stops this flickering right at the
-		// threshold is a fixed constant in DrawReadout(), not a setting --
-		// see that function's own comment for the band and why.
-		a.Switch( "hud.hide_above", "Hide above X",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_enabled; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_enabled = b; PersistSettings(); } ) )
-			.Key( "fps_display.hide_above_enabled" )
-			.Help( "Hides the HUD while your frame rate is comfortably high, and brings it back "
-			       "once it drops." )
-			.Default( config::FpsDisplaySettings{}.hide_above_enabled )
-			.Keywords( "hide above threshold fps high framerate autohide" )
-			.DisabledUnless( MonitorOn, kOffReason )
-			.Param( "fps", "Threshold",
-				ui::AnyBind::Of<float>(
-					[]{ EnsureConfigLoaded(); return s_Settings.fps_display.hide_above_fps; },
-					[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.hide_above_fps = f; PersistSettings(); } ) )
-				.Range( 30.0f, 300.0f )
-				.Step( 5.0f )
-				.Unit( "fps" )
-				.Default( config::FpsDisplaySettings{}.hide_above_fps )
-				.Key( "fps_display.hide_above_fps" )
-				.Help( "The frame rate the HUD disappears above." );
+		// =================================================================
+		//  Appearance
+		// =================================================================
+		a.Group( "Appearance" );
+		a.GroupColumn( 1 );
 
-		// "Backdrop opacity" (hud.backdrop_opacity) sat here until
-		// 2026-09-09. The user asked for the backdrop to go, so the row
-		// went with the drawing rather than being defaulted to 0 -- see
-		// superdoc/features/fps-display.md. "Outline size" below is what
-		// makes the number read over busy content now.
+		a.Slider( "hud.font_size", "Font size",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.font_size; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.font_size = f; PersistSettings(); } ) )
+			.Key( "fps_display.font_size" )
+			.Help( "How big the HUD's text is." )
+			.Range( 10.0f, 48.0f )
+			.Step( 1.0f )
+			.Unit( "px" )
+			.Default( config::FpsDisplaySettings{}.font_size )
+			.Keywords( "font size text scale hud" )   // 39 positions, whole px
+			.DisabledUnless( MonitorOn, kOffReason );
+
+		a.Slider( "hud.outline_strength", "Outline size",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.outline_strength; },
+				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.outline_strength = f; PersistSettings(); } ) )
+			.Key( "fps_display.outline_strength" )
+			.Help( "How thick a black outline to draw around the number, in pixels, so it "
+			       "stands out against busy backgrounds. All the way down turns it off." )
+			.Range( 0.0f, 4.0f )
+			.Step( 0.25f )
+			.Unit( "px" )
+			.ZeroMeans( "Off" )
+			.Default( config::FpsDisplaySettings{}.outline_strength )
+			.Keywords( "outline border stroke edge text size thickness strength" )
+			.DisabledUnless( MonitorOn, kOffReason );
 
 		a.Choice( "hud.color_mode", "Text colour",
 			ui::AnyBind::Of<int>(
@@ -2449,46 +2518,5 @@ namespace gamescope
 			.Default( config::FpsDisplaySettings{}.text_opacity )
 			.Keywords( "text opacity transparency alpha fade number see-through" )
 			.DisabledUnless( FixedColorApplies, kInvertedColorReason );
-
-		a.Switch( "hud.lag_detection", "Lag spike detection",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.lag_detection_enabled; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.fps_display.lag_detection_enabled = b; PersistSettings(); } ) )
-			.Key( "fps_display.lag_detection_enabled" )
-			.Help( "Reacts for a moment when a frame takes far longer than the ones around it. "
-			       "The number flips colour for a moment. Only in Fixed text mode -- an "
-			       "inverted number has no second colour to flip to." )
-			.Default( config::FpsDisplaySettings{}.lag_detection_enabled )
-			.Keywords( "lag spike stutter hitch detection warning frametime" )
-			.DisabledUnless( MonitorOn, kOffReason );
-
-		a.Choice( "hud.fps_shown", "FPS shown",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return fpsmath::FpsShownToInt( s_Settings.fps_display.fps_shown ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.fps_display.fps_shown = fpsmath::FpsShownFromInt( n ); PersistSettings(); } ),
-			kFpsShownOptions, std::size( kFpsShownOptions ) )
-			.Key( "fps_display.fps_shown" )
-			.Help( "Game: the game's own frame rate. Output: what is actually sent to the "
-			       "display (the game's own rate unless Frame generation is generating). Both: with "
-			       "the Frame generation switch on, two numbers, game > output while it is generating, "
-			       "game - output while it passes frames through; with it off, just the game's number." )
-			.Default( 0 )
-			.Keywords( "fps shown count generated fake frames frame generation framegen output both original real presented" )
-			.DisabledUnless( MonitorOn, kOffReason );
-
-		a.Slider( "hud.outline_strength", "Outline size",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.fps_display.outline_strength; },
-				[]( float f ) { EnsureConfigLoaded(); s_Settings.fps_display.outline_strength = f; PersistSettings(); } ) )
-			.Key( "fps_display.outline_strength" )
-			.Help( "How thick a black outline to draw around the number, in pixels, so it "
-			       "stands out against busy backgrounds. All the way down turns it off." )
-			.Range( 0.0f, 4.0f )
-			.Step( 0.25f )
-			.Unit( "px" )
-			.ZeroMeans( "Off" )
-			.Default( config::FpsDisplaySettings{}.outline_strength )
-			.Keywords( "outline border stroke edge text size thickness strength" )
-			.DisabledUnless( MonitorOn, kOffReason );
 	}
 }

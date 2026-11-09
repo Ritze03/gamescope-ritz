@@ -232,8 +232,31 @@ limit, scanout engaged on 298 of 300 each, 0 faults.
 
 **Still open:** the picture artifacts when entering and leaving fullscreen with scanout on, which
 sometimes show older frames. They persist with the fix and were reportedly absent under `allbos`;
-cause unknown ([TODO](../planning/TODO.md)). The Diagnostics area's warning about scanout being off
+cause unknown. The Compatibility area's warning about scanout being off
 is back since the crash fix ([diagnostics.md](diagnostics.md)).
+
+### Block direct scanout from gamescope
+
+User switch "Block direct scanout" ([diagnostics.md](diagnostics.md#block-direct-scanout-switch-displayblock_direct_scanout), default
+off). Hosts only scan out a window that is a single surface (Hyprland reports `solitaryBlockedBy`
+`OPAQUE, SURFACES` when it is not; Mutter's scanout candidate check needing a single surface too is
+from memory and **unverified until tested**). `m_Planes` are subsurfaces of plane 0, so when the
+switch is on `CWaylandConnector::Present()` puts a 1x1 fully transparent buffer
+(`wp_single_pixel_buffer_manager_v1`, rgba 0, `bOpaque = false`, viewport destination 1x1 at the
+origin; `CWaylandBackend::GetTransparentFb()`) on the top plane, `m_Planes[7]`, in both the
+direct-plane and the full-composite path, before the commit loop. Plane 7 is normally empty; in
+the direct-plane path, if a real layer wants it (8 layers, or 7 plus the backing plane) it is left
+alone, because the host is not solitary then anyway. Hidden windows are skipped. Without the
+single-pixel manager the switch does nothing and logs once.
+
+The plane subsurface already has an empty input region (`CWaylandPlane::Init()`), so it takes no
+input and leaves pointer focus on the toplevel. Buffer lifetime, per
+[wayland-vrr-buffer-lifetime.md](../planning/wayland-vrr-buffer-lifetime.md): `CWaylandPlane::Present()`
+only attaches when the plane's buffer changes and acquires on that attach, so presenting the same
+transparent buffer every frame is one attach, one acquire and one release in total; the blocker
+makes exactly one `Present()` call per frame (never `Present(nullptr)` then a state), and turning
+the switch off presents `nullptr` on plane 7, which detaches it on the next frame. Cost: the host
+composites, so Frame generation's shown rate falls back (about 160 uncapped against 261-272).
 
 A host can put gamescope's buffer straight on a display plane instead of drawing it. Under
 Hyprland that is the only way past 160-230 shown frames with a game running (why:
@@ -241,7 +264,9 @@ Hyprland that is the only way past 160-230 shown frames with a game running (why
 both behind `HostMayScanOutOutputImages()` (`src/backend.h`, true only here), and the status
 line's `zero-copy` count says whether it worked.
 
-**Output images carry no AMD DCC modifier** (modifier filter in `CVulkanTexture::BInit()`). The
+**With "Compress output images" Off, output images carry no AMD DCC modifier** (modifier filter in
+`CVulkanTexture::BInit()`; the switch is On by default, which skips the filter, see the last
+paragraph of this section). The
 host's `zwp_linux_dmabuf_v1` list is what it can sample, not what its planes take. From that
 list RADV picked `0x200000028a6bf04` (RDNA 3: DCC, pipe-aligned, no retile), which is missing
 from the plane's `IN_FORMATS`, so `drmModeAddFB2WithModifiers` failed. Hyprland logged it three
@@ -261,6 +286,13 @@ screenshot makes the host composite again). With no compression a plane reads th
 screenshot does. Cost, without scanout: about 3% shown (232 -> 224, 206 -> 199, 162 -> 158),
 across launches, so roughly. Games keep DCC: `GetSupportedModifiers()` stays whole, because it
 also decides what gamescope offers its own clients.
+
+The "Compress output images" setting (Compatibility, default by host desktop: On except under Hyprland, next launch) is why the
+filter above only applies with it Off. On, the filter is skipped and the driver may pick DCC, as
+upstream gamescope does; on RDNA 3 with Hyprland's direct scanout that brings back the modeset loop
+measured above, so Off is the remedy there. Whether DCC cures the RDNA 4 scrambling under GNOME is a
+hypothesis, untested. The chosen modifier is logged at creation. See
+[diagnostics.md](diagnostics.md#compress-output-images-switch-displaycompress_output_images).
 
 **Four output images.** One is on screen, one committed behind it and held until the next flip,
 one being drawn. With three, 34-46 paints a second found none free and shown stopped at 240-273;

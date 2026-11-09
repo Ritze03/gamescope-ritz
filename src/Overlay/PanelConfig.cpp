@@ -26,12 +26,15 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <unordered_map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "Clipboard/ClipboardSync.h"
 #include "Config/ConfigManager.h"
+#include "Config/ProfileExport.h"
 #include "UI/Registry.h"
 #include "UI/Controls.h"   // controls::DeferToRelease(), the modals' atoms
 #include "UI/Colors.h"
@@ -569,6 +572,801 @@ namespace gamescope
 			return panelconfig::DeleteBlocker( s_Profiles.all.size() );
 		}
 
+		// =================================================================
+		//  Export / Import (2026-11-07) -- settings as JSON TEXT through
+		//  the clipboard, no files. superdoc/features/profile-export.md.
+		//  Every decision is a panelconfig:: function (PanelConfig.h); this
+		//  half draws the two dialogs and calls config::profile_export.
+		// =================================================================
+		namespace pe = config::profile_export;
+
+		// Set by PanelConfig_RegisterAreas(); the registry outlives the shell.
+		const ui::Registry *s_pRegistry = nullptr;
+
+		const std::vector<panelconfig::TreeRow> &TreeRowList()
+		{
+			static const std::vector<panelconfig::TreeRow> s = panelconfig::TreeRows( pe::Groups() );
+			return s;
+		}
+
+		// Config key -> the row's label, from the registry. A row's id is
+		// usually its key; an explicit Key() is added too. Built per diff
+		// recompute (a change, never per frame); a key nobody labels is
+		// shown as the key.
+		std::unordered_map<std::string, std::string> BuildLabelMap()
+		{
+			std::unordered_map<std::string, std::string> m;
+			if ( !s_pRegistry )
+				return m;
+			for ( size_t a = 0; a < s_pRegistry->AreaCount(); ++a )
+			{
+				const ui::Area &area = s_pRegistry->AreaAt( a );
+				for ( size_t i = 0; i < area.EntryCount(); ++i )
+				{
+					const ui::Entry &e = area.EntryAt( i );
+					if ( !e.ConfigKey().empty() )
+						m.emplace( e.ConfigKey(), e.Title() );
+					m.emplace( e.Id(), e.Title() );
+					for ( size_t j = 0; j < e.ParamCount(); ++j )
+					{
+						const ui::Parameter &p = e.ParamAt( j );
+						if ( !p.ConfigKey().empty() )
+							m.emplace( p.ConfigKey(), p.Title() );
+						m.emplace( p.Id(), p.Title() );
+					}
+				}
+			}
+			return m;
+		}
+
+		bool ClipboardSyncOn()
+		{
+			return gamescope::g_bClipboardSyncEnabled.load( std::memory_order_relaxed );
+		}
+
+		// A 20-unit line of Meta text in a modal body (the notes under and
+		// above the panes).
+		void MetaLine( ui::ModalBodyCtx &ctx, const std::string &s, ui::Role eRole )
+		{
+			const ImRect rc = ui::ModalNextBlock( ctx, ui::Px( 20.0f ) );
+			ui::DrawText( rc, ui::TypeRole::Meta, ui::Col( eRole ), s.c_str() );
+		}
+
+		// Both dialogs say it when the desktop clipboard cannot reach gamescope.
+		void ClipboardOffNote( ui::ModalBodyCtx &ctx, bool bExport )
+		{
+			if ( ClipboardSyncOn() )
+				return;
+			if ( bExport )
+			{
+				MetaLine( ctx, "Clipboard sync is off, so this copy stays inside gamescope and the desktop", ui::Role::TextMeta );
+				MetaLine( ctx, "will not see it. Turn it on in Settings > System > Clipboard sync.", ui::Role::TextMeta );
+			}
+			else
+			{
+				MetaLine( ctx, "Clipboard sync is off, so the desktop clipboard does not reach gamescope.", ui::Role::TextMeta );
+				MetaLine( ctx, "Paste only sees text copied inside it. Turn it on in Settings > System > Clipboard sync.", ui::Role::TextMeta );
+			}
+		}
+
+		float ClipboardNoteRows()
+		{
+			return ClipboardSyncOn() ? 0.0f : 40.0f / ui::tok::kRowH;
+		}
+
+		// How many Meta columns fit `flWidthPx` (Meta is monospaced, so the
+		// wrap is exact).
+		size_t MetaColumns( float flWidthPx )
+		{
+			const float flCh = ui::MeasureText( ui::TypeRole::Meta, "M" ).x;
+			return flCh > 0.0f ? (size_t)std::max( 8.0f, flWidthPx / flCh ) : 40;
+		}
+
+		// The selection tree both dialogs draw into a pane box. Rows: a parent
+		// (checkbox with Off/On/Mixed), its children indented under it, a
+		// child's note muted under its label. `pUsable` null = all usable.
+		// The keyboard cursor `nCursor` is the dialog's own (the overlay never
+		// enables ImGui nav): Up/Down/Home/End step it, Space toggles the row
+		// it is on; `bKeys` is false while a text field has the keyboard.
+		// Returns true when a tick changed.
+		bool DrawSelectionTree( const ImRect &rcBox, const char *pszId, pe::GroupSet &ticked,
+		                        const pe::GroupSet *pUsable, int &nCursor, bool bKeys )
+		{
+			const pe::GroupSet *pU = pUsable;
+			const auto &groups = pe::Groups();
+			const auto &rows = TreeRowList();
+			const std::vector<bool> enabled = panelconfig::TreeRowEnabled( groups, rows, pU );
+
+			bool bScroll = false;
+			if ( bKeys )
+			{
+				using Nav = ui::controls::ListBoxNav;
+				bool bNav = true;
+				Nav eNav = Nav::Down;
+				if      ( ImGui::IsKeyPressed( ImGuiKey_DownArrow, true ) ) eNav = Nav::Down;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_UpArrow,   true ) ) eNav = Nav::Up;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_Home,      false ) ) eNav = Nav::Home;
+				else if ( ImGui::IsKeyPressed( ImGuiKey_End,       false ) ) eNav = Nav::End;
+				else bNav = false;
+				if ( bNav )
+				{
+					const int nNext = panelconfig::TreeCursorStep( enabled, nCursor, eNav );
+					if ( nNext != nCursor )
+					{
+						nCursor = nNext;
+						bScroll = true;
+					}
+				}
+			}
+
+			bool bChanged = false;
+			ui::ModalPane pane = ui::ModalPaneBegin( rcBox, pszId );
+			if ( pane.bOpen )
+			{
+				for ( size_t i = 0; i < rows.size(); ++i )
+				{
+					const panelconfig::TreeRow &r = rows[ i ];
+					const pe::ExportGroup *pGroup = r.bParent ? nullptr : &groups[ (size_t)r.nGroup ];
+					const bool bNote = pGroup && !pGroup->note.empty();
+					const float flBoxH = ui::tok::kControlH;
+					const ImRect rcRow = ui::ModalPaneNextRow( pane, bNote ? flBoxH + 16.0f : flBoxH );
+					ImRect rcHit( rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Min.y + ui::Px( flBoxH ) );
+					if ( !r.bParent )
+						rcHit.Min.x += ui::Px( ui::tok::kXL );
+
+					char szId[ 24 ];
+					snprintf( szId, sizeof( szId ), "r%zu", i );
+					const bool bKeyFocus = bKeys && nCursor == (int)i;
+					bool bClicked = false;
+					if ( r.bParent )
+					{
+						ui::controls::CheckState e = panelconfig::TreeParentState( groups, r.sParent, ticked, pU );
+						bClicked = ui::controls::CheckboxAt( rcHit, szId, &e, r.sParent.c_str(), !enabled[ i ], bKeyFocus );
+						if ( bClicked )
+							panelconfig::TreeClickParent( groups, r.sParent, ticked, pU );
+					}
+					else
+					{
+						ui::controls::CheckState e = panelconfig::TreeChildState( ticked, pGroup->id );
+						bClicked = ui::controls::CheckboxAt( rcHit, szId, &e, pGroup->label.c_str(), !enabled[ i ], bKeyFocus );
+						if ( bClicked )
+							panelconfig::TreeClickChild( ticked, pGroup->id, pU );
+						if ( bNote )
+						{
+							const ImRect rcNote( rcHit.Min.x + ui::Px( ui::tok::kXS + 16.0f + ui::tok::kM ),
+							                     rcHit.Max.y - ui::Px( 4.0f ), rcRow.Max.x - ui::Px( ui::tok::kS ),
+							                     rcRow.Max.y );
+							ui::DrawText( rcNote, ui::TypeRole::Meta, ui::Col( ui::Role::TextMeta ), pGroup->note.c_str() );
+						}
+					}
+					if ( bClicked )
+					{
+						nCursor  = (int)i;
+						bChanged = true;
+					}
+					if ( bScroll && nCursor == (int)i )
+						ImGui::ScrollToBringRectIntoView( ImGui::GetCurrentWindow(), rcRow );
+				}
+			}
+			ui::ModalPaneEnd( pane );
+			return bChanged;
+		}
+
+		// ---- Export -------------------------------------------------------
+		struct ExportState
+		{
+			config::ProfileMeta      meta;                       // the profile exported: the session's
+			bool                     bOffersInherited = false;   // an inheriting game profile
+			ui::controls::CheckState eResolved = ui::controls::CheckState::On;
+			pe::GroupSet             ticked;
+			int                      nCursor = -1;
+			std::string              sPreview;
+			bool                     bPreviewOk = true;
+			bool                     bPreviewDirty = true;
+			size_t                   nCopiedGroups = 0;
+		};
+		ExportState s_Export;
+
+		bool ExportResolved()
+		{
+			return s_Export.eResolved == ui::controls::CheckState::On;
+		}
+
+		// The preview is recomputed on a change only: it reads the profile
+		// from disk.
+		void RefreshExportPreview()
+		{
+			ExportState &x = s_Export;
+			if ( !x.bPreviewDirty )
+				return;
+			x.bPreviewDirty = false;
+			const pe::ExportResult r = pe::ExportSettings( x.meta.name, x.ticked, ExportResolved() );
+			x.bPreviewOk = r.ok;
+			x.sPreview   = r.ok ? r.text : r.error;
+		}
+
+		float ExportBodyRows()
+		{
+			float fl = ( 22.0f + 360.0f + ui::tok::kM ) / ui::tok::kRowH + ClipboardNoteRows();
+			if ( s_Export.bOffersInherited )
+				fl += ( ui::tok::kRowH + 40.0f ) / ui::tok::kRowH;
+			return fl;
+		}
+
+		void DrawExportBody( ui::ModalBodyCtx &ctx )
+		{
+			ExportState &x = s_Export;
+			ClipboardOffNote( ctx, /* bExport */ true );
+
+			const char *apszTitles[ 2 ] = { "What to export", "Preview" };
+			const ui::ModalPaneRowLayout lay = ui::ModalPaneRow( ctx, apszTitles, 2, 400.0f, 360.0f );
+			if ( DrawSelectionTree( lay.rcBox[ 0 ], "extree", x.ticked, nullptr, x.nCursor,
+			                        !ImGui::IsAnyItemActive() ) )
+				x.bPreviewDirty = true;
+
+			if ( x.bOffersInherited )
+			{
+				const ui::RowCtx row = LabeledRow( ctx, "Include inherited values" );
+				if ( ui::controls::Checkbox( row, "resolved", &x.eResolved ) )
+					x.bPreviewDirty = true;
+				const std::string sParent = x.meta.inherits;
+				MetaLine( ctx, "Ticked: every value is written, so the file works without '" + sParent + "'.",
+				          ui::Role::TextMeta );
+				MetaLine( ctx, "Unticked: only what this profile changes from '" + sParent + "'.", ui::Role::TextMeta );
+			}
+
+			RefreshExportPreview();
+			ui::controls::TextMultiline( lay.rcBox[ 1 ], "expreview", &x.sPreview, /* bReadOnly */ true,
+			                             nullptr, !x.bPreviewOk );
+		}
+
+		// The press: copy, or refuse and stay open. The toast comes after the
+		// dialog closes (fnPrimary).
+		bool ExportValidate()
+		{
+			ExportState &x = s_Export;
+			if ( !panelconfig::ExportPrimaryEnabled( x.ticked ) )
+				return false;
+			const pe::ExportResult r = pe::ExportSettings( x.meta.name, x.ticked, ExportResolved() );
+			if ( !r.ok )
+			{
+				Toast( r.error.empty() ? std::string( "Could not export" ) : r.error, Notifications::Kind::Error );
+				return false;
+			}
+			ui::controls::ClipboardWrite( r.text );
+			x.nCopiedGroups = x.ticked.size();
+			return true;
+		}
+
+		void OpenExport()
+		{
+			if ( ui::IsModalOpen() )
+				return;
+			EnsureProfilesLoaded();
+			s_Export = ExportState{};
+			s_Export.meta             = SessionMeta();
+			s_Export.bOffersInherited = panelconfig::ExportOffersInherited( s_Export.meta );
+			s_Export.ticked           = pe::DefaultTicks();
+
+			ui::ModalSpec spec;
+			spec.sTitle            = "Export '" + s_Export.meta.name + "'";
+			spec.sPrimaryLabel     = "Copy to clipboard";
+			spec.flWidthBase       = 900.0f;
+			spec.bCloseOnBackdrop  = true;
+			spec.flMinBodyRows     = ExportBodyRows();
+			spec.fnBody            = DrawExportBody;
+			spec.fnPrimaryEnabled  = []{ return panelconfig::ExportPrimaryEnabled( s_Export.ticked ); };
+			spec.fnValidate        = ExportValidate;
+			spec.fnPrimary         = []{ Toast( panelconfig::ExportToast( s_Export.nCopiedGroups ) ); force_repaint(); };
+			ui::OpenModal( std::move( spec ) );
+		}
+
+		// ---- Import -------------------------------------------------------
+		struct ImportDest
+		{
+			std::string       name;
+			bool              bNew = false;
+			pe::DiffResult    diff;
+			std::vector<std::string> labels;
+		};
+
+		struct ImportState
+		{
+			// The source: pasted text, or the export of one profile. `sText` is
+			// what is parsed; `sPaste` is only what the paste field holds.
+			int                  nSource = 0;            // 0 = Paste JSON, 1 = From profile
+			std::string          sPaste;
+			std::string          sText;
+			std::string          sSrcText;               // the picked profile's export
+			std::string          sSrcError;
+			int                  nSrc = -1;              // the list's cursor, -1 = none picked
+			std::string          sSrcName;
+			std::vector<ui::controls::ListBoxItem> srcItems;
+			ImRect               rcSrcList;              // empty unless the list is shown
+
+			pe::ParsedExport     parsed;
+			bool                 bBlank = true;       // nothing (but whitespace) pasted yet
+			pe::GroupSet         ticked, usable;
+			int                  nCursor = -1;
+
+			std::vector<config::ProfileMeta> existing;   // the destinations after "+ New profile"
+			std::vector<std::string> destLabel, destTag, destSecondary;
+			std::vector<ui::controls::ListBoxItem> destItems;
+			int                  nDest = 0;              // the list's cursor; 0 = "+ New profile"
+			std::vector<bool>    destSel;                // the selected rows; [0] alone = a new profile
+			ImRect               rcDestList;
+			std::string          sNewName;
+			bool                 bEditingName = false;
+			bool                 bNameTouched = false;
+
+			std::vector<ImportDest>  dests;              // the Changes, one per selected row
+			bool                     bDiffDirty = true;
+			std::string              sError;             // the last refusal
+			std::vector<pe::ApplyResult> results;
+		};
+		ImportState s_Import;
+
+		bool ImportValid()          { return !s_Import.bBlank && s_Import.parsed.valid; }
+		bool ImportIsNew()          { return !s_Import.destSel.empty() && s_Import.destSel[ 0 ]; }
+		std::string ImportNameOf( int nIdx )
+		{
+			const ImportState &i = s_Import;
+			return nIdx == 0 ? i.sNewName : i.existing[ (size_t)nIdx - 1 ].name;
+		}
+		// The selected rows, ascending.
+		std::vector<int> ImportDestIdx()
+		{
+			std::vector<int> out;
+			for ( size_t n = 0; n < s_Import.destSel.size(); ++n )
+				if ( s_Import.destSel[ n ] )
+					out.push_back( (int)n );
+			return out;
+		}
+		pe::GroupSet ImportTicks()  { return panelconfig::TicksWithin( s_Import.ticked, s_Import.usable ); }
+		std::string ImportNameError()
+		{
+			return panelconfig::ImportNameError( s_Import.sNewName, s_Import.existing );
+		}
+		bool ImportCanPress()
+		{
+			return panelconfig::ImportPrimaryEnabled( ImportValid(), ImportTicks(), ImportIsNew(),
+			                                          ImportNameError().empty() );
+		}
+
+		// The source or its text changed: parse it, start the ticks and the new
+		// name over.
+		void ImportTextChanged()
+		{
+			ImportState &i = s_Import;
+			i.bBlank = panelconfig::ImportTextBlank( i.sText );
+			i.sError.clear();
+			i.parsed = i.bBlank ? pe::ParsedExport{} : pe::ParseExport( i.sText );
+			if ( ImportValid() )
+			{
+				i.usable = panelconfig::ImportUsable( i.parsed.groups_present );
+				i.ticked = panelconfig::ImportInitialTicks( pe::Groups(), i.parsed.groups_present );
+				if ( !i.bNameTouched )
+					i.sNewName = panelconfig::ImportSuggestedName( i.parsed.profile, i.existing );
+			}
+			else
+			{
+				i.usable.clear();
+				i.ticked.clear();
+			}
+			i.bDiffDirty = true;
+		}
+
+		// The mode or the picked profile changed: take the matching text.
+		void ImportSourceChanged()
+		{
+			ImportState &i = s_Import;
+			i.sText = i.nSource == 0 ? i.sPaste : i.sSrcText;
+			ImportTextChanged();
+		}
+
+		// A profile was picked as the source: its export with every group and
+		// the inherited values, in memory, through the same path as a paste.
+		void ImportPickSource( int nIdx )
+		{
+			ImportState &i = s_Import;
+			i.nSrc = nIdx;
+			i.sSrcText.clear();
+			i.sSrcError.clear();
+			i.sSrcName.clear();
+			if ( nIdx >= 0 && (size_t)nIdx < i.existing.size() )
+			{
+				i.sSrcName = i.existing[ (size_t)nIdx ].name;
+				pe::GroupSet all;
+				for ( const pe::ExportGroup &g : pe::Groups() )
+					all.insert( g.id );
+				const pe::ExportResult r = pe::ExportSettings( i.sSrcName, all, /* bResolved */ true );
+				if ( r.ok )
+					i.sSrcText = r.text;
+				else
+					i.sSrcError = r.error.empty() ? std::string( "Could not read the profile" ) : r.error;
+			}
+			ImportSourceChanged();
+		}
+
+		// The Changes lines, recomputed on a change only: DiffImport() reads
+		// each destination profile from disk.
+		void RefreshImportDiff()
+		{
+			ImportState &i = s_Import;
+			if ( !i.bDiffDirty )
+				return;
+			i.bDiffDirty = false;
+			i.dests.clear();
+			const pe::GroupSet ticks = ImportTicks();
+			if ( !ImportValid() || ticks.empty() )
+				return;
+			const auto labels = BuildLabelMap();
+			for ( int nIdx : ImportDestIdx() )
+			{
+				ImportDest d;
+				d.name = ImportNameOf( nIdx );
+				d.bNew = nIdx == 0;
+				d.diff = pe::DiffImport( i.parsed, d.bNew ? std::string() : d.name, ticks );
+				for ( const pe::DiffRow &r : d.diff.rows )
+					d.labels.push_back( panelconfig::DiffLabel( r.key, [ &labels ]( const std::string &sKey )
+					{
+						auto it = labels.find( sKey );
+						return it == labels.end() ? std::string() : it->second;
+					} ) );
+				i.dests.push_back( std::move( d ) );
+			}
+		}
+
+		// The Source pane (top left): a Multiselector (Paste JSON | From
+		// profile), then the paste field and Paste button, or the profile list.
+		// The message sits under both; every strip is sized to its content.
+		void DrawSourceBox( const ImRect &rcBox )
+		{
+			ImportState &i = s_Import;
+			const float flPad = ui::Px( ui::tok::kS );
+			const float flXS  = ui::Px( ui::tok::kXS );
+			const float flLineH = ui::Px( 18.0f );
+
+			// The Multiselector, ALWAYS segmented: ui::controls::Choice would
+			// downgrade to a dropdown when cramped, and a modal cannot host the
+			// Shell's dropdown popup, so that form would be dead here.
+			{
+				const ui::Option opts[ 2 ] = { { 0, "Paste JSON" }, { 1, "From profile" } };
+				const ImRect rcSeg( rcBox.Min.x + flPad, rcBox.Min.y + flXS,
+				                    rcBox.Max.x - flPad, rcBox.Min.y + flXS + ui::Px( ui::tok::kControlH ) );
+				int nMode = i.nSource;
+				if ( ui::controls::Segmented( rcSeg, "srcmode", &nMode, opts, 2 ) && nMode != i.nSource )
+				{
+					i.nSource = nMode;
+					ImportSourceChanged();
+				}
+			}
+			const float flHeadH = ui::Px( ui::tok::kControlH ) + flXS * 2.0f;
+			const float flTop   = rcBox.Min.y + flHeadH;
+
+			// The message: nothing while blank, the parse error in orange when
+			// invalid, what was recognised when valid.
+			std::string sMsg;
+			ui::Role eRole = ui::Role::TextMeta;
+			if ( i.nSource == 1 && i.nSrc < 0 )
+				sMsg = "Pick the profile to copy settings from";
+			else if ( i.nSource == 1 && !i.sSrcError.empty() )
+			{
+				sMsg  = i.sSrcError;
+				eRole = ui::Role::WarnText;
+			}
+			else if ( !i.bBlank && !i.parsed.valid )
+			{
+				sMsg  = i.parsed.error;
+				eRole = ui::Role::WarnText;
+			}
+			else if ( ImportValid() )
+			{
+				if ( i.nSource == 1 )
+					sMsg = panelconfig::ImportSourceMessage( i.sSrcName, i.parsed.groups_present.size() );
+				else
+					sMsg = "Export of '" + ( i.parsed.profile.empty() ? std::string( "?" ) : i.parsed.profile ) + "': " +
+						std::to_string( i.parsed.groups_present.size() ) + ( i.parsed.groups_present.size() == 1 ? " group" : " groups" );
+			}
+
+			const bool  bPaste = i.nSource == 0;
+			const float flChipW = ui::MeasureText( ui::TypeRole::Meta, "Paste" ).x + ui::Px( ui::tok::kVerbPadX ) * 2.0f;
+			const float flTextW = rcBox.GetWidth() - flPad * 2.0f - ( bPaste ? flChipW + flPad : 0.0f );
+			const std::vector<std::string> lines = panelconfig::WrapWords( sMsg, MetaColumns( flTextW ) );
+			const size_t nLines = std::min<size_t>( lines.size(), 3 );
+			// Strip height: the chip or the message lines, whichever is taller,
+			// plus padding; none at all for an empty message without the chip.
+			float flStripH = flLineH * (float)nLines;
+			if ( bPaste )
+				flStripH = std::max( flStripH, ui::Px( ui::tok::kControlH ) );
+			if ( flStripH > 0.0f )
+				flStripH += flXS * 2.0f;
+			const ImRect rcMain( rcBox.Min.x, flTop, rcBox.Max.x, rcBox.Max.y - flStripH );
+			const ImRect rcStrip( rcBox.Min.x, rcMain.Max.y, rcBox.Max.x, rcBox.Max.y );
+
+			i.rcSrcList = ImRect();
+			float flMsgRight = rcBox.Max.x - flPad;
+			if ( bPaste )
+			{
+				const bool bChanged = ui::controls::TextMultiline( rcMain, "pastejson", &i.sPaste, false,
+					"Paste the exported JSON here", !i.bBlank && !i.parsed.valid );
+				const ImRect rcChip( rcStrip.Max.x - flPad - flChipW, rcStrip.Min.y + flXS,
+				                     rcStrip.Max.x - flPad, rcStrip.Min.y + flXS + ui::Px( ui::tok::kControlH ) );
+				const ui::controls::VerbSpec spec{ "Paste", ui::controls::Intent::Neutral, true };
+				bool bPasted = false;
+				if ( ui::controls::VerbStrip( rcChip, "pastebtn", &spec, 1 ) == 0 )
+				{
+					i.sPaste = ui::controls::ClipboardRead();
+					bPasted = true;
+				}
+				if ( bChanged || bPasted )
+					ImportSourceChanged();
+				flMsgRight = rcChip.Min.x - flPad;
+			}
+			else
+			{
+				i.rcSrcList = rcMain;
+				int nSel = i.nSrc;
+				const ui::controls::ListBoxResult res = ui::controls::ListBox( rcMain, "srclist", &nSel,
+					i.srcItems.data(), i.srcItems.size(), 10 );
+				if ( res.bChanged && nSel != i.nSrc )
+					ImportPickSource( nSel );
+			}
+
+			for ( size_t n = 0; n < nLines; ++n )
+			{
+				const float y = rcStrip.Min.y + flXS + flLineH * (float)n;
+				ui::DrawText( ImRect( rcStrip.Min.x + flPad, y, flMsgRight, y + flLineH ),
+				              ui::TypeRole::Meta, ui::Col( eRole ), lines[ n ].c_str() );
+			}
+		}
+
+		// Destination (top right): the multi-select list, then a name field
+		// when new, else a line saying where it imports.
+		void DrawDestinationBox( const ImRect &rcBox )
+		{
+			ImportState &i = s_Import;
+			const float flPad   = ui::Px( ui::tok::kS );
+			const bool  bNew    = ImportIsNew();
+			const std::string sErr = bNew ? ImportNameError() : std::string();
+			const float flNoteH = ui::Px( 18.0f + ui::tok::kXS * 2.0f );
+			// Below the list: the Name row (+ the error line only when there is
+			// one), or one note line.
+			const float flBelow = bNew ? ui::Px( ui::tok::kRowH ) + ( sErr.empty() ? 0.0f : flNoteH ) : flNoteH;
+			const ImRect rcList( rcBox.Min.x, rcBox.Min.y, rcBox.Max.x, rcBox.Max.y - flBelow );
+			i.rcDestList = rcList;
+
+			int nSel = i.nDest;
+			const ui::controls::ListBoxResult res = ui::controls::ListBox( rcList, "destlist", &nSel,
+				i.destItems.data(), i.destItems.size(), 10, &i.destSel, /* nExclusive */ 0 );
+			if ( res.bChanged || nSel != i.nDest )
+			{
+				i.nDest      = nSel;
+				i.bDiffDirty = true;
+				i.sError.clear();
+			}
+
+			const ImRect rcRow( rcBox.Min.x + flPad, rcList.Max.y, rcBox.Max.x - flPad, rcList.Max.y + ui::Px( ui::tok::kRowH ) );
+			if ( bNew )
+			{
+				const ui::Lane lane = ui::Lane::ForColumn( rcRow.GetWidth() / std::max( ui::Scale(), 0.01f ) );
+				const ui::RowCtx row = ui::RowCtx::ForRow( lane, rcRow.Min.x, rcRow.Min.y );
+				ImRect rcLabel, rcValue;
+				row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+				ui::DrawText( rcLabel, ui::TypeRole::Label, ui::Col( ui::Role::TextLabel ), "Name" );
+				if ( ui::controls::Text( row, "newname", &i.sNewName, &i.bEditingName, "name" ) )
+				{
+					i.bNameTouched = true;
+					i.bDiffDirty   = true;
+					i.sError.clear();
+				}
+				if ( !sErr.empty() )
+				{
+					const ImRect rcNote( rcRow.Min.x, rcRow.Max.y, rcRow.Max.x, rcRow.Max.y + flNoteH );
+					ui::DrawText( rcNote, ui::TypeRole::Meta, ui::Col( ui::Role::WarnText ), sErr.c_str() );
+				}
+			}
+			else
+			{
+				std::vector<std::string> names;
+				for ( int nIdx : ImportDestIdx() )
+					names.push_back( ImportNameOf( nIdx ) );
+				const ImRect rcNote( rcBox.Min.x + flPad, rcList.Max.y, rcBox.Max.x - flPad, rcBox.Max.y );
+				ui::DrawText( rcNote, ui::TypeRole::Meta, ui::Col( ui::Role::TextMeta ),
+				              panelconfig::ImportTargetLine( names ).c_str() );
+			}
+		}
+
+		// Changes (bottom right): per destination a headline, the backup note,
+		// skipped, then the lines. One destination reads as it always did.
+		void DrawChangesBox( const ImRect &rcBox )
+		{
+			ImportState &i = s_Import;
+			ui::ModalPane pane = ui::ModalPaneBegin( rcBox, "changes" );
+			if ( pane.bOpen )
+			{
+				const float flPad = ui::Px( ui::tok::kS );
+				const size_t nCols = MetaColumns( pane.rcInner.GetWidth() - flPad * 2.0f );
+				auto Lines = [ & ]( const std::string &s, ui::Role eRole, const std::string &sIndent = {} )
+				{
+					for ( const std::string &sLine : panelconfig::WrapWords( s, nCols, sIndent ) )
+					{
+						ImRect rc = ui::ModalPaneNextRow( pane, 18.0f );
+						rc.Min.x += flPad;
+						rc.Max.x -= flPad;
+						ui::DrawText( rc, ui::TypeRole::Meta, ui::Col( eRole ), sLine.c_str() );
+					}
+				};
+
+				if ( !ImportValid() )
+					Lines( "Nothing to show yet.", ui::Role::TextMeta );
+				else if ( ImportTicks().empty() )
+					Lines( "Tick a group to see what would change.", ui::Role::TextMeta );
+				else
+				{
+					RefreshImportDiff();
+					const bool bMany = i.dests.size() > 1;
+					auto Unknown = [ & ]()
+					{
+						if ( i.parsed.unknown_count > 0 )
+							Lines( panelconfig::UnknownLine( i.parsed.unknown_count ), ui::Role::WarnText );
+					};
+					if ( bMany )
+					{
+						if ( !i.sError.empty() )
+							Lines( i.sError, ui::Role::WarnText );
+						Unknown();
+					}
+					for ( size_t d = 0; d < i.dests.size(); ++d )
+					{
+						const ImportDest &dst = i.dests[ d ];
+						if ( bMany && d > 0 )
+							ui::ModalPaneNextRow( pane, 8.0f );
+						Lines( panelconfig::ChangesSummary( dst.bNew, dst.name, dst.diff.count ),
+						       ui::Role::TextPrimary );
+						if ( !dst.bNew && dst.diff.count > 0 )
+							Lines( panelconfig::ImportBackupNote( dst.name ), ui::Role::TextMeta );
+						if ( !bMany && !i.sError.empty() )
+							Lines( i.sError, ui::Role::WarnText );
+						if ( !dst.diff.skipped_keys.empty() )
+							Lines( panelconfig::UnreadableLine( dst.diff.skipped_keys.size() ), ui::Role::WarnText );
+						if ( !bMany )
+							Unknown();
+						for ( size_t n = 0; n < dst.diff.rows.size(); ++n )
+							Lines( panelconfig::DiffLine( dst.diff.rows[ n ], dst.labels[ n ] ), ui::Role::TextBody, "  " );
+					}
+				}
+			}
+			ui::ModalPaneEnd( pane );
+		}
+
+		void DrawImportBody( ui::ModalBodyCtx &ctx )
+		{
+			ImportState &i = s_Import;
+			ClipboardOffNote( ctx, /* bExport */ false );
+
+			const char *apszTop[ 2 ] = { "Source", "Destination" };
+			const ui::ModalPaneRowLayout top = ui::ModalPaneRow( ctx, apszTop, 2, 400.0f, 250.0f );
+			DrawSourceBox( top.rcBox[ 0 ] );
+			DrawDestinationBox( top.rcBox[ 1 ] );
+
+			const char *apszBottom[ 2 ] = { "What to import", "Changes" };
+			const ui::ModalPaneRowLayout bot = ui::ModalPaneRow( ctx, apszBottom, 2, 400.0f, 270.0f );
+			const ImVec2 vMouse = ImGui::GetIO().MousePos;
+			const bool bKeys = !ImGui::IsAnyItemActive() && !i.rcDestList.Contains( vMouse ) &&
+			                   !i.rcSrcList.Contains( vMouse );
+			if ( DrawSelectionTree( bot.rcBox[ 0 ], "imtree", i.ticked, &i.usable, i.nCursor, bKeys ) )
+			{
+				i.bDiffDirty = true;
+				i.sError.clear();
+			}
+			DrawChangesBox( bot.rcBox[ 1 ] );
+		}
+
+		// The press: the last gate before ApplyImport. Every destination is
+		// checked first and nothing is written unless all pass; a refusal keeps
+		// the dialog open with the reason inline and as a toast.
+		bool ImportValidate()
+		{
+			ImportState &i = s_Import;
+			i.sError.clear();
+			i.results.clear();
+			if ( !ImportCanPress() )
+				return false;
+			const std::vector<int> idx = ImportDestIdx();
+			const pe::GroupSet ticks = ImportTicks();
+			const panelconfig::MultiApplyOutcome out = panelconfig::ApplyToAll( idx.size(),
+				[ & ]( size_t n )
+				{
+					return pe::CheckImport( i.parsed, ImportNameOf( idx[ n ] ), idx[ n ] == 0, ticks );
+				},
+				[ & ]( size_t n )
+				{
+					const pe::ApplyResult r = pe::ApplyImport( i.parsed, ImportNameOf( idx[ n ] ), idx[ n ] == 0, ticks );
+					if ( !r.success )
+						return r.error.empty() ? std::string( "Could not import" ) : r.error;
+					i.results.push_back( r );
+					return std::string();
+				} );
+			if ( !out.ok )
+			{
+				i.sError = panelconfig::ImportFailure( idx.size(), out.nWritten, ImportNameOf( idx[ out.nFailedAt ] ),
+				                                       out.error );
+				Toast( i.sError, Notifications::Kind::Error );
+				i.bDiffDirty = true;
+				if ( out.nWritten > 0 )
+					s_nListDirty++;
+				return false;
+			}
+			return true;
+		}
+
+		void ImportDone()
+		{
+			const ImportState &i = s_Import;
+			// ApplyImport bumped the config generation when it wrote an existing
+			// profile (so every panel reloads, and the live-apply hook pushes the
+			// values when it is the session's); a new profile is only listed.
+			if ( i.results.size() == 1 )
+				Toast( panelconfig::ImportToast( i.results[ 0 ].destination, ImportIsNew(), i.results[ 0 ].applied,
+				                                 i.results[ 0 ].skipped + i.results[ 0 ].unknown ) );
+			else
+			{
+				int nApplied = 0, nSkipped = 0;
+				for ( const pe::ApplyResult &r : i.results )
+				{
+					nApplied += r.applied;
+					nSkipped += r.skipped + r.unknown;
+				}
+				Toast( panelconfig::ImportToastMulti( i.results.size(), nApplied, nSkipped ) );
+			}
+			s_nListDirty++;
+			force_repaint();
+		}
+
+		void OpenImport()
+		{
+			if ( ui::IsModalOpen() )
+				return;
+			EnsureProfilesLoaded();
+			s_Import = ImportState{};
+			ImportState &i = s_Import;
+			i.existing = s_Profiles.all;
+			i.destLabel.push_back( "+ New profile" );
+			i.destTag.push_back( {} );
+			i.destSecondary.push_back( {} );
+			for ( const config::ProfileMeta &m : i.existing )
+			{
+				i.destLabel.push_back( panelconfig::ListName( m ) );
+				i.destTag.push_back( panelconfig::ListTag( m ) );
+				i.destSecondary.push_back( panelconfig::ListSecondary( m, {}, false ) );
+			}
+			// Built after the strings are final: the items point into them.
+			for ( size_t n = 0; n < i.destLabel.size(); ++n )
+				i.destItems.push_back( ui::controls::ListBoxItem{
+					i.destLabel[ n ].c_str(),
+					i.destTag[ n ].empty() ? nullptr : i.destTag[ n ].c_str(),
+					i.destSecondary[ n ].empty() ? nullptr : i.destSecondary[ n ].c_str() } );
+			// The source list: the same labels, without "+ New profile".
+			for ( size_t n = 1; n < i.destItems.size(); ++n )
+				i.srcItems.push_back( i.destItems[ n ] );
+			i.destSel.assign( i.destItems.size(), false );
+			i.destSel[ 0 ] = true;
+			i.sNewName = panelconfig::ImportSuggestedName( {}, i.existing );
+
+			ui::ModalSpec spec;
+			spec.sTitle           = "Import settings";
+			spec.sPrimaryLabel    = "Import";
+			spec.flWidthBase      = 900.0f;
+			spec.bCloseOnBackdrop = true;
+			spec.flMinBodyRows    = ( 22.0f * 2.0f + 250.0f + 270.0f + ui::tok::kM * 2.0f ) / ui::tok::kRowH + ClipboardNoteRows();
+			spec.fnBody           = DrawImportBody;
+			spec.fnPrimaryEnabled = ImportCanPress;
+			spec.fnValidate       = ImportValidate;
+			spec.fnPrimary        = ImportDone;
+			ui::OpenModal( std::move( spec ) );
+		}
+
 		// ---- the Inherits dropdown --------------------------------------------
 		void SetInherits( int nOption )
 		{
@@ -624,12 +1422,15 @@ namespace gamescope
 				.ListAction( "Copy",   []{ OpenForm( FormKind::Copy ); } )
 				.ListAction( "Edit",   []{ OpenForm( FormKind::Edit ); } )
 				.ListAction( "Delete", OpenDelete, /* bDanger */ true, DeleteReason )
+				.ListActionRow2( "Export", OpenExport )
+				.ListActionRow2( "Import", OpenImport )
 				.Help( "Every saved profile. Selecting one loads it and makes it this game's profile -- "
 				       "every change you make afterwards is saved straight into it. Game profiles are "
-				       "marked [Game] and may inherit a general profile's values. Create, Copy, Edit and "
-				       "Delete act on the selected profile." )
+				       "marked [Game] and may inherit a general profile's values. Create, Copy, Edit, Delete "
+				       "and Export act on the selected profile; Import adds pasted settings to a new or an "
+				       "existing profile." )
 				.Keywords( "profile profiles list select load save use apply restore per-game this game "
-				           "override game general create copy edit delete rename inherit inherits" )
+				           "override game general create copy edit delete rename inherit inherits export import share clipboard json" )
 				.Live( "count", []{
 					EnsureProfilesLoaded();
 					return ui::Fact{ "profiles", std::to_string( s_Profiles.all.size() ) + " on disk, " +
@@ -1003,6 +1804,8 @@ namespace gamescope
 
 	void PanelConfig_RegisterAreas( ui::Registry &reg )
 	{
+		s_pRegistry = &reg;   // the Import dialog labels its Changes lines from it
+
 		// ---- the session, registry-wide ---------------------------------
 		// Every area's badge is the session profile unless it declares its
 		// own (Appearance below), and every row's inherited / overridden

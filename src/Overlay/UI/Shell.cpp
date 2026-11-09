@@ -882,9 +882,9 @@ namespace gamescope::ui::shell
 			// Motion blur (2026-10-04): the second MOTION-group area, its own
 			// switch next to Frame generation's (they work alone and together).
 			PanelMotionBlur_RegisterArea( reg );
-			// Lag spike buffer (2026-10-04): the third MOTION-group area, independent
-			// of Frame generation's multiplier (it fills gaps with or without it).
-			PanelLagBuffer_RegisterArea( reg );
+			// Lag spike buffer: disabled 2026-11-07 (fghost::kLagBufferAvailable), so
+			// its area is not registered. Restore this call together with that switch.
+			// ponytail: PanelLagBuffer_RegisterArea( reg );
 
 			// ---- SYSTEM --------------------------------------------------
 			// The System tab (2026-09-05, requests-2026-09-05.md item 5)
@@ -939,14 +939,14 @@ namespace gamescope::ui::shell
 			// INPUT areas that change what the game receives without a
 			// visible surface of their own. See Overlay/NullBinds.h.
 			NullBinds_RegisterArea( reg );
+			// 2026-11-08: Compatibility (id system.diagnostics, was Diagnostics),
+			// first in OTHER: Compatibility, Log, About.
+			PanelDiagnostics_RegisterArea( reg );
 			PanelLog_RegisterArea( reg );
 			// P6. The second content area: version identity + the embedded
 			// CHANGELOG.md. Sits next to Log because both answer a question
 			// ABOUT the running system rather than configuring it.
 			PanelChangelog_RegisterArea( reg );
-			// 2026-11-05: checks of the setup around gamescope that cost
-			// frames silently (Hyprland's direct scanout). OTHER, last.
-			PanelDiagnostics_RegisterArea( reg );
 
 			// ---- SETUP ---------------------------------------------------
 			// P3 part B. The Config panel's three tabs became three areas,
@@ -3165,7 +3165,8 @@ namespace gamescope::ui::shell
 					const bool bOpen = ( s_sOpenDropdown == sPopupKey &&
 					                     s_eOpenDropdownRegion == eRegion );
 					const controls::ChoiceResult res = controls::Choice(
-						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen );
+						row, pszId, &n, decl.Options().data(), decl.Options().size(), bOpen,
+						decl.SegmentedStyle() );
 
 					if ( res.bChanged )
 					{
@@ -3354,8 +3355,11 @@ namespace gamescope::ui::shell
 		{
 			if ( entry.GetKind() != Kind::Composite )
 				return 1;
-			return ImClamp( Band( entry.GetCompositeKind() ).nLines,
-			                tok::kBandMinLines, tok::kBandMaxLines );
+			// A List with a second verb strip is one line taller (Band.cpp), and
+			// its own spec decides: Tokens.h's max was sized for one strip.
+			const BandSpec spec = Band( entry.GetCompositeKind(), entry.ListStripCount() );
+			return ImClamp( spec.nLines, tok::kBandMinLines,
+			                spec.bSpansRow ? tok::kListBandLines + 1 : tok::kBandMaxLines );
 		}
 
 		// The nine anchors, named. A lookup and not a format string, so the
@@ -3659,7 +3663,8 @@ namespace gamescope::ui::shell
 		bool DrawCompositeBand( const Entry &entry, const Lane &laneBase, float flOriginPx,
 		                        float flTopPx, bool bSelected, bool bAffordance )
 		{
-			const BandLayout bl = LayOutBand( laneBase, flOriginPx, flTopPx, entry.GetCompositeKind() );
+			const BandLayout bl = LayOutBand( laneBase, flOriginPx, flTopPx, entry.GetCompositeKind(),
+				entry.ListStripCount() );
 			const ImRect rcBand = bl.rcBand;
 
 			ImGui::SetCursorScreenPos( rcBand.Min );
@@ -3865,28 +3870,38 @@ namespace gamescope::ui::shell
 						}
 					}
 
-					// The verb strip -- equal chips, declaration order.
-					std::vector<controls::VerbSpec> verbs;
-					std::vector<std::string> reasons;
-					verbs.reserve( entry.ListActionCount() );
-					reasons.reserve( entry.ListActionCount() );
-					for ( size_t i = 0; i < entry.ListActionCount(); ++i )
+					// The verb strips -- equal chips, declaration order, one strip per
+					// row (ListVerb::nRow). A verb's index in the entry is kept so a
+					// press on either strip finds the same ListActionAt() entry.
+					for ( int nRow = 0; nRow < entry.ListStripCount(); ++nRow )
 					{
-						const ListVerb &la = entry.ListActionAt( i );
-						reasons.push_back( la.fnDisabledReason ? la.fnDisabledReason() : std::string() );
-						verbs.push_back( controls::VerbSpec{ la.sLabel.c_str(),
-							la.bDanger ? controls::Intent::Danger : controls::Intent::Accent,
-							reasons.back().empty() } );
-					}
-					const int nPressed = controls::VerbStrip( bl.rcStrip, "verbs", verbs.data(), verbs.size() );
-					if ( nPressed >= 0 && entry.ListActionAt( (size_t)nPressed ).fn )
-					{
-						// Pressing a verb also selects the row, so the
-						// Inspector shows the list's own page (its disabled
-						// reasons, its facts) while the modal is up.
-						Select( &entry );
-						s_eFocusRegion = Region::Sheet;
-						entry.ListActionAt( (size_t)nPressed ).fn();
+						std::vector<controls::VerbSpec> verbs;
+						std::vector<std::string> reasons;
+						std::vector<size_t> entryIdx;
+						verbs.reserve( entry.ListActionCount() );
+						reasons.reserve( entry.ListActionCount() );
+						for ( size_t i = 0; i < entry.ListActionCount(); ++i )
+						{
+							const ListVerb &la = entry.ListActionAt( i );
+							if ( la.nRow != nRow )
+								continue;
+							reasons.push_back( la.fnDisabledReason ? la.fnDisabledReason() : std::string() );
+							verbs.push_back( controls::VerbSpec{ la.sLabel.c_str(),
+								la.bDanger ? controls::Intent::Danger : controls::Intent::Accent,
+								reasons.back().empty() } );
+							entryIdx.push_back( i );
+						}
+						const int nPressed = controls::VerbStrip( nRow == 0 ? bl.rcStrip : bl.rcStrip2,
+							nRow == 0 ? "verbs" : "verbs2", verbs.data(), verbs.size() );
+						if ( nPressed >= 0 && entry.ListActionAt( entryIdx[ (size_t)nPressed ] ).fn )
+						{
+							// Pressing a verb also selects the row, so the
+							// Inspector shows the list's own page (its disabled
+							// reasons, its facts) while the modal is up.
+							Select( &entry );
+							s_eFocusRegion = Region::Sheet;
+							entry.ListActionAt( entryIdx[ (size_t)nPressed ] ).fn();
+						}
 					}
 					break;
 				}
@@ -4006,6 +4021,17 @@ namespace gamescope::ui::shell
 			// see its own use two switch cases down for DrawSharedControl.
 			SplitValueColumn( entry, sValue, row,
 				bAffordance ? Region::Sheet : Region::Inspector, &rcLabel, &rcValue );
+
+			// Entry::StatusWhen(): a warn-coloured status (e.g. "Restart to apply") just
+			// left of the value; the label zone gives up its width first.
+			if ( const std::string sStatus = entry.StatusText(); !sStatus.empty() )
+			{
+				const float flW = MeasureText( TypeRole::Meta, sStatus.c_str() ).x;
+				const float flRight = rcValue.Min.x - Px( tok::kM );
+				Label( { flRight - flW, rcValue.Min.y, flRight, rcValue.Max.y },
+				       TypeRole::Meta, Col( Role::WarnText ), sStatus.c_str(), TextAlign::Right );
+				rcLabel.Max.x = std::max( rcLabel.Min.x, flRight - flW - Px( tok::kM ) );
+			}
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
 			       TypeRole::Label,
@@ -4771,20 +4797,16 @@ namespace gamescope::ui::shell
 				// Greedy: each group goes to the column that is shortest so
 				// far. index.html's algorithm, kept identical so the mockup
 				// stays the tiebreaker it is declared to be.
-				std::vector<int> colOf( blocks.size(), 0 );
-				float flWeight[ kMaxSheetColumns ] = {};
-				for ( size_t b = 0; b < blocks.size(); ++b )
+				// The pure placement is PackBlocks() (Layout.cpp): the band's
+				// own height counts too, and a group pinned with
+				// Area::GroupColumn() is placed before the greedy pass.
+				std::vector<int> blkLines, blkPin;
+				for ( const Block &blk : blocks )
 				{
-					int nBest = 0;
-					for ( int c = 1; c < cols.nColumns; ++c )
-						if ( flWeight[ c ] < flWeight[ nBest ] )
-							nBest = c;
-
-					colOf[ b ] = nBest;
-					// The band's own height counts too, or a column of many
-					// small groups packs short against one of few big ones.
-					flWeight[ nBest ] += (float)blocks[ b ].nLines + 1.0f;
+					blkLines.push_back( blk.nLines );
+					blkPin.push_back( pArea->GroupPin( blk.nGroup ) );
 				}
+				const std::vector<int> colOf = PackBlocks( blkLines, blkPin, cols.nColumns );
 
 				// ---- draw ------------------------------------------------
 				float yOf[ kMaxSheetColumns ];
@@ -7941,6 +7963,12 @@ namespace gamescope::ui::shell
 
 		const ImGuiIO &io = ImGui::GetIO();
 
+		// Clipboard: gamescope's own CLIPBOARD behind ImGui's Ctrl+V / Ctrl+C
+		// and behind the Paste button. Idempotent, so the context being rebuilt
+		// is picked up again on its next frame.
+		controls::SetClipboardHooks( &gamescope_clipboard_text, &gamescope_post_selection );
+		controls::InstallImGuiClipboard();
+
 #ifndef NDEBUG
 		// See overlay_e2_demo_widgets above: replaces the whole shell frame
 		// while active, exactly like the explain page replaces the sheet --
@@ -8276,7 +8304,8 @@ namespace gamescope::ui::shell
 			std::memory_order_release );
 
 		LadderResult ladder = Solve( slab, Host(), pArea ? (int)pArea->EntryCount() : 0,
-		                             AreaIsUnsplittable( pArea ) );
+		                             AreaIsUnsplittable( pArea ),
+		                             pArea ? pArea->WantedColumns() : 0 );
 
 		// SPEC §8.4's 160 ms region duration, applied to the ONE region
 		// dimension that changes without the surface changing. Note the

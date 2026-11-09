@@ -425,6 +425,8 @@ Captures were taken headless. Top to bottom, exactly the sketch:
    profile does *this* game use", and the other games' lines only answer it by noise.
    Two rows rather than the sketch's one: a dropdown and a labelled switch sharing one
    row would fight for the control zone at every width the shell supports.
+   **Export and Import** sit on a second strip under those four: settings as JSON text
+   through the clipboard, see [profile-export.md](profile-export.md).
 4. **Status** (`profiles.status`, one Facts row, last): `[Game] Rust · inherits Comp`,
    naming the game only when the profile is not this game's own (`Casual · game
    Rust`, `Casual (launch) · game Rust`), so it fits the control zone beside a column

@@ -2193,9 +2193,9 @@ TEST_CASE( "rail: the eight groups are in the order the request named", "[overla
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },
+		{ "system.diagnostics",    ui::RailGroup::Other },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
-		{ "system.diagnostics",    ui::RailGroup::Other },
 	};
 	const size_t nExpected = sizeof( expected ) / sizeof( expected[ 0 ] );
 
@@ -2350,7 +2350,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"audio.mixer", "audio.effects", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",
-		"system.log", "system.changelog", "system.diagnostics",
+		"system.diagnostics", "system.log", "system.changelog",
 	};
 	for ( const char *pszId : pszAllAreas )
 		reg.Add( pszId, pszId, ui::Section::Display );
@@ -4031,4 +4031,138 @@ TEST_CASE( "an Entry's ValueText() hook and Preview() are plain declarations", "
 	REQUIRE( (bool)boxed.ValueTextOf() );
 	REQUIRE( boxed.ValueTextOf()( ui::Value{ 3.0f } ) == "3 px" );
 	REQUIRE( boxed.PreviewOf() == ui::Entry::PreviewKind::UiBox );
+}
+
+TEST_CASE( "an Entry's StatusWhen() is evaluated live and empty means nothing drawn", "[overlay_ui]" )
+{
+	// 2026-11-08: Compress output images shows "Restart to apply" while it differs from
+	// the launch value. The text is read every call, not captured at declaration.
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "system.diagnostics", "Compatibility", ui::Section::System );
+	bool b = true;
+	bool bLaunch = true;
+	ui::Entry &plain = area.Switch( "x.plain", "Plain", ui::Bind( &b ) ).Help( "No status." );
+	REQUIRE( plain.StatusText().empty() );
+	ui::Entry &e = area.Switch( "x.compress", "Compress", ui::Bind( &b ) ).Help( "Status." )
+		.StatusWhen( [&]{ return b != bLaunch ? std::string( "Restart to apply" ) : std::string(); } );
+	REQUIRE( e.StatusText().empty() );
+	b = false;
+	REQUIRE( e.StatusText() == "Restart to apply" );
+	b = true;
+	REQUIRE( e.StatusText().empty() );
+}
+
+TEST_CASE( "listbox: multi-select click rules (plain, Ctrl, exclusive row, never empty)", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	std::vector<bool> sel{ true, false, false, false };
+
+	// Plain click: only that row.
+	ListBoxMultiClick( sel, 2, false, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, false } );
+
+	// Ctrl+click adds, then removes.
+	ListBoxMultiClick( sel, 3, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, true } );
+	ListBoxMultiClick( sel, 2, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, false, true } );
+
+	// Ctrl on the last selected row leaves it selected.
+	ListBoxMultiClick( sel, 3, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, false, true } );
+
+	// The exclusive row, with or without Ctrl, is alone.
+	ListBoxMultiClick( sel, 1, true, 0 );
+	ListBoxMultiClick( sel, 0, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ true, false, false, false } );
+
+	// Ctrl on an ordinary row while the exclusive row is selected replaces it.
+	ListBoxMultiClick( sel, 2, true, 0 );
+	REQUIRE( sel == std::vector<bool>{ false, false, true, false } );
+
+	// No exclusive row: Ctrl toggles any row; out-of-range clicks are ignored.
+	std::vector<bool> any{ true, false };
+	ListBoxMultiClick( any, 1, true, -1 );
+	REQUIRE( any == std::vector<bool>{ true, true } );
+	ListBoxMultiClick( any, 5, false, -1 );
+	REQUIRE( any == std::vector<bool>{ true, true } );
+}
+
+TEST_CASE( "listbox: the wheel scrolls away from the selection; only a moved selection pulls the view", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	// Selection at row 0, wheel scrolled the top to 3: it stays there.
+	REQUIRE( ListBoxScrollTop( 3, 0, false, 4, 10 ) == 3 );
+	// The selection moved this frame (click / key): it is brought into view.
+	REQUIRE( ListBoxScrollTop( 3, 0, true, 4, 10 ) == 0 );
+	// Still clamped to the last page.
+	REQUIRE( ListBoxScrollTop( 99, 0, false, 4, 10 ) == 6 );
+}
+
+TEST_CASE( "listbox: Shift range select (anchor, replace, Ctrl+Shift add, exclusive row)", "[overlay_ui]" )
+{
+	using namespace gamescope::ui::controls;
+	using V = std::vector<bool>;
+	V   sel{ true, false, false, false, false, false };
+	int anchor = -1;
+
+	// Plain and Ctrl clicks set the anchor.
+	ListBoxMultiClick( sel, 2, false, 0, false, &anchor );
+	REQUIRE( anchor == 2 );
+	ListBoxMultiClick( sel, 4, true, 0, false, &anchor );
+	REQUIRE( anchor == 4 );
+	REQUIRE( sel == V{ false, false, true, false, true, false } );
+
+	// Shift down: exactly anchor..clicked, replacing; the anchor stays.
+	ListBoxMultiClick( sel, 5, false, 0, true, &anchor );
+	REQUIRE( sel == V{ false, false, false, false, true, true } );
+	REQUIRE( anchor == 4 );
+
+	// Shift up from the same anchor flips the range.
+	ListBoxMultiClick( sel, 1, false, 0, true, &anchor );
+	REQUIRE( sel == V{ false, true, true, true, true, false } );
+	REQUIRE( anchor == 4 );
+
+	// Ctrl+Shift adds the range to what is already selected.
+	ListBoxMultiClick( sel, 2, false, 0, false, &anchor );
+	ListBoxMultiClick( sel, 5, true, 0, true, &anchor );
+	REQUIRE( sel == V{ false, false, true, true, true, true } );
+	ListBoxMultiClick( sel, 4, true, 0, false, &anchor );   // toggle off, anchor 4
+	ListBoxMultiClick( sel, 5, true, 0, true, &anchor );
+	REQUIRE( sel == V{ false, false, true, true, true, true } );
+
+	// The exclusive row is dropped from a multi-row range...
+	ListBoxMultiClick( sel, 3, false, 0, false, &anchor );
+	ListBoxMultiClick( sel, 0, false, 0, true, &anchor );
+	REQUIRE( sel == V{ false, true, true, true, false, false } );
+	// ...also when it is the anchor...
+	ListBoxMultiClick( sel, 0, false, 0, false, &anchor );
+	REQUIRE( sel == V{ true, false, false, false, false, false } );
+	ListBoxMultiClick( sel, 3, false, 0, true, &anchor );
+	REQUIRE( sel == V{ false, true, true, true, false, false } );
+	// ...unless the range is only that row.
+	ListBoxMultiClick( sel, 0, false, 0, false, &anchor );
+	ListBoxMultiClick( sel, 0, false, 0, true, &anchor );
+	REQUIRE( sel == V{ true, false, false, false, false, false } );
+	// Ctrl+Shift with the exclusive row selected replaces it.
+	ListBoxMultiClick( sel, 2, false, 0, false, &anchor );
+	sel = V{ true, false, false, false, false, false };
+	ListBoxMultiClick( sel, 4, true, 0, true, &anchor );
+	REQUIRE( sel == V{ false, false, true, true, true, false } );
+
+	// No anchor yet, or none passed: Shift acts as a plain click.
+	V s2{ false, true, false };
+	int none = -1;
+	ListBoxMultiClick( s2, 2, false, -1, true, &none );
+	REQUIRE( s2 == V{ false, false, true } );
+	REQUIRE( none == 2 );
+	ListBoxMultiClick( s2, 0, false, -1, true, nullptr );
+	REQUIRE( s2 == V{ true, false, false } );
+
+	// Without an exclusive row the range includes every row.
+	V s3( 4, false );
+	int a3 = 0;
+	s3[ 0 ] = true;
+	ListBoxMultiClick( s3, 3, false, -1, true, &a3 );
+	REQUIRE( s3 == V{ true, true, true, true } );
 }

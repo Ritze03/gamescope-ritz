@@ -363,7 +363,10 @@ namespace gamescope
 
 		using S = config::FrameGenSettings;
 
+		a.Columns( 2 );
+
 		a.Group( "Frame generation" );
+		a.GroupColumn( 0 );
 
 		a.Switch( "framegen.enabled", "Frame generation",
 			ui::AnyBind::Of<bool>(
@@ -411,45 +414,9 @@ namespace gamescope
 			.Help( "Low latency adds the least delay, but motion can stutter when the game's "
 			       "frame times jitter. Smoothness spaces the frames perfectly evenly and adds "
 			       "about one game frame of delay." )
+			.Segmented()
 			.Default( 1 )
 			.Keywords( "frame generation priority low latency smoothness input lag jitter pacing" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Switch( "framegen.pause_at_refresh", "Pause at refresh rate",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
-			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps this switch has no "
-			       "effect and the target is used as set. On: frame generation stops once "
-			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
-			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
-			       "tearing or in a desktop window, where only the newest frame is shown; it "
-			       "costs GPU time, and on a real display without tearing it cannot go past "
-			       "the refresh rate." )
-			.Default( true )
-			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
-			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
-
-		a.Switch( "framegen.pause_when_cursor_visible", "Pause while cursor visible",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_when_cursor_visible; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_when_cursor_visible = b; PersistAndPush(); } ) )
-			.Help( "Shows the game's real frames while its mouse cursor is visible, so menus and "
-			       "settings screens do not get interpolation artifacts. Generation resumes by "
-			       "itself when the cursor hides again." )
-			.Default( false )
-			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.gpu_limit; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.gpu_limit = b; PersistAndPush(); } ) )
-			.Help( "On: when frame generation takes too much of the GPU it lowers the output rate, "
-			       "and as a last resort shows only real frames, so the game itself keeps its frame "
-			       "rate. Off: always generate at the chosen rate, even if that slows the game down." )
-			.Default( false )
-			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.motion_version", "Motion version",
@@ -476,6 +443,28 @@ namespace gamescope
 			.Default( 0 )
 			.Keywords( "frame generation motion version v1 v2 learned neural network ml net morph interpolation algorithm experimental" )
 			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.quality", "Quality",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
+			kQualityOptions, std::size( kQualityOptions ) )
+			.Help( "Quality is the default look; Performance is cheaper on the GPU and a little "
+			       "less clean. Motion version V1: Performance estimates motion at a quarter "
+			       "resolution and can miss thin, fast detail (roughly 35-50% cheaper; 1440p 2x: "
+			       "0.50 -> 0.25 ms per game frame, RX 7900 XTX); switching pauses the picture for "
+			       "an instant. Motion version V2: Quality works out a motion value for every pixel "
+			       "and keeps the side of the picture that is still visible at edges, Performance "
+			       "is a simpler warp, a little less clean around moving edges (1080p 2x, RX 7900 "
+			       "XTX: V1 0.30, V2 Quality 0.24, V2 Performance 0.14 ms per game frame); "
+			       "switching does not interrupt the picture." )
+			.Segmented()
+			.Default( 0 )
+			.Keywords( "frame generation quality performance cost gpu motion estimation v2 mode" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Group( "Learned motion" );
+		a.GroupColumn( 1 );
 
 		a.Choice( "framegen.learned_net", "Learned net",
 			ui::AnyBind::Of<int>(
@@ -535,23 +524,48 @@ namespace gamescope
 			.Keywords( "frame generation learned static guard still blend time mix clean experimental" )
 			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
 
-		a.Choice( "framegen.quality", "Quality",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.quality, kQualityKeys, 2, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.quality = kQualityKeys[ ClampIdx( n, 1 ) ]; PersistAndPush(); } ),
-			kQualityOptions, std::size( kQualityOptions ) )
-			.Help( "Quality is the default look; Performance is cheaper on the GPU and a little "
-			       "less clean. Motion version V1: Performance estimates motion at a quarter "
-			       "resolution and can miss thin, fast detail (roughly 35-50% cheaper; 1440p 2x: "
-			       "0.50 -> 0.25 ms per game frame, RX 7900 XTX); switching pauses the picture for "
-			       "an instant. Motion version V2: Quality works out a motion value for every pixel "
-			       "and keeps the side of the picture that is still visible at edges, Performance "
-			       "is a simpler warp, a little less clean around moving edges (1080p 2x, RX 7900 "
-			       "XTX: V1 0.30, V2 Quality 0.24, V2 Performance 0.14 ms per game frame); "
-			       "switching does not interrupt the picture." )
-			.Default( 0 )
-			.Keywords( "frame generation quality performance cost gpu motion estimation v2 mode" )
+		a.Group( "Pausing and limits" );
+		a.GroupColumn( 1 );
+
+		a.Switch( "framegen.pause_at_refresh", "Pause at refresh rate",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
+			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps this switch has no "
+			       "effect and the target is used as set. On: frame generation stops once "
+			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
+			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
+			       "tearing or in a desktop window, where only the newest frame is shown; it "
+			       "costs GPU time, and on a real display without tearing it cannot go past "
+			       "the refresh rate." )
+			.Default( true )
+			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
+			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
+
+		a.Switch( "framegen.pause_when_cursor_visible", "Pause while cursor visible",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_when_cursor_visible; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_when_cursor_visible = b; PersistAndPush(); } ) )
+			.Help( "Shows the game's real frames while its mouse cursor is visible, so menus and "
+			       "settings screens do not get interpolation artifacts. Generation resumes by "
+			       "itself when the cursor hides again." )
+			.Default( false )
+			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
 			.DisabledUnless( On, "frame generation is off" );
+
+		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.gpu_limit; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.gpu_limit = b; PersistAndPush(); } ) )
+			.Help( "On: when frame generation takes too much of the GPU it lowers the output rate, "
+			       "and as a last resort shows only real frames, so the game itself keeps its frame "
+			       "rate. Off: always generate at the chosen rate, even if that slows the game down." )
+			.Default( false )
+			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Group( "Artifact protection" );
+		a.GroupColumn( 0 );
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
@@ -630,6 +644,7 @@ namespace gamescope
 			.DisabledUnless( UiOn, "UI protection or frame generation is off" );
 
 		a.Group( "Status" );
+		a.GroupColumn( 1 );
 
 		a.Facts( "framegen.status", "Status", []
 		{

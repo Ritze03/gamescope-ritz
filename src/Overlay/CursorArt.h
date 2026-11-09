@@ -76,6 +76,35 @@ namespace gamescope::overlay
 	void CursorArt_TipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY );
 	void CursorArt_TipRoundOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY );
 
+	// ---- the "Pointy" style (Cursor tab > Style) --------------------------
+	//
+	// A slimmer, sharper arrow: the design workbench's icon path
+	// M5 3 L15 9 L10.5 10.5 L8.5 15 Z in a 20x20 box. Concave (the notch at
+	// index 2), so the fill is two triangles, see CursorArt_Draw(). The
+	// vertices are rescaled so the arrow is exactly as tall as the Default
+	// pointer (kFootY) at the same scale.
+	inline constexpr int   kPointyCount = 4;
+	inline constexpr float kPointyX[ kPointyCount ] = { 5.0f, 15.0f, 10.5f, 8.5f };
+	inline constexpr float kPointyY[ kPointyCount ] = { 3.0f, 9.0f, 10.5f, 15.0f };
+	inline constexpr float kPointyHeight = 12.0f;                      // 15 - 3
+	inline constexpr float kPointyFit = kFootY / kPointyHeight;        // path units -> Default-pointer units
+
+	// Vertex i with the tip (vertex 0) at (flOriginX, flOriginY).
+	inline void CursorArt_PointyVertex( int i, float flOriginX, float flOriginY, float flScale,
+	                                    float *pflX, float *pflY )
+	{
+		*pflX = flOriginX + ( kPointyX[ i ] - kPointyX[ 0 ] ) * kPointyFit * flScale;
+		*pflY = flOriginY + ( kPointyY[ i ] - kPointyY[ 0 ] ) * kPointyFit * flScale;
+	}
+
+	// The Pointy tip's miter offset (outward from the path vertex) for a
+	// stroke of flOutlineWidth px -- same role as CursorArt_TipMiterOffset().
+	void CursorArt_PointyTipMiterOffset( float flOutlineWidth, float *pflOffsetX, float *pflOffsetY );
+
+	// Whether the Cursor tab's Style is Pointy (defined in PanelCursor.cpp,
+	// next to the setting it reads).
+	bool CursorArt_IsPointy();
+
 	// Draws with the visible tip -- the true hotspot -- landing exactly on
 	// (flTipX, flTipY).
 	void CursorArt_Draw( ImDrawList *pDrawList, float flTipX, float flTipY, float flScale );

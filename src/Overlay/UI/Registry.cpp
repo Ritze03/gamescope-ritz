@@ -419,6 +419,13 @@ namespace gamescope::ui
 	Entry &Entry::Unit( const char *psz )            { m_sUnit = psz ? psz : ""; return *this; }
 	Entry &Entry::ZeroMeans( const char *psz )       { m_sZeroMeans = psz ? psz : ""; return *this; }
 	Entry &Entry::Keywords( const char *psz )        { m_sKeywords = psz ? psz : ""; return *this; }
+	Entry &Entry::ShownWhen( std::function<bool()> fn )
+	{
+		m_Shown = std::move( fn );
+		if ( m_pArea )
+			m_pArea->m_bAnyShownWhen = true;
+		return *this;
+	}
 	Entry &Entry::Key( const char *psz )             { m_sKey = psz ? psz : ""; return *this; }
 	Entry &Entry::Items( std::function<std::vector<ListItem>()> fn ) { m_Items = std::move( fn ); return *this; }
 	Entry &Entry::ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger,
@@ -427,6 +434,20 @@ namespace gamescope::ui
 		m_ListActions.push_back( ui::ListVerb{ pszLabel ? pszLabel : "", std::move( fn ), bDanger,
 		                                         std::move( fnDisabledReason ), bOnDoubleClick } );
 		return *this;
+	}
+	Entry &Entry::ListActionRow2( const char *pszLabel, std::function<void()> fn, bool bDanger,
+	                              std::function<std::string()> fnDisabledReason )
+	{
+		m_ListActions.push_back( ui::ListVerb{ pszLabel ? pszLabel : "", std::move( fn ), bDanger,
+		                                         std::move( fnDisabledReason ), false, 1 } );
+		return *this;
+	}
+	int Entry::ListStripCount() const
+	{
+		for ( const ui::ListVerb &v : m_ListActions )
+			if ( v.nRow > 0 )
+				return 2;
+		return 1;
 	}
 	Entry &Entry::Validate( std::function<std::string( const std::string & )> fn ) { m_Validate = std::move( fn ); return *this; }
 
@@ -780,6 +801,7 @@ namespace gamescope::ui
 		}
 
 		m_Entries.clear();
+		m_bAnyShownWhen = false;
 		m_Groups.clear();
 
 		m_Build( *this );
@@ -805,6 +827,42 @@ namespace gamescope::ui
 	void Area::GroupCount( const char *pszName )
 	{
 		m_Groups.push_back( { pszName ? pszName : "", true, m_Entries.size() } );
+	}
+
+	void Area::GroupColumn( int nColumn )
+	{
+		if ( !m_Groups.empty() )
+			m_Groups.back().nColumn = nColumn < 0 ? -1 : nColumn;
+	}
+
+	// The wanted count, collapsed to the columns that have a shown row: each
+	// distinct pinned column with a shown group counts once, and every shown
+	// unpinned group may fill one more. Capped at the request, floor 1.
+	int Area::WantedColumns() const
+	{
+		if ( m_nWantedColumns <= 0 )
+			return 0;
+		const int nWant = std::min( m_nWantedColumns, 8 );
+		bool bPinned[ 8 ] = {};
+		int  nPinned = 0, nFree = 0;
+		size_t nLastFree = (size_t)-1;
+		for ( const auto &p : m_Entries )
+		{
+			if ( !p->Shown() )
+				continue;
+			const int nPin = GroupPin( p->m_nGroup );
+			if ( nPin >= 0 )
+			{
+				const int c = std::min( nPin, nWant - 1 );
+				if ( !bPinned[ c ] ) { bPinned[ c ] = true; ++nPinned; }
+			}
+			else if ( p->m_nGroup != nLastFree )
+			{
+				nLastFree = p->m_nGroup;
+				++nFree;
+			}
+		}
+		return std::max( 1, std::min( nWant, nPinned + nFree ) );
 	}
 
 	Entry &Area::Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind )
@@ -991,6 +1049,7 @@ namespace gamescope::ui
 			// or together (the library's pacer composes them).
 			{ "image.framegen",        RailGroup::Motion },
 			{ "image.motionblur",      RailGroup::Motion },
+			// Lag spike buffer: disabled 2026-11-07, never registered; RailAreas() skips this slot.
 			{ "image.lagbuffer",       RailGroup::Motion },
 			// ---- OVERLAY -- I7: things drawn OVER the game. setup.cursor
 			// moves here from Settings (it is the pointer's own on-screen
@@ -1021,9 +1080,9 @@ namespace gamescope::ui
 			{ "setup.appearance",      RailGroup::Settings },
 			{ "setup.keybinds",        RailGroup::Settings },
 			// ---- OTHER -- unchanged.
+			{ "system.diagnostics",    RailGroup::Other },   // "Compatibility" (2026-11-08)
 			{ "system.log",            RailGroup::Other },
 			{ "system.changelog",      RailGroup::Other },
-			{ "system.diagnostics",    RailGroup::Other },
 		};
 	}
 

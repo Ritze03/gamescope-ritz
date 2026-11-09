@@ -59,7 +59,7 @@ namespace gamescope::ui
 	//  The ladder (SPEC §8.3)
 	// =====================================================================
 	LadderResult Solve( const Slab &slab, InspectorHost ePreferred, int nRowsInArea,
-	                    bool bUnsplittable )
+	                    bool bUnsplittable, int nWantedColumns )
 	{
 		LadderResult out;
 		const float Wb = slab.flWidthBase;
@@ -108,7 +108,8 @@ namespace gamescope::ui
 		// dense sheets.
 		const int nByContent = std::max( 1,
 			(int)std::ceil( (double)std::max( 0, nRowsInArea ) / (double)shelltok::kRowsPerColumn ) );
-		out.nColumns = std::min( out.nWidthColumns, nByContent );
+		out.nColumns = std::min( out.nWidthColumns,
+			nWantedColumns > 0 ? nWantedColumns : nByContent );
 
 		// An escaped legacy panel or a content body cannot be split -- see
 		// Layout.h. Applied last so it overrides both caps rather than
@@ -123,6 +124,35 @@ namespace gamescope::ui
 		          : out.RailIsIcons()                  ? 1
 		          : out.nWidthColumns == 3             ? -1 : 0;
 		return out;
+	}
+
+	std::vector<int> PackBlocks( const std::vector<int> &nLines, const std::vector<int> &nPin,
+	                             int nColumns )
+	{
+		const int nCols = std::max( 1, nColumns );
+		std::vector<int>   colOf( nLines.size(), 0 );
+		std::vector<float> flWeight( (size_t)nCols, 0.0f );
+		const auto PinOf = [ & ]( size_t b ) {
+			return b < nPin.size() && nPin[ b ] >= 0 ? std::min( nPin[ b ], nCols - 1 ) : -1;
+		};
+		for ( size_t b = 0; b < nLines.size(); ++b )
+			if ( PinOf( b ) >= 0 )
+			{
+				colOf[ b ] = PinOf( b );
+				flWeight[ (size_t)colOf[ b ] ] += (float)nLines[ b ] + 1.0f;
+			}
+		for ( size_t b = 0; b < nLines.size(); ++b )
+		{
+			if ( PinOf( b ) >= 0 )
+				continue;
+			int nBest = 0;
+			for ( int c = 1; c < nCols; ++c )
+				if ( flWeight[ (size_t)c ] < flWeight[ (size_t)nBest ] )
+					nBest = c;
+			colOf[ b ] = nBest;
+			flWeight[ (size_t)nBest ] += (float)nLines[ b ] + 1.0f;
+		}
+		return colOf;
 	}
 
 	// =====================================================================

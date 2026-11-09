@@ -132,6 +132,18 @@ below) exercised daily rather than only on a 2.0x machine. Sheet columns (1 to 3
 `LayOutSheetColumns()`) follow width and a rows-per-column cap; an area with a `Content()` body is
 forced to one column.
 
+An area can override both automatic rules. `Area::Columns( n )` states the wanted column count
+instead of the rows rule (width still caps it, so a narrow sheet drops to 1);
+`Area::WantedColumns()` collapses it to the columns that hold a *shown* row, so an area whose
+second-column group is entirely `ShownWhen`-hidden lays out as one column. `Area::GroupColumn( c )`
+pins the group just declared to column `c` (0-based; beyond the real count it falls back to the last
+column); unpinned groups stay greedy and count the pinned weight. The pure placement is
+`PackBlocks()` in `Layout.cpp`, with no pins identical to the old inline greedy pack. `Why:` greedy
+packing alone cannot give an area under 13 rows a two-column layout, or keep Status in the right
+column, which the user laid out on a visual workbench. Nothing uses these yet; panels opt in.
+Likewise `Entry::Segmented()` lifts only the 8-character label rule of a Choice: the 5-option cap
+and the `MeasureCells()` fit test stay, so a row too wide for its lane still becomes a dropdown.
+
 The **Inspector** is one region in three hosts (`InspectorHost`) and shows the selected row in
 one of two modes (`InspectorMode`): **Configure** (the row's own control, then its Params as
 ordinary rows) and **Details** (a binding grid and the `.Live()` readouts). `ModeFor( Kind,
@@ -160,6 +172,13 @@ switch on the row's CONFIGURE page, directly under the Inspector verb, drawn by
 row stays a readout, so the "nothing here to set" sentence is skipped for it. Not in the sheet or
 the palette; the setter persists itself. `Why:` Diagnostics' "Silence warning" belongs on the Direct
 scanout row's Inspector (the user marked the spot on a screenshot).
+
+**Row-level hide** — `Entry::ShownWhen( fn )` (2026-11-07): the row exists only while `fn()` is true.
+`Area::EntryCount()` and `EntryAt()` return the shown rows only, so the sheet, the column row count
+(`Solve()`), keyboard navigation and the command palette all treat a hidden row as undeclared; the
+answer may change at run time. `Why:` the Compatibility area's "Block direct scanout" is Wayland-only
+([diagnostics.md](diagnostics.md#block-direct-scanout-switch-displayblock_direct_scanout)) and must be neither visible nor findable on other
+backends. Area-level hiding stays `Area::AvailableWhen()`.
 
 **Warning marker** — `Area::WarnWhen( fn )` (2026-11-05) draws a plain filled yellow dot
 (`glyph::WarnDot()`, `glyph::kWarnDotColor`) on the area's rail row **and** on its group heading,
@@ -194,7 +213,7 @@ since 2026-09-27, the I7 regroup):
 | Group | Areas (rail order) |
 | --- | --- |
 | **DISPLAY** | General, Resolution, Upscaling, Frame limiter, HDR, Shaders |
-| **MOTION** | Frame generation, Motion blur, Lag spike buffer |
+| **MOTION** | Frame generation, Motion blur (Lag spike buffer: disabled 2026-11-07, not registered) |
 | **OVERLAY** | HUD, Crosshair, Zoom, Cursor |
 | **INPUT** | General, Autoclicker, Null binds |
 | **AUDIO** | Mixer, Effects |
@@ -204,7 +223,7 @@ since 2026-09-27, the I7 regroup):
 
 Area ids behind those names: `display.general`, `display.resolution`, `display.upscaling`,
 `display.frame_limiter`, `display.hdr`, `image.shaders`, `image.framegen`, `image.motionblur`,
-`image.lagbuffer`, `system.hud`, `system.crosshair`, `system.zoom`, `setup.cursor`, `input.general`,
+`system.hud`, `system.crosshair`, `system.zoom`, `setup.cursor`, `input.general`,
 `system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`, `system.friends`,
 `setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `system.log`,
 `system.changelog` (labelled "About"; the id was left alone because it keys rail grouping, the icon
@@ -343,6 +362,49 @@ group's rows, however many areas pile up elsewhere.
   (INPUT), a square frame with a small plain "+" reticle inside (OVERLAY, unconnected to the frame
   edges so it differs from `system.crosshair`'s own glyph), a speaker (AUDIO), plus MOTION, MISC,
   SETTINGS, OTHER. A missing area icon falls back to the area's initial, never a blank rail.
+
+## Dialog parts: wide modal, panes, checkbox, multi-line text, clipboard, second strip
+
+Built for the Profiles Export and Import dialogs (2026-11; copy and paste JSON text, no files).
+All in `Controls.{h,cpp}` unless stated.
+
+- **Wide modal.** `ModalSpec::flWidthBase` (0 = the 240..420 default, unchanged; 760 for the
+  dialogs) through `ModalWidthPx()`, clamped to the slab minus 2 x kXL and never under 240.
+  `ModalPaneRow( ctx, titles, nPanes, flFirstColBase, flBoxHeightBase )` draws one row of 1 or 2
+  titled, framed boxes (call twice for Import's 2x2) and shortens the boxes to
+  `ModalBodyCtx::flMaxBodyPx` so the footer stays on screen; `LayOutModalPaneRow()` is the pure
+  arithmetic. A box's content scrolls: `ModalPaneBegin` / `ModalPaneNextRow` / `ModalPaneEnd` wrap
+  a child window in `ui::ScrollView`. `Why:` panes are data-simple like `ModalNextRow`, and the
+  wheel is applied by hand (as the sheet does) but never on top of a native scroll.
+- **Backdrop and primary.** `bCloseOnBackdrop` (default false): a press outside the panel runs
+  Cancel (`ModalBackdropCloses()`). `fnPrimaryEnabled` dims the primary and ignores click and
+  Enter; `fnValidate` stays the press-time gate with an inline message. `Why:` Import must be
+  visibly unavailable until the pasted JSON parses, which a press-time check cannot show.
+- **Checkbox.** `CheckState { Off, On, Mixed }`, `CheckboxAt( rc, id, &state, label, bDisabled,
+  bKeyFocus )` for a tree row, `Checkbox( row, ... )` for an option in a row. Dialogs only (see the
+  styling guide). The overlay never enables ImGui keyboard navigation, so the dialog owns a
+  cursor and passes `bKeyFocus` (Space toggles); `ListBoxStep()` steps an index.
+- **Multi-line text.** `TextMultiline( rc, id, &std::string, bReadOnly, placeholder, bError )`:
+  ImGui `InputTextMultiline` with a resize callback (`TextBufferResize()`), Mono Meta, no 256-byte
+  limit; read-only selects and copies. Characters outside the baked atlas show as the fallback
+  glyph and stay in the string. `Why:` `controls::Text` is single-line and 256 bytes; an export
+  is tens of KB.
+- **Clipboard.** Read: `std::string gamescope_clipboard_text()` (`steamcompmgr.hpp`), guarded by
+  a mutex because the overlay thread reads what the steamcompmgr thread writes. `Shell.cpp`'s
+  `Draw()` installs `controls::SetClipboardHooks()` (read and `gamescope_post_selection` write) and
+  `InstallImGuiClipboard()` each frame, so Ctrl+V / Ctrl+C / Ctrl+X work in fields and a Paste
+  button calls `controls::ClipboardRead()`. `Why:` hooks, not a direct call, because the unit
+  tests link `Controls.cpp` without steamcompmgr. The host clipboard only reaches gamescope while
+  `system.clipboard_sync` (`gamescope::g_bClipboardSyncEnabled`, `Clipboard/ClipboardSync.h`) is on;
+  a dialog that offers Paste should say so when it is off. Ctrl+V reaches ImGui: the key arrives as
+  `ImGuiKey_V` with the Ctrl modifier (its control-character text is dropped), and
+  `RunKeyboard()` returns early while a modal is open, so no shell shortcut takes it.
+- **Second list strip.** `Entry::ListActionRow2()` puts a verb on a second strip
+  (`ListVerb::nRow` 1); `ListStripCount()` is 1 or 2. `Band( List, nStrips )` / `LayOutBand()`
+  grow the band by exactly one 44-unit line and return `BandLayout::rcStrip2`; the list and the
+  first strip keep their place, and a list without a second-strip verb is unchanged. `LinesFor()`
+  in `Shell.cpp` reads the same spec, so the scroll height follows. `Why:` Tokens.h's
+  `kBandMaxLines` was sized for one strip, so a List clamps by its own spec instead.
 
 ## Keyboard map (SPEC section 8.2)
 

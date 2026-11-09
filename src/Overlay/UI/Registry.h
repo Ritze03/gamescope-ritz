@@ -284,6 +284,9 @@ namespace gamescope::ui
 		// "double-click acts, single click only selects" can say so without
 		// changing what any other List composite's click already does.
 		bool                         bOnDoubleClick = false;
+		// Which strip the chip sits on: 0 = the strip under the list (every
+		// existing verb), 1 = the second strip (Entry::ListActionRow2()).
+		int                          nRow = 0;
 	};
 
 	// Profiles v2 (2026-09-06): a row's relation to the session profile's
@@ -366,6 +369,7 @@ namespace gamescope::ui
 		// read this on a Parameter exactly as it does on an Entry without a
 		// second, kind-specific branch.
 		bool  DropdownStyle() const      { return false; }
+		bool  SegmentedStyle() const     { return false; }
 
 		// SPEC §3.13: "A parameter inherits its parent's reason, EXCEPT when
 		// it is the cause of it." That exception is why this reads the Param's
@@ -408,6 +412,15 @@ namespace gamescope::ui
 		Entry &ZeroMeans( const char *pszWord );
 		Entry &Keywords( const char *pszKeywords );
 
+		// Row-level visibility (2026-11-07): the row exists only while `fn` is true.
+		// Area::EntryCount()/EntryAt() skip a hidden row, so the sheet, the column
+		// count, keyboard navigation and the command palette all behave as if it
+		// were not declared. `fn` must be cheap and read already-known state; the
+		// answer may change at run time. Why: "Block direct scanout" is only for the
+		// Wayland backend and must be neither shown nor findable on the others.
+		Entry &ShownWhen( std::function<bool()> fn );
+		bool   Shown() const { return !m_Shown || m_Shown(); }
+
 		// The value text of a row whose number alone says too little (2026-10-05:
 		// the Crosshair box size's "2.5% . 24 px", the pixel figure depending on the
 		// game's resolution). Replaces FormatDeclValue()'s "value + unit" for this
@@ -417,6 +430,13 @@ namespace gamescope::ui
 		using ValueTextFn = std::function<std::string( const Value & )>;
 		Entry &ValueText( ValueTextFn fn ) { m_ValueText = std::move( fn ); return *this; }
 		const ValueTextFn &ValueTextOf() const { return m_ValueText; }
+
+		// A short warn-coloured status the sheet row draws left of its value (e.g.
+		// "Restart to apply"). Evaluated every frame; an empty string draws nothing.
+		// The label zone gives up the width it needs. Why: a row that needs a restart
+		// must say so on the row, not only in its help text.
+		Entry &StatusWhen( std::function<std::string()> fn ) { m_StatusWhen = std::move( fn ); return *this; }
+		std::string StatusText() const { return m_StatusWhen ? m_StatusWhen() : std::string(); }
 
 		// One disabled mechanism, and there is no overload without a reason
 		// (API.md §5). The reason renders in Configure; the row draws at 0.55.
@@ -543,6 +563,16 @@ namespace gamescope::ui
 		Entry &Dropdown() { m_bDropdownStyle = true; return *this; }
 		bool  DropdownStyle() const { return m_bDropdownStyle; }
 
+		// ---- presentation flag: segmented despite long labels (2026-11-07) --
+		// Lifts ONLY SPEC §3.2's 8-character label rule for this Choice. The
+		// option-count cap and the measured fit test stay, so a row too wide
+		// for its lane still falls back to a dropdown (user decision D8).
+		// Why: the user's workbench layout wants segmented buttons for labels
+		// a little over eight characters; the fit test is what keeps a row
+		// from being cramped, so the char rule is the one safe thing to lift.
+		Entry &Segmented() { m_bSegmentedStyle = true; return *this; }
+		bool  SegmentedStyle() const { return m_bSegmentedStyle; }
+
 		// ---- presentation flag: capture a key chord (2026-09-08) ----------
 		// A Kind::Text row whose value is a KEY CHORD. Exactly the same shape
 		// as Dropdown() above and for the same reason: the row is still a
@@ -624,6 +654,15 @@ namespace gamescope::ui
 		Entry &ListAction( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
 		                   std::function<std::string()> fnDisabledReason = {},
 		                   bool bOnDoubleClick = false );
+		// The same verb on a SECOND strip under the first (Profiles: Export and
+		// Import sit one line below Create, Copy, Edit, Delete). A list with no
+		// second-strip verb is exactly as tall as before; one with any is one
+		// 44-unit line taller (Band.h). Indices from ListActionAt() still
+		// run over every verb in declaration order, whichever strip it is on.
+		Entry &ListActionRow2( const char *pszLabel, std::function<void()> fn, bool bDanger = false,
+		                       std::function<std::string()> fnDisabledReason = {} );
+		// 1, or 2 when any verb is on the second strip.
+		int ListStripCount() const;
 		size_t ListActionCount() const { return m_ListActions.size(); }
 		const ListVerb &ListActionAt( size_t i ) const { return m_ListActions[ i ]; }
 
@@ -761,6 +800,7 @@ namespace gamescope::ui
 
 		std::string m_sId, m_sTitle, m_sHelp, m_sUnit, m_sZeroMeans, m_sKeywords, m_sReason, m_sKey;
 		std::string m_sConfirm;   // Confirm() -- a destructive Action's second-press prompt
+		std::function<bool()> m_Shown;   // ShownWhen()
 		std::function<std::vector<ListItem>()> m_Items;        // Composite(List)
 		std::vector<ListVerb>                  m_ListActions;  // Composite(List)
 		bool        m_bExcludeFromPalette = false;   // HideFromPalette() -- issue #91
@@ -771,9 +811,11 @@ namespace gamescope::ui
 		std::function<bool()> m_InspSwitchGet;
 		std::function<void( bool )> m_InspSwitchSet;
 		bool        m_bDropdownStyle      = false;   // Dropdown() -- Profiles v2, 2026-09-06
+		bool        m_bSegmentedStyle     = false;   // Segmented() -- 2026-11-07
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
 		ValueTextFn m_ValueText;                     // ValueText() -- 2026-10-05
+		std::function<std::string()> m_StatusWhen;   // StatusWhen() -- 2026-11-08
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;
@@ -913,6 +955,28 @@ namespace gamescope::ui
 
 		void Group( const char *pszName );
 		void GroupCount( const char *pszName );
+
+		// ---- column control (2026-11-07) ----------------------------------
+		// Columns( n ): the column count this area WANTS, replacing the
+		// rows-per-column rule. Width still caps it (a narrow sheet gives 1).
+		// WantedColumns() collapses the request to the number of columns that
+		// have a SHOWN row, so an area whose second-column group is entirely
+		// hidden (ShownWhen) lays out as one column. 0 = no request.
+		// GroupColumn( c ) pins the MOST RECENTLY declared group to column c
+		// (0-based) instead of greedy packing; a pin beyond the real column
+		// count falls back to the last column. Unpinned groups stay greedy and
+		// count the pinned weight. Call it right after Group()/GroupCount().
+		// Why: greedy packing alone cannot give an area under 13 rows two
+		// columns, or keep Status in the right one, as the user laid out on a
+		// visual workbench.
+		Area &Columns( int n ) { m_nWantedColumns = n; return *this; }
+		void  GroupColumn( int nColumn );
+		int   WantedColumns() const;
+		// The pinned column of group `nGroup` (an index from GroupOf()), or -1.
+		int   GroupPin( size_t nGroup ) const
+		{
+			return nGroup < m_Groups.size() ? m_Groups[ nGroup ].nColumn : -1;
+		}
 
 		// ---- the complete taxonomy. There are no other factories. --------
 		Entry &Switch ( const char *pszId, const char *pszTitle, AnyBind bind );
@@ -1063,8 +1127,18 @@ namespace gamescope::ui
 		const std::string &Id() const    { return m_sId; }
 		const std::string &Title() const { return m_sTitle; }
 		Section GetSection() const       { return m_eSection; }
-		size_t  EntryCount() const       { return m_Entries.size(); }
-		const Entry &EntryAt( size_t i ) const { return *m_Entries[ i ]; }
+		// The SHOWN entries only (Entry::ShownWhen): EntryAt( i ) is the i-th shown
+		// one, so every loop over 0..EntryCount() skips a hidden row for free.
+		size_t  EntryCount() const
+		{
+			if ( !m_bAnyShownWhen )
+				return m_Entries.size();
+			size_t n = 0;
+			for ( const auto &p : m_Entries )
+				n += p->Shown() ? 1 : 0;
+			return n;
+		}
+		const Entry &EntryAt( size_t i ) const { return *m_Entries[ RawIndex( i ) ]; }
 
 		// Whether this area is currently offerable at all (SPEC's rail hides
 		// what a machine cannot do). No predicate means always available.
@@ -1074,7 +1148,7 @@ namespace gamescope::ui
 		// none was registered.
 		std::string SummaryText() const { return m_Summary ? m_Summary() : std::string(); }
 
-		struct GroupBand { std::string sName; bool bCounted = false; size_t nFirstEntry = 0; };
+		struct GroupBand { std::string sName; bool bCounted = false; size_t nFirstEntry = 0; int nColumn = -1; };
 		const std::vector<GroupBand> &Groups() const { return m_Groups; }
 
 		// Which band entry `i` sits under. Recorded on the Entry when it was
@@ -1082,12 +1156,24 @@ namespace gamescope::ui
 		// -- rather than re-derived from nFirstEntry ranges at draw time. The
 		// two would agree today; only one of them stays right if a band is
 		// ever declared with no entries under it.
-		size_t GroupOf( size_t i ) const { return m_Entries[ i ]->m_nGroup; }
+		size_t GroupOf( size_t i ) const { return m_Entries[ RawIndex( i ) ]->m_nGroup; }
 
 	private:
 		friend class Registry;
+		friend class Entry;
 
 		Entry &Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind );
+
+		// Index into m_Entries of the i-th shown entry.
+		size_t RawIndex( size_t i ) const
+		{
+			if ( !m_bAnyShownWhen )
+				return i;
+			for ( size_t r = 0; r < m_Entries.size(); ++r )
+				if ( m_Entries[ r ]->Shown() && i-- == 0 )
+					return r;
+			return m_Entries.size();   // out of range, like the unfiltered case
+		}
 
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
@@ -1103,6 +1189,8 @@ namespace gamescope::ui
 		uint64_t                     m_ulGeneration = 0;
 		bool                         m_bBuilt = false;
 		std::vector<std::unique_ptr<Entry>> m_Entries;
+		bool                         m_bAnyShownWhen = false;   // an entry has ShownWhen()
+		int                          m_nWantedColumns = 0;      // Columns()
 		std::vector<GroupBand>       m_Groups;
 		Registry   *m_pRegistry = nullptr;
 	};

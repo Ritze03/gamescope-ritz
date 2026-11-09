@@ -57,6 +57,12 @@ namespace gamescope
 			return nullptr;
 		}
 
+		// What the compatibility switches key on, from the launch environment.
+		Desktop DetectHostDesktop()
+		{
+			return DetectDesktop( HostGetenv( "HYPRLAND_INSTANCE_SIGNATURE" ), HostGetenv( "XDG_CURRENT_DESKTOP" ) );
+		}
+
 		// What gamescope sets for the game it hosts, or what only makes sense
 		// inside it. A browser started with these would load our WSI layer,
 		// connect to gamescope's own nested session, or pick the Steam runtime's
@@ -250,8 +256,7 @@ namespace gamescope
 			f.bBackendApplicable = BackendApplicable();
 			if ( GetBackend() && GetBackend()->GetCurrentConnector() )
 				f.sBackend = GetBackend()->GetCurrentConnector()->GetName();   // "SDLWindow", "Wayland", a DRM connector...
-			f.bHyprland = HostGetenv( "HYPRLAND_INSTANCE_SIGNATURE" ) != nullptr &&
-			              *HostGetenv( "HYPRLAND_INSTANCE_SIGNATURE" ) != '\0';
+			f.bHyprland = DetectHostDesktop() == Desktop::Hyprland;
 
 			{
 				std::lock_guard<std::mutex> l( g_Mutex );
@@ -335,7 +340,8 @@ namespace gamescope
 		if ( bToast )
 		{
 			g_bToasted = true;
-			if ( Diagnostics_Silenced() )
+			// Blocked by gamescope: "scanout is off, turn it on" would be wrong.
+			if ( Diagnostics_Silenced() || Diagnostics_BlockScanout() )
 				return;
 			Notifications::Show(
 				"Hyprland has direct scanout off, so frames gamescope makes are lost. "
@@ -362,7 +368,8 @@ namespace gamescope
 	bool Diagnostics_HasWarning()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );
-		return AnyWarns( &g_Pub.scanout, &g_Pub.scanout + 1, Diagnostics_Silenced() );
+		const ScanoutResult r = WithBlock( g_Pub.scanout, Diagnostics_BlockScanout() );
+		return AnyWarns( &r, &r + 1, Diagnostics_Silenced() );
 	}
 
 	namespace
@@ -390,13 +397,154 @@ namespace gamescope
 		force_repaint();
 	}
 
+	namespace
+	{
+		// Both compatibility switches resolve together, once, on the first getter
+		// call. -1: not resolved yet.
+		std::atomic<int> g_nBlockScanout{ -1 };
+		std::atomic<int> g_nCompressOutput{ -1 };
+		std::atomic<int> g_nCompressAtLaunch{ -1 };
+		std::once_flag   g_ResolveOnce;
+		std::atomic<int> g_nHostDesktop{ (int)Desktop::Other };
+
+		std::mutex  g_FactsMutex;
+		std::string g_sGpuName;
+
+		// Needs the host environment (Diagnostics_CaptureHostEnv(), first thing in
+		// main()); every getter funnels through here, so nothing can read a switch
+		// before it ran.
+		void ResolveCompat()
+		{
+			std::call_once( g_ResolveOnce, []
+			{
+				const Desktop eDesktop = DetectHostDesktop();
+				g_nHostDesktop.store( (int)eDesktop );
+				const Recommendation rec = Recommend( eDesktop );
+				const config::Settings s = config::LoadGlobal();
+				const bool bBlock = ResolveSwitch( s.overlay.diagnostics_block_scanout, rec.bBlockScanout );
+				const bool bCompress = ResolveSwitch( s.overlay.compress_output_images, rec.bCompress );
+				g_nBlockScanout.store( bBlock ? 1 : 0, std::memory_order_relaxed );
+				g_nCompressOutput.store( bCompress ? 1 : 0, std::memory_order_relaxed );
+				g_nCompressAtLaunch.store( bCompress ? 1 : 0, std::memory_order_relaxed );
+				diag_log.infof( "compatibility: desktop %s; block_scanout %s -> %s; compress_output_images %s -> %s",
+					DesktopName( eDesktop ),
+					s.overlay.diagnostics_block_scanout ? "set" : "absent", bBlock ? "on" : "off",
+					s.overlay.compress_output_images ? "set" : "absent", bCompress ? "on" : "off" );
+			} );
+		}
+	}
+
+	// Read on the Wayland present path every frame: the atomic only after the
+	// first call resolved both switches.
+	bool Diagnostics_BlockScanout()
+	{
+		int n = g_nBlockScanout.load( std::memory_order_relaxed );
+		if ( n < 0 )
+		{
+			ResolveCompat();
+			n = g_nBlockScanout.load( std::memory_order_relaxed );
+		}
+		return n == 1;
+	}
+
+	void Diagnostics_SetBlockScanout( bool bBlock )
+	{
+		ResolveCompat();
+		g_nBlockScanout.store( bBlock ? 1 : 0, std::memory_order_relaxed );
+		config::Settings s = config::LoadGlobal();
+		s.overlay.diagnostics_block_scanout = bBlock;
+		config::EnqueueGlobalWrite( s );
+		// An idle screen presents nothing: repaint so the plane appears or goes now.
+		force_repaint();
+	}
+
+	bool Diagnostics_CompressOutputImages()
+	{
+		int n = g_nCompressOutput.load( std::memory_order_relaxed );
+		if ( n < 0 )
+		{
+			ResolveCompat();
+			n = g_nCompressOutput.load( std::memory_order_relaxed );
+		}
+		return n == 1;
+	}
+
+	void Diagnostics_SetCompressOutputImages( bool bCompress )
+	{
+		ResolveCompat();   // fixes the launch value before the first change
+		g_nCompressOutput.store( bCompress ? 1 : 0, std::memory_order_relaxed );
+		config::Settings s = config::LoadGlobal();
+		s.overlay.compress_output_images = bCompress;
+		config::EnqueueGlobalWrite( s );
+	}
+
+	bool Diagnostics_CompressOutputImagesAtLaunch()
+	{
+		ResolveCompat();
+		return g_nCompressAtLaunch.load( std::memory_order_relaxed ) == 1;
+	}
+
+	Desktop Diagnostics_HostDesktop()
+	{
+		ResolveCompat();
+		return (Desktop)g_nHostDesktop.load();
+	}
+
+	Recommendation Diagnostics_Recommended()
+	{
+		return Recommend( Diagnostics_HostDesktop() );
+	}
+
+	std::string Diagnostics_RecommendationText()
+	{
+		return RecommendationText( Diagnostics_Recommended() );
+	}
+
+	void Diagnostics_ApplyRecommended()
+	{
+		const Recommendation rec = Diagnostics_Recommended();
+		Diagnostics_SetBlockScanout( rec.bBlockScanout );
+		Diagnostics_SetCompressOutputImages( rec.bCompress );
+	}
+
+	void Diagnostics_Redetect()
+	{
+		// The host environment is fixed at launch and the settings are never
+		// touched here; the facts are read live, so a repaint is the refresh.
+		diag_log.infof( "compatibility: re-detected: desktop %s", DesktopName( Diagnostics_HostDesktop() ) );
+		force_repaint();
+	}
+
+	void Diagnostics_SetGpuName( const char *pszName )
+	{
+		std::lock_guard<std::mutex> l( g_FactsMutex );
+		g_sGpuName = pszName ? pszName : "";
+	}
+
+	CompatFacts Diagnostics_Facts()
+	{
+		CompatFacts f;
+		f.sDesktop = DesktopName( Diagnostics_HostDesktop() );
+		const char *pszConn = ( GetBackend() && GetBackend()->GetCurrentConnector() )
+			? GetBackend()->GetCurrentConnector()->GetName() : "";
+		f.sBackend = BackendDisplayName( pszConn ? pszConn : "" );
+		std::lock_guard<std::mutex> l( g_FactsMutex );
+		f.sGpu = g_sGpuName.empty() ? "unknown" : g_sGpuName;
+		return f;
+	}
+
+	bool Diagnostics_ScanoutApplicable()
+	{
+		return BackendApplicable();
+	}
+
 	DiagnosticsView Diagnostics_View()
 	{
 		std::lock_guard<std::mutex> l( g_Mutex );
 		DiagnosticsView v;
 		v.bRunning = g_Pub.bRunning;
 		v.bEverChecked = g_Pub.bEverChecked;
-		v.scanout = g_Pub.scanout;
+		v.scanout = WithBlock( g_Pub.scanout, Diagnostics_BlockScanout() );
 		return v;
 	}
 }
