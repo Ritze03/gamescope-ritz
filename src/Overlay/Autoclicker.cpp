@@ -139,8 +139,8 @@ namespace gamescope
 			uint32_t m_uDown = 0;
 		};
 
-		// Sleeps until an ABSOLUTE deadline -- so a late wake-up costs that
-		// one half-period and not every one after it -- waking early the
+		// Sleeps until an ABSOLUTE deadline (RunBurst() drops missed clicks
+		// instead of catching up, see Resync) -- waking early the
 		// moment the chord lets go. Returns false when the run is over.
 		//
 		// The condition variable IS the sleep, rather than
@@ -153,6 +153,18 @@ namespace gamescope
 			std::unique_lock<std::mutex> lock( s_Mutex );
 			s_Cv.wait_until( lock, tpDeadline, []{ return !s_bWanted; } );
 			return s_bWanted;
+		}
+
+		// Missed clicks are dropped, not caught up: a deadline more than one
+		// half-period behind now is resynced to now. `Why:` after a stall, or
+		// when one click costs more than the half-period at high CPS, the
+		// old catch-up fired the backlog back-to-back with no sleep, hogging
+		// wlserver_lock; the user would rather it top out at the limit.
+		void Resync( Clock::time_point &tpDeadline, std::chrono::nanoseconds halfPeriod )
+		{
+			const Clock::time_point tpNow = Clock::now();
+			if ( tpDeadline + halfPeriod < tpNow )
+				tpDeadline = tpNow;
 		}
 
 		void RunBurst()
@@ -178,12 +190,14 @@ namespace gamescope
 					holder.Press( s_uButton.load( std::memory_order_relaxed ) );
 
 				tpDeadline += halfPeriod;
+				Resync( tpDeadline, halfPeriod );
 				if ( !WaitUntil( tpDeadline ) )
 					return;               // ~ButtonHolder emits the release
 
 				holder.Release();
 
 				tpDeadline += halfPeriod;
+				Resync( tpDeadline, halfPeriod );
 				if ( !WaitUntil( tpDeadline ) )
 					return;
 			}

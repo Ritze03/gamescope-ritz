@@ -1187,7 +1187,16 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			}
 			else
 			{
-				s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
+				// A button already held by another source (the autoclicker
+				// plus the user's own click) collapses into the one press.
+				// `Why:` wlroots counts presses per button (n_pressed in
+				// wlr_seat_pointer.c) and only tells the client about the
+				// release when the count is back at 0, but this set holds
+				// one entry per button -- so two presses would need two
+				// releases, and the second is dropped as unmatched below,
+				// leaving the game's button held forever.
+				if ( !s_setMouseButtonsForwardedToGame.insert( uLinuxButton ).second )
+					return;
 				wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
 				wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 
@@ -1232,7 +1241,16 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 				gamescope::Crosshair_NotifyRightButton( false );
 			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
 		}
-		// else: unmatched release, drop -- see wlserver_dispatch_key()'s comment.
+		else
+		{
+			// Unmatched release: nothing to tell the seat (see
+			// wlserver_dispatch_key()'s comment), but the hotkey engine
+			// still gets it. `Why:` the press dedupe above can leave the
+			// real release unmatched (the synthetic one consumed the set
+			// entry), and its press already put the button into
+			// s_setHeldButtonSyms. A no-op if the button isn't held.
+			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
+		}
 	}
 }
 

@@ -103,9 +103,14 @@ paced to an **absolute** `steady_clock` deadline:
   is a pure header-only function with no compositor dependencies, so it is unit
   testable with no link-time dependency on `Autoclicker.cpp` — the same
   arrangement `Zoom_StepFactor()` uses, for the same reason.
-- Each deadline is computed from the **previous deadline, never from "now"**, so
-  a late wake-up costs that one half-period instead of pushing every later click
-  out with it.
+- Each deadline is computed from the **previous deadline**, so a late wake-up costs
+  that one half-period instead of pushing every later click out with it -- but a
+  deadline more than one half-period behind now is **resynced to now**
+  (`Resync()`): clicks that could not be sent are dropped, not fired back-to-back.
+  `Why:` the catch-up ran with no sleep and hogged `wlserver_lock` after a stall or
+  when one click costs more than the half-period at high CPS; the user: "just drop
+  the clicks that couldn't be sent... I'd rather have it top out at the limit than
+  it breaking."
 - The 50% duty cycle is deliberate: a press and release with no measurable gap
   between them is missed by any game that polls button state rather than reading
   the event stream.
@@ -177,6 +182,13 @@ What that covers, concretely:
   button that was down when the overlay came up is released on the next
   half-period. The pacing keeps running through the gate, so letting the overlay
   go resumes in rhythm rather than with a burst.
+
+- **The user clicks the same button meanwhile** — `wlserver_dispatch_mouse_button()`
+  collapses a press of a button already in `s_setMouseButtonsForwardedToGame` into
+  the one already sent (no second seat notify). `Why:` wlroots counts presses per
+  button (`n_pressed`) and releases the client only at 0, while that set holds one
+  entry per button, so the second release was dropped as unmatched and the game saw
+  the button held forever (fixed 2026-11-09). The first release now releases it.
 
 Two limits, both real and both deliberate:
 
