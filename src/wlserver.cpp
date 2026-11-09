@@ -1187,7 +1187,16 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 			}
 			else
 			{
-				s_setMouseButtonsForwardedToGame.insert( uLinuxButton );
+				// A button already held by another source (the autoclicker
+				// plus the user's own click) collapses into the one press.
+				// `Why:` wlroots counts presses per button (n_pressed in
+				// wlr_seat_pointer.c) and only tells the client about the
+				// release when the count is back at 0, but this set holds
+				// one entry per button -- so two presses would need two
+				// releases, and the second is dropped as unmatched below,
+				// leaving the game's button held forever.
+				if ( !s_setMouseButtonsForwardedToGame.insert( uLinuxButton ).second )
+					return;
 				wlr_seat_pointer_notify_button( wlserver.wlr.seat, uTimeMs, uLinuxButton, WL_POINTER_BUTTON_STATE_PRESSED );
 				wlr_seat_pointer_notify_frame( wlserver.wlr.seat );
 

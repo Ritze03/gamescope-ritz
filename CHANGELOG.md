@@ -9,6 +9,13 @@ All notable user-facing changes, newest first. Categories:
 
 The newest version below is the one this build reports.
 
+## [0.14.14] – 2026-11-09
+
+### Fixed
+- **Autoclicker stuck button**: the clicked mouse button no longer stays held down in
+  the game after you click it yourself while the autoclicker runs; clicks the system
+  can't keep up with are now skipped instead of piling up.
+
 ## [0.14.13] – 2026-11-08
 
 ### Added
