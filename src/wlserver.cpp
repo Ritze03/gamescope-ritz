@@ -1241,7 +1241,16 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 				gamescope::Crosshair_NotifyRightButton( false );
 			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
 		}
-		// else: unmatched release, drop -- see wlserver_dispatch_key()'s comment.
+		else
+		{
+			// Unmatched release: nothing to tell the seat (see
+			// wlserver_dispatch_key()'s comment), but the hotkey engine
+			// still gets it. `Why:` the press dedupe above can leave the
+			// real release unmatched (the synthetic one consumed the set
+			// entry), and its press already put the button into
+			// s_setHeldButtonSyms. A no-op if the button isn't held.
+			wlserver_ritz_mouse_hotkey( uLinuxButton, false );
+		}
 	}
 }
 
