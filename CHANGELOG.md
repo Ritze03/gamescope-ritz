@@ -10,9 +10,8 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-12
 
 ### Info
-- **Date-based changelog**: new entries are grouped under a plain date instead of a
-  version number; the About page now shows the newest date as this build's version.
-  Older entries keep their version numbers.
+- **Changelog dates**: new changes are listed by date instead of version number, and the
+  About page shows that date as the version.
 
 ## [0.14.14] – 2026-11-09
 

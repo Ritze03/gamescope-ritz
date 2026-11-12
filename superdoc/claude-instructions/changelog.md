@@ -42,6 +42,10 @@ The format is strict, because the overlay parses it:
 - **One block per calendar day, newest on top.** If today's block already exists, add
   your bullet to it under the right category; otherwise create a new `## YYYY-MM-DD` block at
   the top. Never change a past block's heading, and never rewrite past entries.
+- **Short and non-technical: say what got better, never how.** Write for someone who has
+  never seen the code. No internals, no component names, no mechanism. Example: a
+  compositor change that fixes a VRR bug becomes
+  `- **Variable refresh rate**: fixed an issue with variable refresh rate.`
 - **Be ruthless.** One line per change. What changed *for the user*, not how it was
   implemented. Reasoning, mechanism, measurements, issue archaeology and rejected
   alternatives all belong in the commit message, in `superdoc/`, or in the relevant
