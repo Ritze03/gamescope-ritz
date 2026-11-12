@@ -34,7 +34,8 @@
 # meson.build's project() declares none. Rather than ADD a second place to
 # write the number -- which is a thing to keep in sync, and therefore a thing
 # that eventually disagrees -- the number is DERIVED here from the top
-# block's `## [x.y.z] - YYYY-MM-DD` heading, in the same pass that reads the
+# block's heading (`## YYYY-MM-DD`, or the older `## [x.y.z] - YYYY-MM-DD`;
+# a date-only heading reports the date as the version), in the same pass that reads the
 # file for embedding. A semver in the binary that disagrees with the one in
 # the changelog is worse than neither, because both look authoritative; this
 # makes the disagreement unrepresentable rather than merely discouraged.
@@ -42,23 +43,26 @@ import os
 import re
 import sys
 
-# The top block's heading. Deliberately strict -- three all-numeric parts in
-# brackets, an en dash or a hyphen, then the date -- because this is the one
-# place the version is read from, and a loose pattern would silently accept a
-# malformed heading and ship a wrong number.
+# The top block's heading. Deliberately strict -- either a bare date
+# (`## YYYY-MM-DD`, the current date-based policy) or the older form with
+# three all-numeric parts in brackets, an en dash or a hyphen, then the date
+# -- because this is the one place the version is read from, and a loose
+# pattern would silently accept a malformed heading and ship a wrong number.
+# Group 1 is the bracketed version (legacy headings), group 2 the bare date.
 VERSION_RE = re.compile(
-    r"^##\s+\[(\d+\.\d+\.\d+)\]\s*[–-]\s*\d{4}-\d{2}-\d{2}\s*$" )
+    r"^##\s+(?:\[(\d+\.\d+\.\d+)\]\s*[–-]\s*\d{4}-\d{2}-\d{2}|(\d{4}-\d{2}-\d{2}))\s*$" )
 
 
 def extract_version( text ):
-    """The first `## [x.y.z] - date` heading, or None if there is none."""
+    """Version of the first `## ` heading: x.y.z for a legacy heading, the
+    date for a date-only one, or None if it is neither."""
     for line in text.splitlines():
         if line.startswith( "## " ):
             m = VERSION_RE.match( line.strip() )
             # The FIRST `## ` heading decides: it is the newest block by the
             # newest-on-top rule, so a later well-formed heading must not be
             # able to stand in for a malformed newest one.
-            return m.group( 1 ) if m else None
+            return ( m.group( 1 ) or m.group( 2 ) ) if m else None
     return None
 
 # What gets embedded when CHANGELOG.md is absent. A source tarball exported
@@ -106,8 +110,8 @@ def main():
             sys.stderr.write(
                 "embed_changelog.py: {}: could not read a version from the "
                 "first '## ' heading.\n"
-                "  Expected:  ## [x.y.z] - YYYY-MM-DD\n"
-                "  The newest block's version is this project's version "
+                "  Expected:  ## YYYY-MM-DD  (or legacy ## [x.y.z] - YYYY-MM-DD)\n"
+                "  The newest block's heading is this project's version "
                 "marker; see\n"
                 "  superdoc/claude-instructions/changelog.md.\n"
                 .format( in_path ) )

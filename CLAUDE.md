@@ -55,12 +55,12 @@ optional, on-demand read.
 - **Documentation discipline** — @superdoc/claude-instructions/documentation.md — read
   before you touch, update after you change, record design rationale (the *why*).
 - **Version policy** — @superdoc/claude-instructions/documentation-version-policy.md — how
-  this project bumps doc/version markers.
+  this project dates doc/changelog blocks (date-based, no version bumps).
 - **Changelog maintenance** — @superdoc/claude-instructions/changelog.md — `CHANGELOG.md`
   (repo root) gets a one-line entry, in the **same commit**, for every user-visible change.
-  Strict format, four categories, one version bump per dated block. The overlay parses
-  this file, and the build reads the top block's version as the project's own — so
-  `CHANGELOG.md` **is** the version marker; there is no other.
+  Strict format, four categories, one `## YYYY-MM-DD` block per day, no version numbers.
+  The overlay parses this file, and the build reads the top block's heading (the date) as the
+  build's version — so `CHANGELOG.md` **is** the version marker; there is no other.
 
 Path base: `CLAUDE.md` uses repo-root-relative paths (`@superdoc/...`, `` `superdoc/...` ``);
 links *inside* docs are docs-relative. Precedence: `CLAUDE.md` is authoritative for
