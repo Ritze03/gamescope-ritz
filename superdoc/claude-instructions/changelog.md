@@ -15,18 +15,18 @@ The format is strict, because the overlay parses it:
 ```
 # Changelog
 
-<two- or three-line preamble naming the categories>
+<short preamble naming the categories>
 
-## [x.y.z] – YYYY-MM-DD
+## YYYY-MM-DD
 
 ### Added
 - **Short title**: one sentence of what changed for the user.
 ```
 
-- **`## [x.y.z] – YYYY-MM-DD`** — a semantic version, an **en dash**, then the date.
-  Every block is a bump relative to the block below it, sized per
-  [`documentation-version-policy.md`](documentation-version-policy.md). See
-  [Where the version number goes](#where-the-version-number-goes) below.
+- **`## YYYY-MM-DD`** — the date of the block, nothing else: **no version number, no
+  bumping** (date-based policy, see
+  [`documentation-version-policy.md`](documentation-version-policy.md)). Old blocks of the
+  form `## [x.y.z] – YYYY-MM-DD` stay as they are; the parser accepts both.
 - **`### Added` / `### Fixed` / `### Removed` / `### Info`** — the only four categories.
   *Added* = new features, *Fixed* = bug and behaviour fixes, *Removed* = things taken
   out, *Info* = notes worth knowing (reorganisations, renames, policy). Omit a category
@@ -40,9 +40,12 @@ The format is strict, because the overlay parses it:
 - **Maintain it as you work.** A user-facing change gets a bullet under the right
   heading in **today's** dated block, in the **same commit** as the change.
 - **One block per calendar day, newest on top.** If today's block already exists, add
-  your bullet to it under the right category; otherwise create a new block at the top
-  and give it a fresh version bump. Never change a past block's date **or version**, and
-  never rewrite past entries.
+  your bullet to it under the right category; otherwise create a new `## YYYY-MM-DD` block at
+  the top. Never change a past block's heading, and never rewrite past entries.
+- **Short and non-technical: say what got better, never how.** Write for someone who has
+  never seen the code. No internals, no component names, no mechanism. Example: a
+  compositor change that fixes a VRR bug becomes
+  `- **Variable refresh rate**: fixed an issue with variable refresh rate.`
 - **Be ruthless.** One line per change. What changed *for the user*, not how it was
   implemented. Reasoning, mechanism, measurements, issue archaeology and rejected
   alternatives all belong in the commit message, in `superdoc/`, or in the relevant
@@ -61,30 +64,21 @@ The format is strict, because the overlay parses it:
   appears, so bold in the middle of a sentence renders as plain text — do not rely on
   it. Backticks are fine and are kept verbatim.
 
-## Where the version number goes
+## What version the build reports
 
 **This file is the project's version marker.** The fork carries no tags and
-`meson.build`'s `project()` declares no version, so there is no manifest to keep in step
-with the changelog — which is the usual way the two drift apart and start contradicting
-each other.
+`meson.build`'s `project()` declares no version, so the number is not copied anywhere.
+`Overlay/embed_changelog.py` reads the **top block's** heading at build time and emits it
+beside the embedded text; the overlay's About area displays that. The version in the binary
+is therefore *derived from* this file and cannot disagree with it.
 
-So the number is not copied anywhere. `Overlay/embed_changelog.py` reads the **top
-block's** version at build time and emits it beside the embedded text, and the overlay's
-About area displays that. The version in the binary is therefore *derived from* this
-file rather than kept in sync with it, and the two cannot disagree.
-
-What that means when you write here:
-
-- **Bump the top block and the build follows.** Adding a new block at the top with a new
-  version is the whole of "update the version marker" — there is no second file.
-- **Keep the heading exactly `## [x.y.z] – YYYY-MM-DD`.** The extractor wants a
-  bracketed, three-part, all-numeric version on the first `## ` line. A heading it
-  cannot read makes the build **fail loudly** rather than ship a binary whose version is
-  a guess.
-- **The version is not the whole identity.** The About area shows three
-  things and none substitutes for another: this semver (what the fork calls itself), the
-  upstream gamescope commit it is built on (what it is a fork *of*), and HEAD's commit
-  date (which build of it you are running). Those last two come from git via
+- **Date-only heading (`## 2026-11-12`)**: the build reports the date, `2026-11-12`.
+- **Legacy heading (`## [0.14.14] – 2026-11-09`)**: the build reports `0.14.14`. Only
+  matters while no date-only block sits above it.
+- **Anything else** as the first `## ` heading makes the build **fail loudly** rather than
+  ship a guessed version.
+- **The version is not the whole identity.** The About area also shows the upstream
+  gamescope commit this fork is built on and HEAD's commit date; those come from git via
   `src/RitzVersion.h.in`, not from here.
 
 ## What the parser guarantees
