@@ -7,6 +7,11 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-13
+
+### Fixed
+- **Settings crash**: opening the settings no longer closes gamescope.
+
 ## 2026-11-12
 
 ### Info
