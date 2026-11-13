@@ -9,6 +9,10 @@ All notable user-facing changes, newest first. Categories:
 
 ## 2026-11-13
 
+### Added
+- **Direct scanout warning**: the Direct scanout row in Compatibility shows the yellow
+  dot when scanout is off.
+
 ### Fixed
 - **Text fields at UI scale**: typing into a text or number field now uses the scaled
   font instead of tiny unscaled text.

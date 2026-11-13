@@ -231,6 +231,11 @@ the published range, and it clears when a recheck finds the problem fixed. Only 
 copy, no child process, no repaint request: the worker already calls `force_repaint()` when a
 result lands).
 
+The **Direct scanout** row in the sheet carries the same dot too (2026-11-13), drawn left of its
+value text via `Entry::WarnWhen(fn)` with the same `Diagnostics_HasWarning()` rule: Off and not
+silenced; Could not check, Pending and Not applicable do not warn. `Why:` the user: *"direct
+scanout should get the yellow circle, if it isnt on"*.
+
 How it looks per rail state (`Shell.cpp`, `DrawRail()`):
 
 | Rail state | Heading (OTHER) | Diagnostics row |

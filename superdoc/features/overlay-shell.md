@@ -189,6 +189,7 @@ Diagnostics: *"if something is active in the diagnostics, it should show a warni
 OTHER category and the Diagnostics tab name, to tell the user, to look there."* The triangle with
 "!" that shipped first was dropped as looking fake. Diagnostics' own warnings are switched off
 (see [diagnostics.md](diagnostics.md)); the machinery stays.
+`Entry::WarnWhen( fn )` (2026-11-13) is the per-row twin: the same dot on the sheet row, left of the value (and of any `StatusWhen` text). Used by Diagnostics' Direct scanout row.
 
 **`AvailableWhen( fn )`** hides an area entirely when it is false: no rail entry, no palette rows
 (`Build()` skips unavailable areas), and `RequestArea()` ignores it. `Why:` a palette route to a row

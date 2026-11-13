@@ -4024,13 +4024,22 @@ namespace gamescope::ui::shell
 
 			// Entry::StatusWhen(): a warn-coloured status (e.g. "Restart to apply") just
 			// left of the value; the label zone gives up its width first.
+			float flLeftOfValue = rcValue.Min.x - Px( tok::kM );
 			if ( const std::string sStatus = entry.StatusText(); !sStatus.empty() )
 			{
 				const float flW = MeasureText( TypeRole::Meta, sStatus.c_str() ).x;
-				const float flRight = rcValue.Min.x - Px( tok::kM );
+				const float flRight = flLeftOfValue;
 				Label( { flRight - flW, rcValue.Min.y, flRight, rcValue.Max.y },
 				       TypeRole::Meta, Col( Role::WarnText ), sStatus.c_str(), TextAlign::Right );
-				rcLabel.Max.x = std::max( rcLabel.Min.x, flRight - flW - Px( tok::kM ) );
+				flLeftOfValue = flRight - flW - Px( tok::kM );
+				rcLabel.Max.x = std::max( rcLabel.Min.x, flLeftOfValue );
+			}
+			// Entry::WarnWhen(): the rail's yellow dot, just left of the value / status.
+			if ( entry.Warns() )
+			{
+				glyph::WarnDot( ImVec2( flLeftOfValue - Px( 4.0f ), ( rcValue.Min.y + rcValue.Max.y ) * 0.5f ),
+				                Px( 8.0f ) );
+				rcLabel.Max.x = std::max( rcLabel.Min.x, flLeftOfValue - Px( 8.0f ) - Px( tok::kM ) );
 			}
 
 			Label( { rcLabel.Min.x, rcLabel.Min.y, rcLabel.Max.x, rcLabel.Max.y },
