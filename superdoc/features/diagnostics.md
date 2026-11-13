@@ -282,7 +282,7 @@ shows neither.
 `HostMayScanOutOutputImages()`; `GS_RITZ_DIAGNOSTICS_ASSUME_WAYLAND=1` forces it for tests). On SDL,
 DRM, headless and OpenVR it is neither on the sheet nor in the command palette. An SDL window on a
 Wayland desktop gets no row either: the blocker exists only in `CWaylandConnector::Present()`, so
-there is nothing to block ([overlay-shell.md](overlay-shell.md#inspector-only-switch)'s row-level hide).
+there is nothing to block ([overlay-shell.md](overlay-shell.md#regions-the-ladder-and-the-inspector)'s row-level hide).
 
 `Why:` a user on GNOME (Mutter) saw the whole picture, menu included, scrambled into fine block noise
 after tabbing out and back in, and this switch cured it, so host direct scanout is involved; GNOME has no
