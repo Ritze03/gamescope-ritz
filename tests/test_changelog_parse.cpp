@@ -61,6 +61,14 @@ TEST_CASE( "changelog: the document's five line shapes", "[changelog_parse]" )
 		CHECK( vec[ 1 ].sText == "[0.3.1] - 2026-08-24" );
 	}
 
+	SECTION( "a date-only heading is a Heading" )
+	{
+		const auto vec = Parse( "## 2026-11-12" );
+		REQUIRE( vec.size() == 1 );
+		CHECK( vec[ 0 ].eKind == ContentKind::Heading );
+		CHECK( vec[ 0 ].sText == "2026-11-12" );
+	}
+
 	SECTION( "a category is a Subheading" )
 	{
 		const auto vec = Parse( "### Added" );

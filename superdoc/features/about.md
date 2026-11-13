@@ -16,7 +16,7 @@ command palette.
 It answers three questions on one page:
 
 1. **What am I running.** Three identity facts, none substitutes for another:
-   - the gamescope-ritz semver (`g_Changelog_Version`);
+   - the gamescope-ritz version (`g_Changelog_Version`: the newest block's date, or the version of a legacy `## [x.y.z]` heading);
    - the upstream base commit this fork is built on (`k_szRitzBaseCommit`, with
      `k_bRitzBaseVerified`: checked against git at configure time; if the recorded base is no
      longer an ancestor the row says "unknown" instead of printing a stale hash);
@@ -37,7 +37,7 @@ It answers three questions on one page:
 ## The changelog is the version marker
 
 There is no other version marker in the repo (no tags, `project()` declares none).
-`embed_changelog.py` reads the first `## [x.y.z] – YYYY-MM-DD` heading with a strict regex,
+`embed_changelog.py` reads the first `## ` heading with a strict regex (`## YYYY-MM-DD`, or the legacy `## [x.y.z] – YYYY-MM-DD`; a date-only heading reports the date as the version),
 and the build **fails** if the newest heading cannot be read. The overlay displays that
 number. *Why:* a second place to write the version would eventually disagree with the
 changelog; deriving it makes disagreement unrepresentable. A missing `CHANGELOG.md` builds
@@ -76,5 +76,5 @@ dropped; a malformed changelog renders as unstyled text. Details worth knowing:
 
 ## History
 
-- **About** (glossary detail): the settings overlay's `system.changelog` area, labelled "About" since 2026-09-09. It answers three questions on one page: what am I running (the gamescope-ritz semver, the upstream base commit, HEAD's date), what changed (`CHANGELOG.md`, compiled in), and what is it made of (the licences of everything compiled into the binary — the fork's own `LICENSE`, `THIRD-PARTY-LICENSES.md` and the Geist fonts' OFL, all compiled in and printed below the changelog). Searching the command palette for either "changelog" or "about" finds it.
+- **About** (glossary detail): the settings overlay's `system.changelog` area, labelled "About" since 2026-09-09. It answers three questions on one page: what am I running (the gamescope-ritz version (newest block date), the upstream base commit, HEAD's date), what changed (`CHANGELOG.md`, compiled in), and what is it made of (the licences of everything compiled into the binary — the fork's own `LICENSE`, `THIRD-PARTY-LICENSES.md` and the Geist fonts' OFL, all compiled in and printed below the changelog). Searching the command palette for either "changelog" or "about" finds it.
 

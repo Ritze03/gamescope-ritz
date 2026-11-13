@@ -7,7 +7,17 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
-The newest version below is the one this build reports.
+## 2026-11-13
+
+### Fixed
+- **Text fields at UI scale**: typing into a text or number field now uses the scaled
+  font instead of tiny unscaled text.
+
+## 2026-11-12
+
+### Info
+- **Changelog dates**: new changes are listed by date instead of version number, and the
+  About page shows that date as the version.
 
 ## [0.14.14] – 2026-11-09
 
