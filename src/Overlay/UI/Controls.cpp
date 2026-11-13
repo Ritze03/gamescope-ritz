@@ -1022,6 +1022,13 @@ namespace gamescope::ui
 			ImGui::SetNextItemWidth( ImMax( rc.GetWidth() - Px( tok::kSelfPadX ) * 2.0f, 1.0f ) );
 			ImGui::PushStyleColor( ImGuiCol_FrameBg, IM_COL32_BLACK_TRANS );
 			ImGui::PushStyleColor( ImGuiCol_Text, Col( Role::TextPrimary ) );
+			// The font the non-editing value is drawn in, and a frame padding
+			// that centres its line in rc: without these the input takes
+			// ImGui's unscaled default font and frame (tiny at UI scale != 1).
+			ImGui::PushFont( fonts::Get( fonts::Style::Value ), fonts::RasterSize( TypeSizePx( TypeRole::Value ) ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_FramePadding,
+				ImVec2( 0.0f, ImMax( 0.0f, ( rc.GetHeight() - ImGui::GetFontSize() ) * 0.5f ) ) );
+			ImGui::PushStyleVar( ImGuiStyleVar_FrameBorderSize, 0.0f );
 			if ( ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive() )
 				ImGui::SetKeyboardFocusHere();
 
@@ -1040,6 +1047,8 @@ namespace gamescope::ui
 				bCommitted = !ImGui::IsKeyPressed( ImGuiKey_Escape );
 				*pbEditing = false;
 			}
+			ImGui::PopStyleVar( 2 );
+			ImGui::PopFont();
 			ImGui::PopStyleColor( 2 );
 			return bCommitted;
 		}

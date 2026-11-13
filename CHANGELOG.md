@@ -7,6 +7,12 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-13
+
+### Fixed
+- **Text fields at UI scale**: typing into a text or number field now uses the scaled
+  font instead of tiny unscaled text.
+
 ## 2026-11-12
 
 ### Info
