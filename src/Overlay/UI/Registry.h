@@ -438,6 +438,12 @@ namespace gamescope::ui
 		Entry &StatusWhen( std::function<std::string()> fn ) { m_StatusWhen = std::move( fn ); return *this; }
 		std::string StatusText() const { return m_StatusWhen ? m_StatusWhen() : std::string(); }
 
+		// The yellow warning dot (glyph::WarnDot) on the sheet row, left of the value (and
+		// of the status). Mirrors Area::WarnWhen. Why: the user: "direct scanout should
+		// get the yellow circle, if it isnt on".
+		Entry &WarnWhen( std::function<bool()> fn ) { m_WarnWhen = std::move( fn ); return *this; }
+		bool   Warns() const { return m_WarnWhen && m_WarnWhen(); }
+
 		// One disabled mechanism, and there is no overload without a reason
 		// (API.md §5). The reason renders in Configure; the row draws at 0.55.
 		Entry &DisabledUnless( std::function<bool()> pred, const char *pszReason );
@@ -815,6 +821,7 @@ namespace gamescope::ui
 		std::string m_sChordAction;                  // Chord() -- keybinds, 2026-09-08; empty = not a chord row
 		PreviewKind m_ePreview            = PreviewKind::Nothing;   // Preview() -- 2026-09-07
 		ValueTextFn m_ValueText;                     // ValueText() -- 2026-10-05
+		std::function<bool()>        m_WarnWhen;     // WarnWhen() -- 2026-11-13
 		std::function<std::string()> m_StatusWhen;   // StatusWhen() -- 2026-11-08
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;

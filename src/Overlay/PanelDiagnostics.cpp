@@ -135,6 +135,8 @@ namespace gamescope
 
 		a.Facts( "diagnostics.hypr_scanout", "Direct scanout",
 			[]{ return Headline( Diagnostics_View() ); } )
+			// Same rule as the rail's dot: state Off and the warning not silenced.
+			.WarnWhen( []{ return Diagnostics_HasWarning(); } )
 			.Help( "Whether the host lets gamescope's window go straight to the screen. Without it "
 			       "the host draws every frame itself, and frames that Frame generation makes are "
 			       "lost. Read from Hyprland's settings when gamescope runs nested under Hyprland." )
