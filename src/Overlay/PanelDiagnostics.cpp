@@ -185,9 +185,13 @@ namespace gamescope
 			       "config: render { direct_scanout = 1 } (or 2)." )
 			.Keywords( "fix direct scanout lua hyprlang config render" );
 		a.Facts( "diagnostics.scanout_lua", "Lua config", []{ return std::string( "render = { direct_scanout = 1 }  (or 2)" ); } )
-			.ShownWhen( []{ return ScanoutOff(); } );
+			.ShownWhen( []{ return ScanoutOff(); } )
+			.Help( "The line that turns direct scanout on in a Lua Hyprland config." )
+			.Keywords( "lua config direct scanout render hyprland" );
 		a.Facts( "diagnostics.scanout_hyprlang", "hyprlang config", []{ return std::string( "render { direct_scanout = 1 }  (or 2)" ); } )
-			.ShownWhen( []{ return ScanoutOff(); } );
+			.ShownWhen( []{ return ScanoutOff(); } )
+			.Help( "The same setting in a hyprlang (hyprland.conf) config." )
+			.Keywords( "hyprlang hyprland.conf config direct scanout render" );
 		a.Facts( "diagnostics.scanout_reason", "Detail", []{ return ReasonText(); } )
 			.ShownWhen( []{ return !ReasonText().empty() && !ScanoutOff(); } )
 			.Help( "Why the Direct scanout check shows what it shows." );
