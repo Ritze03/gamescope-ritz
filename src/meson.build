@@ -310,6 +310,7 @@ src = [
   'Utils/TempFiles.cpp',
   'Utils/Version.cpp',
   'Utils/Process.cpp',
+  'Utils/TaskbarIcon.cpp',
   'Config/AppId.cpp',
   'Config/ConfigManager.cpp',
   'Config/ProfileExport.cpp',
@@ -573,6 +574,15 @@ changelog_header = custom_target(
   depend_files : changelog_deps,
 )
 
+# The project icon (icon-256.png, exported from icon.svg with rsvg-convert),
+# embedded as a byte array for the taskbar-icon fallback. See Utils/TaskbarIcon.cpp.
+project_icon_header = custom_target(
+  'ProjectIcon.h',
+  output       : 'ProjectIcon.h',
+  command      : [find_program('Utils/embed_project_icon.py'), ritz_src_root / 'icon-256.png', '@OUTPUT@'],
+  depend_files : files('../icon-256.png'),
+)
+
 # The bundled Lua tree (scripts/00-gamescope), embedded as byte arrays plus
 # an ordered table -- the known-displays database and the modegen helpers
 # that DRMBackend looks a panel up in. Compiled in as of 2026-09-09 because
@@ -609,7 +619,7 @@ bundled_scripts_header = custom_target(
 
   executable(
     'gamescope',
-    src, reshade_src, gamescope_version, ritz_version, changelog_header,
+    src, reshade_src, gamescope_version, ritz_version, changelog_header, project_icon_header,
     bundled_scripts_header,
     include_directories : [reshade_include, sol2_include],
     dependencies: [
