@@ -9,6 +9,7 @@
 // key derived from the icon pixels, and the window's app_id is set to that
 // key.
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -22,6 +23,10 @@ namespace gamescope::taskbar_icon
 	// whole session (to group with an existing launcher shortcut): no
 	// per-game switching, no generated .desktop files.
 	const std::string &EnvAppId();
+
+	// The Name= of the fallback entry, and of any entry with no usable title.
+	inline constexpr const char *k_szFallbackName = "Gamescope";
+	inline constexpr size_t k_nMaxNameLen = 100;
 
 	struct Image
 	{
@@ -40,10 +45,21 @@ namespace gamescope::taskbar_icon
 	// PNG (RGBA) of an ARGB image. Empty on failure.
 	std::vector<uint8_t> EncodePng( const Image &img );
 
-	// Text of the NoDisplay .desktop entry for key. szName has newlines stripped.
+	// A window title as a .desktop Name: control characters (CR, LF...) dropped,
+	// trimmed, capped at k_nMaxNameLen bytes (not mid UTF-8 character);
+	// k_szFallbackName when nothing is left.
+	std::string SanitizeName( const std::string &szName );
+
+	// Text of the NoDisplay .desktop entry for key; szName goes through SanitizeName.
 	std::string DesktopEntryText( const std::string &szKey, const std::string &szName, const std::string &szIconPath );
 
-	// Writes (once per key per process) the PNG and .desktop for the game's
+	// Remembers the focused window's title (the Name of per-game entries
+	// written from now on) and rewrites szKey's .desktop with the new Name if szKey is a
+	// per-game key written by this process (not the fallback). Skipped when
+	// the file already has that content.
+	void UpdateName( const std::string &szKey, const std::string &szTitle );
+
+	// Writes (rewritten only when changed) the PNG and .desktop for the game's
 	// icon under $XDG_DATA_HOME and returns the key, or "" if there is no
 	// usable icon or the write failed. Files exist before this returns, so the
 	// caller may set the app_id right after.

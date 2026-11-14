@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -100,16 +101,35 @@ namespace gamescope::taskbar_icon
 		return png;
 	}
 
+	std::string SanitizeName( const std::string &szName )
+	{
+		std::string szOut;
+		for ( unsigned char c : szName )
+			if ( c >= 0x20 && c != 0x7f )
+				szOut += char( c );
+		const size_t b = szOut.find_first_not_of( ' ' );
+		if ( b == std::string::npos )
+			return k_szFallbackName;
+		szOut.erase( 0, b );
+		if ( szOut.size() > k_nMaxNameLen )
+		{
+			szOut.resize( k_nMaxNameLen );
+			// Do not leave half a UTF-8 sequence at the cut.
+			while ( !szOut.empty() && ( static_cast<unsigned char>( szOut.back() ) & 0xc0 ) == 0x80 )
+				szOut.pop_back();
+			if ( !szOut.empty() && static_cast<unsigned char>( szOut.back() ) >= 0xc0 )
+				szOut.pop_back();
+		}
+		szOut.erase( szOut.find_last_not_of( ' ' ) + 1 );
+		return szOut.empty() ? std::string( k_szFallbackName ) : szOut;
+	}
+
 	std::string DesktopEntryText( const std::string &szKey, const std::string &szName, const std::string &szIconPath )
 	{
-		std::string szSafe;
-		for ( char c : szName )
-			if ( c != '\n' && c != '\r' )
-				szSafe += c;
 		std::ostringstream o;
 		o << "[Desktop Entry]\n"
 		  << "Type=Application\n"
-		  << "Name=" << szSafe << "\n"
+		  << "Name=" << SanitizeName( szName ) << "\n"
 		  << "Icon=" << szIconPath << "\n"
 		  << "Exec=true\n"
 		  << "NoDisplay=true\n"
@@ -160,37 +180,62 @@ namespace gamescope::taskbar_icon
 		return true;
 	}
 
-	static bool WriteEntry( const std::string &szKey, const std::vector<uint8_t> &png, uint32_t uSize )
+	// Guards the state below. Title updates and icon changes both arrive on the
+	// steamcompmgr thread, but the tests do not.
+	static std::mutex s_mutex;
+	// The last window title seen; the Name of per-game entries.
+	static std::string s_szTitle;
+	// Per-game keys written this process -> their PNG path (for rewriting the
+	// .desktop when the title changes).
+	static std::map<std::string, std::string> s_icons;
+	static std::set<std::string> s_failed;
+
+	static std::string DesktopPath( const std::string &szKey )
 	{
-		const std::string szData = DataHome();
-		const std::string szIcon = szData + "/icons/hicolor/" + std::to_string( uSize ) + "x" + std::to_string( uSize ) + "/apps/" + szKey + ".png";
-		const std::string szDesktop = szData + "/applications/" + szKey + ".desktop";
-		// PNG first, then the .desktop that points at it.
-		return WriteAtomic( szIcon, std::string( png.begin(), png.end() ) ) &&
-			WriteAtomic( szDesktop, DesktopEntryText( szKey, "Gamescope", szIcon ) );
+		return DataHome() + "/applications/" + szKey + ".desktop";
 	}
 
-	// One try per key per process: a failure is logged once and not retried.
-	// ponytail: written synchronously on the caller's (steamcompmgr) thread;
-	// two small files once per game, not worth an async path.
-	static std::string EnsureOnce( const std::string &szKey, const std::vector<uint8_t> &png, uint32_t uSize )
+	// PNG first, then the .desktop that points at it.
+	static bool WriteEntry( const std::string &szKey, const std::vector<uint8_t> &png, uint32_t uSize, const std::string &szName, std::string &szIconOut )
 	{
-		static std::mutex s_mutex;
-		static std::set<std::string> s_done;
-		static std::set<std::string> s_failed;
+		szIconOut = DataHome() + "/icons/hicolor/" + std::to_string( uSize ) + "x" + std::to_string( uSize ) + "/apps/" + szKey + ".png";
+		return WriteAtomic( szIconOut, std::string( png.begin(), png.end() ) ) &&
+			WriteAtomic( DesktopPath( szKey ), DesktopEntryText( szKey, szName, szIconOut ) );
+	}
+
+	// A failure is logged once per key and not retried. Success is re-run on
+	// every call (the Name may have changed); WriteAtomic skips identical
+	// files, so that costs two reads.
+	// ponytail: written synchronously on the caller's (steamcompmgr) thread;
+	// two small files per game, not worth an async path.
+	// ponytail: two games with the identical icon share a key, so their shared
+	// .desktop Name follows whichever was focused last. The key is not widened.
+	static std::string EnsureOnce( const std::string &szKey, const std::vector<uint8_t> &png, uint32_t uSize, const std::string &szName, bool bTrackName )
+	{
 		std::lock_guard lock( s_mutex );
-		if ( s_done.count( szKey ) )
-			return szKey;
 		if ( s_failed.count( szKey ) )
 			return {};
-		if ( png.empty() || !WriteEntry( szKey, png, uSize ) )
+		std::string szIcon;
+		if ( png.empty() || !WriteEntry( szKey, png, uSize, szName, szIcon ) )
 		{
 			s_log.errorf( "could not write taskbar icon files for %s", szKey.c_str() );
 			s_failed.insert( szKey );
 			return {};
 		}
-		s_done.insert( szKey );
+		if ( bTrackName )
+			s_icons[szKey] = szIcon;
 		return szKey;
+	}
+
+	void UpdateName( const std::string &szKey, const std::string &szTitle )
+	{
+		std::lock_guard lock( s_mutex );
+		s_szTitle = szTitle;
+		auto it = s_icons.find( szKey );
+		if ( it == s_icons.end() )
+			return;
+		if ( !WriteAtomic( DesktopPath( szKey ), DesktopEntryText( szKey, szTitle, it->second ) ) )
+			s_log.errorf( "could not rewrite %s.desktop", szKey.c_str() );
 	}
 
 	std::string EnsureForIcon( const std::vector<uint32_t> &data )
@@ -198,7 +243,12 @@ namespace gamescope::taskbar_icon
 		Image img;
 		if ( !LargestImage( data, img ) )
 			return {};
-		return EnsureOnce( KeyForImage( img ), EncodePng( img ), img.uWidth );
+		std::string szTitle;
+		{
+			std::lock_guard lock( s_mutex );
+			szTitle = s_szTitle;
+		}
+		return EnsureOnce( KeyForImage( img ), EncodePng( img ), img.uWidth, szTitle, true );
 	}
 
 	std::string EnsureFallback()
@@ -207,7 +257,8 @@ namespace gamescope::taskbar_icon
 		if ( px.size() < 3 )
 			return {};
 		return EnsureOnce( k_szFallbackKey,
-			std::vector<uint8_t>( g_ProjectIcon_Data, g_ProjectIcon_Data + g_ProjectIcon_Size ), px[0] );
+			std::vector<uint8_t>( g_ProjectIcon_Data, g_ProjectIcon_Data + g_ProjectIcon_Size ), px[0],
+			k_szFallbackName, false );
 	}
 
 	const std::vector<uint32_t> &ProjectIconPixels()

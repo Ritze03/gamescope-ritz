@@ -322,8 +322,8 @@ thread when focus changes or `_NET_WM_ICON` changes) does two things; helpers li
 `src/Utils/TaskbarIcon.{h,cpp}`.
 
 - **app_id route.** Takes the largest image in the game's `_NET_WM_ICON`, hashes it
-  (FNV-1a, 8 hex chars) to the key `gamescope-ritz-<hash>`, and writes, once per key per
-  process, atomically (temp file + rename):
+  (FNV-1a, 8 hex chars) to the key `gamescope-ritz-<hash>`, and writes, per icon change,
+  atomically and only when the content differs (temp file + rename):
   - `$XDG_DATA_HOME/icons/hicolor/<W>x<H>/apps/<key>.png` (PNG via stb_image_write)
   - `$XDG_DATA_HOME/applications/<key>.desktop` (`NoDisplay=true`, `Exec=true`,
     `StartupWMClass=<key>`, `Icon=` the absolute PNG path)
@@ -331,6 +331,23 @@ thread when focus changes or `_NET_WM_ICON` changes) does two things; helpers li
   Only then does it call `libdecor_frame_set_app_id( <key> )`, so the host's lookup never
   misses. `XDG_DATA_HOME` defaults to `~/.local/share`. A write failure is logged once and
   the old app_id stays.
+- **Name.** The user's follow-up (2026-11-14): *"It should do the same thing with the clear
+  name of the app."* Taskbars and docks (GNOME dock, KDE task manager, Quickshell/waybar)
+  show the `.desktop` `Name=`, which used to be a fixed `Gamescope`. Per-game entries now
+  use the focused window's title (`_NET_WM_NAME`, the same string `SetTitle` gets).
+  `SanitizeName` drops control characters (CR, LF...), trims, caps at 100 bytes (never
+  mid UTF-8 character) and falls back to `Gamescope` when empty. `CWaylandConnector::SetTitle`
+  calls `taskbar_icon::UpdateName( m_szAppId, title )`, which remembers the title and
+  rewrites the current per-game `<key>.desktop` (atomic, skipped if identical); `SetIcon`
+  writes new entries with the remembered title. Steamcompmgr calls `SetTitle` before
+  `SetIcon` on a focus change, so the title is known when the entry is created (the
+  previous game's entry is rewritten with the new title in that gap and corrected when
+  that game is next focused). The "once per key" cache is gone: a key is re-ensured on
+  every icon change and the identical-content check keeps that cheap. The fallback entry
+  keeps `Name=Gamescope`; with `GAMESCOPE_APP_ID` nothing is written or rewritten.
+  Known ceiling (`// ponytail:` in `TaskbarIcon.cpp`): two games with the identical icon
+  share a key, so the shared `.desktop` Name follows whichever was focused last. Why not
+  widen the key: the user asked for the name only, and identical icons mean one entry.
 - **Fallback.** No game icon (or no window) means the key `gamescope-ritz`, with its files
   written from the embedded project icon. The icon is `icon-256.png` at the repo root, an
   `rsvg-convert -w 256 -h 256 icon.svg` export, embedded as a byte array by
