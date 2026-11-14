@@ -7,6 +7,14 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-14
+
+### Added
+- **Taskbar icon**: gamescope's window now shows the running game's icon in taskbars,
+  or its own icon when the game has none.
+- **Custom app id**: set GAMESCOPE_APP_ID to make gamescope's window match an existing
+  launcher shortcut.
+
 ## 2026-11-13
 
 ### Added

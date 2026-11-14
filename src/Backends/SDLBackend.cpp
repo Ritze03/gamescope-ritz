@@ -19,6 +19,7 @@
 #include "rendervulkan.hpp"
 #include "steamcompmgr.hpp"
 #include "Utils/Defer.h"
+#include "Utils/TaskbarIcon.h"
 #include "refresh_rate.h"
 #include "Clipboard/ClipboardSync.h"
 #include "backend.h"
@@ -722,6 +723,14 @@ namespace gamescope
 		m_uUserEventIdBase = SDL_RegisterEvents( GAMESCOPE_SDL_EVENT_COUNT );
 
 		SDL_SetHint( SDL_HINT_APP_NAME, "Gamescope" );
+		// GAMESCOPE_APP_ID: SDL2 has no app-id hint, but the WM class hints
+		// become the Wayland app_id / X11 WM_CLASS. Only settable before the
+		// window exists, so SDL gets no per-game app_id, just this override.
+		if ( !gamescope::taskbar_icon::EnvAppId().empty() )
+		{
+			SDL_SetHint( "SDL_VIDEO_WAYLAND_WMCLASS", gamescope::taskbar_icon::EnvAppId().c_str() );
+			SDL_SetHint( "SDL_VIDEO_X11_WMCLASS", gamescope::taskbar_icon::EnvAppId().c_str() );
+		}
 		SDL_SetHint( SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1" );
 
 		if ( SDL_Init( SDL_INIT_VIDEO | SDL_INIT_EVENTS ) != 0 )
@@ -1094,13 +1103,19 @@ namespace gamescope
 							m_pIconSurface = nullptr;
 						}
 
-						if ( pIcon && pIcon->size() >= 3 )
+						// The surface borrows the pixels: m_pApplicationIcon keeps the
+						// game's alive, the static project icon covers "no game icon".
+						const std::vector<uint32_t> *pPixels = pIcon.get();
+						if ( !pPixels || pPixels->size() < 3 )
+							pPixels = &gamescope::taskbar_icon::ProjectIconPixels();
+
+						if ( pPixels->size() >= 3 )
 						{
-							const uint32_t uWidth = (*pIcon)[0];
-							const uint32_t uHeight = (*pIcon)[1];
+							const uint32_t uWidth = (*pPixels)[0];
+							const uint32_t uHeight = (*pPixels)[1];
 
 							m_pIconSurface = SDL_CreateRGBSurfaceFrom(
-								&(*pIcon)[2],
+								const_cast<uint32_t *>( &(*pPixels)[2] ),
 								uWidth, uHeight,
 								32, uWidth * sizeof(uint32_t),
 								0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);

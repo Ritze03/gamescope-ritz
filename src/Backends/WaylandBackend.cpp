@@ -5,6 +5,7 @@
 #include "steamcompmgr.hpp"
 #include "edid.h"
 #include "Utils/Defer.h"
+#include "Utils/TaskbarIcon.h"
 #include "Utils/Algorithm.h"
 #include "convar.h"
 #include "refresh_rate.h"
@@ -535,6 +536,9 @@ namespace gamescope
         std::atomic<bool> m_bDesiredFullscreenState = { false };
 
         bool m_bHostCompositorIsCurrentlyVRR = false;
+
+        // The toplevel's current app_id (see SetIcon()).
+        std::string m_szAppId = "gamescope";
     };
 
     class CWaylandFb final : public CBaseBackendFb
@@ -1652,10 +1656,39 @@ namespace gamescope
     {
         m_pBackend->SetKeyboardGrabbed( m_Planes[0].GetSurface(), bGrabbed );
     }
+    // Window icon, two routes (superdoc/features/backend-wayland.md, "Window
+    // icon and app id"):
+    //  1. app_id: hosts without xdg-toplevel-icon-v1 (Hyprland, GNOME) take the
+    //     icon from a .desktop entry matched by app_id. The entry and PNG are
+    //     written BEFORE the app_id changes, so the lookup never misses.
+    //  2. xdg-toplevel-icon-v1 where the host has it (KDE...).
+    // No game icon (null/empty) means the embedded project icon on both routes.
     void CWaylandConnector::SetIcon( std::shared_ptr<std::vector<uint32_t>> uIconPixels )
     {
+        if ( gamescope::taskbar_icon::EnvAppId().empty() )
+        {
+            std::string szKey;
+            if ( uIconPixels )
+                szKey = gamescope::taskbar_icon::EnsureForIcon( *uIconPixels );
+            if ( szKey.empty() )
+                szKey = gamescope::taskbar_icon::EnsureFallback();
+            // On failure keep the old app_id.
+            if ( !szKey.empty() && szKey != m_szAppId && m_Planes[0].GetFrame() )
+            {
+                m_szAppId = szKey;
+                libdecor_frame_set_app_id( m_Planes[0].GetFrame(), m_szAppId.c_str() );
+            }
+        }
+
         if ( !m_pBackend->GetToplevelIconManager() )
             return;
+
+        if ( !uIconPixels || uIconPixels->size() < 3 )
+        {
+            const std::vector<uint32_t> &project = gamescope::taskbar_icon::ProjectIconPixels();
+            if ( project.size() >= 3 )
+                uIconPixels = std::make_shared<std::vector<uint32_t>>( project );
+        }
 
         if ( uIconPixels && uIconPixels->size() >= 3 )
         {
@@ -1826,7 +1859,18 @@ namespace gamescope
 			wl_proxy_set_tag( (wl_proxy *)m_pSurface, &GAMESCOPE_toplevel_tag );
             m_pFrame = libdecor_decorate( m_pBackend->GetLibDecor(), m_pSurface, &s_LibDecorFrameInterface, this );
             libdecor_frame_set_title( m_pFrame, "Gamescope" );
-            libdecor_frame_set_app_id( m_pFrame, "gamescope" );
+            // The project icon's .desktop entry is written first, so the host's
+            // app lookup by app_id finds it. Falls back to plain "gamescope" if
+            // the write failed. SetIcon() below switches it per game.
+            {
+                // GAMESCOPE_APP_ID fixes the app_id for the session: no files, no switching.
+                const std::string szKey = gamescope::taskbar_icon::EnvAppId().empty()
+                    ? gamescope::taskbar_icon::EnsureFallback()
+                    : gamescope::taskbar_icon::EnvAppId();
+                if ( !szKey.empty() )
+                    m_pConnector->m_szAppId = szKey;
+                libdecor_frame_set_app_id( m_pFrame, m_pConnector->m_szAppId.c_str() );
+            }
             libdecor_frame_map( m_pFrame );
         }
         else

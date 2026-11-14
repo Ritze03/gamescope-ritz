@@ -310,6 +310,58 @@ not the screen's 8-bit format (`bitdepth = 8`). An 8-bit output image would avoi
 the composite's precision, and it was not tested with the game.
 
 
+## Window icon and app id
+
+The user's request (2026-11-14): *"Make gamescope set its own icon to the icon of the game
+running inside it (the currently focused/maximized window). If it can't find that icon, use
+the project's icon, so it shows properly in taskbars."* ("It should work for GNOME and such
+too.")
+
+`CWaylandConnector::SetIcon` (`src/Backends/WaylandBackend.cpp`, called on the steamcompmgr
+thread when focus changes or `_NET_WM_ICON` changes) does two things; helpers live in
+`src/Utils/TaskbarIcon.{h,cpp}`.
+
+- **app_id route.** Takes the largest image in the game's `_NET_WM_ICON`, hashes it
+  (FNV-1a, 8 hex chars) to the key `gamescope-ritz-<hash>`, and writes, once per key per
+  process, atomically (temp file + rename):
+  - `$XDG_DATA_HOME/icons/hicolor/<W>x<H>/apps/<key>.png` (PNG via stb_image_write)
+  - `$XDG_DATA_HOME/applications/<key>.desktop` (`NoDisplay=true`, `Exec=true`,
+    `StartupWMClass=<key>`, `Icon=` the absolute PNG path)
+
+  Only then does it call `libdecor_frame_set_app_id( <key> )`, so the host's lookup never
+  misses. `XDG_DATA_HOME` defaults to `~/.local/share`. A write failure is logged once and
+  the old app_id stays.
+- **Fallback.** No game icon (or no window) means the key `gamescope-ritz`, with its files
+  written from the embedded project icon. The icon is `icon-256.png` at the repo root, an
+  `rsvg-convert -w 256 -h 256 icon.svg` export, embedded as a byte array by
+  `src/Utils/embed_project_icon.py` (meson target `project_icon_header`, same shape as the
+  changelog embed). It is also the first app_id at window creation.
+- **Protocol route.** Where the host has `xdg-toplevel-icon-v1` the pixels go through it as
+  before; with no game icon the decoded project icon is sent instead of unsetting.
+- **`GAMESCOPE_APP_ID`.** If set and non-empty at startup it is the fixed app_id for the
+  session on both backends: no switching, no generated files (for grouping with an existing
+  launcher shortcut). The icon pixel routes still run.
+- **SDL backend.** `SDL_SetWindowIcon` gets the same project-icon fallback. No per-game
+  app_id there: SDL2 can only set it before the window exists, so only the
+  `GAMESCOPE_APP_ID` override applies (via the `SDL_VIDEO_WAYLAND_WMCLASS` and
+  `SDL_VIDEO_X11_WMCLASS` hints).
+
+Who resolves the icon how:
+
+| Shell | Path |
+| --- | --- |
+| GNOME (mutter) | exact `<app_id>.desktop` in `$XDG_DATA_HOME/applications`, its `Icon=` |
+| KDE | `xdg-toplevel-icon-v1` pixels, or the `.desktop` by app_id |
+| Hyprland + Quickshell / waybar | `.desktop` by id or `StartupWMClass`, its `Icon=` |
+| X11 (SDL backend) | `_NET_WM_ICON` from `SDL_SetWindowIcon` |
+
+Why: Hyprland and GNOME do not implement `xdg-toplevel-icon-v1`; their taskbars find an
+icon only from the app_id through a `.desktop` entry. So the `.desktop` file name must be
+exactly `<app_id>.desktop` (GNOME), with `StartupWMClass` for the others, and the files must
+exist before the app_id changes. Writes are synchronous (two small files once per game).
+Unverified: changing a libdecor frame's app_id after it is mapped (libdecor forwards it to
+`xdg_toplevel.set_app_id`, which the protocol allows at any time).
+
 ## Related links
 
 - [backend-sdl.md](backend-sdl.md) — the fallback nested backend, both at auto-select

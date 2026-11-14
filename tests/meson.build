@@ -2,7 +2,7 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Config/ProfileExport.cpp', 'Audio/Volume.cpp', 'Audio/Dynamics.cpp', 'Clipboard/ClipboardSync.cpp', 'Keybinds.cpp', 'SteamFriends.cpp', 'LaunchOptions.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Config/ProfileExport.cpp', 'Audio/Volume.cpp', 'Audio/Dynamics.cpp', 'Clipboard/ClipboardSync.cpp', 'Utils/TaskbarIcon.cpp', 'Keybinds.cpp', 'SteamFriends.cpp', 'LaunchOptions.cpp']
 	unittest_src += srcdir / src
 endforeach
 
@@ -22,9 +22,9 @@ endforeach
 
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + [bundled_scripts_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp'],
+	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp'],
 	include_directories: [srcdir, sol2_include, '../subprojects/FrameGen/gpu'],
-	dependencies: [catch2_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
+	dependencies: [catch2_dep, stb_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
 )
 test('isolation', gamescope_tests, args: ['[isolation]'])
@@ -32,6 +32,7 @@ test('convar', gamescope_tests, args: ['[convar]'])
 test('process', gamescope_tests, args: ['[process]'])
 test('diagnostics', gamescope_tests, args: ['[diagnostics]'])
 test('profile_export', gamescope_tests, args: ['[profile_export]'])
+test('taskbar_icon', gamescope_tests, args: ['[taskbar_icon]'])
 test('config', gamescope_tests, args: ['[config]'])
 test('audio_volume', gamescope_tests, args: ['[audio_volume]'])
 test('audio_capture', gamescope_tests, args: ['[audio_capture]'])
