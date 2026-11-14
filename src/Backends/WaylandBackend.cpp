@@ -539,6 +539,8 @@ namespace gamescope
 
         // The toplevel's current app_id (see SetIcon()).
         std::string m_szAppId = "gamescope";
+        // Last non-empty game title SetTitle() saw; a null title never clears it.
+        std::string m_szLastTitle;
     };
 
     class CWaylandFb final : public CBaseBackendFb
@@ -1634,7 +1636,13 @@ namespace gamescope
 
     void CWaylandConnector::SetTitle( std::shared_ptr<std::string> pAppTitle )
     {
-        std::string szTitle = pAppTitle ? *pAppTitle : "gamescope";
+        // A null title (a focus pass on a window whose WM_NAME is unset or
+        // not read yet, an override...) must not replace a known game title
+        // with "gamescope": keep the last real one. "Gamescope" (the initial
+        // title) only when nothing was ever set.
+        if ( pAppTitle && !pAppTitle->empty() )
+            m_szLastTitle = *pAppTitle;
+        std::string szTitle = !m_szLastTitle.empty() ? m_szLastTitle : "Gamescope";
         // g_bGrabbed (-g/--grab, and input.general's "Force grab keyboard"
         // row, PanelInput.cpp) reaches this title suffix AND -- since
         // 2026-09-27, via SetKeyboardGrabbed() below -- a real
@@ -1646,13 +1654,16 @@ namespace gamescope
         if ( g_bGrabbed )
             szTitle += " (grabbed)";
         libdecor_frame_set_title( m_Planes[0].GetFrame(), szTitle.c_str() );
+        // Runs on the steamcompmgr thread: push the queued xdg_toplevel
+        // request out now instead of waiting for the main loop to wake.
+        wl_display_flush( m_pBackend->GetDisplay() );
 
         // The taskbar Name of the current per-game .desktop follows the title.
         // On a focus change this runs BEFORE SetIcon(), so m_szAppId is still
         // the previous game's key; harmless, SetIcon() writes the new key's
         // entry with this title, and the old key is rewritten when refocused.
         if ( gamescope::taskbar_icon::EnvAppId().empty() )
-            gamescope::taskbar_icon::UpdateName( m_szAppId, pAppTitle ? *pAppTitle : std::string{} );
+            gamescope::taskbar_icon::UpdateName( m_szAppId, m_szLastTitle );
     }
 
     // See this method's own declaration for what it is. Delegates to the

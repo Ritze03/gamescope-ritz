@@ -348,6 +348,14 @@ thread when focus changes or `_NET_WM_ICON` changes) does two things; helpers li
   Known ceiling (`// ponytail:` in `TaskbarIcon.cpp`): two games with the identical icon
   share a key, so the shared `.desktop` Name follows whichever was focused last. Why not
   widen the key: the user asked for the name only, and identical icons mean one entry.
+- **Window title.** The user (2026-11-14): *"The application name is now fixed, but it
+  should also be fixed for the window name (right now still displayed as "gamescope" in
+  GNOME)"*. `CWaylandConnector::SetTitle` used to turn a null title into lowercase
+  `gamescope`, so a focus pass on a window with no title yet reset the toplevel title.
+  Now the last non-empty title is kept (`m_szLastTitle`), the fallback is `Gamescope` only
+  when none was ever set, and `wl_display_flush` follows `libdecor_frame_set_title` since
+  it runs on the steamcompmgr thread. Why: a null title is "unknown", not "rename to
+  gamescope". The null-overwrite is a code-read inference, not reproduced on GNOME.
 - **Fallback.** No game icon (or no window) means the key `gamescope-ritz`, with its files
   written from the embedded project icon. The icon is `icon-256.png` at the repo root, an
   `rsvg-convert -w 256 -h 256 icon.svg` export, embedded as a byte array by
