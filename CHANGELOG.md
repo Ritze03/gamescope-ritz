@@ -17,6 +17,10 @@ All notable user-facing changes, newest first. Categories:
 - **Custom app id**: set GAMESCOPE_APP_ID to make gamescope's window match an existing
   launcher shortcut.
 
+### Fixed
+- **Window name**: gamescope's window now shows the running game's name instead of
+  "gamescope".
+
 ## 2026-11-13
 
 ### Added
