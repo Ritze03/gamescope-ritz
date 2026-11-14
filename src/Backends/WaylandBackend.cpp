@@ -1646,6 +1646,13 @@ namespace gamescope
         if ( g_bGrabbed )
             szTitle += " (grabbed)";
         libdecor_frame_set_title( m_Planes[0].GetFrame(), szTitle.c_str() );
+
+        // The taskbar Name of the current per-game .desktop follows the title.
+        // On a focus change this runs BEFORE SetIcon(), so m_szAppId is still
+        // the previous game's key; harmless, SetIcon() writes the new key's
+        // entry with this title, and the old key is rewritten when refocused.
+        if ( gamescope::taskbar_icon::EnvAppId().empty() )
+            gamescope::taskbar_icon::UpdateName( m_szAppId, pAppTitle ? *pAppTitle : std::string{} );
     }
 
     // See this method's own declaration for what it is. Delegates to the
