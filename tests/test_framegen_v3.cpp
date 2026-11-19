@@ -109,10 +109,10 @@ TEST_CASE( "framegen v3: a word with a field out of range unpacks to the default
 	REQUIRE( ( r.v3Smear == 0.1f && r.v3OcclSoft == 1.0f && r.v3Unsure == 1.5f && r.v3SceneCut == 0.2f ) );
 }
 
-TEST_CASE( "framegen v3: the reserved bits 48-49 and above are never written and are ignored", "[framegen_v3]" )
+TEST_CASE( "framegen v3: bits 48-49 are the two switches, bits 50 and above are never written and are ignored", "[framegen_v3]" )
 {
 	Config c; c.v3Smear = 1.0f; c.v3OcclSoft = 4.0f; c.v3Unsure = 4.0f; c.v3SceneCut = 4.0f;
-	REQUIRE( ( PackV3( c ) >> 48 ) == 0u );
+	REQUIRE( ( PackV3( c ) >> 48 ) == 0u );   // both switches off: nothing above bit 47
 	const uint64_t u = PackV3( Config{} );
 	Config a, b;
 	UnpackV3( u, &a );
@@ -127,4 +127,29 @@ TEST_CASE( "framegen v3: a change of any one value changes the word", "[framegen
 	c = Config{}; c.v3OcclSoft = 1.05f; REQUIRE( PackV3( c ) != u );
 	c = Config{}; c.v3Unsure = 0.95f; REQUIRE( PackV3( c ) != u );
 	c = Config{}; c.v3SceneCut = 0.50f; REQUIRE( PackV3( c ) != u );
+}
+
+TEST_CASE( "framegen v3: the two switches take bits 48 and 49, in all four combinations, and leave the four values alone", "[framegen_v3]" )
+{
+	for ( int i = 0; i < 4; i++ )
+	{
+		Config c; c.v3Smear = 0.80f; c.v3OcclSoft = 2.55f; c.v3Unsure = 0.25f; c.v3SceneCut = 3.95f;
+		c.v3ColourWindow = ( i & 1 ) != 0;
+		c.v3DetailSplit = ( i & 2 ) != 0;
+		const uint64_t u = PackV3( c );
+		REQUIRE( ( u >> 48 ) == uint64_t( i ) );   // bit 48 = colour window, bit 49 = detail split
+		Config r;
+		UnpackV3( u, &r );
+		REQUIRE( r.v3ColourWindow == c.v3ColourWindow );
+		REQUIRE( r.v3DetailSplit == c.v3DetailSplit );
+		REQUIRE( ( r.v3Smear == 0.80f && r.v3OcclSoft == 2.55f && r.v3Unsure == 0.25f && r.v3SceneCut == 3.95f ) );
+		// The low 48 bits are exactly those of the same word with both switches off.
+		Config d = c; d.v3ColourWindow = false; d.v3DetailSplit = false;
+		REQUIRE( ( u & 0xFFFFFFFFFFFFull ) == PackV3( d ) );
+	}
+	// A word with bits 48 / 49 clear unpacks to false / false, even into a Config that had them set.
+	Config r; r.v3ColourWindow = true; r.v3DetailSplit = true;
+	UnpackV3( PackV3( Config{} ), &r );
+	REQUIRE( !r.v3ColourWindow );
+	REQUIRE( !r.v3DetailSplit );
 }

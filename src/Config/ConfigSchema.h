@@ -568,6 +568,8 @@ namespace gamescope::config
         float v3_occl_soft = 1.0f;
         float v3_unsure = 1.0f;
         float v3_scene_cut = 0.45f;
+        bool v3_colour_window = false;   // Motion version 3 only: matching weighted by colour similarity
+        bool v3_detail_split = false;    // Motion version 3 only: fine detail taken from one frame
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

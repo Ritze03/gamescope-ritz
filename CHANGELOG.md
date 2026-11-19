@@ -15,6 +15,8 @@ All notable user-facing changes, newest first. Categories:
 - **Frame generation**: new motion version V3, the most fluid one, also for Motion blur,
   with its own settings (smear, occlusion softness, unsure sensitivity, scene cut
   threshold).
+- **Frame generation**: two experimental switches for V3, colour-weighted matching
+  and detail from one frame, to compare on and off while playing.
 
 ## 2026-11-14
 

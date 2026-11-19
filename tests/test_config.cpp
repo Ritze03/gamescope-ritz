@@ -4169,6 +4169,8 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( Settings{}.framegen.v3_occl_soft == 1.0f );
     REQUIRE( Settings{}.framegen.v3_unsure == 1.0f );
     REQUIRE( Settings{}.framegen.v3_scene_cut == 0.45f );
+    REQUIRE( !Settings{}.framegen.v3_colour_window );
+    REQUIRE( !Settings{}.framegen.v3_detail_split );
 
     // Absent keys load the defaults.
     std::ofstream( ProfilePath( "T" ) ) << R"({
@@ -4180,6 +4182,8 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( l.framegen.v3_occl_soft == 1.0f );
     REQUIRE( l.framegen.v3_unsure == 1.0f );
     REQUIRE( l.framegen.v3_scene_cut == 0.45f );
+    REQUIRE( !l.framegen.v3_colour_window );
+    REQUIRE( !l.framegen.v3_detail_split );
 
     // Round trip: "v3" in both sections, and non-default values.
     Settings s{};
@@ -4189,8 +4193,28 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     s.framegen.v3_occl_soft = 2.55f;
     s.framegen.v3_unsure = 0.25f;
     s.framegen.v3_scene_cut = 0.0f;
+    s.framegen.v3_colour_window = true;
+    s.framegen.v3_detail_split = true;
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
+    REQUIRE( l.framegen.v3_colour_window );
+    REQUIRE( l.framegen.v3_detail_split );
+    s.framegen.v3_detail_split = false;   // each switch independent of the other
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.v3_colour_window );
+    REQUIRE( !l.framegen.v3_detail_split );
+    s.framegen.v3_detail_split = true;
+    s.framegen.v3_colour_window = false;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( !l.framegen.v3_colour_window );
+    REQUIRE( l.framegen.v3_detail_split );
+    s.framegen.v3_detail_split = false;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( !l.framegen.v3_colour_window );
+    REQUIRE( !l.framegen.v3_detail_split );
     REQUIRE( l.framegen.motion_version == "v3" );
     REQUIRE( l.motion_blur.motion_version == "v3" );
     REQUIRE_THAT( l.framegen.v3_smear, Catch::Matchers::WithinAbs( 0.8, 1e-6 ) );
@@ -4224,6 +4248,8 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( IsSettingsKey( "framegen.v3_occl_soft" ) );
     REQUIRE( IsSettingsKey( "framegen.v3_unsure" ) );
     REQUIRE( IsSettingsKey( "framegen.v3_scene_cut" ) );
+    REQUIRE( IsSettingsKey( "framegen.v3_colour_window" ) );
+    REQUIRE( IsSettingsKey( "framegen.v3_detail_split" ) );
 }
 
 // A V3 value of the wrong type keeps the default (fresh TempConfigHome: LoadSections() carries values forward).
@@ -4240,4 +4266,18 @@ TEST_CASE( "framegen: V3 keys of the wrong type keep the default", "[config]" )
     REQUIRE( l.framegen.v3_occl_soft == 1.0f );
     REQUIRE( l.framegen.v3_unsure == 1.0f );
     REQUIRE( l.framegen.v3_scene_cut == 1.5f );
+}
+
+// The two V3 switches of the wrong type keep the default (fresh TempConfigHome: LoadSections() carries values forward).
+TEST_CASE( "framegen: V3 switches of the wrong type keep the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "v3_colour_window": "yes", "v3_detail_split": 1 }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( !l.framegen.v3_colour_window );
+    REQUIRE( !l.framegen.v3_detail_split );
 }

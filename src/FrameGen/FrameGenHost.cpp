@@ -552,11 +552,13 @@ namespace fghost
 			// Motion version 3's four values (V3 only; every other version ignores them). Always from the Frame
 			// generation Config, also when only Motion blur is on (one interpolator). All runtime. Clamped here too
 			// (bit-pattern finite test, the project builds with -ffast-math); the library refuses an out-of-range
-			// value with a generic reason. v3ColourWindow / v3DetailSplit stay at the library defaults (not exposed).
+			// value with a generic reason.
 			s.v3Smear = ReachIsFinite( c.v3Smear ) ? std::clamp( c.v3Smear, kV3SmearMin, kV3SmearMax ) : kV3SmearDefault;
 			s.v3OcclSoft = ReachIsFinite( c.v3OcclSoft ) ? std::clamp( c.v3OcclSoft, kV3OcclSoftMin, kV3OcclSoftMax ) : kV3OcclSoftDefault;
 			s.v3Unsure = ReachIsFinite( c.v3Unsure ) ? std::clamp( c.v3Unsure, kV3UnsureMin, kV3UnsureMax ) : kV3UnsureDefault;
 			s.v3SceneCut = ReachIsFinite( c.v3SceneCut ) ? std::clamp( c.v3SceneCut, kV3SceneCutMin, kV3SceneCutMax ) : kV3SceneCutDefault;
+			s.v3ColourWindow = c.v3ColourWindow;
+			s.v3DetailSplit = c.v3DetailSplit;
 			return s;
 		}
 

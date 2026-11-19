@@ -36,8 +36,10 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.v3_occl_soft` | float 0.25-4 (default 1.0), clamped on load | the row "Occlusion softness" (slider, step 0.05), V3 only. Runtime. Additive (2026-11-19) |
 | `framegen.v3_unsure` | float 0.25-4 (default 1.0), clamped on load | the row "Unsure sensitivity" (slider, step 0.05), V3 only. Runtime. Additive (2026-11-19) |
 | `framegen.v3_scene_cut` | float 0-4 (default 0.45), clamped on load; 0 = never | the row "Scene cut threshold" (slider, step 0.05, 0 shown as "Never"), V3 only. Runtime, read by the estimate (applies from the next real pair). Additive (2026-11-19) |
+| `framegen.v3_colour_window` | bool (default false; absent or wrong type: false) | the row "Colour-weighted matching" (switch), V3 only. Runtime, applies from the next real pair. Experiment: motion search weighted by colour similarity. Additive (2026-11-19) |
+| `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
-**Motion version 3 (2026-11-19).** The four `v3_*` rows form the group "Motion version 3" (column 1,
+**Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches form the group "Motion version 3" (column 1,
 after "Learned motion"), greyed out unless V3 is the version the interpolator runs. Under V3 the
 Search radius, Search radius (coarsest level), Pyramid smallest level, Search penalty and Static HUD
 protection rows are greyed too (V3 ignores what they set). The page

@@ -2,16 +2,15 @@
 // 64-bit word, so the render thread reads a consistent set (FrameGenHost.cpp's g_ulV3). Header-only and pure so
 // tests/test_framegen_v3.cpp can round-trip it without the host's GPU code.
 //
-// Layout (each value in hundredths, twelve bits; the two reserved bits are for brief C):
-//   bits  0-11  v3Smear      0..100   (0..1)
-//   bits 12-23  v3OcclSoft   25..400  (0.25..4)
-//   bits 24-35  v3Unsure     25..400  (0.25..4)
-//   bits 36-47  v3SceneCut   0..400   (0..4, 0 = never a scene cut)
-//   bit  48     RESERVED: the library's Settings::v3ColourWindow (not exposed; it does nothing at library c2644af)
-//   bit  49     RESERVED: the library's Settings::v3DetailSplit (same)
-//   bits 50-63  unused
-// PackV3() writes 0 into every bit from 48 up and UnpackV3() ignores them, so a later change that fills bits 48-49
-// does not disturb the four values; it will have to extend both functions and the applied key's comparison.
+// Layout (the four values in hundredths, twelve bits each; the two switches one bit each):
+//   bits  0-11  v3Smear        0..100   (0..1)
+//   bits 12-23  v3OcclSoft     25..400  (0.25..4)
+//   bits 24-35  v3Unsure       25..400  (0.25..4)
+//   bits 36-47  v3SceneCut     0..400   (0..4, 0 = never a scene cut)
+//   bit  48     v3ColourWindow (motion search weighted by colour similarity)
+//   bit  49     v3DetailSplit  (fine detail taken from one frame)
+//   bits 50-63  unused, written as 0 and ignored on unpack
+// The whole word is the applied key's comparison in EnsureReady(), so a change to either switch is noticed.
 // `Why a sixth word:` the five existing words (config, UI box, Learned, reach, blur) and the 64-bit applied key in
 // EnsureReady() have no free bit left, and four values at twelve bits need 48.
 // `Why hundredths:` 0.35 = 35 / 100.0 round-trips exactly through float (the defaults must change nothing) and the
@@ -47,7 +46,9 @@ namespace fghost
 		return Hundredths( c.v3Smear, kV3SmearMin, kV3SmearMax, kV3SmearDefault )
 			| ( Hundredths( c.v3OcclSoft, kV3OcclSoftMin, kV3OcclSoftMax, kV3OcclSoftDefault ) << 12 )
 			| ( Hundredths( c.v3Unsure, kV3UnsureMin, kV3UnsureMax, kV3UnsureDefault ) << 24 )
-			| ( Hundredths( c.v3SceneCut, kV3SceneCutMin, kV3SceneCutMax, kV3SceneCutDefault ) << 36 );
+			| ( Hundredths( c.v3SceneCut, kV3SceneCutMin, kV3SceneCutMax, kV3SceneCutDefault ) << 36 )
+			| ( uint64_t( c.v3ColourWindow ) << 48 )
+			| ( uint64_t( c.v3DetailSplit ) << 49 );
 	}
 
 	inline void UnpackV3( uint64_t u, Config *c )
@@ -57,5 +58,7 @@ namespace fghost
 		c->v3OcclSoft = FromHundredths( ( u >> 12 ) & 0xFFFu, 25, 400, kV3OcclSoftDefault );
 		c->v3Unsure = FromHundredths( ( u >> 24 ) & 0xFFFu, 25, 400, kV3UnsureDefault );
 		c->v3SceneCut = FromHundredths( ( u >> 36 ) & 0xFFFu, 0, 400, kV3SceneCutDefault );
+		c->v3ColourWindow = ( ( u >> 48 ) & 1u ) != 0;
+		c->v3DetailSplit = ( ( u >> 49 ) & 1u ) != 0;
 	}
 }
