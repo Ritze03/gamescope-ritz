@@ -49,7 +49,7 @@ values.
 | `v3_smear` | `v3Smear` | 0-1 | 0.35 | Smear | how strongly unsure areas are smeared along the motion; 0 = none (sharper, wrong spots show as sharp ghosts) |
 | `v3_occl_soft` | `v3OcclSoft` | 0.25-4 | 1.0 | Occlusion softness | width of the ramp at the edge of a hidden area; higher = softer, more one-sided |
 | `v3_unsure` | `v3Unsure` | 0.25-4 | 1.0 | Unsure sensitivity | scales the poor-match ramp of the unsure measure; higher = trusts worse matches (less smear, more risk) |
-| `v3_scene_cut` | `v3SceneCut` | 0-4 | 0.45 | Scene cut threshold | histogram distance above which a pair is a scene cut (nearer real frame shown); 0 = never. Applies from the next estimate |
+| `v3_scene_cut` | `v3SceneCut` | 0-4 | 0 (Never) | Scene cut threshold | histogram distance above which a pair is a scene cut (nearer real frame shown); 0 = never (default since 2026-11-19). Applies from the next estimate |
 
 | `v3_colour_window` | `v3ColourWindow` | on / off | off | Colour-weighted matching | the motion search weighted by colour similarity; can sharpen clearly coloured moving objects, can break areas next to flat dark regions; +0.05 ms. Applies from the next estimate |
 | `v3_detail_split` | `v3DetailSplit` | on / off | off | Detail from one frame | only the coarse picture is blended, the fine detail comes from one frame; slightly crisper texture and text; +0.06 ms per generated frame. Applies from the next generated frame |
@@ -162,6 +162,19 @@ the cost guard lower the rate for nothing. V2's `splat` / `coverage` / `morph` s
 this parser (V2 showed "estimate 24 ms, synth n/a" in the same test): left alone because nothing may change for V2 in this
 change; see the report note. (The "V1 budget 0.33 ms"
 in the reach help text is the library's own figure for V1, not a host constant.)
+
+## Scene cut default: Never
+
+Since 2026-11-19 (library `d61951c`) `v3_scene_cut` defaults to 0 = Never, the library's own default
+too. `Why:` on fast motion that is not a cut the cut decision fired and V3 showed the previous real
+frame unchanged, up to five generated frames in a row on a fast pan at a 30 fps-like base, which looks
+like lag; the user: "scene cuts arent as important as fluid gameplay". With 0 a real cut shows one
+cross-faded frame. The same pin adds a frame-edge band to the synthesis and a projection fix.
+
+Saved profiles: the row existed for hours with 0.45 as its default, so profiles saved in that window hold
+`"v3_scene_cut": 0.45` explicitly. On load a value of 0.45 (compared in hundredths, not as a float) is
+read as 0. Deliberate simplification: exactly 0.45 can no longer be kept (0.40 and 0.50 can); remove the
+mapping once no profile from 2026-11-19 is around. No schema version change.
 
 ## Known limits
 

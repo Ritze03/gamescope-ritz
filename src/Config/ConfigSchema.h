@@ -567,7 +567,7 @@ namespace gamescope::config
         float v3_smear = 0.35f;
         float v3_occl_soft = 1.0f;
         float v3_unsure = 1.0f;
-        float v3_scene_cut = 0.45f;
+        float v3_scene_cut = 0.0f;   // 0 = never (default)
         bool v3_colour_window = false;   // Motion version 3 only: matching weighted by colour similarity
         bool v3_detail_split = false;    // Motion version 3 only: fine detail taken from one frame
     };

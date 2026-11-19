@@ -393,7 +393,10 @@ namespace gamescope::config
                     f.v3_smear = V3( "v3_smear", 0.35f, 0.0f, 1.0f );
                     f.v3_occl_soft = V3( "v3_occl_soft", 1.0f, 0.25f, 4.0f );
                     f.v3_unsure = V3( "v3_unsure", 1.0f, 0.25f, 4.0f );
-                    f.v3_scene_cut = V3( "v3_scene_cut", 0.45f, 0.0f, 4.0f );
+                    f.v3_scene_cut = V3( "v3_scene_cut", 0.0f, 0.0f, 4.0f );
+                    // ponytail: a stored 0.45 is the old default (the row was hours old when the default became Never) and loads as 0; ceiling: exactly 0.45 cannot be kept, 0.40 / 0.50 can. Remove once no profile from 2026-11-19 is around.
+                    if ( std::lround( f.v3_scene_cut * 100.0f ) == 45 )
+                        f.v3_scene_cut = 0.0f;
                     f.v3_colour_window = JGetBool( *pFrameGen, "v3_colour_window", f.v3_colour_window );
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
                 }
