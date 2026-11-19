@@ -10,7 +10,7 @@ latency / Smoothness, up to 8x). Off by default (a plain on/off switch, separate
 **Architecture rule** (the user): *"you're basically only building the GUI in this chat and
 most of the stuff should go into the frame gen itself"*. The optical flow, the synth, the
 motion blur, UI protection **and the pacing** are the library's (`frame-gen-ritz`, pinned at
-`981c844` (the library's local-only `ml-fg-testing` branch, which carries PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave`, #18 `ui-box-margin` and #19 `target-start-band` from main; the pin on main was `b77d058`, and `0015453` before #19)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
+`185fdf5` (library `dev`, since 2026-11-19: the reach settings and the wide search shaders; before that `981c844`, the library's local-only `ml-fg-testing` branch, which carries PRs #15 `pacing-hysteresis`, #16 `pacing-fixes`, #17 `extra-timer-leave`, #18 `ui-box-margin` and #19 `target-start-band` from main; the pin on main was `b77d058`, and `0015453` before #19)); gamescope is the GUI and the platform glue (arrival times, the vblank timer, the
 composite hook, the settings).
 
 Code map:

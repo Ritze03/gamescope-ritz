@@ -4078,3 +4078,82 @@ TEST_CASE( "the live-apply hook fires synchronously on a generation bump, which 
 
     SetLiveApplyHook( nullptr );
 }
+
+// Expert: motion search reach (2026-11-19). Four additive keys under "framegen": defaults are the library's,
+// an absent key loads the default, the values clamp on load to the library's full ranges.
+TEST_CASE( "framegen: motion search reach keys default, round-trip and clamp on load", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.framegen.search_radius == 2 );
+    REQUIRE( Settings{}.framegen.search_radius_top == 6 );
+    REQUIRE( Settings{}.framegen.pyramid_min_side == 48 );
+    REQUIRE( Settings{}.framegen.search_penalty == 0.5f );
+
+    // Absent keys load the defaults.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    Settings l = LoadSections();
+    REQUIRE( l.framegen.search_radius == 2 );
+    REQUIRE( l.framegen.search_radius_top == 6 );
+    REQUIRE( l.framegen.pyramid_min_side == 48 );
+    REQUIRE( l.framegen.search_penalty == 0.5f );
+
+    // Round trip of non-default values (penalty above the overlay's 4: the JSON may hold the full range).
+    Settings s{};
+    s.framegen.search_radius = 12;
+    s.framegen.search_radius_top = 9;
+    s.framegen.pyramid_min_side = 16;
+    s.framegen.search_penalty = 1.25f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.search_radius == 12 );
+    REQUIRE( l.framegen.search_radius_top == 9 );
+    REQUIRE( l.framegen.pyramid_min_side == 16 );
+    REQUIRE_THAT( l.framegen.search_penalty, Catch::Matchers::WithinAbs( 1.25, 1e-6 ) );
+    s.framegen.search_penalty = 200.0f;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_THAT( LoadSections().framegen.search_penalty, Catch::Matchers::WithinAbs( 200.0, 1e-6 ) );
+
+    // Clamp on load, low side and high side.
+    s.framegen.search_radius = 0;
+    s.framegen.search_radius_top = 13;
+    s.framegen.pyramid_min_side = 8;
+    s.framegen.search_penalty = -1.0f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.search_radius == 1 );
+    REQUIRE( l.framegen.search_radius_top == 12 );
+    REQUIRE( l.framegen.pyramid_min_side == 16 );
+    REQUIRE( l.framegen.search_penalty == 0.0f );
+    s.framegen.pyramid_min_side = 1000;
+    s.framegen.search_penalty = 300.0f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.pyramid_min_side == 256 );
+    REQUIRE( l.framegen.search_penalty == 255.0f );
+
+}
+
+// A reach value of the wrong type keeps the default.
+TEST_CASE( "framegen: motion search reach keys of the wrong type keep the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "search_radius": "wide", "search_penalty": null, "pyramid_min_side": 64 }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.search_radius == 2 );
+    REQUIRE( l.framegen.search_penalty == 0.5f );
+    REQUIRE( l.framegen.pyramid_min_side == 64 );
+
+    REQUIRE( IsSettingsKey( "framegen.search_radius" ) );
+    REQUIRE( IsSettingsKey( "framegen.search_radius_top" ) );
+    REQUIRE( IsSettingsKey( "framegen.pyramid_min_side" ) );
+    REQUIRE( IsSettingsKey( "framegen.search_penalty" ) );
+}

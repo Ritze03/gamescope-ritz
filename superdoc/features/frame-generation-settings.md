@@ -27,6 +27,49 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](frame-generation-ui-protection.md#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
+| `framegen.search_radius` | 1-12 (default 2), clamped on load | the row "Search radius" (whole-number slider, group "Expert: motion search"). Runtime: `setSettings()`, no wait. Motion versions V1 and V2; Learned ignores it (the row is greyed out then). Additive (2026-11-19), absent loads 2 |
+| `framegen.search_radius_top` | 1-12 (default 6), clamped on load | the row "Search radius (coarsest level)" (whole-number slider). Runtime, like `search_radius`; V1 and V2, Learned ignores it. Additive (2026-11-19) |
+| `framegen.pyramid_min_side` | 16-256 (default 48), clamped on load | the row "Pyramid smallest level" (dropdown 16 / 24 / 32 / 48 / 64 / 96 / 128 / 256). **Structural**: a change goes through the library's `reconfigure()` (GPU wait, buffers re-created, the estimate is dropped), like a Quality change. Every motion version (Learned: only its buffer layout). A stored value that is not in the list shows the nearest entry and is not rewritten until the user picks one. Additive (2026-11-19) |
+| `framegen.search_penalty` | float 0-255 (default 0.5), clamped on load (non-finite: 0.5) | the row "Search penalty" (slider 0-4, step 0.05; a stored value above 4 is not clamped by being displayed). Runtime; V1 and V2. Written rounded to hundredths. Additive (2026-11-19) |
+
+**Expert: motion search reach (2026-11-19).** The library's `searchRadius`, `searchRadiusTop`,
+`pyramidMinSide` and `searchPenalty` (at library `185fdf5`), shown in an "Expert: motion search"
+group at the end of the area (column 1, after Status), changeable while a game runs. The defaults
+(2 / 6 / 48 / 0.5) are the library's own and give byte-identical output to before; the rows exist
+for the user to watch what more reach does. `Why a group of its own, against the old "only the
+defaults were reviewed" rule:` the user asked for it (the library session's brief): longer motion
+between two real frames needs a longer search, and only trying it shows what it costs.
+
+- *Reach.* With n pyramid levels the longest vector at the finest level is
+  `Rt * 2^(n-1) + R * (2^(n-1) - 1)` flow pixels (R = radius, Rt = coarsest-level radius). The
+  defaults at 1080p, flowScale 2 give 4 levels: about 62 flow px, about 250 px between the two real
+  frames. A smaller pyramid side adds levels (16 gives 6 levels at 1080p, flowScale 2).
+- *Cost.* A radius above 6 switches to the library's wide search shader. Measured in the library
+  (RX 7900 XTX, 1080p, flowScale 2) with 12 / 12 / 16: V1 1.29 ms per real pair against 0.29 ms at
+  the defaults; this fork's V1 budget at 1080p is 0.33 ms, so large values make the pacer lower the
+  output rate. Every row's help says so in one line.
+- *Build.* The library's wide variants (`search`, `v2_search` with `FG_MAXR=12`; `medhist`,
+  `v2_medhist`, `v2_qown`, `v2_qcov` with `FG_WIDE=1`) are six more `custom_target()`s in
+  `src/meson.build`'s FRAME GENERATION block, named `<name>_wide_spv.h`; the plain shaders carry
+  no define and are untouched. `framegen.cpp` includes all six, so the build fails without them.
+- *Host path.* Overlay row -> `config::FrameGenSettings` -> `fghost::Config` -> a **fifth atomic
+  word** `g_uReach` (`FrameGen/FrameGenReach.h`: bits 0-3 radius, 4-7 coarsest radius, 8-16
+  `pyramidMinSide`, 17-31 penalty in hundredths = 32 bits). `Why a new word:` the main, UI-box,
+  Learned and blur words are full, and so is the 64-bit applied key. `Why hundredths:` 0.5 =
+  50 / 100.0 round-trips exactly (the default must change nothing) and the overlay steps by 0.05.
+  Pack and unpack clamp; an out-of-range field on unpack falls back to the default. The header
+  is pure so `tests/test_framegen_reach.cpp` round-trips it.
+- *Re-applying.* `EnsureReady()` compares the new word with `Host_t::uAppliedReach` next to the
+  old 64-bit `uAppliedConfig` key, so a change of any of the four re-applies the settings. A
+  `pyramidMinSide` change takes the same route as a flowScale change (`reconfigure()`, after a GPU
+  wait); the error log names which one changed. `Why:` the library's `setSettings()` refuses a
+  `pyramidMinSide` change. flowScale is forced to 2 for V2 and Learned, `pyramidMinSide` is not:
+  it applies to every version. `FailKey()` includes `pyramidMinSide`, so a failed reconfigure is
+  retried once the user picks another value (and not every frame).
+- *Motion blur.* It shares the one interpolator; the reach values always come from Frame
+  generation's config (`g_uReach`), also when only Motion blur is on. The rows are enabled while
+  either is on; the two radii are greyed out under Learned (that is the version the interpolator
+  actually runs, Motion blur's own one included).
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
 `"off"` again): `mode: "off"` -> `enabled = false`, `mode = "fixed"`, the stored
@@ -62,7 +105,7 @@ Column 0: group "Frame generation" (Frame generation, Multiplier, Target fps, Pr
 version, Quality), then "Artifact protection" (Artifact safety, Static HUD protection, UI protection,
 Crosshair box size). Column 1: "Learned motion" (Learned net, Learned precision, Zero-motion test,
 Static guard), "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
-GPU speed), "Status". Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
+GPU speed), "Status", "Expert: motion search" (Search radius, Search radius (coarsest level), Pyramid smallest level, Search penalty; 2026-11-19). Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
 against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
 falls back to a dropdown. `Why:` the user arranged this on a visual workbench.
 

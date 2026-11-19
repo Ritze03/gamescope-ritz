@@ -7,6 +7,7 @@
 
 #include "FrameGenHost.h"
 #include "FrameGenFormat.h"
+#include "FrameGenReach.h"
 
 #include <algorithm>
 #include <atomic>
@@ -39,7 +40,8 @@ namespace fghost
 		// safety, 8-9 hud protection, 10-11 mode, 12 priority, 13-22 target fps, 23 pause at refresh,
 		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 safety's third bit (VeryLow = 4 needs it; bits 6-7 hold the low two), 31 pause while cursor visible. The
 		// crosshair box size is its own word, g_uUiBox, and Learned motion's runtime settings (net,
-		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full).
+		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full), and the
+		// motion search reach (radii, pyramid side, penalty) a fourth, g_uReach.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
@@ -110,9 +112,10 @@ namespace fghost
 		};
 		BoxPending_t g_BoxPending;
 
-		Config Unpack( uint32_t u, uint32_t uBox, uint32_t uLearned )
+		Config Unpack( uint32_t u, uint32_t uBox, uint32_t uLearned, uint32_t uReach )
 		{
 			Config c;
+			UnpackReach( uReach, &c );
 			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
 			c.multiplier = int( u & 0xFu );
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
@@ -142,6 +145,7 @@ namespace fghost
 
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
 		std::atomic<uint32_t> g_uLearned{ PackLearned( Config{} ) };
+		std::atomic<uint32_t> g_uReach{ PackReach( Config{} ) };
 
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
@@ -400,6 +404,9 @@ namespace fghost
 
 			// What the library is currently configured with.
 			uint64_t uAppliedConfig = 0;
+			// The reach word (PackReach) last applied: the 64-bit key above has no free bit left, so the four reach values
+			// are compared on their own. 0 = none applied (a real reach word is never 0: the radii start at 1).
+			uint32_t uAppliedReach = 0;
 			// A failed init/reconfigure is not retried until the size or the
 			// structural setting changes (or FG is switched off and on): init
 			// builds pipelines, so retrying per frame would be a stutter machine.
@@ -527,6 +534,14 @@ namespace fghost
 			s.learnedStaticGuard = c.learnedStaticGuard;
 			// The one Quality setting also picks V2's mode (V1 ignores it).
 			s.v2Mode = c.quality == Quality::Performance ? framegen::V2Mode::Performance : framegen::V2Mode::Quality;
+			// Motion search reach (V1 and V2; Learned ignores the radii). Always from the Frame generation Config,
+			// also when only Motion blur is on (one interpolator). The two radii and the penalty are runtime;
+			// pyramidMinSide is structural and takes EnsureReady()'s reconfigure() route. Clamped here too: the
+			// library refuses an out-of-range value with a generic reason.
+			s.searchRadius = uint32_t( std::clamp( c.searchRadius, kSearchRadiusMin, kSearchRadiusMax ) );
+			s.searchRadiusTop = uint32_t( std::clamp( c.searchRadiusTop, kSearchRadiusMin, kSearchRadiusMax ) );
+			s.pyramidMinSide = uint32_t( std::clamp( c.pyramidMinSide, kPyramidMinSideMin, kPyramidMinSideMax ) );
+			s.searchPenalty = ReachIsFinite( c.searchPenalty ) ? std::clamp( c.searchPenalty, 0.0f, kSearchPenaltyMax ) : kSearchPenaltyDefault;
 			return s;
 		}
 
@@ -619,6 +634,7 @@ namespace fghost
 			DropFrames( H );
 			H.bProfileOpen = false;
 			H.uAppliedConfig = 0;
+			H.uAppliedReach = 0;
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
 			g_flLastPairGpuMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastEstimateMs.store( -1.0f, std::memory_order_relaxed );
@@ -690,7 +706,9 @@ namespace fghost
 		uint64_t FailKey( uint32_t w, uint32_t h, const Config &c, const FormatPlan &plan )
 		{
 			return ( uint64_t( w ) << 32 ) ^ ( uint64_t( h ) << 8 ) ^ uint64_t( c.quality == Quality::Performance ? 4 : 2 )
-				^ ( uint64_t( plan.eFormat ) << 50 ) ^ ( uint64_t( plan.eTransfer ) << 53 ) ^ 0x8000000000000000ull;
+				^ ( uint64_t( plan.eFormat ) << 50 ) ^ ( uint64_t( plan.eTransfer ) << 53 ) ^ 0x8000000000000000ull
+				// pyramidMinSide is structural and can make reconfigure() fail: a changed value must retry.
+				^ ( uint64_t( c.pyramidMinSide ) * 0x9E3779B97F4A7C15ull );
 		}
 
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
@@ -720,6 +738,8 @@ namespace fghost
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
 			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) | ( 0x1u << 30 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
 				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x7Fu ) << 56 );
+
+			const uint32_t uReach = PackReach( c );
 
 			if ( !H.bLive )
 			{
@@ -765,6 +785,7 @@ namespace fghost
 				// unequal to the wanted one and the code falls through.
 				const bool bWantV2 = want.motionVersion != framegen::MotionVersion::V1;
 				H.uAppliedConfig = bWantV2 ? ~uLibraryConfig : uLibraryConfig;
+				H.uAppliedReach = uReach;   // init() took want's reach values (info.settings = want)
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
 					w, h, want.flowScale, H.bProfiling ? "on" : "n/a",
@@ -801,7 +822,7 @@ namespace fghost
 				// applies a pending change.
 			}
 
-			if ( uLibraryConfig != H.uAppliedConfig )
+			if ( uLibraryConfig != H.uAppliedConfig || uReach != H.uAppliedReach )
 			{
 				want = ResolveMotion( H, want );
 				// V2 always estimates at the library's own flowScale 2 / sub-pixel (its
@@ -819,15 +840,19 @@ namespace fghost
 					want.subpixel = true;
 				}
 				const framegen::MotionVersion eMotionWas = H.interp.settings().motionVersion;
-				if ( want.flowScale != H.interp.settings().flowScale )
+				const bool bFlowChange = want.flowScale != H.interp.settings().flowScale;
+				const bool bPyramidChange = want.pyramidMinSide != H.interp.settings().pyramidMinSide;
+				if ( bFlowChange || bPyramidChange )
 				{
-					// Structural (Quality <-> Performance): reconfigure() re-creates the
+					// Structural (Quality <-> Performance, or the pyramid's smallest level): reconfigure() re-creates the
 					// size-dependent buffers, so every earlier record must have retired,
 					// and the next synth needs a new estimate.
 					g_device.waitIdle();   // WAITIDLE 3 of 3: Quality preset change
 					if ( !H.interp.reconfigure( want ) )
 					{
-						fg_log.errorf( "frame generation unavailable: could not reconfigure (flowScale %u)", want.flowScale );
+						fg_log.errorf( "frame generation unavailable: could not reconfigure (flowScale %u, pyramidMinSide %u; changed: %s)",
+							want.flowScale, want.pyramidMinSide,
+							bFlowChange && bPyramidChange ? "both" : bFlowChange ? "flowScale" : "pyramidMinSide" );
 						Teardown( H );
 						H.ulFailedKey = ulKey;
 						return false;
@@ -865,6 +890,7 @@ namespace fghost
 					InvalidateOutputs( H );
 				}
 				H.uAppliedConfig = uLibraryConfig;
+				H.uAppliedReach = uReach;
 			}
 			return true;
 		}
@@ -1349,6 +1375,7 @@ namespace fghost
 		g_uConfig.store( uPacked, std::memory_order_relaxed );
 		g_uUiBox.store( PackBox( cfg ), std::memory_order_relaxed );
 		g_uLearned.store( PackLearned( cfg ), std::memory_order_relaxed );
+		g_uReach.store( PackReach( cfg ), std::memory_order_relaxed );
 		UpdateGate();
 	}
 
@@ -1409,7 +1436,7 @@ namespace fghost
 
 	Config GetConfig()
 	{
-		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ), g_uLearned.load( std::memory_order_relaxed ) );
+		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ), g_uLearned.load( std::memory_order_relaxed ), g_uReach.load( std::memory_order_relaxed ) );
 	}
 
 	bool Enabled()
@@ -1516,7 +1543,7 @@ namespace fghost
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
 			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 0x3u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
 		const uint32_t uPackedLearned = g_uLearned.load( std::memory_order_relaxed );
-		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned );
+		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned, g_uReach.load( std::memory_order_relaxed ) );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// Frame generation, motion blur and the lag spike buffer all off (or never on): release

@@ -29,15 +29,18 @@
 // single selector for just quality and performance, and just pass it the same way for v1
 // and v2 since both of them have the same options."
 //
-// `Why only these:` the library's expert knobs (searchPenalty and the
-// rest) are deliberately not exposed -- only the defaults were visually
-// reviewed, so a slider would hand the user settings nobody has looked at.
+// `Why only these:` the library's expert knobs are deliberately not exposed -- only the
+// defaults were visually reviewed, so a slider would hand the user settings nobody has
+// looked at. The one exception (2026-11-19) is the "Expert: motion search" group at the end
+// of the area (search radius, coarsest-level radius, pyramid smallest level, search
+// penalty): the user asked to watch what more reach does while a game runs.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
 // momentary action; the Frame generation switch is the on/off.
 #include "PanelFrameGen.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -81,6 +84,23 @@ namespace gamescope
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
 		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
 		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" } };
+
+		// Expert: motion search reach (2026-11-19). The Choice ids ARE the pyramid's smallest-level sides (flow pixels):
+		// each change re-creates the library's buffers and waits for the GPU, so a short list, not a free slider.
+		// A stored value between two entries shows the nearest one and is not rewritten until the user picks.
+		constexpr int kPyramidSides[] = { 16, 24, 32, 48, 64, 96, 128, 256 };
+		constexpr ui::Option kPyramidOptions[] = {
+			{ 16, "16" }, { 24, "24" }, { 32, "32" }, { 48, "48 (default)" },
+			{ 64, "64" }, { 96, "96" }, { 128, "128" }, { 256, "256" } };
+
+		int NearestPyramidSide( int nSide )
+		{
+			int nBest = kPyramidSides[ 0 ];
+			for ( const int n : kPyramidSides )
+				if ( std::abs( n - nSide ) < std::abs( nBest - nSide ) )
+					nBest = n;
+			return nBest;
+		}
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
@@ -193,6 +213,10 @@ namespace gamescope
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
 			c.learnedStaticGuard = f.learned_static_guard;
+			c.searchRadius = f.search_radius;   // SetConfig() clamps all four to the library's ranges
+			c.searchRadiusTop = f.search_radius_top;
+			c.pyramidMinSide = f.pyramid_min_side;
+			c.searchPenalty = f.search_penalty;
 			return c;
 		}
 
@@ -241,6 +265,27 @@ namespace gamescope
 			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
 			const std::string &sEffective = bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version;
 			return ( st.framegen.enabled || st.motion_blur.enabled ) && sEffective == "learned";
+		}
+
+		// The motion version the interpolator actually runs (same rule as LearnedRowsUsable()).
+		bool EffectiveMotionIsLearned()
+		{
+			const config::Settings &st = s_Settings;
+			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
+			return ( bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version ) == "learned";
+		}
+
+		// Expert reach rows: they matter while the interpolator runs (Frame generation or Motion blur on); the search
+		// radii not under Learned motion, which has no search.
+		bool ReachRowsUsable()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.enabled || s_Settings.motion_blur.enabled;
+		}
+
+		bool RadiusRowsUsable()
+		{
+			return ReachRowsUsable() && !EffectiveMotionIsLearned();
 		}
 
 		bool UiOn()
@@ -658,5 +703,71 @@ namespace gamescope
 			       "shows the presented rate; this fork's HUD shows the game rate, the "
 			       "presented rate, or both, per its FPS shown choice (Game / Output / Both)." )
 			.Keywords( "frame generation status fps presented delay latency reason" );
+
+		a.Group( "Expert: motion search" );
+		a.GroupColumn( 1 );
+
+		a.Slider( "framegen.search_radius", "Search radius",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.search_radius; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.search_radius = std::clamp( n, 1, 12 ); PersistAndPush(); } ) )
+			.Help( "How far the motion search looks around its guess at each step, in pixels of "
+			       "the motion map, 1 to 12. A larger radius follows faster motion between two real "
+			       "frames. Above 6 a wider, slower search runs. Large values cost GPU time and can "
+			       "make frame generation lower its output rate: 12 / 12 / 16 at 1080p measured 1.29 ms "
+			       "per game frame in V1 against 0.29 ms at the defaults (this fork's V1 budget at 1080p "
+			       "is 0.33 ms). Motion versions V1 and V2; Learned motion ignores it." )
+			.Range( 1.0f, 12.0f ).Step( 1.0f )
+			.Default( 2 )
+			.Keywords( "frame generation expert motion search radius reach fast motion vectors v1 v2" )
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned)" );
+
+		a.Slider( "framegen.search_radius_top", "Search radius (coarsest level)",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.search_radius_top; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.search_radius_top = std::clamp( n, 1, 12 ); PersistAndPush(); } ) )
+			.Help( "The search radius on the smallest, coarsest picture of the motion search, 1 to "
+			       "12. It sets the longest motion that can be found: each finer level doubles it. "
+			       "Defaults 2 and 6 reach about 250 pixels between two real frames at 1080p. Above 6 "
+			       "the wider search runs; large values cost GPU time and can make frame generation "
+			       "lower its output rate (see Search radius). Motion versions V1 and V2; Learned "
+			       "motion ignores it." )
+			.Range( 1.0f, 12.0f ).Step( 1.0f )
+			.Default( 6 )
+			.Keywords( "frame generation expert motion search radius coarsest top level reach long vectors v1 v2" )
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned)" );
+
+		a.Choice( "framegen.pyramid_min_side", "Pyramid smallest level",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return NearestPyramidSide( s_Settings.framegen.pyramid_min_side ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.pyramid_min_side = NearestPyramidSide( n ); PersistAndPush(); } ),
+			kPyramidOptions, std::size( kPyramidOptions ) )
+			.Help( "How small the coarsest picture of the motion search may get, as the shorter "
+			       "side in pixels of the motion map. A smaller value adds levels: motion can be longer "
+			       "(16 gives 6 levels instead of 4 at 1080p), costs a little more and risks a wrong "
+			       "match on the coarsest level. Changing it re-creates the frame generation buffers and "
+			       "pauses the picture for an instant. Large reach costs GPU time and can make frame "
+			       "generation lower its output rate (see Search radius). Applies to every motion "
+			       "version." )
+			.Default( 48 )
+			.Keywords( "frame generation expert motion search pyramid levels smallest minimum side reach long vectors" )
+			.DisabledUnless( ReachRowsUsable, "frame generation and motion blur are off" );
+
+		a.Slider( "framegen.search_penalty", "Search penalty",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.search_penalty; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.search_penalty = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "What the motion search pays for each step away from its guess. Higher gives "
+			       "steadier motion on flat or repeating surfaces, lower follows small fast detail "
+			       "more freely. 0 to 4 here; a profile file may hold up to 255. Motion versions V1 and V2." )
+			.Range( 0.0f, 4.0f ).Step( 0.05f )
+			.Default( 0.5f )
+			.Keywords( "frame generation expert motion search penalty lambda steady flat repetitive detail v1 v2" )
+			.DisabledUnless( ReachRowsUsable, "frame generation and motion blur are off" );
 	}
 }
