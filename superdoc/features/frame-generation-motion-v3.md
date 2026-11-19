@@ -86,7 +86,7 @@ rows that drive nothing V3 uses are greyed, per the library's table of ignored s
 | Search radius, Search radius (coarsest level) | `searchRadius`, `searchRadiusTop` | greyed (`RadiusRowsUsable()`, which also covers Learned) |
 | Pyramid smallest level | `pyramidMinSide` | greyed (`PenaltyRowsUsable()`): V3 builds its own pyramid; a change would still rebuild the shared buffers without changing V3's picture |
 | Search penalty | `searchPenalty` | greyed (`PenaltyRowsUsable()`) |
-| Static HUD protection | `hudBonus` only | greyed (`HudRowUsable()`) |
+| Static HUD protection | `hudBonus` (0 / 1.0 / 2.5) | **enabled**: V3 honours it since library `c9c6718`, as V1 does (see "Static HUD protection under V3") |
 | Artifact safety | `trustLow` / `trustHigh` / `sceneCutSad` **and `globalFallback`** | **left enabled**: `globalFallback` (Off sets it to 1.0) is V3's "estimate failed" threshold |
 | Quality | `flowScale` (and `subpixel`, `v2Mode`) | enabled: V3 honours `flowScale` |
 | Limit to GPU speed, UI protection, Crosshair box size, Motion blur rows | pacing / `ui*` / `blur*` | enabled: V3 honours them |
@@ -97,6 +97,24 @@ There is no row for `v2StaticMask` (the library default, honoured by V3), `smoot
 `DisabledUnless` predicate and to keep a row enabled if anything it sets is honoured; Artifact
 safety is the case where that matters. Its help text carries one sentence for V3 (no mismatch
 ranges there; only Off matters).
+
+## Static HUD protection under V3
+
+Since library `c9c6718` V3 honours `hudBonus`; the row works under V3 exactly as under V1 (Off / Normal /
+Strong = 0 / 1.0 / 2.5, `ToLibrarySettings()` sets it for every version, and the level is part of the
+applied-config key, so a change or a live version switch re-applies it with `setSettings()`). The bonus
+acts only where the motion it would undo is a real one (about 4 px per frame pair and up) and both frames
+show the same detail at the same place, so slow motion never freezes at any level.
+
+- **Off** is byte-identical to V3 before this pin. **Normal** is nearly neutral on real footage (mean
+  quality over nine test pairs unchanged) and steadies small fixed elements such as a ping readout or an
+  ammo panel. **Strong** also steadies weapon lists and costs one of nine test pairs about 0.3 dB.
+- It does not fix a radar or minimap whose content moves (those defects come from the fast
+  background's motion estimate); a radar gets slightly worse at Strong.
+- This project's default is Strong, so V3 runs with `hudBonus` 2.5 by default from this pin on and its
+  default picture changes slightly (Strong steadies weapon lists, costs one of nine test pairs about
+  0.3 dB, and a radar gets slightly worse); Normal is the nearly neutral level. Intended; the default is
+  unchanged for every version.
 
 ## Build
 
@@ -143,6 +161,8 @@ both switches off / colour window on / detail split on / both on, in ms:
 |---|---|---|---|
 | Rgba8 | 0.976 / 1.023 / 1.035 / 1.077 | 1.196 / 1.242 / 1.314 / 1.356 | 1.425 / 1.468 / 1.593 / 1.652 |
 | F16 linear (worst) | 1.068 / 1.131 / 1.145 / 1.210 | 1.326 / 1.400 / 1.488 / 1.552 | 1.581 / 1.665 / 1.819 / 1.893 |
+
+Static HUD protection adds about 0.02 ms per real frame pair at Normal and Strong and 0.006 ms at Off (Rgba8 2x: 1.00 to 1.02 ms; F16 linear: 1.10 to 1.12 ms).
 
 (Before the library's picture tuning, Rgba8 off was 0.89 / 1.07 / 1.26.) Earlier measurements,
 before the tuning: flowScale 4 0.44 ms; flowScale 1 2.84 ms; 1440p flowScale 2 1.55 ms. V1 is about 0.30 ms, V2 Quality 0.27. Memory about 56 MiB at 1080p flowScale 2 (224 MiB at

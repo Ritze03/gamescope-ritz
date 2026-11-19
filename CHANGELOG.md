@@ -17,6 +17,8 @@ All notable user-facing changes, newest first. Categories:
   threshold).
 - **Frame generation**: two experimental switches for V3, colour-weighted matching
   and detail from one frame, to compare on and off while playing.
+- **Frame generation**: Static HUD protection now also works with V3, steadying fixed
+  overlays against fast scene motion.
 
 ### Fixed
 - **Frame generation**: V3 no longer shows repeated frames on fast motion; its scene

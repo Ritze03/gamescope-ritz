@@ -283,7 +283,7 @@ namespace gamescope
 
 		// The same for Motion version 3 (2026-11-19): its four rows are usable only while V3 is what the interpolator
 		// runs (and something is on), and the rows that only drive settings V3 ignores (the search radii, the pyramid
-		// side, the search penalty, Static HUD protection) are greyed while it is.
+		// side, the search penalty) are greyed while it is.
 		bool EffectiveMotionIsV3()
 		{
 			const config::Settings &st = s_Settings;
@@ -296,12 +296,6 @@ namespace gamescope
 			EnsureConfigLoaded();
 			const config::Settings &st = s_Settings;
 			return ( st.framegen.enabled || st.motion_blur.enabled ) && EffectiveMotionIsV3();
-		}
-
-		// Static HUD protection sets only hudBonus, which V3 ignores.
-		bool HudRowUsable()
-		{
-			return On() && !EffectiveMotionIsV3();
 		}
 
 		// Expert reach rows: they matter while the interpolator runs (Frame generation or Motion blur on); the search
@@ -766,10 +760,14 @@ namespace gamescope
 			.Help( "A soft bias towards \"stay put\" when frames are generated, so a motionless "
 			       "or see-through HUD wobbles less. It only nudges the motion estimate: it "
 			       "cannot make a HUD pixel-exact (that is UI protection below). Strong "
-			       "can hold back genuinely slow motion near the HUD." )
+			       "can hold back genuinely slow motion near the HUD. Under Motion version 3 it "
+			       "steadies fixed overlays (text, lists, panels) against fast scene motion and "
+			       "does not affect slow movement. Strong holds overlays harder but can cost a "
+			       "little picture quality in busy scenes; it does not fix a radar or minimap "
+			       "whose map itself moves." )
 			.Default( 2 )
 			.Keywords( "frame generation static hud protection ui wobble see-through" )
-			.DisabledUnless( HudRowUsable, "frame generation is off, or Motion version is V3 (it does not use this)" );
+			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.ui_protection", "UI protection",
 			ui::AnyBind::Of<int>(
