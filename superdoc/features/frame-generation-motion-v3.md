@@ -4,8 +4,7 @@ Part of [Frame generation](frame-generation.md). The library's third motion algo
 
 ## Motion version 3
 
-(2026-11-19, library `c2644af` on its `dev` branch; the pin moves again with a later brief, and the
-build list below is meant to survive that.) The library's `MotionVersion::V3`: a gather-based,
+(2026-11-19, library `acab885` on its `dev` branch; the build list below is meant to survive a later pin.) The library's `MotionVersion::V3`: a gather-based,
 two-flow, occlusion-aware interpolator. It estimates motion in both directions, finds the pixels
 that one of the two real frames hides, fills the vectors in those hidden strips from their
 neighbours and builds each generated pixel from both real frames along both vectors. Where it
@@ -35,9 +34,9 @@ default stays `v1`. Library details: `subprojects/FrameGen/INTEGRATION.md`, "Mot
   the Quality row's own flowScale (`EnsureReady()` leaves it alone for V3), and the host leaves
   `subpixel` as the row gives it (V3 ignores it).
 
-## The four settings
+## The four settings and two switches
 
-All four are runtime (`setSettings()`; no buffers re-created, the estimate is kept). Group "Motion
+All six are runtime (`setSettings()`; no buffers re-created, the estimate is kept). Group "Motion
 version 3" in the Frame generation area (column 1, right after "Learned motion"); sliders with
 step 0.05; enabled only while V3 is the version the interpolator actually runs and Frame
 generation or Motion blur is on (`V3RowsUsable()`, the same rule as the Learned rows: Motion blur's
@@ -52,7 +51,12 @@ values.
 | `v3_unsure` | `v3Unsure` | 0.25-4 | 1.0 | Unsure sensitivity | scales the poor-match ramp of the unsure measure; higher = trusts worse matches (less smear, more risk) |
 | `v3_scene_cut` | `v3SceneCut` | 0-4 | 0.45 | Scene cut threshold | histogram distance above which a pair is a scene cut (nearer real frame shown); 0 = never. Applies from the next estimate |
 
-Additive (schema stays 5): an absent key loads the default; a value is clamped to its range on
+| `v3_colour_window` | `v3ColourWindow` | on / off | off | Colour-weighted matching | the motion search weighted by colour similarity; can sharpen clearly coloured moving objects, can break areas next to flat dark regions; +0.05 ms. Applies from the next estimate |
+| `v3_detail_split` | `v3DetailSplit` | on / off | off | Detail from one frame | only the coarse picture is blended, the fine detail comes from one frame; slightly crisper texture and text; +0.06 ms per generated frame. Applies from the next generated frame |
+
+Both switches are experiments to compare by eye, on and off, while a game runs (the rows are
+switches, reachable by `overlay_e2_set`); with both off V3's output is byte-identical to V3 without
+them. Additive (schema stays 5): an absent key loads the default; a value is clamped to its range on
 load; a non-finite or wrong-typed value takes the default (the bit-pattern test, because the
 project builds with `-ffast-math`); written rounded to hundredths, like `search_penalty`.
 
@@ -62,17 +66,14 @@ project builds with `-ffast-math`); written rounded to hundredths, like `search_
 
 - bits 0-11 smear, 12-23 occlusion softness, 24-35 unsure sensitivity, 36-47 scene cut, each in
   hundredths;
-- **bits 48 and 49 are reserved** for the library's two bools `v3ColourWindow` and
-  `v3DetailSplit`. They are **not exposed**: at library `c2644af` they are accepted and do nothing
-  (output is identical on and off). A later brief fills them; until then `PackV3()` writes 0 there
-  and `UnpackV3()` ignores them.
+- bit 48 `v3ColourWindow`, bit 49 `v3DetailSplit`; bits 50-63 unused (written 0, ignored).
 
 `Why a new word:` the main, UI-box, Learned, reach and blur words and the 64-bit applied key are
 full. `Why hundredths:` 0.35 and 0.45 survive `value / 100.0` -> float exactly (proved in
 `tests/test_framegen_v3.cpp`), so the defaults change nothing. `EnsureReady()` compares the word
 with `Host_t::ulAppliedV3` (set in the init path and at the end of the apply block, reset in
 `Teardown()`), so a change of any value re-applies the settings, once. `ToLibrarySettings()` sets
-the four fields (clamped, finite-tested); the `setSettings()` that `SyncUiHistory()` derives from
+the six fields (the four clamped and finite-tested); the `setSettings()` that `SyncUiHistory()` derives from
 `H.interp.settings()` carries them along.
 
 ## Rows greyed under V3
@@ -94,8 +95,8 @@ rows that drive nothing V3 uses are greyed, per the library's table of ignored s
 There is no row for `v2StaticMask` (the library default, honoured by V3), `smoothBonus`
 (ignored) or `subpixel` alone. `Why only these:` the brief asked to grey only what is cheap with a
 `DisabledUnless` predicate and to keep a row enabled if anything it sets is honoured; Artifact
-safety is the case where that matters. Its help text still talks about the V1 ramp; under V3 only
-the whole-frame fallback of its levels applies.
+safety is the case where that matters. Its help text carries one sentence for V3 (no mismatch
+ranges there; only Off matters).
 
 ## Build
 
@@ -110,6 +111,12 @@ the whole-frame fallback of its levels applies.
   `v3_synth_<fmt>_spv.h` (4 more compiles). The library finds them through `__has_include`. NV12 /
   P010 stay unbuilt (see [limits](frame-generation-limits.md#build)); without a format's variants
   the library refuses V3 for it with a reason and the host falls back to V1.
+- **The two switches' builds** (library `acab885`, second compiles of existing sources with one
+  more define): `v3_search`, `v3_search_top`, `v3_dense` with `-DV3J=1` -> `v3_search_j_spv.h`,
+  `v3_search_top_j_spv.h`, `v3_dense_j_spv.h`; `v3_synth` with `-DV3L=1` -> `v3_synth_l_spv.h`;
+  and per format (`rgb10`, `f16`) `v3_synth` with `-DFG_FORMAT_<FMT>=1 -DV3L=1` ->
+  `v3_synth_l_<fmt>_spv.h` (variable `<name>_spv`). The first four are mandatory (the library
+  includes them unconditionally); a format without its `v3_synth_l` variant has V3 refused.
 - **Includes, no compile of their own** (resolved relative to each `.comp`, listed by the
   depfile): `v3_common.glsl`, `v3_format.glsl`, `v3_weights.glsl`, `v3_maps.glsl`, `v3_est.glsl`,
   `v3_search.glsl`, `v3_static.glsl`.
@@ -129,10 +136,16 @@ Motion version 3 (its pipelines or buffers)". `initError()` is already logged wh
 
 ## Cost and memory
 
-Measured in the library (RX 7900 XTX, 1080p, flowScale 2, Rgba8, per real pair, back to back):
-0.89 ms at 2x, 1.07 at 3x, 1.26 at 4x (each generated frame beyond the first about 0.18 ms); worst
-format F16 linear 0.99 ms at 2x; flowScale 4: 0.44 ms; flowScale 1: 2.84 ms; 1440p flowScale 2:
-1.55 ms. V1 is about 0.30 ms, V2 Quality 0.27. Memory about 56 MiB at 1080p flowScale 2 (224 MiB at
+Measured in the library (RX 7900 XTX, 1080p, flowScale 2, per real pair, back to back, fast pair),
+both switches off / colour window on / detail split on / both on, in ms:
+
+| Format | 2x | 3x | 4x |
+|---|---|---|---|
+| Rgba8 | 0.976 / 1.023 / 1.035 / 1.077 | 1.196 / 1.242 / 1.314 / 1.356 | 1.425 / 1.468 / 1.593 / 1.652 |
+| F16 linear (worst) | 1.068 / 1.131 / 1.145 / 1.210 | 1.326 / 1.400 / 1.488 / 1.552 | 1.581 / 1.665 / 1.819 / 1.893 |
+
+(Before the library's picture tuning, Rgba8 off was 0.89 / 1.07 / 1.26.) Earlier measurements,
+before the tuning: flowScale 4 0.44 ms; flowScale 1 2.84 ms; 1440p flowScale 2 1.55 ms. V1 is about 0.30 ms, V2 Quality 0.27. Memory about 56 MiB at 1080p flowScale 2 (224 MiB at
 flowScale 1), plus 7.9 MiB per interior motion-blur sample.
 
 **Pacing needs no V3 entry.** Neither the pacer nor the cost guard holds a per-version cost table

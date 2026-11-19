@@ -291,6 +291,10 @@ namespace fghost
 		float v3OcclSoft = kV3OcclSoftDefault;
 		float v3Unsure = kV3UnsureDefault;
 		float v3SceneCut = kV3SceneCutDefault;
+		// Motion::V3 only, both runtime: the motion search weighted by colour similarity, and the fine detail of the
+		// picture taken from one frame (the coarse picture still blended). Off = V3 as before.
+		bool v3ColourWindow = false;
+		bool v3DetailSplit = false;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

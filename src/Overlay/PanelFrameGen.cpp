@@ -221,6 +221,8 @@ namespace gamescope
 			c.v3OcclSoft = f.v3_occl_soft;
 			c.v3Unsure = f.v3_unsure;
 			c.v3SceneCut = f.v3_scene_cut;
+			c.v3ColourWindow = f.v3_colour_window;   // ... and its two switches
+			c.v3DetailSplit = f.v3_detail_split;
 			return c;
 		}
 
@@ -676,6 +678,26 @@ namespace gamescope
 			.Keywords( "frame generation v3 scene cut threshold histogram cut transition" )
 			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
 
+		a.Switch( "framegen.v3_colour_window", "Colour-weighted matching",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_colour_window; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_colour_window = b; PersistAndPush(); } ) )
+			.Help( "Experiment: weights the motion search by colour similarity. Can sharpen clearly "
+			       "coloured moving objects; can break areas next to flat dark regions. +0.05 ms." )
+			.Default( false )
+			.Keywords( "frame generation v3 colour color weighted matching window motion search experiment" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Switch( "framegen.v3_detail_split", "Detail from one frame",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_detail_split; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_detail_split = b; PersistAndPush(); } ) )
+			.Help( "Experiment: blends only the coarse picture and takes fine detail from one frame. "
+			       "Slightly crisper texture and text. +0.06 ms per generated frame." )
+			.Default( false )
+			.Keywords( "frame generation v3 detail split one frame texture text sharp crisp experiment" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
 		a.Group( "Pausing and limits" );
 		a.GroupColumn( 1 );
 
@@ -730,7 +752,9 @@ namespace gamescope
 			       "more where the motion is wrong). All four also show the real "
 			       "frame when more than 15% of the picture is untrusted or on a scene cut. Off "
 			       "never falls back: smoothest, but expect smearing on fast flicks and blended "
-			       "scene cuts." )
+			       "scene cuts. Motion version 3 has no mismatch ranges (it has its own Smear and "
+			       "Unsure settings): for it only Off matters, which stops its failed-estimate "
+			       "fallback." )
 			.Default( 1 )
 			.Keywords( "frame generation artifact safety artefacts ghosting trust fallback" )
 			.DisabledUnless( On, "frame generation is off" );
