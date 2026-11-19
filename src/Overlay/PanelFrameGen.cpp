@@ -668,12 +668,11 @@ namespace gamescope
 					s_Settings.framegen.v3_scene_cut = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 4.0f );
 					PersistAndPush();
 				} ) )
-			.Help( "How different two real frames must look (by their brightness and colour "
-			       "statistics) before Motion version 3 treats the pair as a scene cut and shows the "
-			       "nearer real frame instead of generating one. Lower cuts earlier. 0 never "
-			       "detects a scene cut. Only used while Motion version is V3." )
+			.Help( "0 = Never (default). Above 0, V3 shows the previous real frame when two frames "
+			       "differ this much; on fast motion that looks like lag. Only used while Motion "
+			       "version is V3." )
 			.Range( 0.0f, 4.0f ).Step( 0.05f )
-			.Default( 0.45f )
+			.Default( 0.0f )
 			.ZeroMeans( "Never" )
 			.Keywords( "frame generation v3 scene cut threshold histogram cut transition" )
 			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );

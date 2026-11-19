@@ -128,7 +128,7 @@ namespace fghost
 	constexpr float kV3SmearMin = 0.0f, kV3SmearMax = 1.0f, kV3SmearDefault = 0.35f;
 	constexpr float kV3OcclSoftMin = 0.25f, kV3OcclSoftMax = 4.0f, kV3OcclSoftDefault = 1.0f;
 	constexpr float kV3UnsureMin = 0.25f, kV3UnsureMax = 4.0f, kV3UnsureDefault = 1.0f;
-	constexpr float kV3SceneCutMin = 0.0f, kV3SceneCutMax = 4.0f, kV3SceneCutDefault = 0.45f;   // 0 = never a scene cut
+	constexpr float kV3SceneCutMin = 0.0f, kV3SceneCutMax = 4.0f, kV3SceneCutDefault = 0.0f;   // 0 = never a scene cut (the default since 2026-11-19)
 
 	// What the user asked for. Off = nothing runs. Fixed = a multiplier of the
 	// game's rate (output saturates at the refresh rate, it never steps down).

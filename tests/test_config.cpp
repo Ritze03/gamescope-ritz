@@ -4168,7 +4168,7 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( Settings{}.framegen.v3_smear == 0.35f );
     REQUIRE( Settings{}.framegen.v3_occl_soft == 1.0f );
     REQUIRE( Settings{}.framegen.v3_unsure == 1.0f );
-    REQUIRE( Settings{}.framegen.v3_scene_cut == 0.45f );
+    REQUIRE( Settings{}.framegen.v3_scene_cut == 0.0f );
     REQUIRE( !Settings{}.framegen.v3_colour_window );
     REQUIRE( !Settings{}.framegen.v3_detail_split );
 
@@ -4181,7 +4181,7 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( l.framegen.v3_smear == 0.35f );
     REQUIRE( l.framegen.v3_occl_soft == 1.0f );
     REQUIRE( l.framegen.v3_unsure == 1.0f );
-    REQUIRE( l.framegen.v3_scene_cut == 0.45f );
+    REQUIRE( l.framegen.v3_scene_cut == 0.0f );
     REQUIRE( !l.framegen.v3_colour_window );
     REQUIRE( !l.framegen.v3_detail_split );
 
@@ -4192,7 +4192,7 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     s.framegen.v3_smear = 0.8f;
     s.framegen.v3_occl_soft = 2.55f;
     s.framegen.v3_unsure = 0.25f;
-    s.framegen.v3_scene_cut = 0.0f;
+    s.framegen.v3_scene_cut = 1.25f;
     s.framegen.v3_colour_window = true;
     s.framegen.v3_detail_split = true;
     REQUIRE( SaveSections( s ) );
@@ -4220,7 +4220,7 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE_THAT( l.framegen.v3_smear, Catch::Matchers::WithinAbs( 0.8, 1e-6 ) );
     REQUIRE_THAT( l.framegen.v3_occl_soft, Catch::Matchers::WithinAbs( 2.55, 1e-6 ) );
     REQUIRE_THAT( l.framegen.v3_unsure, Catch::Matchers::WithinAbs( 0.25, 1e-6 ) );
-    REQUIRE( l.framegen.v3_scene_cut == 0.0f );
+    REQUIRE( l.framegen.v3_scene_cut == 1.25f );
 
     // Clamp on load, low side and high side.
     s.framegen.v3_smear = -1.0f;
@@ -4250,6 +4250,27 @@ TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip
     REQUIRE( IsSettingsKey( "framegen.v3_scene_cut" ) );
     REQUIRE( IsSettingsKey( "framegen.v3_colour_window" ) );
     REQUIRE( IsSettingsKey( "framegen.v3_detail_split" ) );
+}
+
+// v3_scene_cut: the default became 0 (Never) on 2026-11-19; a stored 0.45 (the old default) loads as 0, other values stay.
+// Each file gets a fresh TempConfigHome: LoadSections() carries values forward.
+static float LoadSceneCut( const char *pszJsonValue )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\","
+        " \"framegen\": { \"v3_scene_cut\": " << pszJsonValue << " } }";
+    return LoadSections().framegen.v3_scene_cut;
+}
+
+TEST_CASE( "framegen: a stored v3_scene_cut of 0.45 loads as 0, other values stay", "[config]" )
+{
+    REQUIRE( LoadSceneCut( "0.45" ) == 0.0f );
+    REQUIRE( LoadSceneCut( "0.45000000000000001" ) == 0.0f );
+    REQUIRE( LoadSceneCut( "0.40" ) == 0.40f );
+    REQUIRE( LoadSceneCut( "0.50" ) == 0.50f );
+    REQUIRE( LoadSceneCut( "0" ) == 0.0f );
+    REQUIRE( LoadSceneCut( "1.25" ) == 1.25f );
 }
 
 // A V3 value of the wrong type keeps the default (fresh TempConfigHome: LoadSections() carries values forward).

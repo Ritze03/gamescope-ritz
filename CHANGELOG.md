@@ -18,6 +18,10 @@ All notable user-facing changes, newest first. Categories:
 - **Frame generation**: two experimental switches for V3, colour-weighted matching
   and detail from one frame, to compare on and off while playing.
 
+### Fixed
+- **Frame generation**: V3 no longer shows repeated frames on fast motion; its scene
+  cut detection is now off by default.
+
 ## 2026-11-14
 
 ### Added

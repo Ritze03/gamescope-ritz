@@ -26,12 +26,12 @@ TEST_CASE( "framegen v3: the defaults round-trip exactly", "[framegen_v3]" )
 	REQUIRE( d.v3Smear == 0.35f );
 	REQUIRE( d.v3OcclSoft == 1.0f );
 	REQUIRE( d.v3Unsure == 1.0f );
-	REQUIRE( d.v3SceneCut == 0.45f );
+	REQUIRE( d.v3SceneCut == 0.0f );
 	const Config r = RoundTrip( d );
 	REQUIRE( r.v3Smear == 0.35f );      // exactly: 35 / 100.0
 	REQUIRE( r.v3OcclSoft == 1.0f );
 	REQUIRE( r.v3Unsure == 1.0f );
-	REQUIRE( r.v3SceneCut == 0.45f );   // exactly: 45 / 100.0
+	REQUIRE( r.v3SceneCut == 0.0f );
 	// The default word is not 0 (EnsureReady() uses 0 as "nothing applied") and uses no reserved bit.
 	REQUIRE( PackV3( d ) != 0u );
 	REQUIRE( ( PackV3( d ) >> 48 ) == 0u );
@@ -55,7 +55,7 @@ TEST_CASE( "framegen v3: every overlay step round-trips, each field independent 
 		Config c; c.v3Smear = float( n * 5 ) / 100.0f;
 		const Config r = RoundTrip( c );
 		REQUIRE( Near( r.v3Smear, c.v3Smear ) );
-		REQUIRE( ( r.v3OcclSoft == 1.0f && r.v3Unsure == 1.0f && r.v3SceneCut == 0.45f ) );
+		REQUIRE( ( r.v3OcclSoft == 1.0f && r.v3Unsure == 1.0f && r.v3SceneCut == 0.0f ) );
 	}
 	for ( int n = 5; n <= 80; n++ )
 	{
@@ -64,7 +64,7 @@ TEST_CASE( "framegen v3: every overlay step round-trips, each field independent 
 		Config d; d.v3Unsure = float( n * 5 ) / 100.0f;
 		const Config r = RoundTrip( d );
 		REQUIRE( Near( r.v3Unsure, d.v3Unsure ) );
-		REQUIRE( ( r.v3Smear == 0.35f && r.v3OcclSoft == 1.0f && r.v3SceneCut == 0.45f ) );
+		REQUIRE( ( r.v3Smear == 0.35f && r.v3OcclSoft == 1.0f && r.v3SceneCut == 0.0f ) );
 	}
 	for ( int n = 0; n <= 80; n++ )
 	{
@@ -93,7 +93,7 @@ TEST_CASE( "framegen v3: out-of-range values clamp, non-finite falls back to the
 		REQUIRE( r.v3Smear == 0.35f );
 		REQUIRE( r.v3OcclSoft == 1.0f );
 		REQUIRE( r.v3Unsure == 1.0f );
-		REQUIRE( r.v3SceneCut == 0.45f );
+		REQUIRE( r.v3SceneCut == 0.0f );
 	}
 }
 
@@ -103,7 +103,7 @@ TEST_CASE( "framegen v3: a word with a field out of range unpacks to the default
 	UnpackV3( 0u, &r );   // smear 0 and scene cut 0 are valid; the occlusion softness and unsure sensitivity (min 25) are not
 	REQUIRE( ( r.v3Smear == 0.0f && r.v3OcclSoft == 1.0f && r.v3Unsure == 1.0f && r.v3SceneCut == 0.0f ) );
 	UnpackV3( 0xFFFFFFFFFFFFull, &r );   // every field 4095 (> every maximum)
-	REQUIRE( ( r.v3Smear == 0.35f && r.v3OcclSoft == 1.0f && r.v3Unsure == 1.0f && r.v3SceneCut == 0.45f ) );
+	REQUIRE( ( r.v3Smear == 0.35f && r.v3OcclSoft == 1.0f && r.v3Unsure == 1.0f && r.v3SceneCut == 0.0f ) );
 	// One field out of range does not take the others with it.
 	UnpackV3( ( uint64_t( 4000 ) << 12 ) | ( uint64_t( 150 ) << 24 ) | ( uint64_t( 20 ) << 36 ) | 10u, &r );
 	REQUIRE( ( r.v3Smear == 0.1f && r.v3OcclSoft == 1.0f && r.v3Unsure == 1.5f && r.v3SceneCut == 0.2f ) );
