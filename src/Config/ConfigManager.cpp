@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -368,6 +369,13 @@ namespace gamescope::config
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
                 f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );
                 f.learned_static_guard = JGetBool( *pFrameGen, "learned_static_guard", f.learned_static_guard );
+                f.search_radius = std::clamp( JGetInt( *pFrameGen, "search_radius", f.search_radius ), 1, 12 );
+                f.search_radius_top = std::clamp( JGetInt( *pFrameGen, "search_radius_top", f.search_radius_top ), 1, 12 );
+                f.pyramid_min_side = std::clamp( JGetInt( *pFrameGen, "pyramid_min_side", f.pyramid_min_side ), 16, 256 );
+                {
+                    const float flPenalty = JGetFloat( *pFrameGen, "search_penalty", f.search_penalty );
+                    f.search_penalty = std::isfinite( flPenalty ) ? std::clamp( flPenalty, 0.0f, 255.0f ) : 0.5f;
+                }
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -859,6 +867,11 @@ namespace gamescope::config
             jFrameGen[ "learned_half" ] = fg.learned_half;
             jFrameGen[ "learned_zero_test" ] = fg.learned_zero_test;
             jFrameGen[ "learned_static_guard" ] = fg.learned_static_guard;
+            jFrameGen[ "search_radius" ] = fg.search_radius;
+            jFrameGen[ "search_radius_top" ] = fg.search_radius_top;
+            jFrameGen[ "pyramid_min_side" ] = fg.pyramid_min_side;
+            // Rounded to hundredths through a double (the overlay's 0.05 step), so 0.55f is stored as 0.55.
+            jFrameGen[ "search_penalty" ] = std::round( double( fg.search_penalty ) * 100.0 ) / 100.0;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();

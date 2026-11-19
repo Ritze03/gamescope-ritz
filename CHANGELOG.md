@@ -7,6 +7,12 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-19
+
+### Added
+- **Frame generation**: new expert settings for how far the motion search reaches
+  (search radius, coarsest-level radius, pyramid depth and search penalty).
+
 ## 2026-11-14
 
 ### Added

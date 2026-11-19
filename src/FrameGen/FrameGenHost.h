@@ -109,6 +109,18 @@ namespace fghost
 	constexpr int kUiBoxMaxTenths = 100;
 	constexpr int kUiBoxDefaultTenths = 25;
 
+	// Motion search reach (2026-11-19): the library's Settings::searchRadius / searchRadiusTop / pyramidMinSide /
+	// searchPenalty, with its defaults and full ranges. SetConfig() clamps to these; the penalty travels in hundredths.
+	constexpr int kSearchRadiusMin = 1;
+	constexpr int kSearchRadiusMax = 12;
+	constexpr int kSearchRadiusDefault = 2;
+	constexpr int kSearchRadiusTopDefault = 6;
+	constexpr int kPyramidMinSideMin = 16;
+	constexpr int kPyramidMinSideMax = 256;
+	constexpr int kPyramidMinSideDefault = 48;
+	constexpr float kSearchPenaltyMax = 255.0f;
+	constexpr float kSearchPenaltyDefault = 0.5f;
+
 	// What the user asked for. Off = nothing runs. Fixed = a multiplier of the
 	// game's rate (output saturates at the refresh rate, it never steps down).
 	// Target = aim at an output frame rate whatever the game does.
@@ -255,6 +267,14 @@ namespace fghost
 		bool learnedHalf = false;
 		bool learnedZeroTest = true;
 		bool learnedStaticGuard = false;
+		// Expert: motion search reach (the library's Settings::searchRadius / searchRadiusTop /
+		// pyramidMinSide / searchPenalty; V1 and V2, Learned ignores the radii). Clamped by SetConfig() to
+		// 1..12 / 1..12 / 16..256 / 0..255 (the penalty in hundredths). pyramidMinSide is structural: a change goes
+		// through the library's reconfigure(), like flowScale.
+		int searchRadius = kSearchRadiusDefault;
+		int searchRadiusTop = kSearchRadiusTopDefault;
+		int pyramidMinSide = kPyramidMinSideDefault;
+		float searchPenalty = kSearchPenaltyDefault;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

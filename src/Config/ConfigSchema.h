@@ -550,6 +550,16 @@ namespace gamescope::config
         bool learned_half = false;
         bool learned_zero_test = true;
         bool learned_static_guard = false;
+        // Expert: motion search reach (2026-11-19, the library's Settings::searchRadius / searchRadiusTop /
+        // pyramidMinSide / searchPenalty). Motion versions V1 and V2; Learned ignores the two radii and
+        // pyramid_min_side only changes its buffer layout. Clamped on load to the library's full ranges:
+        // radii 1..12, pyramid_min_side 16..256, search_penalty 0..255 (the overlay offers 0..4). Defaults are the
+        // library's own and change nothing. ADDITIVE: absent loads the defaults. pyramid_min_side is structural
+        // (the library re-creates its buffers); the other three apply live.
+        int search_radius = 2;
+        int search_radius_top = 6;
+        int pyramid_min_side = 48;
+        float search_penalty = 0.5f;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see
