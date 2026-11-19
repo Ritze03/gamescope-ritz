@@ -63,7 +63,9 @@ namespace gamescope
 		constexpr ui::Option kRelativeOptions[] = { { 0, "Shown frame" }, { 1, "Game frame" } };
 		constexpr ui::Option kWeightOptions[]   = { { 0, "Even" }, { 1, "Gaussian" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" }, { 3, "V3" } };
+		// Display order V1, V2, V3, Learned; the values stay the enum / kMotionKeys indices (a Choice maps a click to
+		// Option::nValue, not to the array position).
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 2, "Learned" } };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3" };
 		constexpr const char *kRelativeKeys[] = { "shown", "game" };
@@ -323,12 +325,12 @@ namespace gamescope
 			       "instead of falling back to the real frame spot by spot, and it is cheaper on "
 			       "the GPU. It works in every game format, HDR and 10-bit included; a GPU "
 			       "without the shader features it needs stays on V1 (the Status line says why). "
+			       "V3: most fluid; smears where it is unsure; costs about three times V1; its "
+			       "settings are Frame generation's V3 rows. "
 			       "Learned is an experimental neural-network estimator (several times V1's GPU "
 			       "time, always at Quality's resolution; see Frame generation's Motion version "
 			       "help); its net, precision, zero-motion test and static guard are Frame generation's "
 			       "Learned rows, this area has none of its own. "
-			       "V3: most fluid; smears where it is unsure; costs about three times V1; its "
-			       "settings are Frame generation's V3 rows. "
 			       "Switching shows real frames for an instant. Shown greyed out with Frame "
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )

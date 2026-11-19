@@ -71,7 +71,9 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" }, { 3, "V3" } };
+		// Display order V1, V2, V3, Learned; the values stay the enum / kMotionKeys indices (a Choice maps a click to
+		// Option::nValue, not to the array position).
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 2, "Learned" } };
 		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
 		constexpr ui::Option kLearnedNetOptions[] = {
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
@@ -507,6 +509,7 @@ namespace gamescope
 			       "says why). Switching shows real frames for an instant. Motion blur follows "
 			       "this and Quality unless you turn off its \"Use Frame generation's settings\" "
 			       "switch; then, while Motion blur is on, its own two settings are used instead. "
+			       "V3: most fluid; smears where it is unsure; costs about three times V1. "
 			       "Learned is an experimental, opt-in estimator: a small neural network finds the "
 			       "motion instead of V1's search, then V1 makes the picture. It costs several "
 			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms with e2v5, 0.6 ms "
@@ -514,7 +517,7 @@ namespace gamescope
 			       "Quality row's Performance is ignored. Static HUD text over moving scenery can "
 			       "still get a little torn; the Zero-motion test below fixes most of it. Two "
 			       "identical frames are left alone. If it cannot run the Status line says why and "
-			       "V1 runs. V3: most fluid; smears where it is unsure; costs about three times V1." )
+			       "V1 runs." )
 			.Default( 0 )
 			.Keywords( "frame generation motion version v1 v2 v3 learned neural network ml net morph interpolation algorithm experimental fluid smear" )
 			.DisabledUnless( On, "frame generation is off" );

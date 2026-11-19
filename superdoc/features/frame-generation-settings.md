@@ -129,7 +129,8 @@ frames. Adds delay, so it is not suited to twitch shooters.*), **Multiplier** (2
 6x / 7x / 8x / Target fps; it sets `mode`, and `multiplier` for a fixed choice, and is keyed to
 `framegen.mode` -- the Shell's overridden-dot follows one key per row), **Target fps** (a slider, 0
 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag into 1..29 snaps to 0
-or 30), **Priority** (Low latency / Smoothness), **Motion version** (V1 / V2 / Learned), **Quality**.
+or 30), **Priority** (Low latency / Smoothness), **Motion version** (V1 / V2 / V3 / Learned; displayed in that order, the option values stay the
+enum and `kMotionKeys` indices 0 / 1 / 3 / 2, so `overlay_e2_set` still means 2 = Learned, 3 = V3), **Quality**.
 **Artifact protection** group: **Artifact safety** (Off / Very low / Low / Default / High),
 **Static HUD protection**, **UI protection** (Off / Crosshair / Crosshair V2 / Whole screen),
 **Crosshair box size** (a slider, `2.5% · 24 px`, disabled while UI protection is Off). Column 1,

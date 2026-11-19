@@ -23,6 +23,7 @@ All notable user-facing changes, newest first. Categories:
 ### Fixed
 - **Frame generation**: V3 no longer shows repeated frames on fast motion; its scene
   cut detection is now off by default.
+- **Frame generation**: the Motion version options are now ordered V1, V2, V3, Learned.
 
 ## 2026-11-14
 
