@@ -71,7 +71,7 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" }, { 3, "V3" } };
 		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
 		constexpr ui::Option kLearnedNetOptions[] = {
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
@@ -104,7 +104,7 @@ namespace gamescope
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned" };
+		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3" };
 		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" };
 		constexpr fghost::LearnedNet kLearnedNets[] = {
 			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
@@ -208,7 +208,7 @@ namespace gamescope
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
-			c.motion = (fghost::Motion)IndexOf( f.motion_version, kMotionKeys, 3, 0 );   // the index IS the enum value
+			c.motion = (fghost::Motion)IndexOf( f.motion_version, kMotionKeys, 4, 0 );   // the index IS the enum value
 			c.learnedNet = kLearnedNets[ IndexOf( f.learned_net, kLearnedNetKeys, 10, 0 ) ];
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
@@ -217,6 +217,10 @@ namespace gamescope
 			c.searchRadiusTop = f.search_radius_top;
 			c.pyramidMinSide = f.pyramid_min_side;
 			c.searchPenalty = f.search_penalty;
+			c.v3Smear = f.v3_smear;   // ... and the four V3 values
+			c.v3OcclSoft = f.v3_occl_soft;
+			c.v3Unsure = f.v3_unsure;
+			c.v3SceneCut = f.v3_scene_cut;
 			return c;
 		}
 
@@ -275,6 +279,29 @@ namespace gamescope
 			return ( bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version ) == "learned";
 		}
 
+		// The same for Motion version 3 (2026-11-19): its four rows are usable only while V3 is what the interpolator
+		// runs (and something is on), and the rows that only drive settings V3 ignores (the search radii, the pyramid
+		// side, the search penalty, Static HUD protection) are greyed while it is.
+		bool EffectiveMotionIsV3()
+		{
+			const config::Settings &st = s_Settings;
+			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
+			return ( bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version ) == "v3";
+		}
+
+		bool V3RowsUsable()
+		{
+			EnsureConfigLoaded();
+			const config::Settings &st = s_Settings;
+			return ( st.framegen.enabled || st.motion_blur.enabled ) && EffectiveMotionIsV3();
+		}
+
+		// Static HUD protection sets only hudBonus, which V3 ignores.
+		bool HudRowUsable()
+		{
+			return On() && !EffectiveMotionIsV3();
+		}
+
 		// Expert reach rows: they matter while the interpolator runs (Frame generation or Motion blur on); the search
 		// radii not under Learned motion, which has no search.
 		bool ReachRowsUsable()
@@ -285,7 +312,14 @@ namespace gamescope
 
 		bool RadiusRowsUsable()
 		{
-			return ReachRowsUsable() && !EffectiveMotionIsLearned();
+			return ReachRowsUsable() && !EffectiveMotionIsLearned() && !EffectiveMotionIsV3();
+		}
+
+		// Pyramid side and penalty: every version but V3 (V3 builds its own pyramid and ignores both; a pyramid
+		// change would still rebuild the buffers without changing V3's picture, so the row is greyed).
+		bool PenaltyRowsUsable()
+		{
+			return ReachRowsUsable() && !EffectiveMotionIsV3();
 		}
 
 		bool UiOn()
@@ -466,8 +500,8 @@ namespace gamescope
 
 		a.Choice( "framegen.motion_version", "Motion version",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 3, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 4, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kMotionOptions, std::size( kMotionOptions ) )
 			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
 			       "the picture along the motion and stretches it over gaps instead of falling "
@@ -484,9 +518,9 @@ namespace gamescope
 			       "Quality row's Performance is ignored. Static HUD text over moving scenery can "
 			       "still get a little torn; the Zero-motion test below fixes most of it. Two "
 			       "identical frames are left alone. If it cannot run the Status line says why and "
-			       "V1 runs." )
+			       "V1 runs. V3: most fluid; smears where it is unsure; costs about three times V1." )
 			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 learned neural network ml net morph interpolation algorithm experimental" )
+			.Keywords( "frame generation motion version v1 v2 v3 learned neural network ml net morph interpolation algorithm experimental fluid smear" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.quality", "Quality",
@@ -569,6 +603,79 @@ namespace gamescope
 			.Keywords( "frame generation learned static guard still blend time mix clean experimental" )
 			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
 
+		a.Group( "Motion version 3" );
+		a.GroupColumn( 1 );
+
+		a.Slider( "framegen.v3_smear", "Smear",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_smear; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_smear = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 1.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How strongly Motion version 3 smears the picture along the motion where it is "
+			       "unsure. 0 does not smear at all: sharper, but a wrong spot then shows as a sharp ghost. "
+			       "Only used while Motion version is V3." )
+			.Range( 0.0f, 1.0f ).Step( 0.05f )
+			.Default( 0.35f )
+			.Keywords( "frame generation v3 smear blur unsure motion ghost sharp" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_occl_soft", "Occlusion softness",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_occl_soft; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_occl_soft = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How soft Motion version 3's decision is about areas that one of the two real "
+			       "frames hides (behind a moving object). Higher is a softer, more one-sided "
+			       "transition at the edge of such an area. Only used while Motion version is V3." )
+			.Range( 0.25f, 4.0f ).Step( 0.05f )
+			.Default( 1.0f )
+			.Keywords( "frame generation v3 occlusion softness hidden edge disocclusion" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_unsure", "Unsure sensitivity",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_unsure; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_unsure = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How readily Motion version 3 counts a spot as unsure. Higher trusts worse "
+			       "matches: less smearing, more risk of wrong spots. Only used while Motion "
+			       "version is V3." )
+			.Range( 0.25f, 4.0f ).Step( 0.05f )
+			.Default( 1.0f )
+			.Keywords( "frame generation v3 unsure sensitivity trust match smear" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_scene_cut", "Scene cut threshold",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_scene_cut; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_scene_cut = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How different two real frames must look (by their brightness and colour "
+			       "statistics) before Motion version 3 treats the pair as a scene cut and shows the "
+			       "nearer real frame instead of generating one. Lower cuts earlier. 0 never "
+			       "detects a scene cut. Only used while Motion version is V3." )
+			.Range( 0.0f, 4.0f ).Step( 0.05f )
+			.Default( 0.45f )
+			.ZeroMeans( "Never" )
+			.Keywords( "frame generation v3 scene cut threshold histogram cut transition" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
 		a.Group( "Pausing and limits" );
 		a.GroupColumn( 1 );
 
@@ -639,7 +746,7 @@ namespace gamescope
 			       "can hold back genuinely slow motion near the HUD." )
 			.Default( 2 )
 			.Keywords( "frame generation static hud protection ui wobble see-through" )
-			.DisabledUnless( On, "frame generation is off" );
+			.DisabledUnless( HudRowUsable, "frame generation is off, or Motion version is V3 (it does not use this)" );
 
 		a.Choice( "framegen.ui_protection", "UI protection",
 			ui::AnyBind::Of<int>(
@@ -716,11 +823,11 @@ namespace gamescope
 			       "frames. Above 6 a wider, slower search runs. Large values cost GPU time and can "
 			       "make frame generation lower its output rate: 12 / 12 / 16 at 1080p measured 1.29 ms "
 			       "per game frame in V1 against 0.29 ms at the defaults (this fork's V1 budget at 1080p "
-			       "is 0.33 ms). Motion versions V1 and V2; Learned motion ignores it." )
+			       "is 0.33 ms). Motion versions V1 and V2; Learned motion and V3 ignore it." )
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 2 )
 			.Keywords( "frame generation expert motion search radius reach fast motion vectors v1 v2" )
-			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned)" );
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned or V3)" );
 
 		a.Slider( "framegen.search_radius_top", "Search radius (coarsest level)",
 			ui::AnyBind::Of<int>(
@@ -731,11 +838,11 @@ namespace gamescope
 			       "Defaults 2 and 6 reach about 250 pixels between two real frames at 1080p. Above 6 "
 			       "the wider search runs; large values cost GPU time and can make frame generation "
 			       "lower its output rate (see Search radius). Motion versions V1 and V2; Learned "
-			       "motion ignores it." )
+			       "motion and V3 ignore it." )
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 6 )
 			.Keywords( "frame generation expert motion search radius coarsest top level reach long vectors v1 v2" )
-			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned)" );
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned or V3)" );
 
 		a.Choice( "framegen.pyramid_min_side", "Pyramid smallest level",
 			ui::AnyBind::Of<int>(
@@ -748,10 +855,10 @@ namespace gamescope
 			       "match on the coarsest level. Changing it re-creates the frame generation buffers and "
 			       "pauses the picture for an instant. Large reach costs GPU time and can make frame "
 			       "generation lower its output rate (see Search radius). Applies to every motion "
-			       "version." )
+			       "version except V3, which builds its own." )
 			.Default( 48 )
 			.Keywords( "frame generation expert motion search pyramid levels smallest minimum side reach long vectors" )
-			.DisabledUnless( ReachRowsUsable, "frame generation and motion blur are off" );
+			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3)" );
 
 		a.Slider( "framegen.search_penalty", "Search penalty",
 			ui::AnyBind::Of<float>(
@@ -764,10 +871,10 @@ namespace gamescope
 				} ) )
 			.Help( "What the motion search pays for each step away from its guess. Higher gives "
 			       "steadier motion on flat or repeating surfaces, lower follows small fast detail "
-			       "more freely. 0 to 4 here; a profile file may hold up to 255. Motion versions V1 and V2." )
+			       "more freely. 0 to 4 here; a profile file may hold up to 255. Motion versions V1, V2 and Learned; V3 ignores it." )
 			.Range( 0.0f, 4.0f ).Step( 0.05f )
 			.Default( 0.5f )
 			.Keywords( "frame generation expert motion search penalty lambda steady flat repetitive detail v1 v2" )
-			.DisabledUnless( ReachRowsUsable, "frame generation and motion blur are off" );
+			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3)" );
 	}
 }

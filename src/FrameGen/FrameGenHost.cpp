@@ -8,6 +8,7 @@
 #include "FrameGenHost.h"
 #include "FrameGenFormat.h"
 #include "FrameGenReach.h"
+#include "FrameGenV3.h"
 
 #include <algorithm>
 #include <atomic>
@@ -41,7 +42,7 @@ namespace fghost
 		// 24-25 UI protection, 26 enabled, 27 limit to GPU speed, 28-29 motion version, 30 safety's third bit (VeryLow = 4 needs it; bits 6-7 hold the low two), 31 pause while cursor visible. The
 		// crosshair box size is its own word, g_uUiBox, and Learned motion's runtime settings (net,
 		// precision, zero-motion test, static guard) are another, g_uLearned (the main word is full), and the
-		// motion search reach (radii, pyramid side, penalty) a fourth, g_uReach.
+		// motion search reach (radii, pyramid side, penalty) a fourth, g_uReach, and Motion version 3's four values a fifth, 64-bit one, g_ulV3.
 		constexpr int kMinTargetFps = 30;
 		constexpr int kMaxTargetFps = 1000;
 
@@ -112,10 +113,11 @@ namespace fghost
 		};
 		BoxPending_t g_BoxPending;
 
-		Config Unpack( uint32_t u, uint32_t uBox, uint32_t uLearned, uint32_t uReach )
+		Config Unpack( uint32_t u, uint32_t uBox, uint32_t uLearned, uint32_t uReach, uint64_t ulV3 )
 		{
 			Config c;
 			UnpackReach( uReach, &c );
+			UnpackV3( ulV3, &c );
 			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
 			c.multiplier = int( u & 0xFu );
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
@@ -130,7 +132,7 @@ namespace fghost
 			c.gpuLimit = ( ( u >> 27 ) & 1u ) != 0;
 			c.pauseWhenCursorVisible = ( ( u >> 31 ) & 1u ) != 0;
 			c.motion = Motion( ( u >> 28 ) & 0x3u );
-			if ( c.motion > Motion::Learned )
+			if ( c.motion > Motion::V3 )
 				c.motion = Motion::V1;
 			{
 				// An out-of-range value (cannot happen from PackLearned) falls back to the default.
@@ -146,11 +148,12 @@ namespace fghost
 		std::atomic<uint32_t> g_uConfig{ Pack( Config{} ) };
 		std::atomic<uint32_t> g_uLearned{ PackLearned( Config{} ) };
 		std::atomic<uint32_t> g_uReach{ PackReach( Config{} ) };
+		std::atomic<uint64_t> g_ulV3{ PackV3( Config{} ) };
 
 		// The motion-blur config, its own word (the frame generation word is full):
 		// bits 0-3 samples, 4-10 amount percent, 11 relative (1 = game), 12 weights
 		// (1 = gaussian), 13 enabled, 14 own interpolator settings, 15-16 own motion version
-		// (1 = V2, 2 = Learned), 17 own quality (1 = performance), 18 pause while cursor visible
+		// (1 = V2, 2 = Learned, 3 = V3), 17 own quality (1 = performance), 18 pause while cursor visible
 		// (read by steamcompmgr only; not in the library-config key). Kept apart from g_uConfig so a blur edit never
 		// reconfigures frame generation and vice versa; a reader that sees one
 		// updated and not the other just gets the previous other half for one frame.
@@ -183,7 +186,7 @@ namespace fghost
 			b.enabled = ( u & kBlurEnabledBit ) != 0;
 			b.useOwnInterp = ( u & kBlurOwnBit ) != 0;
 			b.motion = Motion( ( u >> 15 ) & 0x3u );
-			if ( b.motion > Motion::Learned )
+			if ( b.motion > Motion::V3 )
 				b.motion = Motion::V1;
 			b.quality = Quality( ( u >> 17 ) & 1u );
 			b.pauseWhenCursorVisible = ( u & kBlurPauseBit ) != 0;
@@ -407,6 +410,9 @@ namespace fghost
 			// The reach word (PackReach) last applied: the 64-bit key above has no free bit left, so the four reach values
 			// are compared on their own. 0 = none applied (a real reach word is never 0: the radii start at 1).
 			uint32_t uAppliedReach = 0;
+			// The V3 word (PackV3) last applied, for the same reason. 0 = none applied (a real V3 word is never 0:
+			// the occlusion softness and unsure sensitivity start at 25 hundredths).
+			uint64_t ulAppliedV3 = 0;
 			// A failed init/reconfigure is not retried until the size or the
 			// structural setting changes (or FG is switched off and on): init
 			// builds pipelines, so retrying per frame would be a stutter machine.
@@ -511,9 +517,10 @@ namespace fghost
 			// The deep UI-protection history follows the pacer's depth (SyncUiHistory);
 			// a preset change must not reset it to the default.
 			s.uiHistory = nUiHistory;
-			// Motion version: a request; ResolveMotion() drops V2 / Learned to V1 where the library refuses it.
+			// Motion version: a request; ResolveMotion() drops V2 / Learned / V3 to V1 where the library refuses it.
 			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2
-				: c.motion == Motion::Learned ? framegen::MotionVersion::Learned : framegen::MotionVersion::V1;
+				: c.motion == Motion::Learned ? framegen::MotionVersion::Learned
+				: c.motion == Motion::V3 ? framegen::MotionVersion::V3 : framegen::MotionVersion::V1;
 			// Learned's net, activation precision, zero-motion test and static guard (every other
 			// version ignores all four). The host enum has the library's values.
 			switch ( c.learnedNet )
@@ -542,6 +549,14 @@ namespace fghost
 			s.searchRadiusTop = uint32_t( std::clamp( c.searchRadiusTop, kSearchRadiusMin, kSearchRadiusMax ) );
 			s.pyramidMinSide = uint32_t( std::clamp( c.pyramidMinSide, kPyramidMinSideMin, kPyramidMinSideMax ) );
 			s.searchPenalty = ReachIsFinite( c.searchPenalty ) ? std::clamp( c.searchPenalty, 0.0f, kSearchPenaltyMax ) : kSearchPenaltyDefault;
+			// Motion version 3's four values (V3 only; every other version ignores them). Always from the Frame
+			// generation Config, also when only Motion blur is on (one interpolator). All runtime. Clamped here too
+			// (bit-pattern finite test, the project builds with -ffast-math); the library refuses an out-of-range
+			// value with a generic reason. v3ColourWindow / v3DetailSplit stay at the library defaults (not exposed).
+			s.v3Smear = ReachIsFinite( c.v3Smear ) ? std::clamp( c.v3Smear, kV3SmearMin, kV3SmearMax ) : kV3SmearDefault;
+			s.v3OcclSoft = ReachIsFinite( c.v3OcclSoft ) ? std::clamp( c.v3OcclSoft, kV3OcclSoftMin, kV3OcclSoftMax ) : kV3OcclSoftDefault;
+			s.v3Unsure = ReachIsFinite( c.v3Unsure ) ? std::clamp( c.v3Unsure, kV3UnsureMin, kV3UnsureMax ) : kV3UnsureDefault;
+			s.v3SceneCut = ReachIsFinite( c.v3SceneCut ) ? std::clamp( c.v3SceneCut, kV3SceneCutMin, kV3SceneCutMax ) : kV3SceneCutDefault;
 			return s;
 		}
 
@@ -556,15 +571,18 @@ namespace fghost
 		framegen::Settings ResolveMotion( const Host_t &H, framegen::Settings s )
 		{
 			const bool bLearned = s.motionVersion == framegen::MotionVersion::Learned;
+			const bool bV3 = s.motionVersion == framegen::MotionVersion::V3;
 			const char *pszWhy = nullptr;
 			if ( s.motionVersion != framegen::MotionVersion::V1 )
 			{
 				framegen::Settings sCheck = s;
 				if ( bLearned )
 					sCheck.flowScale = 2;
+				// V3 honours flowScale (1, 2, 4), so it is checked with the Quality row's own value, which
+				// EnsureReady() leaves alone for V3.
 				pszWhy = H.interp.settingsError( sCheck );
 			}
-			const char *pszName = bLearned ? "Learned motion" : "Motion version 2";
+			const char *pszName = bLearned ? "Learned motion" : bV3 ? "Motion version 3" : "Motion version 2";
 			if ( pszWhy )
 				s.motionVersion = framegen::MotionVersion::V1;
 			const char *pszOld = g_pszMotionNote.exchange( pszWhy ? pszWhy : "", std::memory_order_relaxed );
@@ -635,6 +653,7 @@ namespace fghost
 			H.bProfileOpen = false;
 			H.uAppliedConfig = 0;
 			H.uAppliedReach = 0;
+			H.ulAppliedV3 = 0;
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
 			g_flLastPairGpuMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastEstimateMs.store( -1.0f, std::memory_order_relaxed );
@@ -740,6 +759,7 @@ namespace fghost
 				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x7Fu ) << 56 );
 
 			const uint32_t uReach = PackReach( c );
+			const uint64_t ulV3 = PackV3( c );
 
 			if ( !H.bLive )
 			{
@@ -786,6 +806,7 @@ namespace fghost
 				const bool bWantV2 = want.motionVersion != framegen::MotionVersion::V1;
 				H.uAppliedConfig = bWantV2 ? ~uLibraryConfig : uLibraryConfig;
 				H.uAppliedReach = uReach;   // init() took want's reach values (info.settings = want)
+				H.ulAppliedV3 = ulV3;       // ... and its V3 values
 				H.bProfiling = g_device.supportsTimestamps() && H.interp.setProfiling( true );
 				fg_log.infof( "frame generation ready: %ux%u, flowScale %u, GPU timing %s, format %s%s",
 					w, h, want.flowScale, H.bProfiling ? "on" : "n/a",
@@ -822,7 +843,7 @@ namespace fghost
 				// applies a pending change.
 			}
 
-			if ( uLibraryConfig != H.uAppliedConfig || uReach != H.uAppliedReach )
+			if ( uLibraryConfig != H.uAppliedConfig || uReach != H.uAppliedReach || ulV3 != H.ulAppliedV3 )
 			{
 				want = ResolveMotion( H, want );
 				// V2 always estimates at the library's own flowScale 2 / sub-pixel (its
@@ -834,7 +855,10 @@ namespace fghost
 				// for a V1 (Performance) -> V2 switch.
 				// Learned the same, for another reason: its nets were trained at flowScale 2 and the
 				// library refuses any other (the Quality row's Performance is ignored while it runs).
-				if ( want.motionVersion != framegen::MotionVersion::V1 )
+				// V3 is the exception: it honours flowScale (1, 2, 4), so it follows the Quality row like V1
+				// (Quality 2, Performance 4: 0.89 ms against 0.44 ms per real pair at 1080p) and keeps the
+				// row's sub-pixel value, which it ignores.
+				if ( want.motionVersion != framegen::MotionVersion::V1 && want.motionVersion != framegen::MotionVersion::V3 )
 				{
 					want.flowScale = 2;
 					want.subpixel = true;
@@ -870,6 +894,8 @@ namespace fghost
 					{
 						if ( want.motionVersion == framegen::MotionVersion::V2 )
 							g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
+						else if ( want.motionVersion == framegen::MotionVersion::V3 )
+							g_pszMotionNote.store( "the library could not create Motion version 3 (its pipelines or buffers)", std::memory_order_relaxed );
 						else if ( want.motionVersion == framegen::MotionVersion::Learned )
 							g_pszMotionNote.store( "the library could not create Learned motion (its pipelines or buffers)", std::memory_order_relaxed );
 						if ( !H.bUiSetFailLogged )
@@ -891,6 +917,7 @@ namespace fghost
 				}
 				H.uAppliedConfig = uLibraryConfig;
 				H.uAppliedReach = uReach;
+				H.ulAppliedV3 = ulV3;
 			}
 			return true;
 		}
@@ -965,8 +992,16 @@ namespace fghost
 			{
 				const char *pszName = names[i];
 				const bool bObserve = !strcmp( pszName, "ui_detect" ) || !strcmp( pszName, "ui_inpaint" );
+				// Motion version 3's synth is `project` (when it has interior samples) then `synth` / `blur synth`; its
+				// first stamp of a group starts a synth, and a blurred output is the one `blur synth` stamp
+				// (counted as blurSamples synths below, like V1's `blur lookup`). Without this a V3 synth would be
+				// counted as estimate time, idle gap included (15 ms against 0.9 measured; found 2026-11-19).
+				const bool bV3Project = !strcmp( pszName, "project" );
+				const bool bV3Synth = ( !strcmp( pszName, "synth" ) || !strcmp( pszName, "blur synth" ) )
+					&& strcmp( pszPrev, "project" ) != 0;
+				const bool bV3BlurSynth = !strcmp( pszName, "blur synth" );
 				const bool bSynthStart = !bObserve
-					&& ( !strcmp( pszName, "lookup" ) || !strcmp( pszName, "blur lookup" )
+					&& ( !strcmp( pszName, "lookup" ) || !strcmp( pszName, "blur lookup" ) || bV3Project || bV3Synth
 						|| ( !strcmp( pszName, "mismatch" ) && strcmp( pszPrev, "lookup" ) != 0 ) );
 				const bool bLuma = !strcmp( pszName, "luma" );
 				const bool bAfterObserve = !strcmp( pszPrev, "ui_inpaint" );
@@ -993,6 +1028,8 @@ namespace fghost
 					if ( bAfterObserve && !H.bEstContig )
 						continue;
 				}
+				if ( bV3BlurSynth )
+					nBlurOutputs++;
 				if ( bSynthStart )
 				{
 					nSynth++;
@@ -1376,6 +1413,7 @@ namespace fghost
 		g_uUiBox.store( PackBox( cfg ), std::memory_order_relaxed );
 		g_uLearned.store( PackLearned( cfg ), std::memory_order_relaxed );
 		g_uReach.store( PackReach( cfg ), std::memory_order_relaxed );
+		g_ulV3.store( PackV3( cfg ), std::memory_order_relaxed );
 		UpdateGate();
 	}
 
@@ -1436,7 +1474,7 @@ namespace fghost
 
 	Config GetConfig()
 	{
-		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ), g_uLearned.load( std::memory_order_relaxed ), g_uReach.load( std::memory_order_relaxed ) );
+		return Unpack( g_uConfig.load( std::memory_order_relaxed ), g_uUiBox.load( std::memory_order_relaxed ), g_uLearned.load( std::memory_order_relaxed ), g_uReach.load( std::memory_order_relaxed ), g_ulV3.load( std::memory_order_relaxed ) );
 	}
 
 	bool Enabled()
@@ -1543,7 +1581,7 @@ namespace fghost
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
 			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 0x3u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
 		const uint32_t uPackedLearned = g_uLearned.load( std::memory_order_relaxed );
-		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned, g_uReach.load( std::memory_order_relaxed ) );
+		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned, g_uReach.load( std::memory_order_relaxed ), g_ulV3.load( std::memory_order_relaxed ) );
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// Frame generation, motion blur and the lag spike buffer all off (or never on): release

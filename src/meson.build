@@ -122,7 +122,8 @@ spirv_shaders = glsl_generator.process(shader_src)
 # validated against it). `#include "common.glsl"` / `"ui_common.glsl"` /
 # `"blur_common.glsl"` (the include of the three blur_* shaders; not a shader of its
 # own, and gpu/blendbench.comp is test-only and deliberately not built) resolve
-# relative to each .comp, so no -I is needed; the depfile lists the includes, so
+# relative to each .comp (V3's v3_common / v3_format / v3_weights / v3_maps / v3_est / v3_search / v3_static
+# .glsl included), so no -I is needed; the depfile lists the includes, so
 # editing either re-runs glslang for every shader that uses it.
 framegen_gpu_dir = meson.project_source_root() / 'subprojects/FrameGen/gpu'
 framegen_has_depfile = run_command(glsl_compiler, ['--version', '--depfile', 'dummy.dep'], check: false).returncode() == 0
@@ -144,7 +145,11 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
                 'ml_zero', 'ml_guard',
                 # Round 4: the colour variant's chroma planes (ml_planes, also per-format below) and the
                 # learned-features variant's feature pass
-                'ml_planes', 'ml_feat']
+                'ml_planes', 'ml_feat',
+                # Motion version 3 (2026-11-19; library c2644af): 14 plain compiles, no define. v3_planes and
+                # v3_synth also get per-format variants below. V3 reuses V2's v2_static above.
+                'v3_synth', 'v3_planes', 'v3_pyr', 'v3_hist', 'v3_search', 'v3_search_top', 'v3_dense', 'v3_wide',
+                'v3_stats', 'v3_occl', 'v3_fill', 'v3_project', 'v3_enclose', 'v3_decide']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
   if framegen_has_depfile
@@ -226,7 +231,9 @@ framegen_colour_shaders = ['luma', 'error', 'resolve', 'fallback', 'ui_detect', 
                            'v2_morph', 'v2_morph_s', 'v2_qmorph', 'v2_qmorph_s',
                            # Learned's duplicate-frame test and static guard (the net and the zero test read
                            # the luma), and the colour variant's chroma planes
-                           'ml_dup', 'ml_guard', 'ml_planes']
+                           'ml_dup', 'ml_guard', 'ml_planes',
+                           # Motion version 3's two colour-reading passes (the rest read V3's own planes)
+                           'v3_planes', 'v3_synth']
 foreach fmt : ['rgb10', 'f16']
   foreach name : framegen_colour_shaders
     fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '-DFG_FORMAT_' + fmt.to_upper() + '=1',

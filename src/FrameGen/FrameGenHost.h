@@ -92,7 +92,9 @@ namespace fghost
 	// RenderStatus::motionNote says why. Its runtime settings are Config::learnedNet /
 	// learnedHalf / learnedZeroTest / learnedStaticGuard (Motion blur's own Motion version
 	// borrows them).
-	enum class Motion : uint8_t { V1, V2, Learned };
+	// V3 (2026-11-19): the library's MotionVersion::V3, a fourth value of the same two bits (its settings:
+	// Config::v3*; see superdoc/features/frame-generation-motion-v3.md).
+	enum class Motion : uint8_t { V1, V2, Learned, V3 };
 
 	// Learned's weights, with the values of framegen::LearnedNet (round 3 of Learned, 2026-10-27):
 	// E2v5 = the default (width 24, e2v4 fine-tuned further), E1v5 = the small net (width 12, about
@@ -120,6 +122,13 @@ namespace fghost
 	constexpr int kPyramidMinSideDefault = 48;
 	constexpr float kSearchPenaltyMax = 255.0f;
 	constexpr float kSearchPenaltyDefault = 0.5f;
+
+	// Motion version 3 (2026-11-19): the library's Settings::v3Smear / v3OcclSoft / v3Unsure / v3SceneCut, with its
+	// defaults and full ranges. SetConfig() clamps to these; they travel in hundredths (FrameGenV3.h).
+	constexpr float kV3SmearMin = 0.0f, kV3SmearMax = 1.0f, kV3SmearDefault = 0.35f;
+	constexpr float kV3OcclSoftMin = 0.25f, kV3OcclSoftMax = 4.0f, kV3OcclSoftDefault = 1.0f;
+	constexpr float kV3UnsureMin = 0.25f, kV3UnsureMax = 4.0f, kV3UnsureDefault = 1.0f;
+	constexpr float kV3SceneCutMin = 0.0f, kV3SceneCutMax = 4.0f, kV3SceneCutDefault = 0.45f;   // 0 = never a scene cut
 
 	// What the user asked for. Off = nothing runs. Fixed = a multiplier of the
 	// game's rate (output saturates at the refresh rate, it never steps down).
@@ -275,6 +284,13 @@ namespace fghost
 		int searchRadiusTop = kSearchRadiusTopDefault;
 		int pyramidMinSide = kPyramidMinSideDefault;
 		float searchPenalty = kSearchPenaltyDefault;
+		// Motion::V3 only (every other version ignores all four; they apply live, no re-creation of buffers):
+		// how strongly unsure areas are smeared along the motion, the softness of the hidden-area decision, the
+		// sensitivity of the "unsure" measure, and the histogram distance above which a pair is a scene cut.
+		float v3Smear = kV3SmearDefault;
+		float v3OcclSoft = kV3OcclSoftDefault;
+		float v3Unsure = kV3UnsureDefault;
+		float v3SceneCut = kV3SceneCutDefault;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

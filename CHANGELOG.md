@@ -12,6 +12,9 @@ All notable user-facing changes, newest first. Categories:
 ### Added
 - **Frame generation**: new expert settings for how far the motion search reaches
   (search radius, coarsest-level radius, pyramid depth and search penalty).
+- **Frame generation**: new motion version V3, the most fluid one, also for Motion blur,
+  with its own settings (smear, occlusion softness, unsure sensitivity, scene cut
+  threshold).
 
 ## 2026-11-14
 

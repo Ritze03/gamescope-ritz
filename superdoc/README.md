@@ -80,6 +80,7 @@ indented under it.
   - [UI protection (Crosshair box, Crosshair V2)](features/frame-generation-ui-protection.md)
   - [Motion version 2](features/frame-generation-motion-v2.md)
   - [Learned motion](features/frame-generation-learned.md)
+  - [Motion version 3](features/frame-generation-motion-v3.md)
   - [Pass-through, costs, limitations, build and testing](features/frame-generation-limits.md)
 - [Motion blur](features/motion-blur.md) — interpolation-based blur, with or without frame
   generation; the shared-timeline composition model.
