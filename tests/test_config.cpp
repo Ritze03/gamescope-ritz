@@ -4136,12 +4136,18 @@ TEST_CASE( "framegen: motion search reach keys default, round-trip and clamp on 
     REQUIRE( l.framegen.pyramid_min_side == 256 );
     REQUIRE( l.framegen.search_penalty == 255.0f );
 
-    // A value of the wrong type keeps the default.
+}
+
+// A reach value of the wrong type keeps the default.
+TEST_CASE( "framegen: motion search reach keys of the wrong type keep the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
     std::ofstream( ProfilePath( "T" ) ) << R"({
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "search_radius": "wide", "search_penalty": null, "pyramid_min_side": 64 }
     })";
-    l = LoadSections();
+    const Settings l = LoadSections();
     REQUIRE( l.framegen.search_radius == 2 );
     REQUIRE( l.framegen.search_penalty == 0.5f );
     REQUIRE( l.framegen.pyramid_min_side == 64 );

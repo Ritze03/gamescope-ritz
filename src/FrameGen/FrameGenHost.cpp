@@ -541,7 +541,7 @@ namespace fghost
 			s.searchRadius = uint32_t( std::clamp( c.searchRadius, kSearchRadiusMin, kSearchRadiusMax ) );
 			s.searchRadiusTop = uint32_t( std::clamp( c.searchRadiusTop, kSearchRadiusMin, kSearchRadiusMax ) );
 			s.pyramidMinSide = uint32_t( std::clamp( c.pyramidMinSide, kPyramidMinSideMin, kPyramidMinSideMax ) );
-			s.searchPenalty = std::isfinite( c.searchPenalty ) ? std::clamp( c.searchPenalty, 0.0f, kSearchPenaltyMax ) : kSearchPenaltyDefault;
+			s.searchPenalty = ReachIsFinite( c.searchPenalty ) ? std::clamp( c.searchPenalty, 0.0f, kSearchPenaltyMax ) : kSearchPenaltyDefault;
 			return s;
 		}
 
@@ -890,6 +890,7 @@ namespace fghost
 					InvalidateOutputs( H );
 				}
 				H.uAppliedConfig = uLibraryConfig;
+				H.uAppliedReach = uReach;
 			}
 			return true;
 		}

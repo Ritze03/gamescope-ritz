@@ -62,6 +62,8 @@ TEST_CASE( "framegen reach: out-of-range values clamp, non-finite falls back to 
 	REQUIRE( RoundTrip( c ).searchPenalty == 0.5f );
 	c.searchPenalty = std::numeric_limits<float>::infinity();
 	REQUIRE( RoundTrip( c ).searchPenalty == 0.5f );
+	c.searchPenalty = -std::numeric_limits<float>::infinity();
+	REQUIRE( RoundTrip( c ).searchPenalty == 0.5f );
 }
 
 TEST_CASE( "framegen reach: a word with a field out of range unpacks to the defaults", "[framegen_reach]" )

@@ -374,7 +374,11 @@ namespace gamescope::config
                 f.pyramid_min_side = std::clamp( JGetInt( *pFrameGen, "pyramid_min_side", f.pyramid_min_side ), 16, 256 );
                 {
                     const float flPenalty = JGetFloat( *pFrameGen, "search_penalty", f.search_penalty );
-                    f.search_penalty = std::isfinite( flPenalty ) ? std::clamp( flPenalty, 0.0f, 255.0f ) : 0.5f;
+                    // Bit test, not std::isfinite(): the project builds with -ffast-math, which folds that away.
+                    uint32_t uBits;
+                    std::memcpy( &uBits, &flPenalty, sizeof uBits );
+                    const bool bFinite = ( uBits & 0x7F800000u ) != 0x7F800000u;
+                    f.search_penalty = bFinite ? std::clamp( flPenalty, 0.0f, 255.0f ) : 0.5f;
                 }
             }
 

@@ -13,17 +13,26 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 #include "FrameGenHost.h"
 
 namespace fghost
 {
+	// std::isfinite() is folded to true under the project's -ffast-math, so NaN / inf are told by their bit pattern.
+	inline bool ReachIsFinite( float f )
+	{
+		uint32_t u;
+		std::memcpy( &u, &f, sizeof u );
+		return ( u & 0x7F800000u ) != 0x7F800000u;
+	}
+
 	inline uint32_t PackReach( const Config &c )
 	{
 		const uint32_t uR = uint32_t( std::clamp( c.searchRadius, kSearchRadiusMin, kSearchRadiusMax ) );
 		const uint32_t uRt = uint32_t( std::clamp( c.searchRadiusTop, kSearchRadiusMin, kSearchRadiusMax ) );
 		const uint32_t uPyr = uint32_t( std::clamp( c.pyramidMinSide, kPyramidMinSideMin, kPyramidMinSideMax ) );
-		const float flPen = std::isfinite( c.searchPenalty )
+		const float flPen = ReachIsFinite( c.searchPenalty )
 			? std::clamp( c.searchPenalty, 0.0f, kSearchPenaltyMax ) : kSearchPenaltyDefault;
 		const uint32_t uPen = uint32_t( std::lround( double( flPen ) * 100.0 ) );
 		return uR | ( uRt << 4 ) | ( uPyr << 8 ) | ( uPen << 17 );
