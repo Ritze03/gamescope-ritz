@@ -560,6 +560,14 @@ namespace gamescope::config
         int search_radius_top = 6;
         int pyramid_min_side = 48;
         float search_penalty = 0.5f;
+        // Motion version 3 (2026-11-19; the library's Settings::v3Smear / v3OcclSoft / v3Unsure / v3SceneCut): only
+        // read while motion_version is "v3". Clamped on load to the library's ranges: smear 0..1, occl_soft 0.25..4,
+        // unsure 0.25..4, scene_cut 0..4 (0 = never a scene cut); a non-finite value takes the default. Defaults are
+        // the library's. ADDITIVE: absent loads the defaults. All four apply live (no re-creation of buffers).
+        float v3_smear = 0.35f;
+        float v3_occl_soft = 1.0f;
+        float v3_unsure = 1.0f;
+        float v3_scene_cut = 0.45f;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see
@@ -583,7 +591,7 @@ namespace gamescope::config
         // "Use Frame generation's settings" (2026-10-22): on (default), the blur uses
         // Frame generation's motion_version / quality; off, it uses its own two below.
         // ADDITIVE: absent loads on / "v1" / "quality"; an unknown string keeps the default.
-        // motion_version may be "learned" too (net and precision come from framegen.learned_*).
+        // motion_version may be "learned" or "v3" too (net and precision come from framegen.learned_*).
         bool same_as_framegen = true;
         std::string motion_version = "v1";
         std::string quality = "quality";

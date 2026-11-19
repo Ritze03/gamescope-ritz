@@ -354,7 +354,7 @@ namespace gamescope::config
                     f.ui_protection = sUi;
                 f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 10.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" )
                     f.motion_version = sMotion;
                 std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
                 // Round 4's test stand-ins became the real nets (round 4b); a saved choice follows.
@@ -380,6 +380,21 @@ namespace gamescope::config
                     const bool bFinite = ( uBits & 0x7F800000u ) != 0x7F800000u;
                     f.search_penalty = bFinite ? std::clamp( flPenalty, 0.0f, 255.0f ) : 0.5f;
                 }
+                {
+                    // Motion version 3's four settings (2026-11-19): clamp to the library's ranges, a non-finite
+                    // value (bit test, as above) takes the default.
+                    const auto V3 = [&]( const char *pszKey, float flDefault, float flLo, float flHi )
+                    {
+                        const float fl = JGetFloat( *pFrameGen, pszKey, flDefault );
+                        uint32_t uBits;
+                        std::memcpy( &uBits, &fl, sizeof uBits );
+                        return ( uBits & 0x7F800000u ) != 0x7F800000u ? std::clamp( fl, flLo, flHi ) : flDefault;
+                    };
+                    f.v3_smear = V3( "v3_smear", 0.35f, 0.0f, 1.0f );
+                    f.v3_occl_soft = V3( "v3_occl_soft", 1.0f, 0.25f, 4.0f );
+                    f.v3_unsure = V3( "v3_unsure", 1.0f, 0.25f, 4.0f );
+                    f.v3_scene_cut = V3( "v3_scene_cut", 0.45f, 0.0f, 4.0f );
+                }
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -398,7 +413,7 @@ namespace gamescope::config
                     m.weights = sWeights;
                 m.same_as_framegen = JGetBool( *pBlur, "same_as_framegen", m.same_as_framegen );
                 const std::string sMotion = JGetString( *pBlur, "motion_version", m.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" )
                     m.motion_version = sMotion;
                 const std::string sQuality = JGetString( *pBlur, "quality", m.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
@@ -876,6 +891,10 @@ namespace gamescope::config
             jFrameGen[ "pyramid_min_side" ] = fg.pyramid_min_side;
             // Rounded to hundredths through a double (the overlay's 0.05 step), so 0.55f is stored as 0.55.
             jFrameGen[ "search_penalty" ] = std::round( double( fg.search_penalty ) * 100.0 ) / 100.0;
+            jFrameGen[ "v3_smear" ] = std::round( double( fg.v3_smear ) * 100.0 ) / 100.0;
+            jFrameGen[ "v3_occl_soft" ] = std::round( double( fg.v3_occl_soft ) * 100.0 ) / 100.0;
+            jFrameGen[ "v3_unsure" ] = std::round( double( fg.v3_unsure ) * 100.0 ) / 100.0;
+            jFrameGen[ "v3_scene_cut" ] = std::round( double( fg.v3_scene_cut ) * 100.0 ) / 100.0;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();

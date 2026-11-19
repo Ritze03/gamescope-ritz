@@ -1884,7 +1884,7 @@ TEST_CASE( "framegen: motion_version round-trips, defaults when absent, invalid 
     REQUIRE( l.framegen.motion_version == "v2" );
     REQUIRE( l.framegen.quality == "performance" );
 
-    s.framegen.motion_version = "v3";
+    s.framegen.motion_version = "v4";
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v1" );
@@ -4156,4 +4156,88 @@ TEST_CASE( "framegen: motion search reach keys of the wrong type keep the defaul
     REQUIRE( IsSettingsKey( "framegen.search_radius_top" ) );
     REQUIRE( IsSettingsKey( "framegen.pyramid_min_side" ) );
     REQUIRE( IsSettingsKey( "framegen.search_penalty" ) );
+}
+
+// Motion version 3 (2026-11-19): "v3" is a fourth motion_version (framegen and motion_blur) plus four additive float
+// keys under "framegen": the library's defaults when absent, a round trip, a clamp to its ranges on load.
+TEST_CASE( "framegen: motion_version v3 and the four V3 keys default, round-trip and clamp on load", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+
+    REQUIRE( Settings{}.framegen.v3_smear == 0.35f );
+    REQUIRE( Settings{}.framegen.v3_occl_soft == 1.0f );
+    REQUIRE( Settings{}.framegen.v3_unsure == 1.0f );
+    REQUIRE( Settings{}.framegen.v3_scene_cut == 0.45f );
+
+    // Absent keys load the defaults.
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    Settings l = LoadSections();
+    REQUIRE( l.framegen.v3_smear == 0.35f );
+    REQUIRE( l.framegen.v3_occl_soft == 1.0f );
+    REQUIRE( l.framegen.v3_unsure == 1.0f );
+    REQUIRE( l.framegen.v3_scene_cut == 0.45f );
+
+    // Round trip: "v3" in both sections, and non-default values.
+    Settings s{};
+    s.framegen.motion_version = "v3";
+    s.motion_blur.motion_version = "v3";
+    s.framegen.v3_smear = 0.8f;
+    s.framegen.v3_occl_soft = 2.55f;
+    s.framegen.v3_unsure = 0.25f;
+    s.framegen.v3_scene_cut = 0.0f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v3" );
+    REQUIRE( l.motion_blur.motion_version == "v3" );
+    REQUIRE_THAT( l.framegen.v3_smear, Catch::Matchers::WithinAbs( 0.8, 1e-6 ) );
+    REQUIRE_THAT( l.framegen.v3_occl_soft, Catch::Matchers::WithinAbs( 2.55, 1e-6 ) );
+    REQUIRE_THAT( l.framegen.v3_unsure, Catch::Matchers::WithinAbs( 0.25, 1e-6 ) );
+    REQUIRE( l.framegen.v3_scene_cut == 0.0f );
+
+    // Clamp on load, low side and high side.
+    s.framegen.v3_smear = -1.0f;
+    s.framegen.v3_occl_soft = 0.0f;
+    s.framegen.v3_unsure = 0.1f;
+    s.framegen.v3_scene_cut = -3.0f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.v3_smear == 0.0f );
+    REQUIRE( l.framegen.v3_occl_soft == 0.25f );
+    REQUIRE( l.framegen.v3_unsure == 0.25f );
+    REQUIRE( l.framegen.v3_scene_cut == 0.0f );
+    s.framegen.v3_smear = 7.0f;
+    s.framegen.v3_occl_soft = 9.0f;
+    s.framegen.v3_unsure = 100.0f;
+    s.framegen.v3_scene_cut = 5.0f;
+    REQUIRE( SaveSections( s ) );
+    l = LoadSections();
+    REQUIRE( l.framegen.v3_smear == 1.0f );
+    REQUIRE( l.framegen.v3_occl_soft == 4.0f );
+    REQUIRE( l.framegen.v3_unsure == 4.0f );
+    REQUIRE( l.framegen.v3_scene_cut == 4.0f );
+
+    REQUIRE( IsSettingsKey( "framegen.v3_smear" ) );
+    REQUIRE( IsSettingsKey( "framegen.v3_occl_soft" ) );
+    REQUIRE( IsSettingsKey( "framegen.v3_unsure" ) );
+    REQUIRE( IsSettingsKey( "framegen.v3_scene_cut" ) );
+}
+
+// A V3 value of the wrong type keeps the default (fresh TempConfigHome: LoadSections() carries values forward).
+TEST_CASE( "framegen: V3 keys of the wrong type keep the default", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "v3_smear": "lots", "v3_occl_soft": null, "v3_unsure": true, "v3_scene_cut": 1.5 }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.v3_smear == 0.35f );
+    REQUIRE( l.framegen.v3_occl_soft == 1.0f );
+    REQUIRE( l.framegen.v3_unsure == 1.0f );
+    REQUIRE( l.framegen.v3_scene_cut == 1.5f );
 }

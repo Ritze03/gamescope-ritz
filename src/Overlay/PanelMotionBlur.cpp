@@ -63,9 +63,9 @@ namespace gamescope
 		constexpr ui::Option kRelativeOptions[] = { { 0, "Shown frame" }, { 1, "Game frame" } };
 		constexpr ui::Option kWeightOptions[]   = { { 0, "Even" }, { 1, "Gaussian" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 2, "Learned" }, { 3, "V3" } };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned" };
+		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3" };
 		constexpr const char *kRelativeKeys[] = { "shown", "game" };
 		constexpr const char *kWeightKeys[]   = { "even", "gaussian" };
 
@@ -94,7 +94,7 @@ namespace gamescope
 			c.relative = IndexOf( m.relative, kRelativeKeys, 2, 0 ) == 1 ? fghost::BlurRel::Game : fghost::BlurRel::Shown;
 			c.weights = IndexOf( m.weights, kWeightKeys, 2, 1 ) == 0 ? fghost::BlurWeighting::Even : fghost::BlurWeighting::Gaussian;
 			c.useOwnInterp = !m.same_as_framegen;
-			c.motion = (fghost::Motion)IndexOf( m.motion_version, kMotionKeys, 3, 0 );   // the index IS the enum value
+			c.motion = (fghost::Motion)IndexOf( m.motion_version, kMotionKeys, 4, 0 );   // the index IS the enum value
 			c.quality = IndexOf( m.quality, kQualityKeys, 2, 0 ) == 1 ? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.pauseWhenCursorVisible = m.pause_when_cursor_visible;
 			return c;
@@ -314,9 +314,9 @@ namespace gamescope
 					EnsureConfigLoaded();
 					return s_Settings.motion_blur.same_as_framegen
 						? int( fghost::GetConfig().motion )
-						: IndexOf( s_Settings.motion_blur.motion_version, kMotionKeys, 3, 0 );
+						: IndexOf( s_Settings.motion_blur.motion_version, kMotionKeys, 4, 0 );
 				},
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.motion_version = kMotionKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.motion_blur.motion_version = kMotionKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
 			kMotionOptions, std::size( kMotionOptions ) )
 			.Help( "V2 is a newer, experimental way of making the in-between frames the blur "
 			       "averages: it bends the picture along the motion and stretches it over gaps "
@@ -327,10 +327,12 @@ namespace gamescope
 			       "time, always at Quality's resolution; see Frame generation's Motion version "
 			       "help); its net, precision, zero-motion test and static guard are Frame generation's "
 			       "Learned rows, this area has none of its own. "
+			       "V3: most fluid; smears where it is unsure; costs about three times V1; its four "
+			       "settings are Frame generation's V3 rows. "
 			       "Switching shows real frames for an instant. Shown greyed out with Frame "
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )
-			.Keywords( "motion blur motion version v1 v2 learned neural network ml morph interpolation algorithm experimental" )
+			.Keywords( "motion blur motion version v1 v2 v3 learned neural network ml morph interpolation algorithm experimental" )
 			.DisabledUnless( OwnInterpUsable, "motion blur is off, or it uses Frame generation's settings" );
 
 		a.Choice( "motion_blur.quality", "Quality",
