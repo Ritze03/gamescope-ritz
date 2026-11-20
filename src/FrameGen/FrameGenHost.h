@@ -108,7 +108,7 @@ namespace fghost
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
 	constexpr int kUiBoxMinTenths = 5;
-	constexpr int kUiBoxMaxTenths = 100;
+	constexpr int kUiBoxMaxTenths = 200;   // 20%; must fit the 8 bits of the library-config key
 	constexpr int kUiBoxDefaultTenths = 25;
 
 	// Motion search reach (2026-11-19): the library's Settings::searchRadius / searchRadiusTop / pyramidMinSide /

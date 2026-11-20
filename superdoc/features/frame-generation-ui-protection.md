@@ -191,10 +191,15 @@ is indexed by it; the GUI's *display* order (Off / Crosshair / Crosshair V2 / Wh
 the order of `kUiOptions`. Pinned: `tests/test_framegen_format.cpp` asserts the values.
 
 **Crosshair box size** (`framegen.ui_box_height`, a float **percent of the game's height**,
-default 2.5, 0.5-10, step 0.1; row text `2.5% · 24 px`, the pixel figure being the library's own
+default 2.5, 0.5-20, step 0.1; row text `2.5% · 24 px`, the pixel figure being the library's own
 `Interpolator::boxSize()` for the game's frame). The side is `clamp(round(H * pct), 8, min(W, H))`:
-24 px at 960 rows, 27 at 1080, 36 at 1440, 54 at 2160. It applies to Crosshair, Crosshair V2 and the
-box part of Whole screen. `Why` a percentage of the **height**, not of the area: the old default
+24 px at 960 rows, 27 at 1080, 36 at 1440, 54 at 2160 (the 20% top: 216 / 288 / 432 px). It applies to Crosshair, Crosshair V2 and the
+box part of Whole screen. `Why:` the range tops out at 20% (was 10%, doubled 2026-11-20 at the
+user's request; no reason given). The limit is `fghost::kUiBoxMaxTenths` (200, tenths of a percent; it must fit
+the 8 bits the library-config key gives the box, static_assert in `FrameGenHost.cpp`); the row's range and setter read it,
+`ConfigManager.cpp`'s load clamp keeps a literal 20 (the config layer does not include the host
+header). The Inspector's box preview needed no change: its crop is reduced by a whole factor to fit
+the 128 px picture (a 20% box at 2160 rows is a 864 px crop, factor 7). `Why` a percentage of the **height**, not of the area: the old default
 was 3% of the frame's *area*, which is 192 px on the user's 1280x960 CS2 (249 px at 1080p, 332 at
 1440p) -- far more than a crosshair, and everything in the box beyond it is background that gets
 pasted from the real frame, which is where V1's specks came from (20.9 artifact pixels per frame
@@ -295,4 +300,4 @@ so they cannot disagree.
 
 ## History
 
-- **Crosshair V2** (glossary detail): **Crosshair V2** / **Crosshair box** — Frame generation's UI protection has a **box**: the centred square it watches and pastes back exactly (`framegen.ui_box_height`, the *Crosshair box size* slider, 0.5-10% of the game's *height*, default 2.5%, shown as `2.5% · 24 px`; the Inspector previews the game pixels under it, `src/Overlay/UiBoxPreview.cpp`). **Crosshair** is the original (V1) detector, which inpaints the crosshair out of the estimate; **Crosshair V2** (2026-10-05, the library's `UiProtection::CrosshairV2`) only protects pixels that stay still and stand out, never pastes over moving content and has no fill-in step, so the specks and moving patterns V1 leaves are gone. See `superdoc/features/frame-generation.md`'s "Crosshair V2 and the box size".
+- **Crosshair V2** (glossary detail): **Crosshair V2** / **Crosshair box** — Frame generation's UI protection has a **box**: the centred square it watches and pastes back exactly (`framegen.ui_box_height`, the *Crosshair box size* slider, 0.5-20% of the game's *height*, default 2.5%, shown as `2.5% · 24 px`; the Inspector previews the game pixels under it, `src/Overlay/UiBoxPreview.cpp`). **Crosshair** is the original (V1) detector, which inpaints the crosshair out of the estimate; **Crosshair V2** (2026-10-05, the library's `UiProtection::CrosshairV2`) only protects pixels that stay still and stand out, never pastes over moving content and has no fill-in step, so the specks and moving patterns V1 leaves are gone. See `superdoc/features/frame-generation.md`'s "Crosshair V2 and the box size".

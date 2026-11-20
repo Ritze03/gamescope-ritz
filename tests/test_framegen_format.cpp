@@ -124,10 +124,10 @@ TEST_CASE( "framegen ui: UiProt matches the library's UiProtection value for val
 
 TEST_CASE( "framegen ui: the box size defaults and range", "[framegen_format]" )
 {
-	// The slider's 2.5% default and 0.5%..10% range, in tenths of a percent.
+	// The slider's 2.5% default and 0.5%..20% range, in tenths of a percent.
 	CHECK( kUiBoxDefaultTenths == 25 );
 	CHECK( kUiBoxMinTenths == 5 );
-	CHECK( kUiBoxMaxTenths == 100 );
+	CHECK( kUiBoxMaxTenths == 200 );
 	// The library default must equal the host's: a host that set nothing would
 	// otherwise protect a different box than the slider says.
 	CHECK_THAT( framegen::Settings{}.uiBoxHeightFrac,
@@ -149,7 +149,7 @@ TEST_CASE( "framegen ui: the box side the slider text and the library share", "[
 	CHECK( Side( 2560, 1440, kUiBoxDefaultTenths ) == 36 );
 	CHECK( Side( 3840, 2160, kUiBoxDefaultTenths ) == 54 );
 	CHECK( Side( 1920, 1080, kUiBoxMinTenths ) == 8 );      // 5.4 px, held at the library's 8 px floor
-	CHECK( Side( 1920, 1080, kUiBoxMaxTenths ) == 108 );
+	CHECK( Side( 1920, 1080, kUiBoxMaxTenths ) == 216 );
 }
 
 TEST_CASE( "framegen: Pause at refresh rate is ignored in Target mode", "[framegen_format]" )
