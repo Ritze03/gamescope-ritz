@@ -295,6 +295,10 @@ namespace fghost
 		// picture taken from one frame (the coarse picture still blended). Off = V3 as before.
 		bool v3ColourWindow = false;
 		bool v3DetailSplit = false;
+		// Motion::V3 only, runtime: the motion guard (library Settings::v3Guard). 0 Off (V3 alone), 1 Guard (V2's
+		// motion search corrects V3 where it matches the frames clearly better), 2 V2 motion (V2's motion everywhere).
+		// Any other value is treated as 0.
+		int v3Guard = 0;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time

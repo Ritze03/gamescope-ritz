@@ -34,7 +34,7 @@ default stays `v1`. Library details: `subprojects/FrameGen/INTEGRATION.md`, "Mot
   the Quality row's own flowScale (`EnsureReady()` leaves it alone for V3), and the host leaves
   `subpixel` as the row gives it (V3 ignores it).
 
-## The four settings and two switches
+## The four settings, two switches and the Motion guard
 
 All six are runtime (`setSettings()`; no buffers re-created, the estimate is kept). Group "Motion
 version 3" in the Frame generation area (column 1, right after "Learned motion"); sliders with
@@ -66,26 +66,29 @@ project builds with `-ffast-math`); written rounded to hundredths, like `search_
 
 - bits 0-11 smear, 12-23 occlusion softness, 24-35 unsure sensitivity, 36-47 scene cut, each in
   hundredths;
-- bit 48 `v3ColourWindow`, bit 49 `v3DetailSplit`; bits 50-63 unused (written 0, ignored).
+- bit 48 `v3ColourWindow`, bit 49 `v3DetailSplit`; bits 50-51 `v3Guard` (0 Off, 1 Guard, 2 V2 motion; 3
+  unpacks as 0); bits 52-63 unused (written 0, ignored).
 
 `Why a new word:` the main, UI-box, Learned, reach and blur words and the 64-bit applied key are
 full. `Why hundredths:` 0.35 and 0.45 survive `value / 100.0` -> float exactly (proved in
 `tests/test_framegen_v3.cpp`), so the defaults change nothing. `EnsureReady()` compares the word
 with `Host_t::ulAppliedV3` (set in the init path and at the end of the apply block, reset in
 `Teardown()`), so a change of any value re-applies the settings, once. `ToLibrarySettings()` sets
-the six fields (the four clamped and finite-tested); the `setSettings()` that `SyncUiHistory()` derives from
+the seven fields (the four clamped and finite-tested; `v3Guard` mapped to `framegen::V3Guard`); the `setSettings()` that `SyncUiHistory()` derives from
 `H.interp.settings()` carries them along.
 
 ## Rows greyed under V3
 
 Under V3 (the effective version: Motion blur's own one when it is on with its own settings), only
-rows that drive nothing V3 uses are greyed, per the library's table of ignored settings:
+rows that drive nothing V3 uses are greyed, per the library's table of ignored settings. Since
+2026-11-20 the four search rows are greyed only while the Motion guard is Off: with the guard on they
+drive its V2 estimate (`V3GuardOn()` in `PanelFrameGen.cpp`):
 
 | Row | Library fields it sets | Under V3 |
 |---|---|---|
-| Search radius, Search radius (coarsest level) | `searchRadius`, `searchRadiusTop` | greyed (`RadiusRowsUsable()`, which also covers Learned) |
-| Pyramid smallest level | `pyramidMinSide` | greyed (`PenaltyRowsUsable()`): V3 builds its own pyramid; a change would still rebuild the shared buffers without changing V3's picture |
-| Search penalty | `searchPenalty` | greyed (`PenaltyRowsUsable()`) |
+| Search radius, Search radius (coarsest level) | `searchRadius`, `searchRadiusTop` | greyed with the guard Off, usable with it on (`RadiusRowsUsable()`, which also covers Learned) |
+| Pyramid smallest level | `pyramidMinSide` | greyed with the guard Off (`PenaltyRowsUsable()`): V3 builds its own pyramid; a change would still rebuild the shared buffers without changing V3's picture. With the guard on it sets the pyramid of the guard's V2 search (structural: `reconfigure()`, as everywhere) |
+| Search penalty | `searchPenalty` | greyed with the guard Off, usable with it on (`PenaltyRowsUsable()`) |
 | Static HUD protection | `hudBonus` (0 / 1.0 / 2.5) | **enabled**: V3 honours it since library `c9c6718`, as V1 does (see "Static HUD protection under V3") |
 | Artifact safety | `trustLow` / `trustHigh` / `sceneCutSad` **and `globalFallback`** | **left enabled**: `globalFallback` (Off sets it to 1.0) is V3's "estimate failed" threshold |
 | Quality | `flowScale` (and `subpixel`, `v2Mode`) | enabled: V3 honours `flowScale` |
@@ -97,6 +100,47 @@ There is no row for `v2StaticMask` (the library default, honoured by V3), `smoot
 `DisabledUnless` predicate and to keep a row enabled if anything it sets is honoured; Artifact
 safety is the case where that matters. Its help text carries one sentence for V3 (no mismatch
 ranges there; only Off matters).
+
+## Motion guard
+
+(2026-11-20, library `f301d7d`.) One more V3 setting, `v3_guard` (`framegen::Settings::v3Guard`): a Choice
+row **Motion guard** in the group "Motion version 3", after the two switches, segmented, Off / Guard / V2 motion,
+default Off, usable while V3 runs (`V3RowsUsable()`), changeable while a game runs. With **Off** nothing changes
+(the library's output is byte-identical to V3 without it; no pass, no memory).
+
+- **Guard**: V2's motion search also runs on every real pair and replaces V3's vector (both directions) where V2's
+  explains the two frames clearly better and differs by more than 2.5 flow pixels; V3 keeps its own motion elsewhere.
+  It never replaces a vector V3 holds still, so Static HUD protection stays in force. About +0.34 ms per real
+  pair and 14 MiB.
+- **V2 motion**: V2's vectors everywhere, V3's occlusion handling, fill and picture generation on top. About +0.31 ms
+  per real pair. No HUD exemption; it gives up V3's advantage on fast motion (looks like V2 there).
+- Quality, measured in the library on nine real pairs (1080p, `flowScale` 2): mean quality Guard 28.19 dB, the same as
+  Off; V2 motion 27.55 dB. Guard replaces 1 to 12 % of the vectors per pair. A gun held in front of a moving
+  background improves (error 20.97 to 16.94 levels), a frame edge improves (6.40 to 5.38), a helmet edge partly
+  (51.18 to 42.29); a radar barely changes and a minimap gets slightly worse (20.37 to 22.85). V2 motion
+  repairs the gun more (11.32) but its fast pairs fall to V2's level.
+- Cost (RX 7900 XTX, 1080p, `flowScale` 2, 2x, per real pair): Off 1.02 ms (Rgba8) / 1.13 ms (F16 linear), Guard
+  1.36 / 1.46, V2 motion 1.33 / 1.43.
+
+**Search rows.** While the guard is on, `searchRadius`, `searchRadiusTop`, `pyramidMinSide`, `subpixel` and
+`searchPenalty` act on the guard's V2 estimate exactly as under V2 (V3 itself still ignores them). They are passed to the
+library under V3 whatever the guard (`ToLibrarySettings()` sets them for every version), and the rows are
+usable under V3 only while the guard is on (see the table above). A pyramid change goes the usual structural route
+(`reconfigure()`, GPU wait).
+
+**Memory, refusal, descriptors.** The first time the guard is on, `setSettings()` creates V2's estimate pipelines and
+two buffers (14.06 MiB at 1080p `flowScale` 2). This host never calls `releaseUnusedMotion()` (see the note in
+`EnsureReady()`), so they stay until a resize or teardown. A device that cannot run V2 is refused by
+`settingsError()` with V2's reason: `ResolveMotion()` then runs V1 with that reason in the Status line and the log,
+like any refused version; a later allocation failure inside `setSettings()` keeps the previous settings and sets
+the note "the library could not create the Motion guard (V2's pipelines or buffers)". The host records one estimate
+per `beginFrame()`, so the guard's two descriptor sets per estimate (at most 16 estimates per `beginFrame()`) are
+never near the limit. The guard's value is part of the V3 word's comparison, so a change reaches `setSettings()`
+once.
+
+`Why:` the user found V3's large artifacts worse than V2's and proposed V2's motion detection with V3's picture
+generation. The library implements exactly that as a setting; it is an experiment with three values to compare by eye,
+so the default stays Off.
 
 ## Static HUD protection under V3
 
@@ -120,7 +164,7 @@ show the same detail at the same place, so slow motion never freezes at any leve
 
 `src/meson.build`'s FRAME GENERATION block compiles, with the same glslang flags as the rest:
 
-- **14 plain compiles** (no define), added to the plain list: `v3_synth`, `v3_planes`, `v3_pyr`,
+- **14 plain compiles** (no define; 16 with the motion guard's two, below), added to the plain list: `v3_synth`, `v3_planes`, `v3_pyr`,
   `v3_hist`, `v3_search`, `v3_search_top`, `v3_dense`, `v3_wide`, `v3_stats`, `v3_occl`,
   `v3_fill`, `v3_project`, `v3_enclose`, `v3_decide` -> `v3_<n>_spv.h`, variable `v3_<n>_spv`.
   `framegen.cpp` includes them unconditionally, so the build fails without them.
@@ -135,6 +179,9 @@ show the same detail at the same place, so slow motion never freezes at any leve
   and per format (`rgb10`, `f16`) `v3_synth` with `-DFG_FORMAT_<FMT>=1 -DV3L=1` ->
   `v3_synth_l_<fmt>_spv.h` (variable `<name>_spv`). The first four are mandatory (the library
   includes them unconditionally); a format without its `v3_synth_l` variant has V3 refused.
+- **The motion guard's two shaders** (library `f301d7d`): plain compiles in the same list, no define, no
+  per-format variants (they work on the motion field): `v3_anchor`, `v3_guard` -> `v3_anchor_spv.h`,
+  `v3_guard_spv.h`. Mandatory (the library includes them unconditionally).
 - **Includes, no compile of their own** (resolved relative to each `.comp`, listed by the
   depfile): `v3_common.glsl`, `v3_format.glsl`, `v3_weights.glsl`, `v3_maps.glsl`, `v3_est.glsl`,
   `v3_search.glsl`, `v3_static.glsl`.
@@ -161,6 +208,8 @@ both switches off / colour window on / detail split on / both on, in ms:
 |---|---|---|---|
 | Rgba8 | 0.976 / 1.023 / 1.035 / 1.077 | 1.196 / 1.242 / 1.314 / 1.356 | 1.425 / 1.468 / 1.593 / 1.652 |
 | F16 linear (worst) | 1.068 / 1.131 / 1.145 / 1.210 | 1.326 / 1.400 / 1.488 / 1.552 | 1.581 / 1.665 / 1.819 / 1.893 |
+
+The Motion guard adds about +0.34 ms (Guard) or +0.31 ms (V2 motion) per real pair and 14 MiB, see "Motion guard".
 
 Static HUD protection adds about 0.02 ms per real frame pair at Normal and Strong and 0.006 ms at Off (Rgba8 2x: 1.00 to 1.02 ms; F16 linear: 1.10 to 1.12 ms).
 

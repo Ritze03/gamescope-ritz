@@ -83,6 +83,8 @@ namespace gamescope
 		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 4, "Very low" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
+		// Motion guard (Motion version 3; 2026-11-20): the ids are fghost::Config::v3Guard's values, the index into kGuardKeys.
+		constexpr ui::Option kGuardOptions[]   = { { 0, "Off" }, { 1, "Guard" }, { 2, "V2 motion" } };
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
 		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
 		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" } };
@@ -115,6 +117,7 @@ namespace gamescope
 			fghost::LearnedNet::M2v2, fghost::LearnedNet::M2v3 };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
+		constexpr const char *kGuardKeys[]   = { "off", "guard", "v2_motion" };
 		// Indexed by fghost::UiProt, so the index IS the option id above.
 		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen", "crosshair_v2" };
 
@@ -225,6 +228,7 @@ namespace gamescope
 			c.v3SceneCut = f.v3_scene_cut;
 			c.v3ColourWindow = f.v3_colour_window;   // ... and its two switches
 			c.v3DetailSplit = f.v3_detail_split;
+			c.v3Guard = IndexOf( f.v3_guard, kGuardKeys, 3, 0 );   // ... and the motion guard
 			return c;
 		}
 
@@ -284,8 +288,8 @@ namespace gamescope
 		}
 
 		// The same for Motion version 3 (2026-11-19): its four rows are usable only while V3 is what the interpolator
-		// runs (and something is on), and the rows that only drive settings V3 ignores (the search radii, the pyramid
-		// side, the search penalty) are greyed while it is.
+		// runs (and something is on). The rows that only drive settings V3 itself ignores (the search radii, the pyramid
+		// side, the search penalty) are greyed while it runs with the Motion guard off; with the guard on they act on its V2 search.
 		bool EffectiveMotionIsV3()
 		{
 			const config::Settings &st = s_Settings;
@@ -308,16 +312,23 @@ namespace gamescope
 			return s_Settings.framegen.enabled || s_Settings.motion_blur.enabled;
 		}
 
-		bool RadiusRowsUsable()
+		// Under V3 the search settings act only on the Motion guard's V2 search (V3 itself ignores them), so
+		// the rows are usable under V3 while the guard is not Off and greyed while it is Off.
+		bool V3GuardOn()
 		{
-			return ReachRowsUsable() && !EffectiveMotionIsLearned() && !EffectiveMotionIsV3();
+			return EffectiveMotionIsV3() && s_Settings.framegen.v3_guard != "off";
 		}
 
-		// Pyramid side and penalty: every version but V3 (V3 builds its own pyramid and ignores both; a pyramid
-		// change would still rebuild the buffers without changing V3's picture, so the row is greyed).
+		bool RadiusRowsUsable()
+		{
+			return ReachRowsUsable() && !EffectiveMotionIsLearned() && ( !EffectiveMotionIsV3() || V3GuardOn() );
+		}
+
+		// Pyramid side and penalty: every version; under V3 only while the Motion guard is on (V3 builds its own
+		// pyramid and ignores both; a pyramid change would rebuild the buffers without changing V3's picture).
 		bool PenaltyRowsUsable()
 		{
-			return ReachRowsUsable() && !EffectiveMotionIsV3();
+			return ReachRowsUsable() && ( !EffectiveMotionIsV3() || V3GuardOn() );
 		}
 
 		bool UiOn()
@@ -694,6 +705,24 @@ namespace gamescope
 			.Keywords( "frame generation v3 detail split one frame texture text sharp crisp experiment" )
 			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
 
+		a.Choice( "framegen.v3_guard", "Motion guard",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+			kGuardOptions, std::size( kGuardOptions ) )
+			.Help( "Experiment. Off: Motion version 3 alone (default). Guard: V2's motion search also runs "
+			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
+			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
+			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
+			       "everywhere, V3's picture generation on top. Removes more of V3's large artifacts but "
+			       "loses V3's advantage on fast motion (looks like V2 there). About +0.31 ms per real "
+			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
+			       "Only used while Motion version is V3." )
+			.Segmented()
+			.Default( 0 )
+			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
 		a.Group( "Pausing and limits" );
 		a.GroupColumn( 1 );
 
@@ -847,11 +876,11 @@ namespace gamescope
 			       "frames. Above 6 a wider, slower search runs. Large values cost GPU time and can "
 			       "make frame generation lower its output rate: 12 / 12 / 16 at 1080p measured 1.29 ms "
 			       "per game frame in V1 against 0.29 ms at the defaults (this fork's V1 budget at 1080p "
-			       "is 0.33 ms). Motion versions V1 and V2; Learned motion and V3 ignore it." )
+			       "is 0.33 ms). Motion versions V1 and V2, and V3 while Motion guard is on; Learned motion and V3 with the guard off ignore it." )
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 2 )
 			.Keywords( "frame generation expert motion search radius reach fast motion vectors v1 v2" )
-			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned or V3)" );
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned, or V3 with Motion guard off)" );
 
 		a.Slider( "framegen.search_radius_top", "Search radius (coarsest level)",
 			ui::AnyBind::Of<int>(
@@ -861,12 +890,12 @@ namespace gamescope
 			       "12. It sets the longest motion that can be found: each finer level doubles it. "
 			       "Defaults 2 and 6 reach about 250 pixels between two real frames at 1080p. Above 6 "
 			       "the wider search runs; large values cost GPU time and can make frame generation "
-			       "lower its output rate (see Search radius). Motion versions V1 and V2; Learned "
-			       "motion and V3 ignore it." )
+			       "lower its output rate (see Search radius). Motion versions V1 and V2, and V3 "
+			       "while Motion guard is on; Learned motion and V3 with the guard off ignore it." )
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 6 )
 			.Keywords( "frame generation expert motion search radius coarsest top level reach long vectors v1 v2" )
-			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned or V3)" );
+			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned, or V3 with Motion guard off)" );
 
 		a.Choice( "framegen.pyramid_min_side", "Pyramid smallest level",
 			ui::AnyBind::Of<int>(
@@ -879,10 +908,10 @@ namespace gamescope
 			       "match on the coarsest level. Changing it re-creates the frame generation buffers and "
 			       "pauses the picture for an instant. Large reach costs GPU time and can make frame "
 			       "generation lower its output rate (see Search radius). Applies to every motion "
-			       "version except V3, which builds its own." )
+			       "version; V3 builds its own and uses it only for the Motion guard's V2 search." )
 			.Default( 48 )
 			.Keywords( "frame generation expert motion search pyramid levels smallest minimum side reach long vectors" )
-			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3)" );
+			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3 with Motion guard off)" );
 
 		a.Slider( "framegen.search_penalty", "Search penalty",
 			ui::AnyBind::Of<float>(
@@ -895,10 +924,10 @@ namespace gamescope
 				} ) )
 			.Help( "What the motion search pays for each step away from its guess. Higher gives "
 			       "steadier motion on flat or repeating surfaces, lower follows small fast detail "
-			       "more freely. 0 to 4 here; a profile file may hold up to 255. Motion versions V1, V2 and Learned; V3 ignores it." )
+			       "more freely. 0 to 4 here; a profile file may hold up to 255. Motion versions V1, V2 and Learned, and V3 while Motion guard is on (otherwise V3 ignores it)." )
 			.Range( 0.0f, 4.0f ).Step( 0.05f )
 			.Default( 0.5f )
 			.Keywords( "frame generation expert motion search penalty lambda steady flat repetitive detail v1 v2" )
-			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3)" );
+			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3 with Motion guard off)" );
 	}
 }

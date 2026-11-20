@@ -4289,6 +4289,61 @@ TEST_CASE( "framegen: V3 keys of the wrong type keep the default", "[config]" )
     REQUIRE( l.framegen.v3_scene_cut == 1.5f );
 }
 
+// The Motion guard (2026-11-20): "off" | "guard" | "v2_motion", string enum. Each "file X loads as Y" check has its own
+// TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
+TEST_CASE( "framegen: the V3 guard defaults to off and round-trips its three values", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( Settings{}.framegen.v3_guard == "off" );
+    for ( const char *psz : { "guard", "v2_motion", "off" } )
+    {
+        Settings s{};
+        s.framegen.v3_guard = psz;
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.v3_guard == psz );
+    }
+}
+
+TEST_CASE( "framegen: an absent V3 guard key loads off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "quality": "performance" }
+    })";
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+}
+
+TEST_CASE( "framegen: an unknown V3 guard string loads off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "v3_guard": "strong" }
+    })";
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+}
+
+TEST_CASE( "framegen: a wrong-typed V3 guard loads off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "v3_guard": 2 }
+    })";
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+}
+
+TEST_CASE( "framegen: the V3 guard is a settings key", "[config]" )
+{
+    REQUIRE( IsSettingsKey( "framegen.v3_guard" ) );
+}
+
 // The two V3 switches of the wrong type keep the default (fresh TempConfigHome: LoadSections() carries values forward).
 TEST_CASE( "framegen: V3 switches of the wrong type keep the default", "[config]" )
 {

@@ -7,6 +7,12 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-20
+
+### Added
+- **Frame generation**: V3 has an experimental Motion guard setting that can reduce
+  its large artifacts.
+
 ## 2026-11-19
 
 ### Added

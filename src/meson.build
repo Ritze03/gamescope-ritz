@@ -149,7 +149,9 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
                 # Motion version 3 (2026-11-19; library acab885): 14 plain compiles, no define. v3_planes and
                 # v3_synth also get per-format variants below. V3 reuses V2's v2_static above.
                 'v3_synth', 'v3_planes', 'v3_pyr', 'v3_hist', 'v3_search', 'v3_search_top', 'v3_dense', 'v3_wide',
-                'v3_stats', 'v3_occl', 'v3_fill', 'v3_project', 'v3_enclose', 'v3_decide']
+                'v3_stats', 'v3_occl', 'v3_fill', 'v3_project', 'v3_enclose', 'v3_decide',
+                # Motion guard (2026-11-20; library f301d7d): 2 more plain compiles, no define.
+                'v3_anchor', 'v3_guard']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
   if framegen_has_depfile

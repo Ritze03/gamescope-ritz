@@ -153,3 +153,41 @@ TEST_CASE( "framegen v3: the two switches take bits 48 and 49, in all four combi
 	REQUIRE( !r.v3ColourWindow );
 	REQUIRE( !r.v3DetailSplit );
 }
+
+TEST_CASE( "framegen v3: the guard takes bits 50 and 51 (0, 1, 2) and leaves bits 0-49 alone", "[framegen_v3]" )
+{
+	for ( int i = 0; i < 4; i++ )
+	{
+		Config c; c.v3Smear = 0.80f; c.v3OcclSoft = 2.55f; c.v3Unsure = 0.25f; c.v3SceneCut = 3.95f;
+		c.v3ColourWindow = ( i & 1 ) != 0;
+		c.v3DetailSplit = ( i & 2 ) != 0;
+		c.v3Guard = 0;
+		const uint64_t uOff = PackV3( c );
+		REQUIRE( ( uOff >> 50 ) == 0 );
+		for ( int g = 1; g <= 2; g++ )
+		{
+			c.v3Guard = g;
+			const uint64_t u = PackV3( c );
+			REQUIRE( ( u >> 50 ) == uint64_t( g ) );
+			REQUIRE( ( u & ( ( 1ull << 50 ) - 1 ) ) == uOff );   // bits 0-49 bit for bit as at Off
+			Config r;
+			UnpackV3( u, &r );
+			REQUIRE( r.v3Guard == g );
+			REQUIRE( r.v3ColourWindow == c.v3ColourWindow );
+			REQUIRE( r.v3DetailSplit == c.v3DetailSplit );
+			REQUIRE( ( r.v3Smear == 0.80f && r.v3OcclSoft == 2.55f && r.v3Unsure == 0.25f && r.v3SceneCut == 3.95f ) );
+		}
+	}
+	// Off is the default and changes nothing; the guard changes the word (so it reaches setSettings()); a value outside 0..2
+	// packs as 0, and the unused value 3 unpacks as 0.
+	REQUIRE( Config{}.v3Guard == 0 );
+	Config c; c.v3Guard = 1; REQUIRE( PackV3( c ) != PackV3( Config{} ) );
+	c.v3Guard = 2; REQUIRE( PackV3( c ) != PackV3( Config{} ) );
+	c.v3Guard = 7; REQUIRE( PackV3( c ) == PackV3( Config{} ) );
+	c.v3Guard = -1; REQUIRE( PackV3( c ) == PackV3( Config{} ) );
+	Config r; r.v3Guard = 2;
+	UnpackV3( PackV3( Config{} ) | ( 3ull << 50 ), &r );
+	REQUIRE( r.v3Guard == 0 );
+	UnpackV3( PackV3( Config{} ), &r );
+	REQUIRE( r.v3Guard == 0 );
+}
