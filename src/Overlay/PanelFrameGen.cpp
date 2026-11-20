@@ -31,9 +31,16 @@
 //
 // `Why only these:` the library's expert knobs are deliberately not exposed -- only the
 // defaults were visually reviewed, so a slider would hand the user settings nobody has
-// looked at. The one exception (2026-11-19) is the "Expert: motion search" group at the end
+// looked at. The one exception (2026-11-19) is the "Motion search" group at the end
 // of the area (search radius, coarsest-level radius, pyramid smallest level, search
 // penalty): the user asked to watch what more reach does while a game runs.
+// EXPERT SETTINGS (2026-11-20). The Learned, V3 and Motion search rows (15 in all) are hidden
+// (ShownWhen) unless the "Expert settings" switch (`framegen.expert`) is on AND the row acts on the
+// effective motion version; while it is off the renderer gets their DEFAULTS
+// (config::FrameGenEffective(), applied in PushToRenderer()), the stored values stay.
+// `Why:` the user: "When expert settings is turned off, it should always use the defaults, so
+// there are no \"ghost settings\"" -- a value you cannot see must not act.
+// See superdoc/features/frame-generation-settings.md.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
 // momentary action; the Frame generation switch is the on/off.
 #include "PanelFrameGen.h"
@@ -89,7 +96,7 @@ namespace gamescope
 		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
 		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" } };
 
-		// Expert: motion search reach (2026-11-19). The Choice ids ARE the pyramid's smallest-level sides (flow pixels):
+		// Motion search reach (2026-11-19). The Choice ids ARE the pyramid's smallest-level sides (flow pixels):
 		// each change re-creates the library's buffers and waits for the GPU, so a short list, not a free slider.
 		// A stored value between two entries shows the nearest one and is not rewritten until the user picks.
 		constexpr int kPyramidSides[] = { 16, 24, 32, 48, 64, 96, 128, 256 };
@@ -237,7 +244,8 @@ namespace gamescope
 		// PanelFrameGen_ApplyStartupConfig().
 		void PushToRenderer( const config::FrameGenSettings &f )
 		{
-			fghost::SetConfig( ToHostConfig( f ) );
+			// The effective values: with Expert settings off the 15 tuning values are the defaults (no "ghost settings").
+			fghost::SetConfig( ToHostConfig( config::FrameGenEffective( f ) ) );
 		}
 
 		void EnsureConfigLoaded()
@@ -316,20 +324,46 @@ namespace gamescope
 		// the rows are usable under V3 while the guard is not Off and greyed while it is Off.
 		bool V3GuardOn()
 		{
-			return EffectiveMotionIsV3() && s_Settings.framegen.v3_guard != "off";
+			// The EFFECTIVE guard: with Expert settings off the stored one is not in force.
+			return EffectiveMotionIsV3() && config::FrameGenEffective( s_Settings.framegen ).v3_guard != "off";
 		}
 
-		bool RadiusRowsUsable()
+		// The version rule of the two search-row groups (which motion versions the rows act on), without "something is on".
+		bool RadiusVersionApplies()
 		{
-			return ReachRowsUsable() && !EffectiveMotionIsLearned() && ( !EffectiveMotionIsV3() || V3GuardOn() );
+			return !EffectiveMotionIsLearned() && ( !EffectiveMotionIsV3() || V3GuardOn() );
 		}
 
 		// Pyramid side and penalty: every version; under V3 only while the Motion guard is on (V3 builds its own
 		// pyramid and ignores both; a pyramid change would rebuild the buffers without changing V3's picture).
+		bool PenaltyVersionApplies()
+		{
+			return !EffectiveMotionIsV3() || V3GuardOn();
+		}
+
+		bool RadiusRowsUsable()
+		{
+			return ReachRowsUsable() && RadiusVersionApplies();
+		}
+
 		bool PenaltyRowsUsable()
 		{
-			return ReachRowsUsable() && ( !EffectiveMotionIsV3() || V3GuardOn() );
+			return ReachRowsUsable() && PenaltyVersionApplies();
 		}
+
+		// Expert settings (2026-11-20): the 15 tuning rows are SHOWN (Entry::ShownWhen, so also absent from keyboard
+		// navigation and the command palette) only while the switch is on and the row acts on the effective motion
+		// version. Not whether frame generation is on: a shown row is greyed by its DisabledUnless() instead.
+		bool ExpertOn()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.expert;
+		}
+
+		bool ShowLearnedRows() { return ExpertOn() && EffectiveMotionIsLearned(); }
+		bool ShowV3Rows()      { return ExpertOn() && EffectiveMotionIsV3(); }
+		bool ShowRadiusRows()  { return ExpertOn() && RadiusVersionApplies(); }
+		bool ShowPenaltyRows() { return ExpertOn() && PenaltyVersionApplies(); }
 
 		bool UiOn()
 		{
@@ -526,7 +560,7 @@ namespace gamescope
 			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms with e2v5, 0.6 ms "
 			       "with the small e1v5, V1 0.3 ms) and always works at Quality's resolution, so the "
 			       "Quality row's Performance is ignored. Static HUD text over moving scenery can "
-			       "still get a little torn; the Zero-motion test below fixes most of it. Two "
+			       "still get a little torn; the Zero-motion test (shown with Expert settings on) fixes most of it. Two "
 			       "identical frames are left alone. If it cannot run the Status line says why and "
 			       "V1 runs." )
 			.Default( 0 )
@@ -552,216 +586,15 @@ namespace gamescope
 			.Keywords( "frame generation quality performance cost gpu motion estimation v2 mode" )
 			.DisabledUnless( On, "frame generation is off" );
 
-		a.Group( "Learned motion" );
-		a.GroupColumn( 1 );
-
-		a.Choice( "framegen.learned_net", "Learned net",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 10, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 9 ) ]; PersistAndPush(); } ),
-			kLearnedNetOptions, std::size( kLearnedNetOptions ) )
-			.Help( "Which trained network Learned motion uses (experimental). e2v5 is the default "
-			       "and the best one: about 1.4 ms of GPU time at 1080p 2x. e1v5 is the small one, "
-			       "about 2.4 times cheaper (about 0.6 ms) and the one to pick when e2v5 costs too "
-			       "much. e2v4 / e1v4 and e2v3 / e1v3 are the earlier versions of the same two nets, kept for "
-			       "comparing. g2v2 and g2v3 are the colour and learned-features nets "
-			       "trained on games, m2v2 and m2v3 the allrounders (about 1.8 / 1.9 ms at 1080p 2x, "
-			       "colour / features); the allround features net m2v3 held up best even on game "
-			       "clips in the library's spot check. Motion blur's Learned borrows this and the rows below: it has no "
-			       "copy of its own. Only used while Motion version is Learned." )
-			.Default( 0 )
-			.Keywords( "frame generation learned net network e2v5 e1v5 e2v4 e1v4 e2v3 e1v3 colour features g2v2 g2v3 m2v2 m2v3 games allround small neural ml weights experimental" )
-			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
-
-		a.Choice( "framegen.learned_half", "Learned precision",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_half ? 1 : 0; },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_half = n == 1; PersistAndPush(); } ),
-			kLearnedPrecOptions, std::size( kLearnedPrecOptions ) )
-			.Help( "How Learned motion stores its working data. Full is the exact version. Half "
-			       "uses half the memory and about a quarter less GPU time (e2v5, 1080p: about "
-			       "1.1 ms instead of 1.4) for a tiny, hardly visible difference. Only used while "
-			       "Motion version is Learned." )
-			.Default( 0 )
-			.Keywords( "frame generation learned precision half full fp16 fp32 float memory experimental" )
-			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
-
-		a.Switch( "framegen.learned_zero_test", "Zero-motion test",
+		a.Switch( "framegen.expert", "Expert settings",
 			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_zero_test; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.learned_zero_test = b; PersistAndPush(); } ) )
-			.Help( "On: wherever keeping a spot still fits the two real frames as well as the "
-			       "network's motion, that spot is treated as not moving. This fixes most of the "
-			       "warped, dragged static text and HUD (money counters, menu titles). It costs "
-			       "almost nothing (about 0.006 ms at 1080p). Off: the network's raw motion, for "
-			       "comparing. Only used while Motion version is Learned." )
-			.Default( true )
-			.Keywords( "frame generation learned zero motion test still static hud text warp experimental" )
-			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
-
-		a.Switch( "framegen.learned_static_guard", "Static guard",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_static_guard; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.learned_static_guard = b; PersistAndPush(); } ) )
-			.Help( "On: where both real frames are the same and the motion there is small, the "
-			       "in-between frame shows a plain blend of the two real frames instead of the "
-			       "network's picture, so still areas stay clean. It costs one extra full-screen "
-			       "pass per generated frame (about 0.05 ms at 1080p). It does not repair a HUD "
-			       "that sits on fast-moving scenery. Off by default. Only used while Motion "
-			       "version is Learned." )
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.expert; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.expert = b; PersistAndPush(); } ) )
+			.Help( "Shows the tuning settings of the selected Motion version. While it is off they are "
+			       "hidden and their defaults are used; your own values are kept and apply again when "
+			       "you turn it back on." )
 			.Default( false )
-			.Keywords( "frame generation learned static guard still blend time mix clean experimental" )
-			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
-
-		a.Group( "Motion version 3" );
-		a.GroupColumn( 1 );
-
-		a.Slider( "framegen.v3_smear", "Smear",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_smear; },
-				[]( float fl )
-				{
-					EnsureConfigLoaded();
-					s_Settings.framegen.v3_smear = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 1.0f );
-					PersistAndPush();
-				} ) )
-			.Help( "How strongly Motion version 3 smears the picture along the motion where it is "
-			       "unsure. 0 does not smear at all: sharper, but a wrong spot then shows as a sharp ghost. "
-			       "Only used while Motion version is V3." )
-			.Range( 0.0f, 1.0f ).Step( 0.05f )
-			.Default( 0.35f )
-			.Keywords( "frame generation v3 smear blur unsure motion ghost sharp" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Slider( "framegen.v3_occl_soft", "Occlusion softness",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_occl_soft; },
-				[]( float fl )
-				{
-					EnsureConfigLoaded();
-					s_Settings.framegen.v3_occl_soft = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
-					PersistAndPush();
-				} ) )
-			.Help( "How soft Motion version 3's decision is about areas that one of the two real "
-			       "frames hides (behind a moving object). Higher is a softer, more one-sided "
-			       "transition at the edge of such an area. Only used while Motion version is V3." )
-			.Range( 0.25f, 4.0f ).Step( 0.05f )
-			.Default( 1.0f )
-			.Keywords( "frame generation v3 occlusion softness hidden edge disocclusion" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Slider( "framegen.v3_unsure", "Unsure sensitivity",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_unsure; },
-				[]( float fl )
-				{
-					EnsureConfigLoaded();
-					s_Settings.framegen.v3_unsure = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
-					PersistAndPush();
-				} ) )
-			.Help( "How readily Motion version 3 counts a spot as unsure. Higher trusts worse "
-			       "matches: less smearing, more risk of wrong spots. Only used while Motion "
-			       "version is V3." )
-			.Range( 0.25f, 4.0f ).Step( 0.05f )
-			.Default( 1.0f )
-			.Keywords( "frame generation v3 unsure sensitivity trust match smear" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Slider( "framegen.v3_scene_cut", "Scene cut threshold",
-			ui::AnyBind::Of<float>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_scene_cut; },
-				[]( float fl )
-				{
-					EnsureConfigLoaded();
-					s_Settings.framegen.v3_scene_cut = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 4.0f );
-					PersistAndPush();
-				} ) )
-			.Help( "0 = Never (default). Above 0, V3 shows the previous real frame when two frames "
-			       "differ this much; on fast motion that looks like lag. Only used while Motion "
-			       "version is V3." )
-			.Range( 0.0f, 4.0f ).Step( 0.05f )
-			.Default( 0.0f )
-			.ZeroMeans( "Never" )
-			.Keywords( "frame generation v3 scene cut threshold histogram cut transition" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Switch( "framegen.v3_colour_window", "Colour-weighted matching",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_colour_window; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_colour_window = b; PersistAndPush(); } ) )
-			.Help( "Experiment: weights the motion search by colour similarity. Can sharpen clearly "
-			       "coloured moving objects; can break areas next to flat dark regions. +0.05 ms." )
-			.Default( false )
-			.Keywords( "frame generation v3 colour color weighted matching window motion search experiment" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Switch( "framegen.v3_detail_split", "Detail from one frame",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_detail_split; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_detail_split = b; PersistAndPush(); } ) )
-			.Help( "Experiment: blends only the coarse picture and takes fine detail from one frame. "
-			       "Slightly crisper texture and text. +0.06 ms per generated frame." )
-			.Default( false )
-			.Keywords( "frame generation v3 detail split one frame texture text sharp crisp experiment" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Choice( "framegen.v3_guard", "Motion guard",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
-			kGuardOptions, std::size( kGuardOptions ) )
-			.Help( "Experiment. Off: Motion version 3 alone (default). Guard: V2's motion search also runs "
-			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
-			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
-			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
-			       "everywhere, V3's picture generation on top. Removes more of V3's large artifacts but "
-			       "loses V3's advantage on fast motion (looks like V2 there). About +0.31 ms per real "
-			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
-			       "Only used while Motion version is V3." )
-			.Segmented()
-			.Default( 0 )
-			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Group( "Pausing and limits" );
-		a.GroupColumn( 1 );
-
-		a.Switch( "framegen.pause_at_refresh", "Pause at refresh rate",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
-			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps this switch has no "
-			       "effect and the target is used as set. On: frame generation stops once "
-			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
-			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
-			       "tearing or in a desktop window, where only the newest frame is shown; it "
-			       "costs GPU time, and on a real display without tearing it cannot go past "
-			       "the refresh rate." )
-			.Default( true )
-			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
-			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
-
-		a.Switch( "framegen.pause_when_cursor_visible", "Pause while cursor visible",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_when_cursor_visible; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_when_cursor_visible = b; PersistAndPush(); } ) )
-			.Help( "Shows the game's real frames while its mouse cursor is visible, so menus and "
-			       "settings screens do not get interpolation artifacts. Generation resumes by "
-			       "itself when the cursor hides again." )
-			.Default( false )
-			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
-			.DisabledUnless( On, "frame generation is off" );
-
-		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
-			ui::AnyBind::Of<bool>(
-				[]{ EnsureConfigLoaded(); return s_Settings.framegen.gpu_limit; },
-				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.gpu_limit = b; PersistAndPush(); } ) )
-			.Help( "On: when frame generation takes too much of the GPU it lowers the output rate, "
-			       "and as a last resort shows only real frames, so the game itself keeps its frame "
-			       "rate. Off: always generate at the chosen rate, even if that slows the game down." )
-			.Default( false )
-			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
-			.DisabledUnless( On, "frame generation is off" );
+			.Keywords( "frame generation expert advanced tuning settings options experimental hidden show" );
 
 		a.Group( "Artifact protection" );
 		a.GroupColumn( 0 );
@@ -848,6 +681,46 @@ namespace gamescope
 			.Keywords( "frame generation ui protection crosshair box size area percent height pixels specks" )
 			.DisabledUnless( UiOn, "UI protection or frame generation is off" );
 
+		a.Group( "Pausing and limits" );
+		a.GroupColumn( 1 );
+
+		a.Switch( "framegen.pause_at_refresh", "Pause at refresh rate",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_at_refresh; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_at_refresh = b; PersistAndPush(); } ) )
+			.Help( "Only for the fixed multipliers (2× to 8×); with Target fps this switch has no "
+			       "effect and the target is used as set. On: frame generation stops once "
+			       "the game alone reaches your refresh rate, so the GPU does no pointless work. "
+			       "Off: it keeps generating above your refresh rate (e.g. 800 fps): useful with "
+			       "tearing or in a desktop window, where only the newest frame is shown; it "
+			       "costs GPU time, and on a real display without tearing it cannot go past "
+			       "the refresh rate." )
+			.Default( true )
+			.Keywords( "frame generation pause refresh rate stop cap limit above uncapped tearing multiplier" )
+			.DisabledUnless( PauseRowUsable, "frame generation is off, or Multiplier is Target fps (the switch has no effect there)" );
+
+		a.Switch( "framegen.pause_when_cursor_visible", "Pause while cursor visible",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.pause_when_cursor_visible; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.pause_when_cursor_visible = b; PersistAndPush(); } ) )
+			.Help( "Shows the game's real frames while its mouse cursor is visible, so menus and "
+			       "settings screens do not get interpolation artifacts. Generation resumes by "
+			       "itself when the cursor hides again." )
+			.Default( false )
+			.Keywords( "frame generation pause cursor mouse visible menu settings artifacts" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Switch( "framegen.gpu_limit", "Limit to GPU speed",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.gpu_limit; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.gpu_limit = b; PersistAndPush(); } ) )
+			.Help( "On: when frame generation takes too much of the GPU it lowers the output rate, "
+			       "and as a last resort shows only real frames, so the game itself keeps its frame "
+			       "rate. Off: always generate at the chosen rate, even if that slows the game down." )
+			.Default( false )
+			.Keywords( "frame generation limit gpu speed cost guard keep up slow lower output rate pass through" )
+			.DisabledUnless( On, "frame generation is off" );
+
 		a.Group( "Status" );
 		a.GroupColumn( 1 );
 
@@ -864,7 +737,189 @@ namespace gamescope
 			       "presented rate, or both, per its FPS shown choice (Game / Output / Both)." )
 			.Keywords( "frame generation status fps presented delay latency reason" );
 
-		a.Group( "Expert: motion search" );
+		a.Group( "Learned motion" );
+		a.GroupColumn( 1 );
+
+		a.Choice( "framegen.learned_net", "Learned net",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 10, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 9 ) ]; PersistAndPush(); } ),
+			kLearnedNetOptions, std::size( kLearnedNetOptions ) )
+			.Help( "Which trained network Learned motion uses (experimental). e2v5 is the default "
+			       "and the best one: about 1.4 ms of GPU time at 1080p 2x. e1v5 is the small one, "
+			       "about 2.4 times cheaper (about 0.6 ms) and the one to pick when e2v5 costs too "
+			       "much. e2v4 / e1v4 and e2v3 / e1v3 are the earlier versions of the same two nets, kept for "
+			       "comparing. g2v2 and g2v3 are the colour and learned-features nets "
+			       "trained on games, m2v2 and m2v3 the allrounders (about 1.8 / 1.9 ms at 1080p 2x, "
+			       "colour / features); the allround features net m2v3 held up best even on game "
+			       "clips in the library's spot check. Motion blur's Learned borrows this and the rows below: it has no "
+			       "copy of its own. Only used while Motion version is Learned." )
+			.Default( 0 )
+			.Keywords( "frame generation learned net network e2v5 e1v5 e2v4 e1v4 e2v3 e1v3 colour features g2v2 g2v3 m2v2 m2v3 games allround small neural ml weights experimental" )
+			.ShownWhen( ShowLearnedRows )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
+
+		a.Choice( "framegen.learned_half", "Learned precision",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_half ? 1 : 0; },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_half = n == 1; PersistAndPush(); } ),
+			kLearnedPrecOptions, std::size( kLearnedPrecOptions ) )
+			.Help( "How Learned motion stores its working data. Full is the exact version. Half "
+			       "uses half the memory and about a quarter less GPU time (e2v5, 1080p: about "
+			       "1.1 ms instead of 1.4) for a tiny, hardly visible difference. Only used while "
+			       "Motion version is Learned." )
+			.Default( 0 )
+			.Keywords( "frame generation learned precision half full fp16 fp32 float memory experimental" )
+			.ShownWhen( ShowLearnedRows )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
+
+		a.Switch( "framegen.learned_zero_test", "Zero-motion test",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_zero_test; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.learned_zero_test = b; PersistAndPush(); } ) )
+			.Help( "On: wherever keeping a spot still fits the two real frames as well as the "
+			       "network's motion, that spot is treated as not moving. This fixes most of the "
+			       "warped, dragged static text and HUD (money counters, menu titles). It costs "
+			       "almost nothing (about 0.006 ms at 1080p). Off: the network's raw motion, for "
+			       "comparing. Only used while Motion version is Learned." )
+			.Default( true )
+			.Keywords( "frame generation learned zero motion test still static hud text warp experimental" )
+			.ShownWhen( ShowLearnedRows )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
+
+		a.Switch( "framegen.learned_static_guard", "Static guard",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_static_guard; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.learned_static_guard = b; PersistAndPush(); } ) )
+			.Help( "On: where both real frames are the same and the motion there is small, the "
+			       "in-between frame shows a plain blend of the two real frames instead of the "
+			       "network's picture, so still areas stay clean. It costs one extra full-screen "
+			       "pass per generated frame (about 0.05 ms at 1080p). It does not repair a HUD "
+			       "that sits on fast-moving scenery. Off by default. Only used while Motion "
+			       "version is Learned." )
+			.Default( false )
+			.Keywords( "frame generation learned static guard still blend time mix clean experimental" )
+			.ShownWhen( ShowLearnedRows )
+			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
+
+		a.Group( "Motion version 3" );
+		a.GroupColumn( 1 );
+
+		a.Slider( "framegen.v3_smear", "Smear",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_smear; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_smear = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 1.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How strongly Motion version 3 smears the picture along the motion where it is "
+			       "unsure. 0 does not smear at all: sharper, but a wrong spot then shows as a sharp ghost. "
+			       "Only used while Motion version is V3." )
+			.Range( 0.0f, 1.0f ).Step( 0.05f )
+			.Default( 0.35f )
+			.Keywords( "frame generation v3 smear blur unsure motion ghost sharp" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_occl_soft", "Occlusion softness",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_occl_soft; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_occl_soft = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How soft Motion version 3's decision is about areas that one of the two real "
+			       "frames hides (behind a moving object). Higher is a softer, more one-sided "
+			       "transition at the edge of such an area. Only used while Motion version is V3." )
+			.Range( 0.25f, 4.0f ).Step( 0.05f )
+			.Default( 1.0f )
+			.Keywords( "frame generation v3 occlusion softness hidden edge disocclusion" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_unsure", "Unsure sensitivity",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_unsure; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_unsure = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.25f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "How readily Motion version 3 counts a spot as unsure. Higher trusts worse "
+			       "matches: less smearing, more risk of wrong spots. Only used while Motion "
+			       "version is V3." )
+			.Range( 0.25f, 4.0f ).Step( 0.05f )
+			.Default( 1.0f )
+			.Keywords( "frame generation v3 unsure sensitivity trust match smear" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Slider( "framegen.v3_scene_cut", "Scene cut threshold",
+			ui::AnyBind::Of<float>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_scene_cut; },
+				[]( float fl )
+				{
+					EnsureConfigLoaded();
+					s_Settings.framegen.v3_scene_cut = std::clamp( std::round( fl * 20.0f ) / 20.0f, 0.0f, 4.0f );
+					PersistAndPush();
+				} ) )
+			.Help( "0 = Never (default). Above 0, V3 shows the previous real frame when two frames "
+			       "differ this much; on fast motion that looks like lag. Only used while Motion "
+			       "version is V3." )
+			.Range( 0.0f, 4.0f ).Step( 0.05f )
+			.Default( 0.0f )
+			.ZeroMeans( "Never" )
+			.Keywords( "frame generation v3 scene cut threshold histogram cut transition" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Switch( "framegen.v3_colour_window", "Colour-weighted matching",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_colour_window; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_colour_window = b; PersistAndPush(); } ) )
+			.Help( "Experiment: weights the motion search by colour similarity. Can sharpen clearly "
+			       "coloured moving objects; can break areas next to flat dark regions. +0.05 ms." )
+			.Default( false )
+			.Keywords( "frame generation v3 colour color weighted matching window motion search experiment" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Switch( "framegen.v3_detail_split", "Detail from one frame",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.v3_detail_split; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.v3_detail_split = b; PersistAndPush(); } ) )
+			.Help( "Experiment: blends only the coarse picture and takes fine detail from one frame. "
+			       "Slightly crisper texture and text. +0.06 ms per generated frame." )
+			.Default( false )
+			.Keywords( "frame generation v3 detail split one frame texture text sharp crisp experiment" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Choice( "framegen.v3_guard", "Motion guard",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+			kGuardOptions, std::size( kGuardOptions ) )
+			.Help( "Experiment. Off: Motion version 3 alone (default). Guard: V2's motion search also runs "
+			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
+			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
+			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
+			       "everywhere, V3's picture generation on top. Removes more of V3's large artifacts but "
+			       "loses V3's advantage on fast motion (looks like V2 there). About +0.31 ms per real "
+			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
+			       "Only used while Motion version is V3." )
+			.Segmented()
+			.Default( 0 )
+			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
+			.ShownWhen( ShowV3Rows )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+
+		a.Group( "Motion search" );
 		a.GroupColumn( 1 );
 
 		a.Slider( "framegen.search_radius", "Search radius",
@@ -880,6 +935,7 @@ namespace gamescope
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 2 )
 			.Keywords( "frame generation expert motion search radius reach fast motion vectors v1 v2" )
+			.ShownWhen( ShowRadiusRows )
 			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned, or V3 with Motion guard off)" );
 
 		a.Slider( "framegen.search_radius_top", "Search radius (coarsest level)",
@@ -895,6 +951,7 @@ namespace gamescope
 			.Range( 1.0f, 12.0f ).Step( 1.0f )
 			.Default( 6 )
 			.Keywords( "frame generation expert motion search radius coarsest top level reach long vectors v1 v2" )
+			.ShownWhen( ShowRadiusRows )
 			.DisabledUnless( RadiusRowsUsable, "nothing that uses the motion search is on (or Motion version is Learned, or V3 with Motion guard off)" );
 
 		a.Choice( "framegen.pyramid_min_side", "Pyramid smallest level",
@@ -911,6 +968,7 @@ namespace gamescope
 			       "version; V3 builds its own and uses it only for the Motion guard's V2 search." )
 			.Default( 48 )
 			.Keywords( "frame generation expert motion search pyramid levels smallest minimum side reach long vectors" )
+			.ShownWhen( ShowPenaltyRows )
 			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3 with Motion guard off)" );
 
 		a.Slider( "framegen.search_penalty", "Search penalty",
@@ -928,6 +986,7 @@ namespace gamescope
 			.Range( 0.0f, 4.0f ).Step( 0.05f )
 			.Default( 0.5f )
 			.Keywords( "frame generation expert motion search penalty lambda steady flat repetitive detail v1 v2" )
+			.ShownWhen( ShowPenaltyRows )
 			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3 with Motion guard off)" );
 	}
 }

@@ -4079,7 +4079,7 @@ TEST_CASE( "the live-apply hook fires synchronously on a generation bump, which 
     SetLiveApplyHook( nullptr );
 }
 
-// Expert: motion search reach (2026-11-19). Four additive keys under "framegen": defaults are the library's,
+// Motion search reach (2026-11-19). Four additive keys under "framegen": defaults are the library's,
 // an absent key loads the default, the values clamp on load to the library's full ranges.
 TEST_CASE( "framegen: motion search reach keys default, round-trip and clamp on load", "[config]" )
 {
@@ -4356,4 +4356,185 @@ TEST_CASE( "framegen: V3 switches of the wrong type keep the default", "[config]
     const Settings l = LoadSections();
     REQUIRE( !l.framegen.v3_colour_window );
     REQUIRE( !l.framegen.v3_detail_split );
+}
+
+// Expert settings (2026-11-20): `framegen.expert` is the switch over the 15 tuning values. Each "file X loads as Y" check has
+// its own TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
+namespace
+{
+    // Writes a general profile whose framegen object is `sFrameGen` and loads it. The caller owns the TempConfigHome.
+    FrameGenSettings LoadFrameGenFrom( const std::string &sFrameGen )
+    {
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) )
+            << R"({ "schema_version": 5, "name": "T", "kind": "general", "framegen": )" << sFrameGen << " }";
+        return LoadSections().framegen;
+    }
+}
+
+TEST_CASE( "framegen: expert defaults to false and round-trips both ways", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( !Settings{}.framegen.expert );
+    for ( const bool b : { true, false } )
+    {
+        Settings s{};
+        s.framegen.expert = b;
+        s.framegen.v3_smear = 0.6f;   // changed, so the load rule cannot be what makes it true
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.expert == b );
+        REQUIRE( l.framegen.v3_smear == 0.6f );
+    }
+    REQUIRE( IsSettingsKey( "framegen.expert" ) );
+}
+
+TEST_CASE( "framegen: a wrong-typed expert loads false", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( !LoadFrameGenFrom( R"({ "expert": "yes", "v3_smear": 0.6 })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with all defaults loads false", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( !LoadFrameGenFrom( R"({ "quality": "performance", "v3_smear": 0.35, "search_radius": 2, "v3_guard": "off" })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed float loads true", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "v3_smear": 0.6 })" );
+    REQUIRE( f.expert );
+    REQUIRE( f.v3_smear == 0.6f );   // the value is kept
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed int loads true", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( LoadFrameGenFrom( R"({ "search_radius": 3 })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed string loads true", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( LoadFrameGenFrom( R"({ "learned_net": "e1v5" })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed V3 guard loads true", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( LoadFrameGenFrom( R"({ "v3_guard": "guard" })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed bool loads true", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( LoadFrameGenFrom( R"({ "learned_static_guard": true })" ).expert );
+}
+
+TEST_CASE( "framegen: an explicit expert false stays false with changed values", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "expert": false, "v3_smear": 0.6, "search_radius": 3, "learned_static_guard": true })" );
+    REQUIRE( !f.expert );
+    REQUIRE( f.v3_smear == 0.6f );   // stored, not in force
+    REQUIRE( f.search_radius == 3 );
+}
+
+TEST_CASE( "framegen: an absent expert key with the default written as 0.35000000000000003 loads false", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( !LoadFrameGenFrom( R"({ "v3_smear": 0.35000000000000003 })" ).expert );
+}
+
+TEST_CASE( "framegen: an absent expert key with the legacy scene cut 0.45 loads false", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "v3_scene_cut": 0.45 })" );
+    REQUIRE( f.v3_scene_cut == 0.0f );   // the legacy rule runs first
+    REQUIRE( !f.expert );
+}
+
+TEST_CASE( "framegen: FrameGenEffective with expert off puts the 15 tuning values at their defaults", "[config]" )
+{
+    FrameGenSettings in;
+    in.expert = false;
+    in.learned_net = "e1v5";
+    in.learned_half = true;
+    in.learned_zero_test = false;
+    in.learned_static_guard = true;
+    in.v3_smear = 0.9f;
+    in.v3_occl_soft = 2.0f;
+    in.v3_unsure = 3.0f;
+    in.v3_scene_cut = 1.5f;
+    in.v3_colour_window = true;
+    in.v3_detail_split = true;
+    in.v3_guard = "v2_motion";
+    in.search_radius = 9;
+    in.search_radius_top = 11;
+    in.pyramid_min_side = 16;
+    in.search_penalty = 2.0f;
+    // Everything else non-default too, to see it pass through.
+    in.enabled = true;
+    in.mode = "fixed";
+    in.multiplier = 4;
+    in.motion_version = "v3";
+    in.quality = "performance";
+    in.safety = "high";
+    in.ui_box_height = 5.0f;
+
+    const FrameGenSettings out = FrameGenEffective( in );
+    const FrameGenSettings d;
+    REQUIRE( out.learned_net == d.learned_net );
+    REQUIRE( out.learned_half == d.learned_half );
+    REQUIRE( out.learned_zero_test == d.learned_zero_test );
+    REQUIRE( out.learned_static_guard == d.learned_static_guard );
+    REQUIRE( out.v3_smear == d.v3_smear );
+    REQUIRE( out.v3_occl_soft == d.v3_occl_soft );
+    REQUIRE( out.v3_unsure == d.v3_unsure );
+    REQUIRE( out.v3_scene_cut == d.v3_scene_cut );
+    REQUIRE( out.v3_colour_window == d.v3_colour_window );
+    REQUIRE( out.v3_detail_split == d.v3_detail_split );
+    REQUIRE( out.v3_guard == d.v3_guard );
+    REQUIRE( out.search_radius == d.search_radius );
+    REQUIRE( out.search_radius_top == d.search_radius_top );
+    REQUIRE( out.pyramid_min_side == d.pyramid_min_side );
+    REQUIRE( out.search_penalty == d.search_penalty );
+    // Every other field is unchanged.
+    REQUIRE( !out.expert );
+    REQUIRE( out.enabled );
+    REQUIRE( out.mode == "fixed" );
+    REQUIRE( out.multiplier == 4 );
+    REQUIRE( out.motion_version == "v3" );
+    REQUIRE( out.quality == "performance" );
+    REQUIRE( out.safety == "high" );
+    REQUIRE( out.ui_box_height == 5.0f );
+    // The input is not modified.
+    REQUIRE( in.v3_smear == 0.9f );
+    REQUIRE( in.learned_net == "e1v5" );
+    REQUIRE( in.v3_guard == "v2_motion" );
+    REQUIRE( in.search_radius == 9 );
+}
+
+TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unchanged", "[config]" )
+{
+    FrameGenSettings in;
+    in.expert = true;
+    in.v3_smear = 0.9f;
+    in.learned_net = "m2v3";
+    in.v3_guard = "guard";
+    in.search_radius = 9;
+    in.search_penalty = 2.0f;
+    in.motion_version = "v3";
+    const FrameGenSettings out = FrameGenEffective( in );
+    REQUIRE( out.expert );
+    REQUIRE( out.v3_smear == 0.9f );
+    REQUIRE( out.learned_net == "m2v3" );
+    REQUIRE( out.v3_guard == "guard" );
+    REQUIRE( out.search_radius == 9 );
+    REQUIRE( out.search_penalty == 2.0f );
+    REQUIRE( out.motion_version == "v3" );
+    REQUIRE( in.v3_smear == 0.9f );
 }

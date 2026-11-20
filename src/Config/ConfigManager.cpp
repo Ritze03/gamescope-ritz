@@ -49,6 +49,22 @@ namespace gamescope::config
     {
         LogScope s_ConfigLog( "config" );
 
+        // Whether any of FrameGenSettings' 15 expert values (see FrameGenEffective()) differs from its default. Floats are
+        // compared in hundredths: a saved 0.35000000000000003 is the default 0.35 (and std::isfinite is off the table, -ffast-math).
+        bool ExpertValuesChanged( const FrameGenSettings &f )
+        {
+            const FrameGenSettings d;
+            const auto Hund = []( float fl ) { return std::lround( fl * 100.0f ); };
+            return f.learned_net != d.learned_net || f.learned_half != d.learned_half
+                || f.learned_zero_test != d.learned_zero_test || f.learned_static_guard != d.learned_static_guard
+                || Hund( f.v3_smear ) != Hund( d.v3_smear ) || Hund( f.v3_occl_soft ) != Hund( d.v3_occl_soft )
+                || Hund( f.v3_unsure ) != Hund( d.v3_unsure ) || Hund( f.v3_scene_cut ) != Hund( d.v3_scene_cut )
+                || f.v3_colour_window != d.v3_colour_window || f.v3_detail_split != d.v3_detail_split
+                || f.v3_guard != d.v3_guard || f.search_radius != d.search_radius
+                || f.search_radius_top != d.search_radius_top || f.pyramid_min_side != d.pyramid_min_side
+                || Hund( f.search_penalty ) != Hund( d.search_penalty );
+        }
+
         // ---- type-checked JSON field access -------------------------------
         // Every one of these only calls nlohmann's get<T>() after confirming
         // the field's actual type matches, so none of them can hit a throwing
@@ -402,6 +418,13 @@ namespace gamescope::config
                     const std::string sGuard = JGetString( *pFrameGen, "v3_guard", f.v3_guard );
                     f.v3_guard = ( sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : "off";
                 }
+                f.expert = JGetBool( *pFrameGen, "expert", f.expert );
+                // ponytail: a profile saved before the Expert switch (2026-11-20) with no `expert` key and any tuning value off its
+                // default loads with Expert on, so it keeps sounding as it did; an explicit false stays false. A game profile
+                // gets here with its parent's keys merged under its own (ResolvedSectionsJson), so it follows the parent.
+                // Remove once no profile from before 2026-11-20 is around.
+                if ( !pFrameGen->contains( "expert" ) && ExpertValuesChanged( f ) )
+                    f.expert = true;
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -905,6 +928,7 @@ namespace gamescope::config
             jFrameGen[ "v3_colour_window" ] = fg.v3_colour_window;
             jFrameGen[ "v3_detail_split" ] = fg.v3_detail_split;
             jFrameGen[ "v3_guard" ] = fg.v3_guard;
+            jFrameGen[ "expert" ] = fg.expert;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
@@ -2516,7 +2540,6 @@ namespace gamescope::config
                 }
             }
 
-            std::thread m_Thread;
             std::mutex m_Mutex;
             std::condition_variable m_Cv;
             std::vector<PendingWrite> m_Pending;
@@ -2524,6 +2547,10 @@ namespace gamescope::config
             int m_nFlushWaiters = 0;
             std::chrono::steady_clock::time_point m_tLastEnqueue{};
             std::chrono::steady_clock::time_point m_tOldestPending{};
+            // MUST stay the last member. `Why:` the thread starts in the constructor's initialiser and uses every
+            // other member; declared first it ran ThreadMain() on unconstructed members (a rare crash on the first
+            // settings write, core dump seen 2026-11-20).
+            std::thread m_Thread;
         };
 
         void DiscardQueuedWrite( const std::string &sPath )
@@ -2686,6 +2713,30 @@ namespace gamescope::config
         if ( s_SessionMeta.kind == ProfileKind::Game && !s_SessionMeta.inherits.empty() )
             return s_SessionMeta.inherits;
         return std::nullopt;
+    }
+
+    FrameGenSettings FrameGenEffective( const FrameGenSettings &f )
+    {
+        if ( f.expert )
+            return f;
+        const FrameGenSettings d;
+        FrameGenSettings e = f;
+        e.learned_net = d.learned_net;
+        e.learned_half = d.learned_half;
+        e.learned_zero_test = d.learned_zero_test;
+        e.learned_static_guard = d.learned_static_guard;
+        e.v3_smear = d.v3_smear;
+        e.v3_occl_soft = d.v3_occl_soft;
+        e.v3_unsure = d.v3_unsure;
+        e.v3_scene_cut = d.v3_scene_cut;
+        e.v3_colour_window = d.v3_colour_window;
+        e.v3_detail_split = d.v3_detail_split;
+        e.v3_guard = d.v3_guard;
+        e.search_radius = d.search_radius;
+        e.search_radius_top = d.search_radius_top;
+        e.pyramid_min_side = d.pyramid_min_side;
+        e.search_penalty = d.search_penalty;
+        return e;
     }
 
     Settings ResolvedSettings()

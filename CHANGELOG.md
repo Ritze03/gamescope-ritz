@@ -12,6 +12,17 @@ All notable user-facing changes, newest first. Categories:
 ### Added
 - **Frame generation**: V3 has an experimental Motion guard setting that can reduce
   its large artifacts.
+- **Expert settings**: Frame generation's tuning rows are hidden until you turn on
+  Expert settings, which then shows only those of the selected Motion version; while
+  it is off their defaults are used.
+
+### Fixed
+- **Settings**: fixed a rare crash when a setting was changed for the first time after
+  start.
+
+### Info
+- **Frame generation**: the groups were reordered, with Pausing and limits and Status
+  now above the tuning groups.
 
 ## 2026-11-19
 

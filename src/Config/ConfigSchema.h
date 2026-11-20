@@ -550,7 +550,7 @@ namespace gamescope::config
         bool learned_half = false;
         bool learned_zero_test = true;
         bool learned_static_guard = false;
-        // Expert: motion search reach (2026-11-19, the library's Settings::searchRadius / searchRadiusTop /
+        // Motion search reach (2026-11-19, the library's Settings::searchRadius / searchRadiusTop /
         // pyramidMinSide / searchPenalty). Motion versions V1 and V2; Learned ignores the two radii and
         // pyramid_min_side only changes its buffer layout. Clamped on load to the library's full ranges:
         // radii 1..12, pyramid_min_side 16..256, search_penalty 0..255 (the overlay offers 0..4). Defaults are the
@@ -573,6 +573,12 @@ namespace gamescope::config
         // Motion guard (2026-11-20; Settings::v3Guard): "off" | "guard" | "v2_motion". Motion version 3 only. An absent,
         // wrong-typed or unknown value loads "off". ADDITIVE. Applies live.
         std::string v3_guard = "off";
+        // Expert settings (2026-11-20): the switch for the 15 tuning values above (learned_*, v3_*, search_radius,
+        // search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
+        // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.
+        // ADDITIVE: absent loads false, except for a profile saved before the switch existed that holds a changed
+        // value, which loads true (ConfigManager.cpp), so it keeps sounding the way it did.
+        bool expert = false;
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

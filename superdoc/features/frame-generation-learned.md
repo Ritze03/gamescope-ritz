@@ -14,9 +14,9 @@ trust ramp, fallbacks, motion blur and UI protection are untouched. Defaults are
 `v1`; once Learned is chosen, net `e2v5`, full precision, zero-motion test on, static guard off.
 
 - **Rows** (Frame generation area): **Motion version** gains a third choice, **Learned**
-  (`framegen.motion_version` = `learned`). Below it, four rows, greyed out unless Learned is
-  what actually runs (`LearnedRowsUsable()`: Frame generation or Motion blur on, and the
-  effective Motion version `learned`): **Learned net** (`framegen.learned_net`, in GUI order
+  (`framegen.motion_version` = `learned`). Four more rows, shown only with Expert settings on and Learned the
+  effective Motion version (`ShowLearnedRows()`, see [Expert settings](frame-generation-settings.md#expert-settings)),
+  and greyed out while neither Frame generation nor Motion blur is on (`LearnedRowsUsable()`): **Learned net** (`framegen.learned_net`, in GUI order
   `e2v5` default / `e1v5` the small cheap net / `e2v4` / `e1v4` / `e2v3` / `e1v3`, the last four
   being earlier rounds' nets kept for comparing), **Learned precision** (`framegen.learned_half`, Full default /
   Half), **Zero-motion test** (`framegen.learned_zero_test`, default on) and **Static guard**
