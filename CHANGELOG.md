@@ -21,6 +21,8 @@ All notable user-facing changes, newest first. Categories:
   start.
 - **Settings overlay**: fixed a crash when changing Motion guard, Motion version or
   Expert settings in the Frame generation area.
+- **Expert settings**: is now off for every profile that did not turn it on itself,
+  also for profiles saved before the switch existed.
 
 ### Info
 - **Frame generation**: the groups were reordered, with Pausing and limits and Status
