@@ -399,6 +399,8 @@ namespace gamescope::config
                         f.v3_scene_cut = 0.0f;
                     f.v3_colour_window = JGetBool( *pFrameGen, "v3_colour_window", f.v3_colour_window );
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
+                    const std::string sGuard = JGetString( *pFrameGen, "v3_guard", f.v3_guard );
+                    f.v3_guard = ( sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : "off";
                 }
             }
 
@@ -902,6 +904,7 @@ namespace gamescope::config
             jFrameGen[ "v3_scene_cut" ] = std::round( double( fg.v3_scene_cut ) * 100.0 ) / 100.0;
             jFrameGen[ "v3_colour_window" ] = fg.v3_colour_window;
             jFrameGen[ "v3_detail_split" ] = fg.v3_detail_split;
+            jFrameGen[ "v3_guard" ] = fg.v3_guard;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();

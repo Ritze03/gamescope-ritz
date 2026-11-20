@@ -570,6 +570,9 @@ namespace gamescope::config
         float v3_scene_cut = 0.0f;   // 0 = never (default)
         bool v3_colour_window = false;   // Motion version 3 only: matching weighted by colour similarity
         bool v3_detail_split = false;    // Motion version 3 only: fine detail taken from one frame
+        // Motion guard (2026-11-20; Settings::v3Guard): "off" | "guard" | "v2_motion". Motion version 3 only. An absent,
+        // wrong-typed or unknown value loads "off". ADDITIVE. Applies live.
+        std::string v3_guard = "off";
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

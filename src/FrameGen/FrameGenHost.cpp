@@ -559,6 +559,8 @@ namespace fghost
 			s.v3SceneCut = ReachIsFinite( c.v3SceneCut ) ? std::clamp( c.v3SceneCut, kV3SceneCutMin, kV3SceneCutMax ) : kV3SceneCutDefault;
 			s.v3ColourWindow = c.v3ColourWindow;
 			s.v3DetailSplit = c.v3DetailSplit;
+			s.v3Guard = c.v3Guard == 1 ? framegen::V3Guard::Guard
+				: c.v3Guard == 2 ? framegen::V3Guard::V2Motion : framegen::V3Guard::Off;
 			return s;
 		}
 
@@ -897,7 +899,9 @@ namespace fghost
 						if ( want.motionVersion == framegen::MotionVersion::V2 )
 							g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
 						else if ( want.motionVersion == framegen::MotionVersion::V3 )
-							g_pszMotionNote.store( "the library could not create Motion version 3 (its pipelines or buffers)", std::memory_order_relaxed );
+							g_pszMotionNote.store( want.v3Guard != framegen::V3Guard::Off && want.v3Guard != H.interp.settings().v3Guard
+								? "the library could not create the Motion guard (V2's pipelines or buffers)"
+								: "the library could not create Motion version 3 (its pipelines or buffers)", std::memory_order_relaxed );
 						else if ( want.motionVersion == framegen::MotionVersion::Learned )
 							g_pszMotionNote.store( "the library could not create Learned motion (its pipelines or buffers)", std::memory_order_relaxed );
 						if ( !H.bUiSetFailLogged )
