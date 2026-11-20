@@ -876,6 +876,7 @@ TEST_CASE( "a requested column count collapses over hidden groups", "[overlay_sh
 	SECTION( "shown again -> two" )
 	{
 		bV = true;
+		reg.SnapshotShown();   // a predicate flip shows from the next snapshot
 		REQUIRE( area.WantedColumns() == 2 );
 	}
 	SECTION( "no request means no override" )
@@ -883,6 +884,62 @@ TEST_CASE( "a requested column count collapses over hidden groups", "[overlay_sh
 		ui::Area &plain = reg.Add( "p", "P", ui::Section::Display );
 		plain.Switch( "p.a", "A", ui::Bind( &bB ) );
 		REQUIRE( plain.WantedColumns() == 0 );
+	}
+}
+
+TEST_CASE( "the shown-row set is fixed between snapshots", "[overlay_shell]" )
+{
+	// A click on a row changes a ShownWhen predicate in the middle of the draw
+	// pass; the pass keeps indexing with the counts it took before the click.
+	bool bOn = true, bPlain = true;
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "t", "T", ui::Section::Display );
+	area.Switch( "t.a", "A", ui::Bind( &bPlain ) );
+	area.Switch( "t.b", "B", ui::Bind( &bPlain ) ).ShownWhen( [ & ] { return bOn; } );
+	area.Switch( "t.c", "C", ui::Bind( &bPlain ) ).ShownWhen( [ & ] { return bOn; } );
+	area.Switch( "t.d", "D", ui::Bind( &bPlain ) );
+	reg.SnapshotShown();
+	REQUIRE( area.EntryCount() == 4 );
+
+	SECTION( "a flip mid-pass changes nothing until the next snapshot" )
+	{
+		bOn = false;
+		REQUIRE( area.EntryCount() == 4 );
+		for ( size_t i = 0; i < area.EntryCount(); ++i )
+			REQUIRE( area.EntryAt( i ).Id() == std::string( "t." ) + char( 'a' + i ) );
+		REQUIRE( area.GroupOf( 3 ) == 0 );
+		// b and c are hidden for lookups at once.
+		REQUIRE( reg.FindEntry( "t.b" ) == nullptr );
+		REQUIRE( reg.FindEntry( "t.d" ) != nullptr );
+
+		reg.SnapshotShown();
+		REQUIRE( area.EntryCount() == 2 );
+		REQUIRE( area.EntryAt( 0 ).Id() == "t.a" );
+		REQUIRE( area.EntryAt( 1 ).Id() == "t.d" );
+
+		bOn = true;
+		REQUIRE( area.EntryCount() == 2 );
+		reg.SnapshotShown();
+		REQUIRE( area.EntryCount() == 4 );
+	}
+	SECTION( "an index past the end is the inert sink, never out of range" )
+	{
+		bOn = false;
+		reg.SnapshotShown();
+		REQUIRE( area.EntryCount() == 2 );
+		const ui::Entry &past = area.EntryAt( 2 );        // the stale 3rd of 4
+		REQUIRE( past.Id().empty() );
+		REQUIRE( area.EntryAt( 1000 ).Id().empty() );
+		( void )area.GroupOf( 1000 );
+	}
+	SECTION( "an area without ShownWhen is unaffected" )
+	{
+		ui::Area &plain = reg.Add( "p", "P", ui::Section::Display );
+		plain.Switch( "p.a", "A", ui::Bind( &bPlain ) );
+		reg.SnapshotShown();
+		REQUIRE( plain.EntryCount() == 1 );
+		REQUIRE( plain.EntryAt( 0 ).Id() == "p.a" );
+		REQUIRE( plain.EntryAt( 5 ).Id().empty() );
 	}
 }
 

@@ -19,6 +19,8 @@ All notable user-facing changes, newest first. Categories:
 ### Fixed
 - **Settings**: fixed a rare crash when a setting was changed for the first time after
   start.
+- **Settings overlay**: fixed a crash when changing Motion guard, Motion version or
+  Expert settings in the Frame generation area.
 
 ### Info
 - **Frame generation**: the groups were reordered, with Pausing and limits and Status
