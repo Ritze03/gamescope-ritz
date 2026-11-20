@@ -660,7 +660,7 @@ namespace gamescope
 				[]( float fl )
 				{
 					EnsureConfigLoaded();
-					s_Settings.framegen.ui_box_height = std::clamp( std::round( fl * 10.0f ) / 10.0f, 0.5f, 10.0f );
+					s_Settings.framegen.ui_box_height = std::clamp( std::round( fl * 10.0f ) / 10.0f, 0.5f, fghost::kUiBoxMaxTenths / 10.0f );
 					PersistAndPush();
 				} ) )
 			.Help( "The side of the square in the middle of the screen where frame generation "
@@ -669,7 +669,7 @@ namespace gamescope
 			       "so the soft rim may stick out, and a bit of extra room is harmless. A box far "
 			       "bigger than the crosshair may protect some still background too. The picture "
 			       "in the Inspector shows the box and the protected area." )
-			.Range( 0.5f, 10.0f ).Step( 0.1f )
+			.Range( 0.5f, fghost::kUiBoxMaxTenths / 10.0f ).Step( 0.1f )
 			.Default( 2.5f )
 			.ValueText( []( const ui::Value &v )
 			{

@@ -1833,13 +1833,16 @@ TEST_CASE( "framegen: every field round-trips, and an absent section is the Test
     const Settings loadedV2 = LoadSections();
     REQUIRE( loadedV2.framegen.ui_protection == "crosshair_v2" );
     REQUIRE_THAT( loadedV2.framegen.ui_box_height, Catch::Matchers::WithinAbs( 3.7, 1e-6 ) );
-    // Out-of-range sizes clamp to 0.5..10 on load.
+    // Out-of-range sizes clamp to 0.5..20 on load (the top was 10 until 2026-11-20).
     s.framegen.ui_box_height = 0.0f;
     REQUIRE( SaveSections( s ) );
     REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 0.5, 1e-6 ) );
+    s.framegen.ui_box_height = 15.0f;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 15.0, 1e-6 ) );
     s.framegen.ui_box_height = 55.0f;
     REQUIRE( SaveSections( s ) );
-    REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 10.0, 1e-6 ) );
+    REQUIRE_THAT( LoadSections().framegen.ui_box_height, Catch::Matchers::WithinAbs( 20.0, 1e-6 ) );
 
     // The keys the Frame generation area's rows are bound to: the Shell's
     // inherited/overridden dot and "Reset to inherited" go through this.

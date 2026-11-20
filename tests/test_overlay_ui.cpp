@@ -4022,7 +4022,7 @@ TEST_CASE( "an Entry's ValueText() hook and Preview() are plain declarations", "
 	REQUIRE( plain.PreviewOf() == ui::Entry::PreviewKind::Nothing );
 
 	ui::Entry &boxed = area.Slider( "framegen.ui_box_height", "Crosshair box size", ui::Bind( &flPct ) )
-		.Range( 0.5f, 10.0f ).Step( 0.1f ).Help( "The box." )
+		.Range( 0.5f, 20.0f ).Step( 0.1f ).Help( "The box." )
 		.ValueText( []( const ui::Value &v )
 		{
 			return std::to_string( (int)std::get<float>( v ) ) + " px";

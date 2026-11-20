@@ -91,6 +91,7 @@ namespace fghost
 			return uint32_t( std::min( std::max( c.uiBoxTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ) );
 		}
 
+		static_assert( kUiBoxMaxTenths <= 255, "the box size has 8 bits (48-55) in the library-config key" );
 		std::atomic<uint32_t> g_uUiBox{ uint32_t( kUiBoxDefaultTenths ) };
 
 		// ---- the box preview (the Inspector's picture; see FrameGenHost.h) ----

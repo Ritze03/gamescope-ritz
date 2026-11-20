@@ -352,7 +352,7 @@ namespace gamescope::config
                 const std::string sUi = JGetString( *pFrameGen, "ui_protection", f.ui_protection );
                 if ( sUi == "off" || sUi == "crosshair" || sUi == "crosshair_v2" || sUi == "whole_screen" )
                     f.ui_protection = sUi;
-                f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 10.0f );
+                f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 20.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
                 if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" )
                     f.motion_version = sMotion;

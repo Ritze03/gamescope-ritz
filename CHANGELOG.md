@@ -10,6 +10,7 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-20
 
 ### Added
+- **Crosshair box size**: the slider now goes up to 20% instead of 10%.
 - **Frame generation**: V3 has an experimental Motion guard setting that can reduce
   its large artifacts.
 - **Expert settings**: Frame generation's tuning rows are hidden until you turn on
