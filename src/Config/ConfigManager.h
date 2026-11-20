@@ -106,6 +106,11 @@ namespace gamescope::config
     // `overlay` is filled from global.json's mirror so the struct is whole.
     Settings ResolvedSettings();
 
+    // The framegen settings the interpolator is handed: `f` itself while `f.expert` is on, else a copy whose 15 expert
+    // values (learned_*, v3_*, search_*, pyramid_min_side) are the defaults. The one place that rule lives; stored values
+    // are never changed. superdoc/features/frame-generation-settings.md, "Expert settings".
+    FrameGenSettings FrameGenEffective( const FrameGenSettings &f );
+
     // Selecting a profile in the list: loads it AND remembers the choice --
     // games[<app id>].selected when a game is identified, and last_general
     // whenever the profile is general. Clears any session override, bumps

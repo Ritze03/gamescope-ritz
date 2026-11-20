@@ -27,10 +27,10 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.ui_box_height` | float percent of the game's height, `2.5` (default), clamped to 0.5-10 on load | the row "Crosshair box size" ([box size](frame-generation-ui-protection.md#crosshair-v2-and-the-box-size)); additive (schema stays 5), absent loads 2.5; written rounded to 0.1 |
-| `framegen.search_radius` | 1-12 (default 2), clamped on load | the row "Search radius" (whole-number slider, group "Expert: motion search"). Runtime: `setSettings()`, no wait. Motion versions V1 and V2, and V3 while the Motion guard is on; Learned and V3 with the guard off ignore it (the row is greyed out then). Additive (2026-11-19), absent loads 2 |
+| `framegen.search_radius` | 1-12 (default 2), clamped on load | the row "Search radius" (whole-number slider, group "Motion search"). Runtime: `setSettings()`, no wait. Motion versions V1 and V2, and V3 while the Motion guard is on; Learned and V3 with the guard off ignore it (the row is hidden then). Additive (2026-11-19), absent loads 2 |
 | `framegen.search_radius_top` | 1-12 (default 6), clamped on load | the row "Search radius (coarsest level)" (whole-number slider). Runtime, like `search_radius`; V1 and V2, and V3 with the Motion guard on; Learned and V3 with the guard off ignore it. Additive (2026-11-19) |
-| `framegen.pyramid_min_side` | 16-256 (default 48), clamped on load | the row "Pyramid smallest level" (dropdown 16 / 24 / 32 / 48 / 64 / 96 / 128 / 256). **Structural**: a change goes through the library's `reconfigure()` (GPU wait, buffers re-created, the estimate is dropped), like a Quality change. Every motion version but V3, which builds its own pyramid, so the row is greyed under V3 (Learned: only its buffer layout). A stored value that is not in the list shows the nearest entry and is not rewritten until the user picks one. Additive (2026-11-19) |
-| `framegen.search_penalty` | float 0-255 (default 0.5), clamped on load (non-finite: 0.5) | the row "Search penalty" (slider 0-4, step 0.05; a stored value above 4 is not clamped by being displayed). Runtime; V1, V2 and Learned, and V3 while the Motion guard is on (greyed under V3 with the guard off). Written rounded to hundredths. Additive (2026-11-19) |
+| `framegen.pyramid_min_side` | 16-256 (default 48), clamped on load | the row "Pyramid smallest level" (dropdown 16 / 24 / 32 / 48 / 64 / 96 / 128 / 256). **Structural**: a change goes through the library's `reconfigure()` (GPU wait, buffers re-created, the estimate is dropped), like a Quality change. Every motion version but V3, which builds its own pyramid, so the row is hidden under V3 with the guard Off (Learned: only its buffer layout). A stored value that is not in the list shows the nearest entry and is not rewritten until the user picks one. Additive (2026-11-19) |
+| `framegen.search_penalty` | float 0-255 (default 0.5), clamped on load (non-finite: 0.5) | the row "Search penalty" (slider 0-4, step 0.05; a stored value above 4 is not clamped by being displayed). Runtime; V1, V2 and Learned, and V3 while the Motion guard is on (hidden under V3 with the guard off). Written rounded to hundredths. Additive (2026-11-19) |
 
 | `framegen.v3_smear` | float 0-1 (default 0.35), clamped on load (non-finite or wrong type: default) | the row "Smear" (slider, step 0.05, group "Motion version 3"), used only while V3 runs. Runtime. Written rounded to hundredths. Additive (2026-11-19) |
 | `framegen.v3_occl_soft` | float 0.25-4 (default 1.0), clamped on load | the row "Occlusion softness" (slider, step 0.05), V3 only. Runtime. Additive (2026-11-19) |
@@ -38,18 +38,20 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.v3_scene_cut` | float 0-4 (default 0 = Never since 2026-11-19), clamped on load; a stored 0.45 (the old default) loads as 0, see [motion-v3](frame-generation-motion-v3.md#scene-cut-default-never) | the row "Scene cut threshold" (slider, step 0.05, 0 shown as "Never"), V3 only. Runtime, read by the estimate (applies from the next real pair). Additive (2026-11-19) |
 | `framegen.v3_colour_window` | bool (default false; absent or wrong type: false) | the row "Colour-weighted matching" (switch), V3 only. Runtime, applies from the next real pair. Experiment: motion search weighted by colour similarity. Additive (2026-11-19) |
 | `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"off"`; absent, wrong type or unknown: `"off"`) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Motion version 3"), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
+| `framegen.expert` | bool (default false; wrong type: false; absent: false, unless an old profile holds a changed tuning value, see "Expert settings") | the row "Expert settings" (switch, last row of group "Frame generation"): shows the 15 tuning rows of the selected Motion version and puts their stored values in force; off hides them and the defaults act. Additive (2026-11-20), schema stays 5 |
 | `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
 **Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches form the group "Motion version 3" (column 1,
-after "Learned motion"), greyed out unless V3 is the version the interpolator runs. Under V3 the
-Search radius, Search radius (coarsest level), Pyramid smallest level and Search penalty rows are greyed
+after "Learned motion" until 2026-11-20), shown only with Expert settings on and V3 the version the interpolator runs
+(see "Expert settings" below). Under V3 the
+Search radius, Search radius (coarsest level), Pyramid smallest level and Search penalty rows are hidden
 too while the Motion guard is Off (V3 ignores what they set; with the guard on they drive its V2 search; Static HUD protection works under V3 since 2026-11-19). The page
 [frame-generation-motion-v3](frame-generation-motion-v3.md) has the host path, the rows' reasons,
 the build and the cost.
 
-**Expert: motion search reach (2026-11-19).** The library's `searchRadius`, `searchRadiusTop`,
-`pyramidMinSide` and `searchPenalty` (at library `185fdf5`), shown in an "Expert: motion search"
-group at the end of the area (column 1, after Status), changeable while a game runs. The defaults
+**Motion search reach (2026-11-19; the group was called "Expert: motion search" until 2026-11-20).** The library's `searchRadius`, `searchRadiusTop`,
+`pyramidMinSide` and `searchPenalty` (at library `185fdf5`), shown in a "Motion search"
+group at the end of the area (column 1, last), changeable while a game runs. The defaults
 (2 / 6 / 48 / 0.5) are the library's own and give byte-identical output to before; the rows exist
 for the user to watch what more reach does. `Why a group of its own, against the old "only the
 defaults were reviewed" rule:` the user asked for it (the library session's brief): longer motion
@@ -83,8 +85,85 @@ between two real frames needs a longer search, and only trying it shows what it 
   retried once the user picks another value (and not every frame).
 - *Motion blur.* It shares the one interpolator; the reach values always come from Frame
   generation's config (`g_uReach`), also when only Motion blur is on. The rows are enabled while
-  either is on; the two radii (and, since V3, the pyramid side and the penalty) are greyed out under Learned (radii) or V3 (all four), the version the interpolator
+  either is on; the two radii (and, since V3, the pyramid side and the penalty) are hidden under Learned (radii) or V3 with the guard Off (all four), the version the interpolator
   actually runs, Motion blur's own one included).
+
+## Expert settings
+
+*2026-11-20.* The row **Expert settings** (`framegen.expert`, a switch, default off, the last row
+of group "Frame generation", never greyed) hides the 15 tuning rows and decides whether their
+stored values act. Help: *Shows the tuning settings of the selected Motion version. While it is
+off they are hidden and their defaults are used; your own values are kept and apply again when you
+turn it back on.* Keywords make the palette find it under "expert", "advanced" and "tuning".
+
+**Which rows show.** A row shows (`Entry::ShownWhen()`, predicates `ShowLearnedRows()` etc. in
+`PanelFrameGen.cpp`) only while Expert settings is on **and** the row acts on the *effective* motion
+version (Motion blur's own version when the blur is on with its own settings, else Motion version).
+The version rule only: whether frame generation is on is not asked, a shown row is greyed by its
+`DisabledUnless()` with its reason while Frame generation (and Motion blur) is off.
+
+| Rows | Shown under the effective version |
+| --- | --- |
+| Learned net, Learned precision, Zero-motion test, Static guard | Learned |
+| Smear, Occlusion softness, Unsure sensitivity, Scene cut threshold, Colour-weighted matching, Detail from one frame, Motion guard | V3 |
+| Search radius, Search radius (coarsest level) | V1, V2, and V3 while Motion guard is not Off |
+| Pyramid smallest level, Search penalty | V1, V2, Learned, and V3 while Motion guard is not Off |
+
+A hidden row is gone from the sheet, from keyboard navigation and from the command palette: a
+row that does not act must not be findable (searching "smear" finds nothing under V1 or with
+Expert settings off). A group whose rows are all hidden draws no heading and takes no space (the
+Shell builds its bands from the shown rows only). If the selected row becomes hidden at run time
+(Expert switched off, Motion version changed) the Shell selects nothing and the Inspector shows its
+Overview, as for every other `ShownWhen` row; "differs N" and the changed-value markers walk
+the shown rows only, so hidden rows are not counted.
+
+**Defaults in effect while off.** `config::FrameGenEffective( f )` (`Config/ConfigManager.cpp`)
+returns `f` unchanged when `f.expert`, else a copy whose 15 values (`learned_net`, `learned_half`,
+`learned_zero_test`, `learned_static_guard`, `v3_smear`, `v3_occl_soft`, `v3_unsure`,
+`v3_scene_cut`, `v3_colour_window`, `v3_detail_split`, `v3_guard`, `search_radius`,
+`search_radius_top`, `pyramid_min_side`, `search_penalty`) are those of a default-constructed
+`FrameGenSettings` (no default is written twice). It is applied at the one place the stored
+settings become the host config, `PushToRenderer()` -> `ToHostConfig()` in `PanelFrameGen.cpp`;
+everything downstream (`fghost::GetConfig()`, which `steamcompmgr.cpp` and the Motion blur panel
+read, and the library's `setSettings()` / `reconfigure()`) therefore sees effective values. The
+panel's own `V3GuardOn()` uses it too (guard effectively Off with Expert off). The rows' getters and
+setters keep reading and writing the **stored** values, and the switch never touches them: turning
+Expert on again applies the user's own values again, at once (a switch is an ordinary
+"setting changed" push). `Why:` the user: *"When expert settings is turned off, it should always
+use the defaults, so there are no \"ghost settings\"."* A value you cannot see must not act.
+
+**Old profiles.** A profile saved before the switch has no `expert` key and may hold changed tuning
+values; it must not change silently. On load, if `expert` is **absent** and any of the 15 values
+differs from its default, `expert` loads `true`; an explicit `"expert": false` stays false (also a
+wrong-typed value). Floats compare in hundredths (`std::lround( v * 100 )`, since the build is
+`-ffast-math` and saved files hold values like `0.35000000000000003`); the legacy "a stored
+`v3_scene_cut` of 0.45 loads as 0" rule runs first, so such a profile does not count as changed.
+A game profile that inherits stores only differing keys; the loader resolves it by merging the
+parent's file under the child's keys and then loading the merged JSON once (`ResolvedSectionsJson()`),
+so the rule runs on the resolved values and a child without its own `expert` key follows the
+parent's: an explicit parent `expert` is inherited, otherwise the merged values decide. It is
+marked `// ponytail:` in `ConfigManager.cpp`; remove it once no profile from before 2026-11-20 is
+around. `Why:` those users tuned the values on purpose, and hiding them behind a default switch
+would silently change how their game looks.
+
+**Driving hidden rows.** `gamescopectl overlay_e2_set "framegen.v3_smear 0.5"` while the row is
+hidden is refused: the console command looks the id up through the shown rows
+(`Registry::FindEntry()`), so it logs `no such E2 id: framegen.v3_smear` and stores nothing; the same
+holds for `overlay_e2_select`. Test scripts that drive these rows must first set `framegen.expert 1`
+and a Motion version the row acts on (and `framegen.v3_guard` for the search rows under V3). Left
+as is on purpose: the lookup is the one general path and a hidden row is declared not to exist.
+
+**Export / import.** `expert` is a leaf of the `framegen` section, so it travels with the "Frame
+generation" group in a [settings export](profile-export.md) and comes back with it (the Changes list
+labels it "Expert settings"). An import of text without the key (an export from before the switch)
+changes only the keys it carries, so the destination keeps its own `expert` (off for a new
+profile): the values arrive but stay out of force until Expert settings is turned on.
+
+**Order and name.** The groups were reordered the same day to what the user approved on a mockup:
+column 0 "Frame generation", "Artifact protection"; column 1 "Pausing and limits", "Status",
+"Learned motion", "Motion version 3", "Motion search" (until then "Expert: motion search", renamed
+because the switch now says "expert"). Declaration order only decides placement, the palette's tie
+order and keyboard order; nothing else depends on it.
 
 **Migration** (on load; save writes `enabled`, `mode`, `multiplier`, `target_fps` and never
 `"off"` again): `mode: "off"` -> `enabled = false`, `mode = "fixed"`, the stored
@@ -117,10 +196,13 @@ No migration.
 
 **Layout** (2026-11-07): two columns (`a.Columns( 2 )`, every group pinned with `GroupColumn()`).
 Column 0: group "Frame generation" (Frame generation, Multiplier, Target fps, Priority, Motion
-version, Quality), then "Artifact protection" (Artifact safety, Static HUD protection, UI protection,
-Crosshair box size). Column 1: "Learned motion" (Learned net, Learned precision, Zero-motion test,
-Static guard), "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
-GPU speed), "Status", "Expert: motion search" (Search radius, Search radius (coarsest level), Pyramid smallest level, Search penalty; 2026-11-19). Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
+version, Quality, Expert settings), then "Artifact protection" (Artifact safety, Static HUD
+protection, UI protection, Crosshair box size). Column 1 (reordered 2026-11-20, see "Expert
+settings" below): "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
+GPU speed), "Status", then the three groups that only show with Expert settings on: "Learned
+motion" (Learned net, Learned precision, Zero-motion test, Static guard), "Motion version 3" and
+"Motion search" (Search radius, Search radius (coarsest level), Pyramid smallest level, Search
+penalty; 2026-11-19). Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
 against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
 falls back to a dropdown. `Why:` the user arranged this on a visual workbench.
 
@@ -135,10 +217,11 @@ enum and `kMotionKeys` indices 0 / 1 / 3 / 2, so `overlay_e2_set` still means 2 
 **Artifact protection** group: **Artifact safety** (Off / Very low / Low / Default / High),
 **Static HUD protection**, **UI protection** (Off / Crosshair / Crosshair V2 / Whole screen),
 **Crosshair box size** (a slider, `2.5% · 24 px`, disabled while UI protection is Off). Column 1,
-**Learned motion** group: **Learned net**, **Learned precision**, **Zero-motion test**, **Static
-guard**. **Pausing and limits** group: **Pause at refresh rate** (a switch; help: stops at the
+**Pausing and limits** group: **Pause at refresh rate** (a switch; help: stops at the
 refresh rate or the Target fps, whichever is lower), **Pause while cursor visible**, **Limit to GPU
-speed**. **Status** group: the status line. Multiplier and the rows after it are disabled while the
+speed**. **Status** group: the status line. Then **Learned motion** (**Learned net**, **Learned
+precision**, **Zero-motion test**, **Static guard**), **Motion version 3** and **Motion search**,
+which only show under Expert settings. Multiplier and the rows after it are disabled while the
 switch is off. The rail summary reads "off", "N×" or "target N". Priority help: *Low latency adds the least
 delay, but motion can stutter when the game's frame times jitter. Smoothness spaces the
 frames perfectly evenly and adds about one game frame of delay.*

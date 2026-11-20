@@ -326,11 +326,11 @@ namespace gamescope
 			       "the GPU. It works in every game format, HDR and 10-bit included; a GPU "
 			       "without the shader features it needs stays on V1 (the Status line says why). "
 			       "V3: most fluid; smears where it is unsure; costs about three times V1; its "
-			       "settings are Frame generation's V3 rows. "
+			       "settings are Frame generation's V3 rows (shown with its Expert settings on). "
 			       "Learned is an experimental neural-network estimator (several times V1's GPU "
 			       "time, always at Quality's resolution; see Frame generation's Motion version "
 			       "help); its net, precision, zero-motion test and static guard are Frame generation's "
-			       "Learned rows, this area has none of its own. "
+			       "Learned rows (shown with Expert settings on), this area has none of its own. "
 			       "Switching shows real frames for an instant. Shown greyed out with Frame "
 			       "generation's value while \"Use Frame generation's settings\" is on." )
 			.Default( 0 )

@@ -37,10 +37,11 @@ default stays `v1`. Library details: `subprojects/FrameGen/INTEGRATION.md`, "Mot
 ## The four settings, two switches and the Motion guard
 
 All six are runtime (`setSettings()`; no buffers re-created, the estimate is kept). Group "Motion
-version 3" in the Frame generation area (column 1, right after "Learned motion"); sliders with
-step 0.05; enabled only while V3 is the version the interpolator actually runs and Frame
-generation or Motion blur is on (`V3RowsUsable()`, the same rule as the Learned rows: Motion blur's
-own version counts when it is on with its own settings). Motion blur running V3 on the shared
+version 3" in the Frame generation area (column 1, after "Learned motion"); sliders with
+step 0.05; **shown** only with Expert settings on and V3 the version the interpolator actually
+runs (`ShowV3Rows()`; see [Expert settings](frame-generation-settings.md#expert-settings)), and
+**enabled** only while Frame generation or Motion blur is on (`V3RowsUsable()`; Motion blur's own
+version counts when it is on with its own settings). Motion blur running V3 on the shared
 interpolator takes the values from Frame generation's config (one interpolator), like the reach
 values.
 
@@ -77,26 +78,29 @@ with `Host_t::ulAppliedV3` (set in the init path and at the end of the apply blo
 the seven fields (the four clamped and finite-tested; `v3Guard` mapped to `framegen::V3Guard`); the `setSettings()` that `SyncUiHistory()` derives from
 `H.interp.settings()` carries them along.
 
-## Rows greyed under V3
+## Rows hidden or greyed under V3
 
 Under V3 (the effective version: Motion blur's own one when it is on with its own settings), only
-rows that drive nothing V3 uses are greyed, per the library's table of ignored settings. Since
-2026-11-20 the four search rows are greyed only while the Motion guard is Off: with the guard on they
-drive its V2 estimate (`V3GuardOn()` in `PanelFrameGen.cpp`):
+rows that drive nothing V3 uses are left out, per the library's table of ignored settings. Since
+2026-11-20 the four search rows are not shown (they are Expert settings rows, hidden unless that
+switch is on) while the Motion guard is Off: with the guard on they drive its V2 estimate
+(`V3GuardOn()` in `PanelFrameGen.cpp`, effective guard). The table's "hidden" is the shown rule
+(`ShowRadiusRows()` / `ShowPenaltyRows()`, Expert on); a shown row is still greyed while Frame
+generation and Motion blur are off:
 
 | Row | Library fields it sets | Under V3 |
 |---|---|---|
-| Search radius, Search radius (coarsest level) | `searchRadius`, `searchRadiusTop` | greyed with the guard Off, usable with it on (`RadiusRowsUsable()`, which also covers Learned) |
-| Pyramid smallest level | `pyramidMinSide` | greyed with the guard Off (`PenaltyRowsUsable()`): V3 builds its own pyramid; a change would still rebuild the shared buffers without changing V3's picture. With the guard on it sets the pyramid of the guard's V2 search (structural: `reconfigure()`, as everywhere) |
-| Search penalty | `searchPenalty` | greyed with the guard Off, usable with it on (`PenaltyRowsUsable()`) |
+| Search radius, Search radius (coarsest level) | `searchRadius`, `searchRadiusTop` | hidden with the guard Off, shown with it on (`ShowRadiusRows()`; never under Learned) |
+| Pyramid smallest level | `pyramidMinSide` | hidden with the guard Off (`ShowPenaltyRows()`): V3 builds its own pyramid; a change would still rebuild the shared buffers without changing V3's picture. With the guard on it sets the pyramid of the guard's V2 search (structural: `reconfigure()`, as everywhere) |
+| Search penalty | `searchPenalty` | hidden with the guard Off, shown with it on (`ShowPenaltyRows()`) |
 | Static HUD protection | `hudBonus` (0 / 1.0 / 2.5) | **enabled**: V3 honours it since library `c9c6718`, as V1 does (see "Static HUD protection under V3") |
 | Artifact safety | `trustLow` / `trustHigh` / `sceneCutSad` **and `globalFallback`** | **left enabled**: `globalFallback` (Off sets it to 1.0) is V3's "estimate failed" threshold |
 | Quality | `flowScale` (and `subpixel`, `v2Mode`) | enabled: V3 honours `flowScale` |
 | Limit to GPU speed, UI protection, Crosshair box size, Motion blur rows | pacing / `ui*` / `blur*` | enabled: V3 honours them |
-| Learned rows | `learned*` | already enabled only under Learned |
+| Learned rows | `learned*` | shown only under Learned (and Expert settings on) |
 
 There is no row for `v2StaticMask` (the library default, honoured by V3), `smoothBonus`
-(ignored) or `subpixel` alone. `Why only these:` the brief asked to grey only what is cheap with a
+(ignored) or `subpixel` alone. `Why only these:` the brief asked to leave out only what is cheap with a
 `DisabledUnless` predicate and to keep a row enabled if anything it sets is honoured; Artifact
 safety is the case where that matters. Its help text carries one sentence for V3 (no mismatch
 ranges there; only Off matters).
