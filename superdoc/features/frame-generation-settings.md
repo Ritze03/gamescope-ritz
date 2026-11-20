@@ -38,7 +38,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.v3_scene_cut` | float 0-4 (default 0 = Never since 2026-11-19), clamped on load; a stored 0.45 (the old default) loads as 0, see [motion-v3](frame-generation-motion-v3.md#scene-cut-default-never) | the row "Scene cut threshold" (slider, step 0.05, 0 shown as "Never"), V3 only. Runtime, read by the estimate (applies from the next real pair). Additive (2026-11-19) |
 | `framegen.v3_colour_window` | bool (default false; absent or wrong type: false) | the row "Colour-weighted matching" (switch), V3 only. Runtime, applies from the next real pair. Experiment: motion search weighted by colour similarity. Additive (2026-11-19) |
 | `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"off"`; absent, wrong type or unknown: `"off"`) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Motion version 3"), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
-| `framegen.expert` | bool (default false; wrong type: false; absent: false, unless an old profile holds a changed tuning value, see "Expert settings") | the row "Expert settings" (switch, last row of group "Frame generation"): shows the 15 tuning rows of the selected Motion version and puts their stored values in force; off hides them and the defaults act. Additive (2026-11-20), schema stays 5 |
+| `framegen.expert` | bool (default false; wrong type: false; absent: false, also for an old profile with changed tuning values, see "Expert settings") | the row "Expert settings" (switch, last row of group "Frame generation"): shows the 15 tuning rows of the selected Motion version and puts their stored values in force; off hides them and the defaults act. Additive (2026-11-20), schema stays 5 |
 | `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
 **Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches form the group "Motion version 3" (column 1,
@@ -132,19 +132,16 @@ Expert on again applies the user's own values again, at once (a switch is an ord
 "setting changed" push). `Why:` the user: *"When expert settings is turned off, it should always
 use the defaults, so there are no \"ghost settings\"."* A value you cannot see must not act.
 
-**Old profiles.** A profile saved before the switch has no `expert` key and may hold changed tuning
-values; it must not change silently. On load, if `expert` is **absent** and any of the 15 values
-differs from its default, `expert` loads `true`; an explicit `"expert": false` stays false (also a
-wrong-typed value). Floats compare in hundredths (`std::lround( v * 100 )`, since the build is
-`-ffast-math` and saved files hold values like `0.35000000000000003`); the legacy "a stored
-`v3_scene_cut` of 0.45 loads as 0" rule runs first, so such a profile does not count as changed.
-A game profile that inherits stores only differing keys; the loader resolves it by merging the
-parent's file under the child's keys and then loading the merged JSON once (`ResolvedSectionsJson()`),
-so the rule runs on the resolved values and a child without its own `expert` key follows the
-parent's: an explicit parent `expert` is inherited, otherwise the merged values decide. It is
-marked `// ponytail:` in `ConfigManager.cpp`; remove it once no profile from before 2026-11-20 is
-around. `Why:` those users tuned the values on purpose, and hiding them behind a default switch
-would silently change how their game looks.
+**Old profiles.** `expert` loads from the file's `expert` key and is **false** when the key is
+absent or wrong-typed, whatever tuning values the profile holds (an explicit `"expert": true` loads
+on). A profile saved before the switch existed therefore opens with Expert settings off; its tuning
+values are kept untouched but run at their defaults until Expert settings is turned on. A game
+profile that inherits is resolved by merging the parent's file under the child's keys
+(`ResolvedSectionsJson()`), so a child without its own `expert` key follows the parent's, or is off
+if the parent has none. Nothing is rewritten on load. `Why:` the user's rule (2026-11-20): Expert
+settings is off by default, also for a profile saved before the switch existed. An earlier rule
+turned it on for such a profile with changed tuning values; it was removed the same day because it
+showed the switch on to someone who had never touched it.
 
 **Driving hidden rows.** `gamescopectl overlay_e2_set "framegen.v3_smear 0.5"` while the row is
 hidden is refused: the console command looks the id up through the shown rows

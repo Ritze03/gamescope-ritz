@@ -4402,36 +4402,30 @@ TEST_CASE( "framegen: an absent expert key with all defaults loads false", "[con
     REQUIRE( !LoadFrameGenFrom( R"({ "quality": "performance", "v3_smear": 0.35, "search_radius": 2, "v3_guard": "off" })" ).expert );
 }
 
-TEST_CASE( "framegen: an absent expert key with a changed float loads true", "[config]" )
+TEST_CASE( "framegen: an absent expert key with a changed float loads false and keeps the value", "[config]" )
 {
     TempConfigHome home;
     const FrameGenSettings f = LoadFrameGenFrom( R"({ "v3_smear": 0.6 })" );
+    REQUIRE( !f.expert );
+    REQUIRE( std::lround( f.v3_smear * 100.0f ) == 60 );   // stored
+    REQUIRE( std::lround( FrameGenEffective( f ).v3_smear * 100.0f ) == std::lround( FrameGenSettings{}.v3_smear * 100.0f ) );
+}
+
+TEST_CASE( "framegen: an absent expert key with a changed Learned value loads false and keeps the value", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "learned_zero_test": false })" );
+    REQUIRE( !f.expert );
+    REQUIRE( !f.learned_zero_test );   // stored
+    REQUIRE( FrameGenEffective( f ).learned_zero_test == FrameGenSettings{}.learned_zero_test );
+}
+
+TEST_CASE( "framegen: an explicit expert true loads true", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "expert": true, "v3_smear": 0.6 })" );
     REQUIRE( f.expert );
-    REQUIRE( f.v3_smear == 0.6f );   // the value is kept
-}
-
-TEST_CASE( "framegen: an absent expert key with a changed int loads true", "[config]" )
-{
-    TempConfigHome home;
-    REQUIRE( LoadFrameGenFrom( R"({ "search_radius": 3 })" ).expert );
-}
-
-TEST_CASE( "framegen: an absent expert key with a changed string loads true", "[config]" )
-{
-    TempConfigHome home;
-    REQUIRE( LoadFrameGenFrom( R"({ "learned_net": "e1v5" })" ).expert );
-}
-
-TEST_CASE( "framegen: an absent expert key with a changed V3 guard loads true", "[config]" )
-{
-    TempConfigHome home;
-    REQUIRE( LoadFrameGenFrom( R"({ "v3_guard": "guard" })" ).expert );
-}
-
-TEST_CASE( "framegen: an absent expert key with a changed bool loads true", "[config]" )
-{
-    TempConfigHome home;
-    REQUIRE( LoadFrameGenFrom( R"({ "learned_static_guard": true })" ).expert );
+    REQUIRE( std::lround( FrameGenEffective( f ).v3_smear * 100.0f ) == 60 );
 }
 
 TEST_CASE( "framegen: an explicit expert false stays false with changed values", "[config]" )
@@ -4443,17 +4437,11 @@ TEST_CASE( "framegen: an explicit expert false stays false with changed values",
     REQUIRE( f.search_radius == 3 );
 }
 
-TEST_CASE( "framegen: an absent expert key with the default written as 0.35000000000000003 loads false", "[config]" )
-{
-    TempConfigHome home;
-    REQUIRE( !LoadFrameGenFrom( R"({ "v3_smear": 0.35000000000000003 })" ).expert );
-}
-
 TEST_CASE( "framegen: an absent expert key with the legacy scene cut 0.45 loads false", "[config]" )
 {
     TempConfigHome home;
     const FrameGenSettings f = LoadFrameGenFrom( R"({ "v3_scene_cut": 0.45 })" );
-    REQUIRE( f.v3_scene_cut == 0.0f );   // the legacy rule runs first
+    REQUIRE( f.v3_scene_cut == 0.0f );   // the legacy scene-cut rule still runs
     REQUIRE( !f.expert );
 }
 
