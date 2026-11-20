@@ -2540,7 +2540,6 @@ namespace gamescope::config
                 }
             }
 
-            std::thread m_Thread;
             std::mutex m_Mutex;
             std::condition_variable m_Cv;
             std::vector<PendingWrite> m_Pending;
@@ -2548,6 +2547,10 @@ namespace gamescope::config
             int m_nFlushWaiters = 0;
             std::chrono::steady_clock::time_point m_tLastEnqueue{};
             std::chrono::steady_clock::time_point m_tOldestPending{};
+            // MUST stay the last member. `Why:` the thread starts in the constructor's initialiser and uses every
+            // other member; declared first it ran ThreadMain() on unconstructed members (a rare crash on the first
+            // settings write, core dump seen 2026-11-20).
+            std::thread m_Thread;
         };
 
         void DiscardQueuedWrite( const std::string &sPath )

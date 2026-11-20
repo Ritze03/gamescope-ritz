@@ -16,6 +16,10 @@ All notable user-facing changes, newest first. Categories:
   Expert settings, which then shows only those of the selected Motion version; while
   it is off their defaults are used.
 
+### Fixed
+- **Settings**: fixed a rare crash when a setting was changed for the first time after
+  start.
+
 ### Info
 - **Frame generation**: the groups were reordered, with Pausing and limits and Status
   now above the tuning groups.

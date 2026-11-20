@@ -501,6 +501,10 @@ pick is session-only.
   **discard any queued write for the same file first** -- the synchronous write was
   computed from the mirror and is the newer of the two; the queued one landing later
   would undo it (`WriteProfileNow()`, `ConfigWriter::Discard()`).
+- **`ConfigWriter`'s thread member is declared last.** The thread starts in the constructor's
+  initialiser and uses every other member, so members are constructed in declaration order
+  and the thread must come after all of them. `Why:` declared first, it could read an
+  unconstructed mutex and queue on the first settings write of a process, a rare crash.
 - **The mirror** (`s_Written`, per profile name) is what this process last queued or
   wrote for each profile: `ResolvedSettings()`, `OverriddenKeys()`, the CRUD and the
   diff base all read it before the disk, so nothing in the process is ever behind a
