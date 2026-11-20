@@ -423,7 +423,10 @@ namespace gamescope::ui
 	{
 		m_Shown = std::move( fn );
 		if ( m_pArea )
+		{
 			m_pArea->m_bAnyShownWhen = true;
+			m_pArea->m_bShownValid   = false;
+		}
 		return *this;
 	}
 	Entry &Entry::Key( const char *psz )             { m_sKey = psz ? psz : ""; return *this; }
@@ -802,6 +805,7 @@ namespace gamescope::ui
 
 		m_Entries.clear();
 		m_bAnyShownWhen = false;
+		m_bShownValid   = false;
 		m_Groups.clear();
 
 		m_Build( *this );
@@ -846,10 +850,9 @@ namespace gamescope::ui
 		bool bPinned[ 8 ] = {};
 		int  nPinned = 0, nFree = 0;
 		size_t nLastFree = (size_t)-1;
-		for ( const auto &p : m_Entries )
+		for ( size_t i = 0, n = EntryCount(); i < n; ++i )
 		{
-			if ( !p->Shown() )
-				continue;
+			const Entry *p = &EntryAt( i );
 			const int nPin = GroupPin( p->m_nGroup );
 			if ( nPin >= 0 )
 			{
@@ -863,6 +866,27 @@ namespace gamescope::ui
 			}
 		}
 		return std::max( 1, std::min( nWant, nPinned + nFree ) );
+	}
+
+	const Entry &Area::NoEntry() { return SinkEntry(); }
+
+	void Area::SnapshotShown() const
+	{
+		if ( !m_bAnyShownWhen )
+			return;
+		std::vector<size_t> v;
+		for ( size_t r = 0; r < m_Entries.size(); ++r )
+			if ( m_Entries[ r ]->Shown() )
+				v.push_back( r );
+		if ( !m_bShownValid || v != m_ShownRaw )
+			m_ShownRaw = std::move( v );
+		m_bShownValid = true;
+	}
+
+	void Registry::SnapshotShown() const
+	{
+		for ( const auto &pArea : m_Areas )
+			pArea->SnapshotShown();
 	}
 
 	Entry &Area::Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind )
@@ -887,6 +911,7 @@ namespace gamescope::ui
 		e.m_pRegistry  = m_pRegistry;
 		e.m_nGroup     = m_Groups.empty() ? 0 : m_Groups.size() - 1;
 		m_Entries.push_back( std::move( up ) );
+		m_bShownValid = false;
 		return e;
 	}
 
@@ -1242,18 +1267,20 @@ namespace gamescope::ui
 	const Entry *Registry::FindEntry( const std::string &sId ) const
 	{
 		for ( const auto &pArea : m_Areas )
-			for ( size_t i = 0; i < pArea->EntryCount(); ++i )
-				if ( pArea->EntryAt( i ).Id() == sId )
-					return &pArea->EntryAt( i );
+			for ( const auto &p : pArea->m_Entries )
+				if ( p->Shown() && p->Id() == sId )
+					return p.get();
 		return nullptr;
 	}
 
 	const Parameter *Registry::FindParam( const std::string &sId ) const
 	{
 		for ( const auto &pArea : m_Areas )
-			for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+			for ( const auto &p : pArea->m_Entries )
 			{
-				const Entry &e = pArea->EntryAt( i );
+				if ( !p->Shown() )
+					continue;
+				const Entry &e = *p;
 				for ( size_t j = 0; j < e.ParamCount(); ++j )
 					if ( e.ParamAt( j ).Id() == sId )
 						return &e.ParamAt( j );

@@ -176,7 +176,17 @@ scanout row's Inspector (the user marked the spot on a screenshot).
 **Row-level hide** — `Entry::ShownWhen( fn )` (2026-11-07): the row exists only while `fn()` is true.
 `Area::EntryCount()` and `EntryAt()` return the shown rows only, so the sheet, the column row count
 (`Solve()`), keyboard navigation and the command palette all treat a hidden row as undeclared; the
-answer may change at run time. `Why:` the Compatibility area's "Block direct scanout" is Wayland-only
+answer may change at run time, but **only between frames**: the shown set is a snapshot
+(`Registry::SnapshotShown()`, called in `Shell.cpp`'s `Draw()` right after `SyncDynamicAreas()`, and in the
+Launcher branch), and `EntryCount()`, `EntryAt()`, `GroupOf()` and `WantedColumns()` read it, so a click that flips
+a predicate shows from the NEXT frame (a selected row that becomes hidden then falls back to the Overview). An
+area never snapshotted (tests, `SelfTest`) takes its first snapshot lazily; areas without a `ShownWhen` row skip
+the machinery. `EntryAt( i )` / `GroupOf( i )` with `i >= EntryCount()` return the shared inert sink Entry (the
+one a rejected registration returns), never a read past the entry list. `Registry::FindEntry()` / `FindParam()`
+read the live predicates instead (the console thread calls them; a hidden row is not findable at once).
+`Why:` a predicate may depend on a value a control on the same sheet changes (Frame generation's Motion guard,
+Motion version, Expert settings); evaluated live, a click shrank the row set in the middle of a draw pass and the
+pass indexed past the entry list, a crash seen 2026-11-20. `Why:` the Compatibility area's "Block direct scanout" is Wayland-only
 ([diagnostics.md](diagnostics.md#block-direct-scanout-switch-displayblock_direct_scanout)) and must be neither visible nor findable on other
 backends. Area-level hiding stays `Area::AvailableWhen()`.
 

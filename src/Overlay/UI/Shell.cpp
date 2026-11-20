@@ -8153,6 +8153,7 @@ namespace gamescope::ui::shell
 		{
 			ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
 			Reg().SyncDynamicAreas();
+			Reg().SnapshotShown();
 
 			std::vector<PaletteItem> launcherItems = Build( Reg(), s_sPaletteQuery );
 			RunPaletteKeyboard( launcherItems );
@@ -8287,6 +8288,11 @@ namespace gamescope::ui::shell
 		// once, first, is what guarantees nothing does. Selection is by id
 		// string and survives (Registry.h's Rebuilds()).
 		Reg().SyncDynamicAreas();
+
+		// The shown-row set of every area is fixed HERE for the rest of this
+		// pass: a click that flips a ShownWhen predicate takes effect next frame
+		// (Area::EntryCount()).
+		Reg().SnapshotShown();
 
 		// The friends panel's deferred join. Run here, once per frame on the
 		// thread that owns the overlay, because a click (or a ConCommand on

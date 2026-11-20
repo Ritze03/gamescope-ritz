@@ -1136,16 +1136,33 @@ namespace gamescope::ui
 		Section GetSection() const       { return m_eSection; }
 		// The SHOWN entries only (Entry::ShownWhen): EntryAt( i ) is the i-th shown
 		// one, so every loop over 0..EntryCount() skips a hidden row for free.
+		//
+		// THE SHOWN SET IS A SNAPSHOT, not a live answer. A ShownWhen predicate
+		// may depend on a value a control on the SAME sheet changes, and a click
+		// runs that setter in the middle of the draw pass; evaluated live, the
+		// row set shrank under a loop that had already counted it and indexed
+		// past the entry list (a crash, 2026-11-20). So the set is taken at ONE
+		// point per frame -- Registry::SnapshotShown(), right after the dynamic
+		// areas resync at the top of the shell's draw -- and EntryCount(),
+		// EntryAt(), GroupOf() and WantedColumns() all read it. A click that
+		// flips a predicate shows from the NEXT frame. An area never snapshotted
+		// (tests, startup, SelfTest) takes its first one lazily. Areas without a
+		// ShownWhen row skip all of it.
 		size_t  EntryCount() const
 		{
 			if ( !m_bAnyShownWhen )
 				return m_Entries.size();
-			size_t n = 0;
-			for ( const auto &p : m_Entries )
-				n += p->Shown() ? 1 : 0;
-			return n;
+			if ( !m_bShownValid )
+				SnapshotShown();
+			return m_ShownRaw.size();
 		}
-		const Entry &EntryAt( size_t i ) const { return *m_Entries[ RawIndex( i ) ]; }
+		// An index >= EntryCount() yields the shared inert sink Entry (the same
+		// one a rejected registration returns), never a read past m_Entries.
+		const Entry &EntryAt( size_t i ) const { return EntryPtr( i ); }
+
+		// Re-evaluates every ShownWhen predicate once and keeps the answer until
+		// the next call. Cheap no-op without a ShownWhen row.
+		void SnapshotShown() const;
 
 		// Whether this area is currently offerable at all (SPEC's rail hides
 		// what a machine cannot do). No predicate means always available.
@@ -1163,7 +1180,7 @@ namespace gamescope::ui
 		// -- rather than re-derived from nFirstEntry ranges at draw time. The
 		// two would agree today; only one of them stays right if a band is
 		// ever declared with no entries under it.
-		size_t GroupOf( size_t i ) const { return m_Entries[ RawIndex( i ) ]->m_nGroup; }
+		size_t GroupOf( size_t i ) const { return EntryPtr( i ).m_nGroup; }
 
 	private:
 		friend class Registry;
@@ -1171,16 +1188,17 @@ namespace gamescope::ui
 
 		Entry &Emit( const char *pszId, const char *pszTitle, Kind eKind, AnyBind bind );
 
-		// Index into m_Entries of the i-th shown entry.
-		size_t RawIndex( size_t i ) const
+		// The i-th shown entry, or the inert sink when i is out of range.
+		const Entry &EntryPtr( size_t i ) const
 		{
 			if ( !m_bAnyShownWhen )
-				return i;
-			for ( size_t r = 0; r < m_Entries.size(); ++r )
-				if ( m_Entries[ r ]->Shown() && i-- == 0 )
-					return r;
-			return m_Entries.size();   // out of range, like the unfiltered case
+				return i < m_Entries.size() ? *m_Entries[ i ] : NoEntry();
+			if ( !m_bShownValid )
+				SnapshotShown();
+			return i < m_ShownRaw.size() && m_ShownRaw[ i ] < m_Entries.size()
+			     ? *m_Entries[ m_ShownRaw[ i ] ] : NoEntry();
 		}
+		static const Entry &NoEntry();
 
 		std::string m_sId, m_sTitle, m_sKeywords;
 		Section     m_eSection = Section::Display;
@@ -1197,6 +1215,10 @@ namespace gamescope::ui
 		bool                         m_bBuilt = false;
 		std::vector<std::unique_ptr<Entry>> m_Entries;
 		bool                         m_bAnyShownWhen = false;   // an entry has ShownWhen()
+		// The snapshot (see EntryCount()): raw indices into m_Entries of the shown
+		// rows. Dropped (m_bShownValid = false) whenever m_Entries changes.
+		mutable std::vector<size_t>  m_ShownRaw;
+		mutable bool                 m_bShownValid = false;
 		int                          m_nWantedColumns = 0;      // Columns()
 		std::vector<GroupBand>       m_Groups;
 		Registry   *m_pRegistry = nullptr;
@@ -1216,8 +1238,14 @@ namespace gamescope::ui
 
 		// Every registered id, Params included. Lookup for the palette, and
 		// the uniqueness law's own bookkeeping.
+		// Both read the LIVE predicates (not the frame snapshot): the console thread
+		// calls them too, and a hidden row must not be findable at once.
 		const Entry *FindEntry( const std::string &sId ) const;
 		const Parameter *FindParam( const std::string &sId ) const;
+
+		// Takes the per-frame shown-row snapshot of every area (Area::EntryCount()).
+		// The shell calls it once per frame, right after SyncDynamicAreas().
+		void SnapshotShown() const;
 
 		// Runs after RegisterAll(). Checks the two laws that cannot be decided
 		// at the moment of the call that breaks them:

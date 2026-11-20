@@ -109,7 +109,7 @@ The version rule only: whether frame generation is on is not asked, a shown row 
 | Search radius, Search radius (coarsest level) | V1, V2, and V3 while Motion guard is not Off |
 | Pyramid smallest level, Search penalty | V1, V2, Learned, and V3 while Motion guard is not Off |
 
-A hidden row is gone from the sheet, from keyboard navigation and from the command palette: a
+A hidden row is gone from the sheet (from the frame after the click that hides it, never in the middle of a draw pass), from keyboard navigation and from the command palette: a
 row that does not act must not be findable (searching "smear" finds nothing under V1 or with
 Expert settings off). A group whose rows are all hidden draws no heading and takes no space (the
 Shell builds its bands from the shown rows only). If the selected row becomes hidden at run time
