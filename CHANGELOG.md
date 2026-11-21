@@ -24,6 +24,8 @@ All notable user-facing changes, newest first. Categories:
   is no longer used; it caused single distorted frames.
 - **Motion version 3**: when two frames do not belong together, a real frame is shown
   instead of a distorted one.
+- **Game frames**: a game's frame is no longer handed back to the game while it is
+  still being shown; this caused single distorted frames and short hitches.
 
 ## 2026-11-20
 
