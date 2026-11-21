@@ -37,12 +37,17 @@ Part of [Frame generation](frame-generation.md). The renderer host (`fghost`) an
   `SetFrame()`: a Decision that uses a pair (`prevId != 0`: a generated frame, or with blur a
   blurred real frame) whose two real frames **arrived** more than `k x` the game's frame
   interval apart is rewritten to a plain real frame (`prevId = currId = 0`, `t = t0 = t1 = 1`,
-  `showId` = the pair's later frame `currId`). Arrival times come from the capture's always-on
-  `fghost::capture::Arrivals()` table, the interval from `Pacer::IntervalMs()` (the median of
-  the last 8 arrival intervals, clamped to 1..50 ms, 0 right after a reset); an unknown time or
-  interval never guards. `RecordBaseLayer()` then still copies and observes a new `newestId`,
-  skips the pair branch (no estimate, no synth, no cached output of that pair), and shows layer
-  0 when `currId` is the newest, else `currId`'s ring copy. `k` is the ConVar
+  `showId` = the pair's later frame `currId`). Every Decision with a pair is checked, a repeat
+  of the same `outId` too, and a pair once guarded stays guarded for all its paints, so no
+  paint of it reaches the synth or the output cache; a blur window is dropped with the pair.
+  Arrival times come from the guard's own record: the arrival of every frame that was the
+  newest at a paint, the last `kHistoryMax + 3` of them (exactly the frames the pacer's history
+  holds, so both frames of a pair are always in it); the interval from `Pacer::IntervalMs()`
+  (the median of the last 8 arrival intervals, clamped to 1..50 ms, 0 right after a reset). An
+  unknown time (a frame that arrived while frame generation was off) or interval never guards.
+  There is no upper bound on the span. `RecordBaseLayer()` then still copies and observes a new
+  `newestId`, skips the pair branch, and shows layer 0 when `currId` is the newest, else
+  `currId`'s ring copy (layer 0, the newest, if it is gone from the ring). `k` is the ConVar
   **`ritz_fg_pair_span_limit`** (default 3.0; 0 or below = off; `gamescopectl
   ritz_fg_pair_span_limit 0` to compare) -- a test knob, no setting and no profile key. The
   log says `frame generation: pair of frames X ms apart (limit Y ms ...): real frame shown; N
@@ -53,6 +58,10 @@ Part of [Frame generation](frame-generation.md). The renderer host (`fghost`) an
   fast motion the motion search cannot cover that span, and with Artifact safety Off none of
   the library's fallbacks catches it, so one whole generated frame was built from a wrong
   motion estimate. A real frame after a hitch is what the game shows without frame generation.
+  `Why no upper bound:` the 100 ms reset compares the game's arrivals; a stall of the
+  compositor while the game keeps delivering is never reset, and the pair across it can be
+  200 ms long. `Why an own record and not the capture's arrival table:` that table keeps the
+  last 16 arrivals, and more than 16 can pass between a pair's two frames during such a stall.
   `Why currId and not the newest:` Smoothness may play the pair before the newest; showing the
   newest there and then the next pair at `t < 1` would step back in time. `Why no floor` (such
   as 25 ms): it would blind the guard at high frame rates, where a 20 ms hitch is already

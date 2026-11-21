@@ -7990,14 +7990,48 @@ namespace
 	gamescope::ConVar<float> cv_ritz_fg_pair_span_limit( "ritz_fg_pair_span_limit", 3.0f,
 		"Frame generation: a pair of real frames that arrived more than this many game frame intervals apart is not interpolated, its later real frame is shown instead (0 = off)." );
 
-	// The guard's counters and its rate-limited log. steamcompmgr thread only.
+	// The guard's arrival record, counters and rate-limited log. steamcompmgr thread only.
 	struct FrameGenSpanGuard_t
 	{
+		// The newest arrival (FrameGen_OnArrival()): the frame the pacer takes as its newest at the next paint.
+		uint64_t ulArrivalId = 0;
+		uint64_t ulArrivalNs = 0;
+		// Arrival time of every frame that was the newest at a paint, the last kSlots of them. The pacer's history
+		// gets exactly these frames (one PushNewest per paint, its arrival = the last OnArrival's, which belongs
+		// to the same id or the pacer resets), and a pair is two adjacent history entries, so both frames of any
+		// pair are among the last kHistoryMax of them. `Why not the capture's Arrivals() table:` it keeps the
+		// last 16 ARRIVALS, and while the compositor stalls (the game keeps delivering) more than 16 can pass
+		// between the two frames of one pair, so the older one could be gone exactly when the span is longest.
+		static constexpr int kSlots = fgpacing::kHistoryMax + 3;
+		uint64_t ulPaintId[ kSlots ] = {};
+		int64_t  nPaintNs[ kSlots ] = {};
+		int      nNext = 0;
 		uint64_t ulPaints = 0;      // paints that showed a real frame instead of a pair's output
 		uint64_t ulPairs = 0;       // distinct pairs guarded
-		uint64_t ulLastPrev = 0;    // the last guarded pair, to count pairs (a pair spans several paints)
+		uint64_t ulLastPrev = 0;    // the last guarded pair: counts pairs, and keeps every later paint of it guarded
 		uint64_t ulLastCurr = 0;
 		uint64_t ulLastLogNs = 0;   // at most one line per second
+
+		// The newest frame of this paint (layer 0): remember its arrival when it is the last arrival.
+		void NotePaint( uint64_t ulNewestId )
+		{
+			const int nLast = ( nNext + kSlots - 1 ) % kSlots;
+			if ( ulNewestId == 0 || ulNewestId != ulArrivalId || ulPaintId[ nLast ] == ulNewestId )
+				return;
+			ulPaintId[ nNext ] = ulNewestId;
+			nPaintNs[ nNext ] = int64_t( ulArrivalNs );
+			nNext = ( nNext + 1 ) % kSlots;
+		}
+		// -1 when unknown (never the newest at a paint while frame generation was on, or too old).
+		int64_t Find( uint64_t ulId ) const
+		{
+			for ( int i = 0; i < kSlots; i++ )
+			{
+				if ( ulPaintId[ i ] == ulId && ulId != 0 )
+					return nPaintNs[ i ];
+			}
+			return -1;
+		}
 	};
 	FrameGenSpanGuard_t s_FrameGenSpan;
 
@@ -8303,20 +8337,27 @@ namespace
 	// `Why no floor (e.g. 25 ms):` a floor blinds the guard at high frame rates, where a 20 ms hitch is already
 	// several frame intervals of camera motion. The pacer's interval is clamped to [1, 50] ms, and the 8-sample
 	// median does not move on one hitch, so a single long interval cannot widen its own limit.
+	// `Why no upper bound:` the pacer's 100 ms reset compares GAME arrivals; a stall of the compositor itself
+	// (the game keeps delivering) is never reset, and the pair across it can be 200 ms long.
+	// Every Decision with a pair is checked, a repeat of the same outId too, and once a pair is guarded every
+	// later paint of it stays guarded (the median may move between its paints): no paint of a guarded pair
+	// reaches the renderer's synth or its output cache. A blur window (t0 < t1) is dropped with the pair.
+	// An unknown arrival time does not guard: both frames of a pair are always in the record (see
+	// FrameGenSpanGuard_t), so unknown means the frame arrived while frame generation was off or not
+	// routed to the pacer, not that it is old.
 	void FrameGen_PairSpanGuard( fgpacing::Pacer::Decision &d, uint64_t ulNow )
 	{
 		if ( d.skip || d.inert || d.prevId == 0 || d.currId == 0 || d.prevId == d.currId )
 			return;
 		const float flK = cv_ritz_fg_pair_span_limit;
 		if ( !( flK > 0.0f ) )
-			return;   // off: not even the table lookup
-		const fghost::capture::ArrivalTable &arr = fghost::capture::Arrivals();
-		const fgspan::Verdict v = fgspan::Check( arr.Find( d.prevId ), arr.Find( d.currId ), s_FrameGen.pacer.IntervalMs(), double( flK ) );
-		if ( !v.guard )
-			return;
-
+			return;   // off: not even the lookup
 		FrameGenSpanGuard_t &G = s_FrameGenSpan;
 		const bool bNewPair = d.prevId != G.ulLastPrev || d.currId != G.ulLastCurr;
+		const fgspan::Verdict v = fgspan::Check( G.Find( d.prevId ), G.Find( d.currId ), s_FrameGen.pacer.IntervalMs(), double( flK ) );
+		if ( bNewPair && !v.guard )
+			return;
+
 		G.ulPaints++;
 		if ( bNewPair )
 		{
@@ -8358,6 +8399,8 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 		layer.format = pCommit->vulkanTex->drmFormat();
 	}
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
+	s_FrameGenSpan.ulArrivalId = pCommit->commitID;   // the pair span guard's record (NotePaint() at the paint)
+	s_FrameGenSpan.ulArrivalNs = pCommit->present_time;
 	fghost::capture::Arrivals().Note( pCommit->commitID, pCommit->present_time );   // ritz_fg_capture's table: one small write
 	s_FrameGen.bArrivalRepaint = true;
 }
@@ -8504,6 +8547,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.blurAmount = double( blurCfg.amountPercent ) / 100.0;
 	in.blurRelative = fgpacing::BlurRelative( uint8_t( blurCfg.relative ) );
 
+	s_FrameGenSpan.NotePaint( ulLayer0Id );   // the frame OnPaint() pushes as its newest, with its arrival
 	fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
 	FrameGen_PairSpanGuard( d, ulNow );   // before the capture records it and the renderer gets it
 	{
