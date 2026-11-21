@@ -26,6 +26,7 @@ All notable user-facing changes, newest first. Categories:
   instead of a distorted one.
 - **Game frames**: a game's frame is no longer handed back to the game while it is
   still being shown; this caused single distorted frames and short hitches.
+- **Settings crash**: opening the settings no longer closes gamescope.
 
 ## 2026-11-20
 
