@@ -12,6 +12,8 @@ All notable user-facing changes, newest first. Categories:
 ### Added
 - **Frame generation**: a troubleshooting command can record the frames around a
   moment to files.
+- **Frame generation**: the troubleshooting recorder can watch for a faulty generated
+  frame and save it by itself.
 
 ### Fixed
 - **Motion version 3**: fast motion near the picture's edge can no longer darken a
