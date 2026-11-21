@@ -62,6 +62,7 @@
 #include "cs_fg_copy_rgb10.h"
 #include "cs_fg_copy_f16.h"
 #include "cs_fg_crop.h"
+#include "cs_fg_stale_probe.h"
 #include "cs_effects_layer0.h"
 #include "cs_effects_measure.h"
 #include "cs_effects_preview.h"
@@ -1069,6 +1070,7 @@ bool CVulkanDevice::createShaders()
 		SHADER(FG_COPY_RGB10, cs_fg_copy_rgb10);
 	SHADER(FG_COPY_F16, cs_fg_copy_f16);
 	SHADER(FG_CROP, cs_fg_crop);
+	SHADER(FG_STALE_PROBE, cs_fg_stale_probe);
 #undef SHADER
 
 	for (uint32_t i = 0; i < shaderInfos.size(); i++)
@@ -1355,6 +1357,8 @@ void CVulkanDevice::compileAllPipelines(std::stop_token st)
 	// The Inspector's UI-protection box preview crop: switched on by looking at a
 	// settings row mid-game, so precompiled for the same reason.
 	SHADER(FG_CROP, 1, 1, 1);
+	// Frame generation's stale real-frame probe: runs once per new game frame while generating.
+	SHADER(FG_STALE_PROBE, 1, 1, 1);
 #undef SHADER
 
 	for (auto& info : pipelineInfos) {

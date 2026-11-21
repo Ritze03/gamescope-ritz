@@ -20,6 +20,7 @@ foreach src : ['Overlay/UI/Tokens.cpp', 'Overlay/UI/Lane.cpp', 'Overlay/UI/Row.c
 	unittest_src += srcdir / src
 endforeach
 
+unittest_src += files('test_framegen_stale.cpp')   # frame generation's stale real-frame guard (FrameGen/StaleFrame.h)
 gamescope_tests = executable(
 	'gamescope_tests',
 	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp', 'test_framegen_reach.cpp', 'test_framegen_v3.cpp', 'test_framegen_capture.cpp'],
@@ -62,6 +63,7 @@ test('framegen_capture', gamescope_tests, args: ['[framegen_capture]'])
 test('framegen_pacing', gamescope_tests, args: ['[framegen_pacing]'])
 test('framegen_hold', gamescope_tests, args: ['[framegen_hold]'])
 test('framegen_tearhint', gamescope_tests, args: ['[framegen_tearhint]'])
+test('framegen_stale', gamescope_tests, args: ['[framegen_stale]'])
 
 # ---------------------------------------------------------------------------
 #  The Steam client stand-ins, for test_steam_friends.cpp

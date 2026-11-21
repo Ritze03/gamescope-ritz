@@ -1,0 +1,44 @@
+#version 460
+
+// cs_fg_stale_probe.comp -- frame generation's stale real-frame probe (src/FrameGen/FrameGenHost.cpp's
+// StaleGuard(), src/FrameGen/StaleFrame.h; superdoc/features/frame-generation-stale-frames.md).
+//
+// One invocation per texel of a fixed 64x64 grid spread evenly over the frame. Slot 0 is the frame
+// under test (the game's buffer of a new commit), slots 1..3 are up to three frames to compare it with
+// (the ring's newest, 2 back, 3 back; an unused slot is bound to slot 0's image and ignored by the
+// host). Every slot is bound the way the ring copy binds the game's frame: raw UNORM view, so a fetch
+// returns the exact encoded value, and cs_fg_copy.comp stored exactly that value into the ring, so a
+// texel the copy took unchanged compares EQUAL here (rgb only: the copy writes alpha 1).
+//
+// The output is a 64x64 rgba8 mask: r / g / b = 1 where the texel equals slot 1 / 2 / 3. The host
+// copies it into a mappable image and counts on the CPU (16 KiB, after the submission retired).
+// Exact `==`: the stale frames seen in the field were byte-identical to an older frame over the
+// whole picture, and any tolerance would call a slow scene "unchanged".
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "descriptor_set.h"
+
+layout(
+  local_size_x = 8,
+  local_size_y = 8,
+  local_size_z = 1) in;
+
+const int kGrid = 64;   // == fghost::stale::kGrid
+
+void main()
+{
+    ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, ivec2(kGrid))))
+        return;
+
+    ivec2 size = textureSize(s_samplers[0], 0);
+    // The centre of grid cell g, in texels (a frame smaller than the grid repeats texels; harmless).
+    ivec2 p = clamp(ivec2((vec2(g) + 0.5) * vec2(size) / float(kGrid)), ivec2(0), size - ivec2(1));
+
+    vec3 c = texelFetch(s_samplers[0], p, 0).rgb;
+    float e1 = all(equal(c, texelFetch(s_samplers[1], p, 0).rgb)) ? 1.0 : 0.0;
+    float e2 = all(equal(c, texelFetch(s_samplers[2], p, 0).rgb)) ? 1.0 : 0.0;
+    float e3 = all(equal(c, texelFetch(s_samplers[3], p, 0).rgb)) ? 1.0 : 0.0;
+    imageStore(dst, g, vec4(e1, e2, e3, 1.0));
+}
