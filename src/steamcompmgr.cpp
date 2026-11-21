@@ -8006,7 +8006,8 @@ namespace
 		uint64_t ulPaintId[ kSlots ] = {};
 		int64_t  nPaintNs[ kSlots ] = {};
 		int      nNext = 0;
-		uint64_t ulPaints = 0;      // paints that showed a real frame instead of a pair's output
+		int      nCount = 0;
+		uint64_t ulPaints = 0;     // paints that showed a real frame instead of a pair's output
 		uint64_t ulPairs = 0;       // distinct pairs guarded
 		uint64_t ulLastPrev = 0;    // the last guarded pair: counts pairs, and keeps every later paint of it guarded
 		uint64_t ulLastCurr = 0;
@@ -8021,6 +8022,16 @@ namespace
 			ulPaintId[ nNext ] = ulNewestId;
 			nPaintNs[ nNext ] = int64_t( ulArrivalNs );
 			nNext = ( nNext + 1 ) % kSlots;
+			nCount = std::min( nCount + 1, kSlots );
+		}
+		// The median of the last pair spans (fgspan::RecentSpanMs()), ms; 0 while there are too few.
+		double RecentSpanMs() const
+		{
+			int64_t nNs[ fgspan::kRecentSpans + 1 ];
+			const int n = std::min( nCount, fgspan::kRecentSpans + 1 );
+			for ( int i = 0; i < n; i++ )
+				nNs[ i ] = nPaintNs[ ( nNext - n + i + kSlots ) % kSlots ];
+			return fgspan::RecentSpanMs( nNs, n );
 		}
 		// -1 when unknown (never the newest at a paint while frame generation was on, or too old).
 		int64_t Find( uint64_t ulId ) const
@@ -8354,7 +8365,10 @@ namespace
 			return;   // off: not even the lookup
 		FrameGenSpanGuard_t &G = s_FrameGenSpan;
 		const bool bNewPair = d.prevId != G.ulLastPrev || d.currId != G.ulLastCurr;
-		const fgspan::Verdict v = fgspan::Check( G.Find( d.prevId ), G.Find( d.currId ), s_FrameGen.pacer.IntervalMs(), double( flK ) );
+		// The reference interval: the pacer's arrival median, or the median of the recent pair spans when that is
+		// longer (after a burst of frames stamped together the arrival median drops towards 0, the pair spans do not).
+		const double flIntervalMs = std::max( s_FrameGen.pacer.IntervalMs(), G.RecentSpanMs() );
+		const fgspan::Verdict v = fgspan::Check( G.Find( d.prevId ), G.Find( d.currId ), flIntervalMs, double( flK ) );
 		if ( bNewPair && !v.guard )
 			return;
 
@@ -8369,7 +8383,7 @@ namespace
 			{
 				G.ulLastLogNs = ulNow;
 				fg_log.infof( "frame generation: pair of frames %.1f ms apart (limit %.1f ms = %.2f x %.2f ms, ids %llu-%llu): real frame shown; %llu pairs (%llu paints) so far",
-					v.spanMs, v.limitMs, double( flK ), s_FrameGen.pacer.IntervalMs(), (unsigned long long)d.prevId, (unsigned long long)d.currId,
+					v.spanMs, v.limitMs, double( flK ), flIntervalMs, (unsigned long long)d.prevId, (unsigned long long)d.currId,
 					(unsigned long long)G.ulPairs, (unsigned long long)G.ulPaints );
 			}
 		}

@@ -8,6 +8,7 @@
 // when it says so, shows the pair's later real frame instead.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -26,6 +27,32 @@ namespace fgspan
 		uint64_t u;
 		std::memcpy( &u, &f, sizeof u );
 		return ( u & 0x7FF0000000000000ull ) != 0x7FF0000000000000ull;
+	}
+
+	constexpr int kRecentSpans = 8;     // pair spans in RecentSpanMs()'s median (the pacer's interval window too)
+	constexpr int kMinRecentSpans = 3;  // fewer: no reference (0)
+
+	// The median of the last kRecentSpans spans between adjacent entries of pnArrivalNs (nCount arrival times,
+	// oldest first; a negative entry is unknown and breaks the span on both sides), in ms. 0 when fewer than
+	// kMinRecentSpans spans are known. The host feeds it the arrivals of the frames that were the newest at a
+	// paint, so these spans are the pairs' own spans: after a burst of frames that arrive together (a stall of
+	// the compositor, which then stamps them at once) they stay at the game's frame interval, where the pacer's
+	// arrival median drops towards 0 and would make a normal pair look long.
+	inline double RecentSpanMs( const int64_t *pnArrivalNs, int nCount )
+	{
+		double fl[ kRecentSpans ];
+		int n = 0;
+		for ( int i = nCount - 1; i >= 1 && n < kRecentSpans; i-- )
+		{
+			const int64_t a = pnArrivalNs[ i - 1 ], b = pnArrivalNs[ i ];
+			if ( a < 0 || b < 0 || b <= a )
+				continue;
+			fl[ n++ ] = double( b - a ) / 1e6;
+		}
+		if ( n < kMinRecentSpans )
+			return 0.0;
+		std::sort( fl, fl + n );
+		return n % 2 ? fl[ n / 2 ] : 0.5 * ( fl[ n / 2 - 1 ] + fl[ n / 2 ] );
 	}
 
 	// prevNs / currNs: the arrival times (ns) of the pair's earlier and later real frame, -1 (any negative value)

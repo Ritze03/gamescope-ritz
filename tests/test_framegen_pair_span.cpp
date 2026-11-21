@@ -59,6 +59,25 @@ TEST_CASE( "pair span guard: k of 0 or below switches it off", "[framegen_pair_s
 	REQUIRE( fgspan::Check( kBase, kBase + 6 * kMs, 5.0, 1.1 ).guard );
 }
 
+TEST_CASE( "pair span guard: the recent pair spans' median", "[framegen_pair_span]" )
+{
+	// Steady 10 ms pairs with one 51 ms hitch among them: the median stays 10.
+	const int64_t nSteady[] = { 0, 10 * kMs, 20 * kMs, 30 * kMs, 81 * kMs, 91 * kMs, 101 * kMs, 111 * kMs, 121 * kMs, 131 * kMs };
+	REQUIRE( fgspan::RecentSpanMs( nSteady, 10 ) == 10.0 );
+	// Even count: the mean of the middle two (spans 5, 10, 20, 40 -> 15).
+	const int64_t nEven[] = { 0, 5 * kMs, 15 * kMs, 35 * kMs, 75 * kMs };
+	REQUIRE( fgspan::RecentSpanMs( nEven, 5 ) == 15.0 );
+	// Too few spans: no reference.
+	REQUIRE( fgspan::RecentSpanMs( nSteady, 3 ) == 0.0 );
+	REQUIRE( fgspan::RecentSpanMs( nSteady, 0 ) == 0.0 );
+	// Unknown or out-of-order neighbours are skipped, not counted as spans.
+	const int64_t nHoles[] = { 0, -1, 20 * kMs, 30 * kMs, 25 * kMs, 35 * kMs, 45 * kMs };
+	REQUIRE( fgspan::RecentSpanMs( nHoles, 7 ) == 10.0 );
+	// Only the last kRecentSpans spans count.
+	const int64_t nOld[] = { 0, 100 * kMs, 200 * kMs, 300 * kMs, 302 * kMs, 304 * kMs, 306 * kMs, 308 * kMs, 310 * kMs, 312 * kMs, 314 * kMs, 316 * kMs };
+	REQUIRE( fgspan::RecentSpanMs( nOld, 12 ) == 2.0 );
+}
+
 TEST_CASE( "pair span guard: arrival times out of order never guard", "[framegen_pair_span]" )
 {
 	const fgspan::Verdict v = fgspan::Check( kBase + 90 * kMs, kBase, 5.0, 3.0 );

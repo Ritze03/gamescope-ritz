@@ -42,8 +42,12 @@ Part of [Frame generation](frame-generation.md). The renderer host (`fghost`) an
   paint of it reaches the synth or the output cache; a blur window is dropped with the pair.
   Arrival times come from the guard's own record: the arrival of every frame that was the
   newest at a paint, the last `kHistoryMax + 3` of them (exactly the frames the pacer's history
-  holds, so both frames of a pair are always in it); the interval from `Pacer::IntervalMs()`
-  (the median of the last 8 arrival intervals, clamped to 1..50 ms, 0 right after a reset). An
+  holds, so both frames of a pair are always in it). The interval is the larger of
+  `Pacer::IntervalMs()` (the median of the last 8 arrival intervals, clamped to 1..50 ms, 0
+  right after a reset) and the median of the last 8 pair spans in that record
+  (`fgspan::RecentSpanMs()`). `Why the second:` after a stall of the whole compositor the
+  frames that queued up are stamped at once, the arrival median dropped to 2.6 ms at a 10 ms
+  game, and a normal 10 ms pair was guarded; the pair spans stay at the game's interval. An
   unknown time (a frame that arrived while frame generation was off) or interval never guards.
   There is no upper bound on the span. `RecordBaseLayer()` then still copies and observes a new
   `newestId`, skips the pair branch, and shows layer 0 when `currId` is the newest, else
