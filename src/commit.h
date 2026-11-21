@@ -1,11 +1,17 @@
 #include "steamcompmgr_shared.hpp"
 #include "Utils/NonCopyable.h"
 
+#include <memory>
 #include <optional>
 #include "main.hpp"
 #include "rendervulkan.hpp"
 
 class CVulkanTexture;
+
+namespace gamescope
+{
+	class CTimeline;
+}
 
 struct UpscaledTexture_t
 {
@@ -75,6 +81,18 @@ struct commit_t final : public gamescope::RcObject, public gamescope::IWaitable,
 	uint64_t earliest_present_time = 0;
 	uint64_t present_margin = 0;
 	uint64_t present_time = 0;
+
+	// This fork: the explicit-sync facts of this commit, for the duplicate release point check in
+	// update_wayland_res() and frame generation's stale-frame diagnostics (FrameGen_CommitFacts()).
+	// The release TIMELINE and value only, never the release point object: holding that would change
+	// when the game gets its buffer back (it signals when its last owner lets go).
+	std::shared_ptr<gamescope::CTimeline> pReleaseTimeline;
+	uint64_t ulReleasePoint = 0;
+	uint64_t ulReceivedNs = 0;        // update_wayland_res() took it
+	uint64_t ulDoneNs = 0;            // handle_done_commit() made it the window's newest done commit
+	bool bExplicitSync = false;       // had an acquire point
+	bool bReadyAtCommit = false;      // its acquire point was already signalled when it was received
+	bool bRecommit = false;           // the same buffer AND release point as a commit still queued (no new buffer)
 
 	std::mutex m_WaitableCommitStateMutex;
 	int m_nCommitFence = -1;

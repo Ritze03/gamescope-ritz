@@ -7,6 +7,8 @@
 // See superdoc/features/frame-generation-stale-frames.md.
 #pragma once
 
+#include <cstdio>
+
 namespace fghost
 {
 	namespace stale
@@ -69,6 +71,54 @@ namespace fghost
 		inline bool ForcedStale( int nEvery, unsigned long long ulNewFrameIndex )
 		{
 			return nEvery > 0 && ulNewFrameIndex > 0 && ( ulNewFrameIndex % (unsigned long long)nEvery ) == 0;
+		}
+
+		// ---- what the compositor knows about the commit a new real frame came from ----
+		// Filled by steamcompmgr.cpp's FrameGen_CommitFacts() when the frame is first taken (the probe), logged
+		// with a stale verdict or a "changed after it was taken". Tri-state ints: 1 yes, 0 no, -1 unknown.
+		struct CommitFacts
+		{
+			bool bFound = false;          // the commit is still in the focused window's queue
+			bool bExplicitSync = false;   // it had an explicit-sync acquire point
+			bool bReadyAtCommit = false;  // that point was already signalled when the commit was received
+			bool bRecommit = false;       // no new buffer: the same buffer and release point as a commit before it
+			int nReleased = -1;           // its release point was already signalled (the game had the buffer back)
+			int nWritePending = -1;       // the buffer's implicit write fence was still pending
+			double flReceivedToDoneMs = -1.0;   // received -> ready (acquire fence)
+			double flDoneToTakenMs = -1.0;      // ready -> the window's newest done commit
+			double flTakenToProbeMs = -1.0;     // -> this paint's probe
+			unsigned uTexRefs = 0;        // references on the buffer's texture / its backend framebuffer now
+			unsigned uFbRefs = 0;
+		};
+
+		// A commit whose release point has already been signalled has been handed back to the game: the game may
+		// be drawing its next frame into that buffer while the compositor reads it. Point 0 is no point (a
+		// timeline starts at 0, so it always reads as signalled).
+		inline bool HandedBack( bool bHaveReleasePoint, unsigned long long ulSignalled, unsigned long long ulPoint )
+		{
+			return bHaveReleasePoint && ulPoint != 0 && ulSignalled >= ulPoint;
+		}
+
+		inline const char *TriText( int n, const char *pszYes, const char *pszNo )
+		{
+			return n > 0 ? pszYes : n == 0 ? pszNo : "n/a";
+		}
+
+		// The facts as one log suffix ("commit ...; ..."), never longer than cb - 1 characters.
+		inline int FormatFacts( const CommitFacts &f, char *psz, unsigned long cb )
+		{
+			if ( !psz || cb == 0 )
+				return 0;
+			if ( !f.bFound )
+				return snprintf( psz, cb, "commit gone" );
+			return snprintf( psz, cb,
+				"commit: %s sync, %s, %s, released to the game %s, write fence %s, received->ready %.2f ms, ready->newest %.2f ms, ->probe %.2f ms, refs %u/%u",
+				f.bExplicitSync ? "explicit" : "implicit",
+				f.bReadyAtCommit ? "ready at commit" : "waited for",
+				f.bRecommit ? "re-commit without a new buffer" : "new buffer",
+				TriText( f.nReleased, "YES", "no" ),
+				TriText( f.nWritePending, "PENDING", "signalled" ),
+				f.flReceivedToDoneMs, f.flDoneToTakenMs, f.flTakenToProbeMs, f.uTexRefs, f.uFbRefs );
 		}
 	}
 }

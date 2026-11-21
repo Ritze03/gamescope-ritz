@@ -114,6 +114,8 @@
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/HostShown.h"
 #include "FrameGen/PairSpanGuard.h"
+#include "FrameGen/StaleFrame.h"
+#include <xf86drm.h>
 #include "FrameGen/TearHint.h"
 #include "../subprojects/FrameGen/gpu/pacing.h"
 #include "Config/ConfigManager.h"
@@ -8664,6 +8666,7 @@ bool handle_done_commit( steamcompmgr_win_t *w, xwayland_ctx_t *ctx, uint64_t co
 		{
 			gpuvis_trace_printf( "commit %lu done", w->commit_queue[ j ]->commitID );
 			w->commit_queue[ j ]->done = true;
+			w->commit_queue[ j ]->ulDoneNs = get_time_in_nanos();   // this fork: FrameGen_CommitFacts()
 			w->commit_queue[ j ]->earliest_present_time = earliestPresentTime;
 			w->commit_queue[ j ]->present_margin = earliestPresentTime - earliestLatchTime;
 			bFoundWindow = true;
@@ -9040,9 +9043,105 @@ static TempUpscaleImage_t *GetTempUpscaleImage( uint32_t uWidth, uint32_t uHeigh
 
 gamescope::ConVar<bool> cv_surface_update_force_only_current_surface( "surface_update_force_only_current_surface", false, "Force updates to apply only to the current surface, ignoring commits for other surfaces." );
 
+// ---- This fork: a commit WITHOUT a new buffer must not hand the held buffer back to its client ----
+// (superdoc/features/frame-generation-stale-frames.md, "The early hand-back".)
+// Every wl_surface.commit reaches update_wayland_res(), also one that attaches no new buffer: it
+// "commits the same buffer again" (xwayland_surface_commit()). The linux-drm-syncobj surface state is
+// never cleared after a commit (LinuxDrmSyncobj.h: Extract*TimelinePoint() is const), so such a commit
+// arrives with a NEW release point object carrying the SAME timeline and value as the commit that attached
+// the buffer. That object signals its point when its last owner lets go (~CTimelinePoint): dropped with a
+// discarded commit, or replacing the backend fb's own object in SetReleasePoint() (which destroys the
+// original), it signals the release point of a buffer gamescope still holds and has maybe not even read
+// yet. The client then draws its next frame into that buffer: a frame taken from it later holds a FUTURE
+// picture, or changes while it is being read. Here the duplicate object is PARKED instead, with the texture,
+// and destroyed only once nothing uses the buffer any more (the fb's own release point has fired by then).
+// `ritz_recommit_keep_release 0` restores the old behaviour, to compare.
+gamescope::ConVar<bool> cv_ritz_recommit_keep_release( "ritz_recommit_keep_release", true,
+	"A commit that re-commits a held buffer without new sync points keeps that buffer's release point until gamescope is done with the buffer (0 = upstream behaviour: it is signalled at once)." );
+
+struct ParkedReleasePoint_t
+{
+	gamescope::OwningRc<CVulkanTexture> pTex;   // a private reference: it keeps the object, not the buffer, alive
+	std::shared_ptr<gamescope::CReleaseTimelinePoint> pPoint;
+};
+// Leaked on purpose (like the frame generation host): no ~CVulkanTexture after the device is gone at exit.
+static std::vector<ParkedReleasePoint_t> &s_ParkedReleasePoints = *new std::vector<ParkedReleasePoint_t>();
+static std::atomic<uint64_t> s_ulRecommits{ 0 };       // commits without a new buffer whose release point was a duplicate
+static std::atomic<uint64_t> s_ulRecommitsKept{ 0 };   // ... of those, parked (the fix on)
+static std::atomic<uint64_t> s_ulParkedNow{ 0 };      // parked duplicates not released yet (should stay small)
+static uint64_t s_ulRecommitLastLogNs = 0;
+static uint64_t s_ulRecommitsAtLog = 0;
+
+// Destroys (= signals) every parked duplicate whose buffer nothing uses any more. Called before every
+// commit is taken and once per main loop iteration, so a parked point fires before the client can be handed
+// a newer release point of the same buffer (which only gamescope signals, after its commit was taken).
+static void ReleaseParkedReleasePoints()
+{
+	if ( s_ParkedReleasePoints.empty() )
+		return;
+	std::erase_if( s_ParkedReleasePoints, []( const ParkedReleasePoint_t &p ) { return !p.pTex || !p.pTex->IsInUse(); } );
+	s_ulParkedNow.store( s_ParkedReleasePoints.size(), std::memory_order_relaxed );
+}
+
+// Read by FrameGenHost.cpp (ritz_fg_stale_stats; console thread, hence the atomics).
+uint64_t FrameGen_RecommitCount( uint64_t *pulKept, uint64_t *pulParkedNow )
+{
+	if ( pulKept )
+		*pulKept = s_ulRecommitsKept.load( std::memory_order_relaxed );
+	if ( pulParkedNow )
+		*pulParkedNow = s_ulParkedNow.load( std::memory_order_relaxed );
+	return s_ulRecommits.load( std::memory_order_relaxed );
+}
+
 void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, ResListEntry_t& reslistentry)
 {
 	struct wlr_buffer *buf = reslistentry.buf;
+
+	ReleaseParkedReleasePoints();
+
+	// A commit without a new buffer (see above): the same buffer and the same release point as a commit still
+	// queued. Its release point is a duplicate of that commit's, which the backend fb already owns.
+	commit_t *pRecommitOf = nullptr;
+	if ( w != nullptr && reslistentry.pReleasePoint )
+	{
+		for ( auto it = w->commit_queue.rbegin(); it != w->commit_queue.rend(); ++it )
+		{
+			commit_t *pOld = it->get();
+			if ( pOld->buf == buf && pOld->pReleaseTimeline && pOld->pReleaseTimeline == reslistentry.pReleasePoint->GetTimeline()
+				&& pOld->ulReleasePoint == reslistentry.pReleasePoint->GetPoint() )
+			{
+				pRecommitOf = pOld;
+				break;
+			}
+		}
+	}
+	std::shared_ptr<gamescope::CTimeline> pRecommitTimeline;
+	uint64_t ulRecommitPoint = 0;
+	if ( pRecommitOf )
+	{
+		pRecommitTimeline = pRecommitOf->pReleaseTimeline;
+		ulRecommitPoint = pRecommitOf->ulReleasePoint;
+		const uint64_t ulCount = s_ulRecommits.fetch_add( 1, std::memory_order_relaxed ) + 1;
+		const bool bKeep = cv_ritz_recommit_keep_release && pRecommitOf->vulkanTex != nullptr;
+		if ( bKeep )
+		{
+			s_ulRecommitsKept.fetch_add( 1, std::memory_order_relaxed );
+			s_ParkedReleasePoints.push_back( ParkedReleasePoint_t{ pRecommitOf->vulkanTex, std::move( reslistentry.pReleasePoint ) } );
+			reslistentry.pReleasePoint = nullptr;
+			s_ulParkedNow.store( s_ParkedReleasePoints.size(), std::memory_order_relaxed );
+		}
+		const uint64_t ulNow = get_time_in_nanos();
+		if ( ulNow - s_ulRecommitLastLogNs >= 5ull * 1000000000ull )
+		{
+			xwm_log.infof( "a commit without a new buffer re-committed the buffer of commit %lu (release point %lu): %s (%lu so far, %lu since the last line)",
+				(unsigned long)pRecommitOf->commitID, (unsigned long)ulRecommitPoint,
+				bKeep ? "its release point is kept until the buffer is no longer used" : "its release point is signalled now (ritz_recommit_keep_release 0)",
+				(unsigned long)ulCount, (unsigned long)( ulCount - s_ulRecommitsAtLog ) );
+			s_ulRecommitLastLogNs = ulNow;
+			s_ulRecommitsAtLog = ulCount;
+		}
+	}
+	const bool bKeepFbRelease = pRecommitOf && !reslistentry.pReleasePoint;
 
 	if ( w == nullptr )
 	{
@@ -9241,10 +9340,29 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 
 	if ( gamescope::IBackendFb *pBackendFb = newCommit->vulkanTex->GetBackendFb() )
 	{
-		if ( reslistentry.pReleasePoint )
+		// A parked duplicate (see ReleaseParkedReleasePoints()): the fb keeps the release point it owns. Neither
+		// call below may run: SetReleasePoint() would destroy that one (signal it), SetBuffer() drops it too.
+		if ( bKeepFbRelease )
+			;
+		else if ( reslistentry.pReleasePoint )
 			pBackendFb->SetReleasePoint( reslistentry.pReleasePoint );
 		else
 			pBackendFb->SetBuffer( buf );
+	}
+
+	// The commit's own sync facts (commit.h): diagnostics and the duplicate check above.
+	newCommit->ulReceivedNs = get_time_in_nanos();
+	newCommit->bExplicitSync = reslistentry.pAcquirePoint != nullptr;
+	newCommit->bRecommit = pRecommitOf != nullptr;
+	if ( pRecommitOf )
+	{
+		newCommit->pReleaseTimeline = pRecommitTimeline;
+		newCommit->ulReleasePoint = ulRecommitPoint;
+	}
+	else if ( reslistentry.pReleasePoint )
+	{
+		newCommit->pReleaseTimeline = reslistentry.pReleasePoint->GetTimeline();
+		newCommit->ulReleasePoint = reslistentry.pReleasePoint->GetPoint();
 	}
 
 	if ( eventFd != gamescope::CAcquireTimelinePoint::k_InvalidEvent )
@@ -9265,6 +9383,8 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 		}
 	}
 
+	newCommit->bReadyAtCommit = newCommit->bExplicitSync && bKnownReady;
+
 	gpuvis_trace_printf( "pushing wait for commit %lu win %lx", newCommit->commitID, w->type == steamcompmgr_win_type_t::XWAYLAND ? w->xwayland().id : 0 );
 	{
 		newCommit->SetFence( fence, mango_nudge, doneCommits );
@@ -9275,6 +9395,73 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 	}
 
 	w->commit_queue.push_back( std::move(newCommit) );
+}
+
+// Frame generation's stale-frame guard (FrameGenHost.cpp StaleGuard()): what is known about the commit a new
+// real frame came from, at the moment it is first taken. Render path = this thread.
+bool FrameGen_CommitFacts( uint64_t ulCommitId, fghost::stale::CommitFacts *pOut )
+{
+	*pOut = fghost::stale::CommitFacts{};
+	global_focus_t *pFocus = GetCurrentFocus();
+	steamcompmgr_win_t *w = pFocus ? pFocus->focusWindow : nullptr;
+	commit_t *pCommit = nullptr;
+	if ( w )
+	{
+		for ( const auto &c : w->commit_queue )
+		{
+			if ( c->commitID == ulCommitId )
+				pCommit = c.get();
+		}
+	}
+	if ( !pCommit && g_HeldCommits[ HELD_COMMIT_BASE ] && g_HeldCommits[ HELD_COMMIT_BASE ]->commitID == ulCommitId )
+		pCommit = g_HeldCommits[ HELD_COMMIT_BASE ].get();
+	if ( !pCommit )
+		return false;
+
+	const uint64_t ulNow = get_time_in_nanos();
+	auto Ms = []( uint64_t a, uint64_t b ) { return ( a && b && b >= a ) ? double( b - a ) * 1e-6 : -1.0; };
+	pOut->bFound = true;
+	pOut->bExplicitSync = pCommit->bExplicitSync;
+	pOut->bReadyAtCommit = pCommit->bReadyAtCommit;
+	pOut->bRecommit = pCommit->bRecommit;
+	pOut->flReceivedToDoneMs = Ms( pCommit->ulReceivedNs, pCommit->present_time );
+	pOut->flDoneToTakenMs = Ms( pCommit->present_time, pCommit->ulDoneNs );
+	pOut->flTakenToProbeMs = Ms( pCommit->ulDoneNs, ulNow );
+	if ( pCommit->vulkanTex )
+	{
+		pOut->uTexRefs = pCommit->vulkanTex->GetRefCount();
+		if ( gamescope::IBackendFb *pFb = pCommit->vulkanTex->GetBackendFb() )
+			pOut->uFbRefs = pFb->GetRefCount();
+	}
+	if ( pCommit->pReleaseTimeline && pCommit->ulReleasePoint )
+	{
+		uint32_t uHandle = pCommit->pReleaseTimeline->GetSyncobjHandle();
+		uint64_t ulSignalled = 0;
+		if ( uHandle && drmSyncobjQuery( g_device.drmRenderFd(), &uHandle, &ulSignalled, 1u ) == 0 )
+			pOut->nReleased = fghost::stale::HandedBack( true, ulSignalled, pCommit->ulReleasePoint ) ? 1 : 0;
+	}
+	return true;
+}
+
+// Test of the duplicate release point fix (update_wayland_res()) where no client sends a commit without a new
+// buffer: after every n-th explicit-sync commit, the commit such a client would produce is injected (the same
+// buffer, new point objects with the SAME acquire and release values, as PrepareCommit() creates them).
+gamescope::ConVar<int> cv_ritz_debug_recommit( "ritz_debug_recommit", 0,
+	"Test: after every n-th commit with explicit sync, inject a commit without a new buffer, as a client's frame-callback-only commit arrives (0 = off)." );
+
+static void DebugInjectRecommit( CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, const ResListEntry_t &e )
+{
+	static uint64_t s_ulCommits = 0;
+	const int nEvery = cv_ritz_debug_recommit;
+	if ( nEvery <= 0 || !w || !e.buf || !e.pAcquirePoint || !e.pReleasePoint || ++s_ulCommits % uint64_t( nEvery ) != 0 )
+		return;
+	wlserver_lock();
+	wlr_buffer_lock( e.buf );
+	wlserver_unlock();
+	ResListEntry_t dup{ e.surf, e.buf, e.async, e.fifo, e.feedback, {}, std::nullopt, 0,
+		std::make_shared<gamescope::CAcquireTimelinePoint>( e.pAcquirePoint->GetTimeline(), e.pAcquirePoint->GetPoint() ),
+		std::make_shared<gamescope::CReleaseTimelinePoint>( e.pReleasePoint->GetTimeline(), e.pReleasePoint->GetPoint() ) };
+	update_wayland_res( doneCommits, w, dup );
 }
 
 void check_new_xwayland_res(xwayland_ctx_t *ctx)
@@ -9288,6 +9475,7 @@ void check_new_xwayland_res(xwayland_ctx_t *ctx)
 	{
 		steamcompmgr_win_t	*w = find_win( ctx, tmp_queue[ i ].surf );
 		update_wayland_res( &ctx->doneCommits, w, tmp_queue[ i ]);
+		DebugInjectRecommit( &ctx->doneCommits, w, tmp_queue[ i ] );
 	}
 }
 
@@ -11328,6 +11516,9 @@ steamcompmgr_main(int argc, char **argv)
 		}
 
 		vulkan_garbage_collect();
+
+		// Duplicate release points of commits without a new buffer whose buffer is no longer in use.
+		ReleaseParkedReleasePoints();
 
 		vblank = false;
 	}

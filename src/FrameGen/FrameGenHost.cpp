@@ -20,6 +20,11 @@
 #include <mutex>
 #include <vector>
 
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <linux/dma-buf.h>
+
 #include "../../subprojects/FrameGen/gpu/framegen.h"
 #include "../../subprojects/FrameGen/gpu/pacing.h"
 
@@ -30,6 +35,11 @@
 #include "convar.h"
 
 static LogScope fg_log( "framegen" );
+
+// steamcompmgr.cpp: what is known about the commit a new real frame came from (the stale-frame guard's
+// diagnostics), and how many commits re-committed a held buffer without a new one (update_wayland_res()).
+bool FrameGen_CommitFacts( uint64_t ulCommitId, fghost::stale::CommitFacts *pOut );
+uint64_t FrameGen_RecommitCount( uint64_t *pulKept, uint64_t *pulParkedNow );
 
 namespace fghost
 {
@@ -1463,6 +1473,8 @@ namespace fghost
 			"Frame generation: probe every new game frame and drop one that has the content of an earlier frame (0 = no probe, the old behaviour)." );
 		gamescope::ConVar<int> cv_ritz_fg_stale_test( "ritz_fg_stale_test", 0,
 			"Frame generation test: n > 0 marks every n-th new game frame stale on purpose (the fail-safe path); 0 = off." );
+		gamescope::ConVar<bool> cv_ritz_fg_handback_check( "ritz_fg_handback_check", true,
+			"Frame generation: do not use a new game frame whose buffer had already been handed back to the game when it was first taken (explicit sync only; 0 = use it)." );
 
 		struct StaleState_t
 		{
@@ -1484,6 +1496,13 @@ namespace fghost
 			uint64_t ulDiagSeq = ~0ull;     // its submission (~0 = recorded, not submitted yet)
 			uint64_t ulDiagLastLogNs = 0;
 			uint64_t ulDiagSuppressed = 0;
+			// What the compositor knew about the commit of the newest probed frame (FrameGen_CommitFacts()), and
+			// of the frame given the second look, as it was at its copy.
+			stale::CommitFacts lastFacts;
+			uint64_t ulLastFactsId = 0;
+			stale::CommitFacts diagFacts;
+			uint64_t ulHandedLastLogNs = 0;
+			uint64_t ulHandedSuppressed = 0;
 		};
 		StaleState_t &g_Stale = *new StaleState_t();   // render thread only; leaked on purpose like the Host (no ~CVulkanTexture at exit)
 		// Read by ritz_fg_stale_stats (console thread).
@@ -1491,6 +1510,38 @@ namespace fghost
 		std::atomic<uint64_t> g_ulProbeNsSum{ 0 }, g_ulProbeNsMax{ 0 };
 		std::atomic<uint64_t> g_ulHeldPaints{ 0 };   // paints that showed the newest good ring frame instead of a stale layer 0
 		std::atomic<uint64_t> g_ulDiagChecks{ 0 }, g_ulDiagChanged{ 0 };
+		// The readiness / hand-back diagnostics (StaleFrame.h CommitFacts): new frames refused because the game
+		// already had their buffer back; the facts of the stale verdicts and of the "changed after taken" frames.
+		std::atomic<uint64_t> g_ulHandedBack{ 0 };
+		std::atomic<uint64_t> g_ulTakenExplicit{ 0 }, g_ulTakenReadyAtCommit{ 0 }, g_ulTakenRecommit{ 0 };   // every new frame taken
+		std::atomic<uint64_t> g_ulStaleReleased{ 0 }, g_ulStaleRecommit{ 0 }, g_ulStaleReadyAtCommit{ 0 }, g_ulStaleExplicit{ 0 }, g_ulStaleWritePending{ 0 };
+		std::atomic<uint64_t> g_ulChangedReleased{ 0 }, g_ulChangedRecommit{ 0 }, g_ulChangedWritePending{ 0 };
+
+		// The game buffer's implicit write fence (DMA_BUF_IOCTL_EXPORT_SYNC_FILE with the read flag: the fences a
+		// reader waits for), polled without waiting: 1 still pending, 0 signalled, -1 unknown. With explicit
+		// sync the driver may attach none, which reads as signalled.
+		int WriteFencePending( const gamescope::Rc<CVulkanTexture> &pTex )
+		{
+#ifdef DMA_BUF_IOCTL_EXPORT_SYNC_FILE
+			const wlr_dmabuf_attributes &dmabuf = pTex->dmabuf();
+			if ( dmabuf.n_planes < 1 || dmabuf.fd[ 0 ] < 0 )
+				return -1;
+			dma_buf_export_sync_file req = {};
+			req.flags = DMA_BUF_SYNC_READ;
+			req.fd = -1;
+			if ( ioctl( dmabuf.fd[ 0 ], DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &req ) != 0 || req.fd < 0 )
+				return -1;
+			pollfd pfd = {};
+			pfd.fd = req.fd;
+			pfd.events = POLLIN;
+			const int n = poll( &pfd, 1, 0 );
+			close( req.fd );
+			return n > 0 ? 0 : n == 0 ? 1 : -1;
+#else
+			(void)pTex;
+			return -1;
+#endif
+		}
 
 		bool StaleProbeImages( int nSet )
 		{
@@ -1593,6 +1644,42 @@ namespace fghost
 			if ( !H.bHaveCur || H.nRing <= 0 )
 				return false;   // nothing to compare with (and nothing else to show)
 
+			// What the compositor knows about this commit, now that it is first taken (logged with a verdict, and
+			// kept for the second look). A buffer the game already has back may be receiving its NEXT frame while
+			// it is read: not used (the frame to distrust is this one, not the later frame that then looks
+			// "stale"). See superdoc/features/frame-generation-stale-frames.md, "The early hand-back".
+			stale::CommitFacts facts;
+			FrameGen_CommitFacts( ulNewestId, &facts );
+			facts.nWritePending = WriteFencePending( pLayer0 );
+			g_Stale.lastFacts = facts;
+			g_Stale.ulLastFactsId = ulNewestId;
+			if ( facts.bExplicitSync )
+				g_ulTakenExplicit.fetch_add( 1, std::memory_order_relaxed );
+			if ( facts.bReadyAtCommit )
+				g_ulTakenReadyAtCommit.fetch_add( 1, std::memory_order_relaxed );
+			if ( facts.bRecommit )
+				g_ulTakenRecommit.fetch_add( 1, std::memory_order_relaxed );
+			char szFacts[ 384 ];
+			stale::FormatFacts( facts, szFacts, sizeof( szFacts ) );
+			if ( cv_ritz_fg_handback_check && facts.nReleased == 1 )
+			{
+				g_Stale.ulStaleId = ulNewestId;
+				const uint64_t ulHanded = g_ulHandedBack.fetch_add( 1, std::memory_order_relaxed ) + 1;
+				const uint64_t ulNowNs = get_time_in_nanos();
+				if ( ulNowNs - g_Stale.ulHandedLastLogNs >= 1000000000ull )
+				{
+					fg_log.infof( "frame generation: game frame %llu had already been handed back to the game when it was taken (its buffer may hold a later frame); not used (%llu so far, %llu not logged since the last line; %s)",
+						(unsigned long long)ulNewestId, (unsigned long long)ulHanded, (unsigned long long)g_Stale.ulHandedSuppressed, szFacts );
+					g_Stale.ulHandedLastLogNs = ulNowNs;
+					g_Stale.ulHandedSuppressed = 0;
+				}
+				else
+				{
+					g_Stale.ulHandedSuppressed++;
+				}
+				return true;
+			}
+
 			// The ring's frames by age: 0 = newest (nCurSlot), 1 = the one before, 2 = the one before that.
 			gamescope::Rc<CVulkanTexture> pRefs[ stale::kMaxRef ];
 			uint64_t ulRefId[ stale::kMaxRef ] = {};
@@ -1644,6 +1731,19 @@ namespace fghost
 			const uint64_t ulCount = g_ulStaleCount.fetch_add( 1, std::memory_order_relaxed ) + 1;
 			if ( bForced )
 				g_ulStaleForced.fetch_add( 1, std::memory_order_relaxed );
+			else
+			{
+				if ( facts.nReleased == 1 )
+					g_ulStaleReleased.fetch_add( 1, std::memory_order_relaxed );
+				if ( facts.bRecommit )
+					g_ulStaleRecommit.fetch_add( 1, std::memory_order_relaxed );
+				if ( facts.bReadyAtCommit )
+					g_ulStaleReadyAtCommit.fetch_add( 1, std::memory_order_relaxed );
+				if ( facts.bExplicitSync )
+					g_ulStaleExplicit.fetch_add( 1, std::memory_order_relaxed );
+				if ( facts.nWritePending == 1 )
+					g_ulStaleWritePending.fetch_add( 1, std::memory_order_relaxed );
+			}
 			if ( ulNow - g_Stale.ulLastLogNs >= 1000000000ull )
 			{
 				const unsigned long long ulRepeats = (unsigned long long)g_ulRepeatCount.load( std::memory_order_relaxed );
@@ -1651,9 +1751,9 @@ namespace fghost
 					fg_log.infof( "frame generation: game frame %llu marked stale by ritz_fg_stale_test; not used (%llu so far, %llu not logged since the last line)",
 						(unsigned long long)ulNewestId, (unsigned long long)ulCount, (unsigned long long)g_Stale.ulSuppressed );
 				else
-					fg_log.infof( "frame generation: game frame %llu has the content of the frame %d before it (frame %llu); not used (%llu so far, %llu not logged since the last line; %llu plain repeats)",
+					fg_log.infof( "frame generation: game frame %llu has the content of the frame %d before it (frame %llu); not used (%llu so far, %llu not logged since the last line; %llu plain repeats; %s)",
 						(unsigned long long)ulNewestId, r.nBack, (unsigned long long)ulRefId[ r.nBack - 1 ], (unsigned long long)ulCount,
-						(unsigned long long)g_Stale.ulSuppressed, ulRepeats );
+						(unsigned long long)g_Stale.ulSuppressed, ulRepeats, szFacts );
 				g_Stale.ulLastLogNs = ulNow;
 				g_Stale.ulSuppressed = 0;
 			}
@@ -1685,11 +1785,24 @@ namespace fghost
 			if ( nEqual[ 0 ] >= nAll )
 				return;
 			const uint64_t ulChanged = g_ulDiagChanged.fetch_add( 1, std::memory_order_relaxed ) + 1;
+			// Has the game got that buffer back by now (while it was still gamescope's newest frame at the copy)?
+			stale::CommitFacts now;
+			FrameGen_CommitFacts( ulId, &now );
+			const int nReleasedNow = now.bFound ? now.nReleased : -1;
+			if ( nReleasedNow == 1 || g_Stale.diagFacts.nReleased == 1 )
+				g_ulChangedReleased.fetch_add( 1, std::memory_order_relaxed );
+			if ( g_Stale.diagFacts.bRecommit )
+				g_ulChangedRecommit.fetch_add( 1, std::memory_order_relaxed );
+			if ( g_Stale.diagFacts.nWritePending == 1 )
+				g_ulChangedWritePending.fetch_add( 1, std::memory_order_relaxed );
 			const uint64_t ulNow = get_time_in_nanos();
 			if ( ulNow - g_Stale.ulDiagLastLogNs >= 1000000000ull )
 			{
-				fg_log.infof( "frame generation: game buffer of frame %llu changed after it was taken (%d of %d probed texels differ; %llu so far, %llu not logged since the last line)",
-					(unsigned long long)ulId, nAll - nEqual[ 0 ], nAll, (unsigned long long)ulChanged, (unsigned long long)g_Stale.ulDiagSuppressed );
+				char szFacts[ 384 ];
+				stale::FormatFacts( g_Stale.diagFacts, szFacts, sizeof( szFacts ) );
+				fg_log.infof( "frame generation: game buffer of frame %llu changed after it was taken (%d of %d probed texels differ; %llu so far, %llu not logged since the last line; released to the game by now %s; at the copy %s)",
+					(unsigned long long)ulId, nAll - nEqual[ 0 ], nAll, (unsigned long long)ulChanged, (unsigned long long)g_Stale.ulDiagSuppressed,
+					now.bFound ? stale::TriText( nReleasedNow, "YES", "no" ) : "commit gone", szFacts );
 				g_Stale.ulDiagLastLogNs = ulNow;
 				g_Stale.ulDiagSuppressed = 0;
 			}
@@ -1708,6 +1821,7 @@ namespace fghost
 				return false;
 			const gamescope::Rc<CVulkanTexture> pRefs[ stale::kMaxRef ] = { H.pRing[ H.nCurSlot ], nullptr, nullptr };
 			StaleProbeRecord( pCb, 1, pLayer0, pRefs );
+			g_Stale.diagFacts = g_Stale.ulLastFactsId == ulNewestId ? g_Stale.lastFacts : stale::CommitFacts{};
 			g_Stale.ulDiagId = ulNewestId;
 			g_Stale.ulDiagPendingId = ulNewestId;
 			g_Stale.ulDiagSeq = ~0ull;   // set by StaleDiagSubmitted()
@@ -1726,6 +1840,8 @@ namespace fghost
 		[]( std::span<std::string_view> )
 		{
 			const uint64_t ulProbes = g_ulProbeCount.load( std::memory_order_relaxed );
+			uint64_t ulRecommitsKept = 0, ulParkedNow = 0;
+			const uint64_t ulRecommits = FrameGen_RecommitCount( &ulRecommitsKept, &ulParkedNow );
 			const double flMean = ulProbes ? double( g_ulProbeNsSum.load( std::memory_order_relaxed ) ) / double( ulProbes ) * 1e-6 : 0.0;
 			console_log.infof( "ritz_fg_stale_stats: stale %llu (forced %llu), plain repeats %llu, held paints %llu, probes %llu, probe mean %.3f ms, max %.3f ms, "
 				"second looks %llu, changed after taken %llu",
@@ -1733,6 +1849,18 @@ namespace fghost
 				(unsigned long long)g_ulRepeatCount.load( std::memory_order_relaxed ), (unsigned long long)g_ulHeldPaints.load( std::memory_order_relaxed ),
 				(unsigned long long)ulProbes, flMean, double( g_ulProbeNsMax.load( std::memory_order_relaxed ) ) * 1e-6,
 				(unsigned long long)g_ulDiagChecks.load( std::memory_order_relaxed ), (unsigned long long)g_ulDiagChanged.load( std::memory_order_relaxed ) );
+			console_log.infof( "ritz_fg_stale_stats: handed back before taken %llu (not used); stale with: released %llu, re-commit %llu, ready at commit %llu, explicit sync %llu, write fence pending %llu; "
+				"changed after taken with: released %llu, re-commit %llu, write fence pending %llu; re-commits without a new buffer %llu (release kept %llu, still held %llu); "
+				"new frames taken with explicit sync %llu, ready at commit %llu, re-commit %llu",
+				(unsigned long long)g_ulHandedBack.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulStaleReleased.load( std::memory_order_relaxed ), (unsigned long long)g_ulStaleRecommit.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulStaleReadyAtCommit.load( std::memory_order_relaxed ), (unsigned long long)g_ulStaleExplicit.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulStaleWritePending.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulChangedReleased.load( std::memory_order_relaxed ), (unsigned long long)g_ulChangedRecommit.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulChangedWritePending.load( std::memory_order_relaxed ),
+				(unsigned long long)ulRecommits, (unsigned long long)ulRecommitsKept, (unsigned long long)ulParkedNow,
+				(unsigned long long)g_ulTakenExplicit.load( std::memory_order_relaxed ), (unsigned long long)g_ulTakenReadyAtCommit.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulTakenRecommit.load( std::memory_order_relaxed ) );
 		} );
 
 	// ------------------------------------------------------------------

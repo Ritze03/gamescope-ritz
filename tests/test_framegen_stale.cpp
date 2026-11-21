@@ -4,6 +4,9 @@
 
 #include "FrameGen/StaleFrame.h"
 
+#include <string>
+#include <vector>
+
 using namespace fghost::stale;
 
 namespace
@@ -109,4 +112,53 @@ TEST_CASE( "stale frame: the forced test marks every n-th new frame", "[framegen
 	for ( unsigned long long i = 1; i <= 100; i++ )
 		nHit += ForcedStale( 4, i ) ? 1 : 0;
 	CHECK( nHit == 25 );
+}
+
+TEST_CASE( "stale frame: a buffer is handed back once its release point has signalled", "[framegen_stale]" )
+{
+	CHECK_FALSE( HandedBack( false, 10, 5 ) );    // no release point: unknown, never "handed back"
+	CHECK_FALSE( HandedBack( true, 100, 0 ) );    // point 0 is no point (a timeline always reads >= 0)
+	CHECK_FALSE( HandedBack( true, 4, 5 ) );      // still held
+	CHECK( HandedBack( true, 5, 5 ) );            // exactly signalled
+	CHECK( HandedBack( true, 9, 5 ) );            // a later point of the same timeline covers it
+}
+
+TEST_CASE( "stale frame: the commit facts format into one bounded log suffix", "[framegen_stale]" )
+{
+	char sz[ 512 ];
+	CommitFacts f;
+	FormatFacts( f, sz, sizeof( sz ) );
+	CHECK( std::string( sz ) == "commit gone" );
+
+	f.bFound = true;
+	f.bExplicitSync = true;
+	f.bReadyAtCommit = true;
+	f.bRecommit = true;
+	f.nReleased = 1;
+	f.nWritePending = 0;
+	f.flReceivedToDoneMs = 0.0;
+	f.flDoneToTakenMs = 1.25;
+	f.flTakenToProbeMs = 2.5;
+	f.uTexRefs = 3;
+	f.uFbRefs = 1;
+	FormatFacts( f, sz, sizeof( sz ) );
+	const std::string s( sz );
+	CHECK( s.find( "explicit sync" ) != std::string::npos );
+	CHECK( s.find( "ready at commit" ) != std::string::npos );
+	CHECK( s.find( "re-commit without a new buffer" ) != std::string::npos );
+	CHECK( s.find( "released to the game YES" ) != std::string::npos );
+	CHECK( s.find( "write fence signalled" ) != std::string::npos );
+	CHECK( s.find( "refs 3/1" ) != std::string::npos );
+
+	f.nReleased = -1;
+	f.nWritePending = -1;
+	FormatFacts( f, sz, sizeof( sz ) );
+	CHECK( std::string( sz ).find( "released to the game n/a, write fence n/a" ) != std::string::npos );
+
+	// Truncated, never overrun (the size read at run time: a constant one is a -Wformat-truncation warning).
+	volatile unsigned long ulSmall = 16;
+	std::vector<char> small( ulSmall, 'x' );
+	FormatFacts( f, small.data(), ulSmall );
+	CHECK( std::string( small.data() ).size() == small.size() - 1 );
+	CHECK( FormatFacts( f, nullptr, 0 ) == 0 );
 }
