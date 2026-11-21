@@ -82,6 +82,7 @@ indented under it.
   - [Learned motion](features/frame-generation-learned.md)
   - [Motion version 3](features/frame-generation-motion-v3.md)
   - [Capture (`ritz_fg_capture`)](features/frame-generation-capture.md)
+  - [Stale real frames (the guard at the ring copy)](features/frame-generation-stale-frames.md)
   - [Pass-through, costs, limitations, build and testing](features/frame-generation-limits.md)
 - [Motion blur](features/motion-blur.md) — interpolation-based blur, with or without frame
   generation; the shared-timeline composition model.

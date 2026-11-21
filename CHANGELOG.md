@@ -20,6 +20,8 @@ All notable user-facing changes, newest first. Categories:
   moving area with the border's colour.
 - **Frame generation**: after a short stutter of the game the frames around it are no
   longer blended into one distorted frame; the real frame is shown.
+- **Frame generation**: a game frame that arrives with the picture of an earlier frame
+  is no longer used; it caused single distorted frames.
 
 ## 2026-11-20
 
