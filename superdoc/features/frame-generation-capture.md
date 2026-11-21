@@ -55,6 +55,21 @@ pacer only shows real frames (pass-through), the capture starts and, when no gen
 comes for 10 s (`kTimeoutNs`), ends with `reason=timeout` and the header, settings and decisions
 only.
 
+## Early preparation
+
+The expensive part (free-space check, allocating the staging, creating the directory) is not done at the start time: with
+`ritz_fg_capture <seconds>` it runs on the first composite after arming at which the renderer is live (`prepare_ms` is
+logged as "capture prepared: ... starts in N s" and written to `capture.txt`), and the start itself only flips state.
+`Why:` at 1440x1080 the staging is about 0.5 GB and its allocation takes about 40 ms; a stall that long (and a longer
+one on a busy machine) landing at the start of a burst that lasts 0.15 s at 270 fps would make the pacer drop its history
+("Frame gap") and show real frames while it warms up, so the burst would record the recovery from the capture's own stall
+instead of the steady state the user was reproducing. The immediate form prepares and starts in the same composite
+(and logs its preparation time). If the game's size or format changes between preparation and start, the prepared staging
+is dropped (its empty directory removed) and prepared again; when frame generation is torn down while armed nothing is
+started (no live renderer) and the prepared staging is freed by the existing 10 s "not started" timeout, or compared with
+the new size when the renderer is live again. A change of settings between preparation and start is harmless: the settings
+dump is taken at the start.
+
 ## Where the files land
 
 `${XDG_CACHE_HOME:-$HOME/.cache}/gamescope-ritz/fg-capture/<YYYYMMDD-HHMMSS>/` (created with
@@ -90,10 +105,10 @@ capture v=1 start_wall=<local time, %Y-%m-%dT%H:%M:%S%z> start_mono_ns=<n> width
         vk_format=<VkFormat number> format_name=<name> bytes_per_pixel=<n> pitch=tight
         library_commit=<short hash or unknown> ritz_version=<About version> ritz_commit=<hash>
         ritz_dirty=<0|1> motion_wanted=<V1|V2|Learned|V3> motion_effective=<...> fallback_v1=<0|1>
-        flowScale=<n> n=40
+        flowScale=<n> n=40 prepare_ms=<float> prepared_early=<0|1>
 ```
 (one line; `fallback_v1=1` when the library refused the wanted motion version and runs V1;
-`library_commit` is the submodule's HEAD at configure time.)
+`library_commit` is the submodule's HEAD at configure time; `prepare_ms` is how long the space check, the staging allocation and the directory creation took, `prepared_early=1` when that was done when the capture was armed, before the start time.)
 
 ```
 setting <name>=<value> [text=<enum name>]     # one per field of framegen::Settings (44 today)
@@ -129,6 +144,15 @@ output (`na`). `synth_ret` is `recordSynthBlur`'s return (a frame is only captur
 succeeded, so 1). Slots are the host's output slot (0..2) and ring slots.
 
 ```
+timing first_frame_ns= last_frame_ns= burst_ns= max_decision_gap_ns= gap_after_n= last_decision_to_start_ns=
+```
+Written once, just before `end`. `first_frame_ns` / `last_frame_ns` are `now_ns` of the first and last captured `frame`
+(`burst_ns` their difference, 0 with no frame). `max_decision_gap_ns` is the largest gap between two consecutive `decision`
+times of the lines above (`gap_after_n` the counter `n` of the decision that ended the gap), and
+`last_decision_to_start_ns` the gap from the last of them to `start_mono_ns`: together they show at a glance whether a stall
+preceded the burst (the pacer drops its history over about 100 ms).
+
+```
 end frames=<n> reals=<m> dropped=<k> reason=<complete|timeout|disk|settings|resize|format|teardown|shutdown>
 ```
 `dropped` counts generated frames that could not be recorded completely (no partial record is ever
@@ -147,7 +171,7 @@ stored yet, into staging images owned by the capture (`CVulkanCmdBuffer::copyIma
 layout handling and barriers; the ring and output textures carry `TRANSFER_SRC` for this). A cached
 output being repainted is copied the same way. The staging images are host-visible linear images
 of the same format (the screenshot path's mechanism): N for outputs, N + 2 for real frames,
-allocated when the capture starts and freed when its writer is done. About 0.5 GB for a 1440x1080
+allocated when the capture is prepared (see "Early preparation") and freed when its writer is done. About 0.5 GB for a 1440x1080
 8-bit burst. If the staging runs out, a copy cannot be recorded, or a cached frame's pair is gone
 from the ring and was never stored, the frame is counted in `dropped` and skipped entirely.
 

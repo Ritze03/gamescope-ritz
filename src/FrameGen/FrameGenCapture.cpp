@@ -243,11 +243,35 @@ namespace fghost::capture
 	{
 		return Fmt( "capture v=%d start_wall=%s start_mono_ns=%llu width=%u height=%u vk_format=%d format_name=%s bytes_per_pixel=%u "
 			"pitch=tight library_commit=%s ritz_version=%s ritz_commit=%s ritz_dirty=%d motion_wanted=%s motion_effective=%s "
-			"fallback_v1=%d flowScale=%u n=%d",
+			"fallback_v1=%d flowScale=%u n=%d prepare_ms=%.3f prepared_early=%d",
 			kVersion, Token( h.sWallStart ).c_str(), (unsigned long long)h.ulStartNs, h.uWidth, h.uHeight, h.nVkFormat,
 			VkFormatName( h.nVkFormat ), h.uBytesPerPixel, Token( h.sLibraryCommit ).c_str(), Token( h.sRitzVersion ).c_str(),
 			Token( h.sRitzCommit ).c_str(), h.bRitzDirty ? 1 : 0, Token( h.sMotionWanted ).c_str(), Token( h.sMotionEffective ).c_str(),
-			h.sMotionWanted != h.sMotionEffective ? 1 : 0, h.uFlowScale, h.nFrames );
+			h.sMotionWanted != h.sMotionEffective ? 1 : 0, h.uFlowScale, h.nFrames, double( h.flPrepareMs ), h.bPreparedEarly ? 1 : 0 );
+	}
+
+	uint64_t MaxDecisionGapNs( const std::vector<DecisionRec> &v, uint64_t *pulAfterCounter )
+	{
+		uint64_t ulMax = 0, ulAfter = 0;
+		for ( size_t i = 1; i < v.size(); i++ )
+		{
+			const uint64_t ulGap = v[ i ].ns > v[ i - 1 ].ns ? v[ i ].ns - v[ i - 1 ].ns : 0;
+			if ( ulGap > ulMax )
+			{
+				ulMax = ulGap;
+				ulAfter = v[ i ].counter;
+			}
+		}
+		if ( pulAfterCounter )
+			*pulAfterCounter = ulAfter;
+		return ulMax;
+	}
+
+	std::string FormatTimingLine( uint64_t ulFirstNs, uint64_t ulLastNs, uint64_t ulMaxGapNs, uint64_t ulGapAfterCounter, uint64_t ulLastDecisionToStartNs )
+	{
+		return Fmt( "timing first_frame_ns=%llu last_frame_ns=%llu burst_ns=%llu max_decision_gap_ns=%llu gap_after_n=%llu last_decision_to_start_ns=%llu",
+			(unsigned long long)ulFirstNs, (unsigned long long)ulLastNs, (unsigned long long)( ulLastNs > ulFirstNs ? ulLastNs - ulFirstNs : 0 ),
+			(unsigned long long)ulMaxGapNs, (unsigned long long)ulGapAfterCounter, (unsigned long long)ulLastDecisionToStartNs );
 	}
 
 	std::vector<std::string> FormatSettingLines( const framegen::Settings &s )

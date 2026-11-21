@@ -147,7 +147,14 @@ namespace fghost::capture
 		std::string sMotionEffective;   // what the library runs (V1 when it refused the wish)
 		uint32_t uFlowScale = 0;
 		int nFrames = kFrames;
+		float flPrepareMs = 0.0f;      // how long the space check + staging allocation + directory took
+		bool bPreparedEarly = false;   // done when armed (before the start time), not at the start
 	};
+	// The largest gap between two consecutive decisions' times (ns), and the counter of the decision after the gap
+	// (0 when fewer than two records).
+	uint64_t MaxDecisionGapNs( const std::vector<DecisionRec> &v, uint64_t *pulAfterCounter );
+	// `timing first_frame_ns= last_frame_ns= burst_ns= max_decision_gap_ns= gap_after_n= last_decision_to_start_ns=`
+	std::string FormatTimingLine( uint64_t ulFirstNs, uint64_t ulLastNs, uint64_t ulMaxGapNs, uint64_t ulGapAfterCounter, uint64_t ulLastDecisionToStartNs );
 	std::string FormatHeaderLine( const HeaderInfo &h );
 	// One `setting name=value` line for EVERY field of framegen::Settings (enums also `text=Name`).
 	std::vector<std::string> FormatSettingLines( const framegen::Settings &s );

@@ -73,6 +73,13 @@ namespace fghost::capture
 			uint32_t uWidth = 0, uHeight = 0, uBpp = 0;
 			uint64_t ulConfigKey = 0;
 			uint64_t ulLastProgressNs = 0;
+			int nVkFormat = 0;
+			uint32_t uDrmFormat = 0;
+			float flPrepareMs = 0.0f;
+			bool bPreparedEarly = false;
+			// For the `timing` line.
+			uint64_t ulStartNs = 0, ulFirstFrameNs = 0, ulLastFrameNs = 0;
+			uint64_t ulMaxDecisionGapNs = 0, ulGapAfterCounter = 0, ulLastDecisionToStartNs = 0;
 
 			// Staging (paint thread): N outputs, N + 2 real frames, each an own host-visible linear image.
 			std::vector<gamescope::Rc<CVulkanTexture>> pOuts;
@@ -99,6 +106,7 @@ namespace fghost::capture
 		};
 
 		Session *g_pSession = nullptr;   // paint thread; the writer gets its own pointer
+		void DropPrepared();
 
 		void Enqueue( Session &s, Job &&j )
 		{
@@ -211,7 +219,9 @@ namespace fghost::capture
 				const int nReals = s->nRealsWritten.load( std::memory_order_relaxed );
 				// Frames that were recorded but never written (a failed disk, an exit) are dropped too.
 				const int nDropped = s->nDropped + ( s->nCaptured - nFrames );
-				const std::string sEnd = FormatEndLine( nFrames, nReals, nDropped, pszReason ) + "\n";
+				const std::string sTiming = FormatTimingLine( s->ulFirstFrameNs, s->ulLastFrameNs, s->ulMaxDecisionGapNs, s->ulGapAfterCounter,
+					s->ulLastDecisionToStartNs ) + "\n";
+				const std::string sEnd = sTiming + FormatEndLine( nFrames, nReals, nDropped, pszReason ) + "\n";
 				if ( pText )
 				{
 					fwrite( sEnd.data(), 1, sEnd.size(), pText );
@@ -360,6 +370,7 @@ namespace fghost::capture
 			if ( ulNowNs > g_ulDueNs.load( std::memory_order_relaxed ) + kTimeoutNs )
 			{
 				cap_log.warnf( "capture not started: frame generation was not running for %d s after the start time", int( kTimeoutNs / 1000000000ull ) );
+				DropPrepared();
 				g_uState.store( kIdle, std::memory_order_release );
 			}
 			return;
@@ -387,89 +398,145 @@ namespace fghost::capture
 
 	bool DueToStart( uint64_t ulNowNs )
 	{
-		return g_uState.load( std::memory_order_acquire ) == kArmed && ulNowNs >= g_ulDueNs.load( std::memory_order_relaxed );
+		// True while a capture is armed: the renderer entry point then calls Start() every composite, which
+		// prepares early (once the renderer is live) and flips to running at the due time.
+		(void)ulNowNs;
+		return g_uState.load( std::memory_order_acquire ) == kArmed;
+	}
+
+	namespace
+	{
+		// A prepared session has no writer thread yet: dropping it frees the staging and removes its empty directory.
+		void DropPrepared()
+		{
+			Session *s = g_pSession;
+			if ( !s || s->thread.joinable() )
+				return;
+			if ( !s->sDir.empty() )
+				rmdir( s->sDir.c_str() );
+			g_pSession = nullptr;
+			delete s;
+		}
+
+		// Space check, staging allocation, directory: the expensive part, done early for an armed capture so the
+		// stall is not inside the burst. False: refused (logged), state back to idle.
+		bool Prepare( const Env &env, uint64_t ulConfigKey )
+		{
+			const auto tStart = std::chrono::steady_clock::now();
+			auto Refuse = [ & ]( const char *pszWhy )
+			{
+				cap_log.errorf( "capture refused: %s", pszWhy );
+				g_uState.store( kIdle, std::memory_order_release );
+				return false;
+			};
+			const uint32_t uBpp = VkFormatBytes( env.nVkFormat );
+			if ( uBpp == 0 )
+				return Refuse( "the game's pixel format is not one the capture can store" );
+
+			// Space first: nothing is created before it is known to fit.
+			const std::string sBase = CacheBase();
+			{
+				struct statvfs sv;
+				const std::string sAnc = ExistingAncestor( sBase );
+				if ( statvfs( sAnc.c_str(), &sv ) != 0 )
+					return Refuse( "could not read the free space of the cache directory" );
+				const uint64_t ulAvail = uint64_t( sv.f_bavail ) * uint64_t( sv.f_frsize );
+				const uint64_t ulNeed = RequiredBytes( env.uWidth, env.uHeight, uBpp, kFrames );
+				if ( !HasEnoughSpace( ulAvail, ulNeed ) )
+				{
+					cap_log.errorf( "capture refused: not enough free space in %s (%llu MiB free, %llu MiB needed)", sAnc.c_str(),
+						(unsigned long long)( ulAvail >> 20 ), (unsigned long long)( ulNeed >> 20 ) );
+					g_uState.store( kIdle, std::memory_order_release );
+					return false;
+				}
+			}
+
+			std::unique_ptr<Session> pS = std::make_unique<Session>();
+			pS->uWidth = env.uWidth;
+			pS->uHeight = env.uHeight;
+			pS->uBpp = uBpp;
+			pS->nVkFormat = env.nVkFormat;
+			pS->uDrmFormat = env.uDrmFormat;
+			pS->ulConfigKey = ulConfigKey;
+
+			CVulkanTexture::createFlags flags;
+			flags.bMappable = true;
+			flags.bTransferDst = true;
+			const size_t nOuts = size_t( kFrames ), nReals = size_t( kFrames ) + 2;
+			for ( size_t i = 0; i < nOuts + nReals; i++ )
+			{
+				gamescope::Rc<CVulkanTexture> pTex = new CVulkanTexture();
+				if ( !pTex->BInit( env.uWidth, env.uHeight, 1u, env.uDrmFormat, flags, nullptr ) || !pTex->mappedData()
+					|| int( pTex->format() ) != env.nVkFormat || pTex->rowPitch() < env.uWidth * uBpp )
+					return Refuse( "could not allocate the staging images (not enough memory, or the format cannot be copied)" );
+				( i < nOuts ? pS->pOuts : pS->pReals ).push_back( std::move( pTex ) );
+			}
+
+			char szStamp[ 32 ];
+			struct tm tmLocal;
+			const time_t tNow = time( nullptr );
+			localtime_r( &tNow, &tmLocal );
+			strftime( szStamp, sizeof( szStamp ), "%Y%m%d-%H%M%S", &tmLocal );
+			if ( !MakeDirs( sBase ) )
+				return Refuse( "could not create the cache directory" );
+			std::string sDir = sBase + "/" + szStamp;
+			for ( int n = 1; mkdir( sDir.c_str(), 0755 ) != 0; n++ )
+			{
+				if ( errno != EEXIST || n > 99 )
+					return Refuse( "could not create the capture directory" );
+				sDir = sBase + "/" + szStamp + "-" + std::to_string( n );
+			}
+			pS->sDir = sDir;
+			pS->flPrepareMs = float( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - tStart ).count() );
+			g_pSession = pS.release();
+			return true;
+		}
 	}
 
 	bool Start( const Env &env, uint64_t ulNowNs, uint64_t ulConfigKey )
 	{
-		auto Refuse = [ & ]( const char *pszWhy )
-		{
-			cap_log.errorf( "capture refused: %s", pszWhy );
-			g_uState.store( kIdle, std::memory_order_release );
-			return false;
-		};
 		if ( g_uState.load( std::memory_order_acquire ) != kArmed || !env.pSettings )
 			return false;
-		const uint32_t uBpp = VkFormatBytes( env.nVkFormat );
-		if ( uBpp == 0 )
-			return Refuse( "the game's pixel format is not one the capture can store" );
+		const uint64_t ulDue = g_ulDueNs.load( std::memory_order_relaxed );
 
-		// Space first: nothing is created before it is known to fit.
-		const std::string sBase = CacheBase();
+		// A prepared session of another size or format is dropped and prepared again (simplest, leak-free).
+		if ( g_pSession && ( g_pSession->uWidth != env.uWidth || g_pSession->uHeight != env.uHeight || g_pSession->nVkFormat != env.nVkFormat ) )
 		{
-			struct statvfs sv;
-			const std::string sAnc = ExistingAncestor( sBase );
-			if ( statvfs( sAnc.c_str(), &sv ) != 0 )
-				return Refuse( "could not read the free space of the cache directory" );
-			const uint64_t ulAvail = uint64_t( sv.f_bavail ) * uint64_t( sv.f_frsize );
-			const uint64_t ulNeed = RequiredBytes( env.uWidth, env.uHeight, uBpp, kFrames );
-			if ( !HasEnoughSpace( ulAvail, ulNeed ) )
-			{
-				cap_log.errorf( "capture refused: not enough free space in %s (%llu MiB free, %llu MiB needed)", sAnc.c_str(),
-					(unsigned long long)( ulAvail >> 20 ), (unsigned long long)( ulNeed >> 20 ) );
-				g_uState.store( kIdle, std::memory_order_release );
+			cap_log.infof( "capture: the game's size or format changed after the staging was prepared; preparing again" );
+			DropPrepared();
+		}
+		if ( !g_pSession )
+		{
+			if ( !Prepare( env, ulConfigKey ) )
 				return false;
-			}
+			g_pSession->bPreparedEarly = ulNowNs < ulDue;
+			if ( g_pSession->bPreparedEarly )
+				cap_log.infof( "capture prepared: staging for %d frames of %ux%u (format %s) in %.1f ms, into %s; starts in %.1f s", kFrames,
+					env.uWidth, env.uHeight, VkFormatName( env.nVkFormat ), double( g_pSession->flPrepareMs ), g_pSession->sDir.c_str(),
+					double( ulDue - ulNowNs ) / 1e9 );
+			else
+				cap_log.infof( "capture: preparing the staging took %.1f ms (immediate start)", double( g_pSession->flPrepareMs ) );
 		}
+		if ( ulNowNs < ulDue )
+			return true;   // prepared, waiting for the start time
 
-		std::unique_ptr<Session> pS = std::make_unique<Session>();
-		pS->uWidth = env.uWidth;
-		pS->uHeight = env.uHeight;
-		pS->uBpp = uBpp;
-		pS->ulConfigKey = ulConfigKey;
-		pS->ulLastProgressNs = ulNowNs;
+		Session &s = *g_pSession;
+		s.ulConfigKey = ulConfigKey;
+		s.ulLastProgressNs = ulNowNs;
 
-		// Staging: allocated now, freed when the capture is over. A failure frees everything again.
-		CVulkanTexture::createFlags flags;
-		flags.bMappable = true;
-		flags.bTransferDst = true;
-		const size_t nOuts = size_t( kFrames ), nReals = size_t( kFrames ) + 2;
-		for ( size_t i = 0; i < nOuts + nReals; i++ )
-		{
-			gamescope::Rc<CVulkanTexture> pTex = new CVulkanTexture();
-			if ( !pTex->BInit( env.uWidth, env.uHeight, 1u, env.uDrmFormat, flags, nullptr ) || !pTex->mappedData()
-				|| int( pTex->format() ) != env.nVkFormat || pTex->rowPitch() < env.uWidth * uBpp )
-				return Refuse( "could not allocate the staging images (not enough memory, or the format cannot be copied)" );
-			( i < nOuts ? pS->pOuts : pS->pReals ).push_back( std::move( pTex ) );
-		}
-
-		// The directory.
-		char szStamp[ 32 ];
+		char szWall[ 40 ];
 		struct tm tmLocal;
 		const time_t tNow = time( nullptr );
 		localtime_r( &tNow, &tmLocal );
-		strftime( szStamp, sizeof( szStamp ), "%Y%m%d-%H%M%S", &tmLocal );
-		char szWall[ 40 ];
 		strftime( szWall, sizeof( szWall ), "%Y-%m-%dT%H:%M:%S%z", &tmLocal );
-		if ( !MakeDirs( sBase ) )
-			return Refuse( "could not create the cache directory" );
-		std::string sDir = sBase + "/" + szStamp;
-		for ( int n = 1; mkdir( sDir.c_str(), 0755 ) != 0; n++ )
-		{
-			if ( errno != EEXIST || n > 99 )
-				return Refuse( "could not create the capture directory" );
-			sDir = sBase + "/" + szStamp + "-" + std::to_string( n );
-		}
-		pS->sDir = sDir;
 
-		// The header text: capture line, settings, the last decisions.
 		HeaderInfo h;
 		h.sWallStart = szWall;
 		h.ulStartNs = ulNowNs;
 		h.uWidth = env.uWidth;
 		h.uHeight = env.uHeight;
 		h.nVkFormat = env.nVkFormat;
-		h.uBytesPerPixel = uBpp;
+		h.uBytesPerPixel = s.uBpp;
 		h.sLibraryCommit = gamescope::k_szRitzFrameGenCommit;
 		h.sRitzVersion = g_Changelog_Version;
 		h.sRitzCommit = gamescope::k_szRitzCommit;
@@ -478,22 +545,27 @@ namespace fghost::capture
 		h.sMotionEffective = env.pszMotionEffective;
 		h.uFlowScale = env.pSettings->flowScale;
 		h.nFrames = kFrames;
+		h.flPrepareMs = s.flPrepareMs;
+		h.bPreparedEarly = s.bPreparedEarly;
 		Job head;
 		head.eKind = Job::Header;
 		head.sText = FormatHeaderLine( h ) + "\n";
 		for ( const std::string &sLine : FormatSettingLines( *env.pSettings ) )
 			head.sText += sLine + "\n";
-		for ( const DecisionRec &r : Decisions().Snapshot( kDecisionsDumped ) )
+		const std::vector<DecisionRec> decisions = Decisions().Snapshot( kDecisionsDumped );
+		for ( const DecisionRec &r : decisions )
 			head.sText += FormatDecisionLine( r ) + "\n";
+		s.ulMaxDecisionGapNs = MaxDecisionGapNs( decisions, &s.ulGapAfterCounter );
+		s.ulStartNs = ulNowNs;
+		s.ulLastDecisionToStartNs = decisions.empty() || ulNowNs < decisions.back().ns ? 0 : ulNowNs - decisions.back().ns;
 
 		static ExitJoiner s_Joiner;
 		(void)s_Joiner;
-		g_pSession = pS.release();
-		g_pSession->thread = std::thread( WriterMain, g_pSession );
-		Enqueue( *g_pSession, std::move( head ) );
+		s.thread = std::thread( WriterMain, &s );
+		Enqueue( s, std::move( head ) );
 		g_uState.store( kRunning, std::memory_order_release );
 		cap_log.infof( "capture started: %d generated frames of %ux%u (format %s) into %s", kFrames, env.uWidth, env.uHeight,
-			VkFormatName( env.nVkFormat ), sDir.c_str() );
+			VkFormatName( env.nVkFormat ), s.sDir.c_str() );
 		return true;
 	}
 
@@ -565,6 +637,9 @@ namespace fghost::capture
 		f.nArrivalPrevNs = Arrivals().Find( in.ulPrevId );
 		f.nArrivalCurrNs = Arrivals().Find( in.ulCurrId );
 		f.ulNowNs = get_time_in_nanos();
+		if ( s->nCaptured == 0 )
+			s->ulFirstFrameNs = f.ulNowNs;
+		s->ulLastFrameNs = f.ulNowNs;
 		f.uWidth = s->uWidth;
 		f.uHeight = s->uHeight;
 		f.bEstimateRecorded = in.nEstimateRet >= 0;

@@ -323,3 +323,35 @@ TEST_CASE( "capture: rows are written tightly packed from a padded pitch", "[fra
 	fclose( f );
 	free( pBuf );
 }
+
+TEST_CASE( "capture: the timing line and the largest decision gap", "[framegen_capture]" )
+{
+	std::vector<DecisionRec> v;
+	uint64_t ulNs = 1000;
+	for ( uint64_t i = 1; i <= 5; i++ )
+	{
+		DecisionRec r;
+		r.counter = i;
+		ulNs += ( i == 4 ? 150000000ull : 4000000ull );   // a 150 ms stall before decision 4
+		r.ns = ulNs;
+		v.push_back( r );
+	}
+	uint64_t ulAfter = 0;
+	REQUIRE( MaxDecisionGapNs( v, &ulAfter ) == 150000000ull );
+	REQUIRE( ulAfter == 4 );
+	REQUIRE( MaxDecisionGapNs( {}, &ulAfter ) == 0 );
+	REQUIRE( ulAfter == 0 );
+	REQUIRE( FormatTimingLine( 100, 400, 7, 3, 9 ) ==
+		"timing first_frame_ns=100 last_frame_ns=400 burst_ns=300 max_decision_gap_ns=7 gap_after_n=3 last_decision_to_start_ns=9" );
+	REQUIRE( FormatTimingLine( 0, 0, 0, 0, 0 ).find( "burst_ns=0 " ) != std::string::npos );
+}
+
+TEST_CASE( "capture: the header carries the preparation time", "[framegen_capture]" )
+{
+	HeaderInfo h;
+	h.flPrepareMs = 12.5f;
+	h.bPreparedEarly = true;
+	REQUIRE( FormatHeaderLine( h ).find( " n=40 prepare_ms=12.500 prepared_early=1" ) != std::string::npos );
+	h.bPreparedEarly = false;
+	REQUIRE( FormatHeaderLine( h ).find( "prepared_early=0" ) != std::string::npos );
+}
