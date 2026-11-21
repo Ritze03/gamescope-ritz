@@ -516,7 +516,9 @@ wait always reports VSYNC, which says nothing about whether it would tear. Not c
 Allow tearing off (no async hint is ever sent) the verdict never forms and the behaviour is the
 old one. Headless sway reports no VSYNC flag, so the verdict was exercised only by unit tests;
 with the verdict forced on (a temporary build), headless sway at 120 Hz went from 133 sent /
-125 shown / 9 discarded a second to 122 / 122 / 0. Not yet confirmed on the user's screen.
+125 shown / 9 discarded a second to 122 / 122 / 0. **Confirmed on the user's screen
+(2026-11-22):** the generated frames no longer pass the refresh and the stutter is gone;
+`ritz_fg_host_vsync 0` removes the cap and brings it back.
 
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
