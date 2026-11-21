@@ -67,6 +67,7 @@ which FG cannot substitute per output frame.
 | [Frame generation: settings and status](frame-generation-settings.md) | Settings and status, logging |
 | [Frame generation: backends, host frames and direct scanout](frame-generation-host-scanout.md) | Backends, frames the host shows, direct scanout |
 | [Frame generation: pass-through, costs, limitations, build and testing](frame-generation-limits.md) | When it passes real frames through, Frame limiter, costs, limitations, build, testing |
+| [Frame generation: the capture](frame-generation-capture.md) | `ritz_fg_capture`: record generated frames, their real pairs, settings and pacer decisions to files for offline replay |
 
 ## Related
 
