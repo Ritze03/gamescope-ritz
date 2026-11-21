@@ -79,11 +79,12 @@ for before the next paint, so the queue is idle when the probe is submitted and 
 itself. On a backend that does not wait for its composites (DRM), the wait also covers whatever is
 still in flight on the queue.
 
-| Measured (2026-11-21, headless, 500 x 500 game, Motion version 3) | Value |
+| Measured (2026-11-21, headless, Motion version 3, fixed 2x) | Value |
 | --- | --- |
-| probe, CPU wall clock from recording to the counted result | mean 0.17-0.18 ms, max 0.9-1.6 ms |
-| per second at 30 game fps | 30 probes, about 5 ms of render-thread time |
-| presented rate with the probe on vs off | 2.02-2.03x the game's rate both ways |
+| probe, CPU wall clock from recording to the counted result (500 x 500 game at 30 fps, 120 Hz) | mean 0.17-0.18 ms, max 0.9-1.9 ms |
+| the same with the game at 120 fps, 240 Hz | mean 0.165 ms, max 0.74 ms (120 probes a second, about 20 ms of render-thread time) |
+| a still 640 x 480 picture presented at about 1000 fps | mean 0.06 ms |
+| presented rate, game at 120 fps, 240 Hz, probe on / off / on again | 266.7 / 266.2 / 266.7 fps (2.22x each) |
 
 The probe's GPU work is tiny (4096 texels, one 64 x 64 mask); the time is the submit, the wait and
 the wake-up. It does not grow with the game's resolution.
@@ -148,10 +149,17 @@ stale frame has been produced headless (see below).
 ## Headless testing
 
 The smoke test (a nested gamescope in a private headless sway running a 30 fps rotating cube) shows:
-no stale frame and no repeat over minutes of normal running, every captured real frame different;
-with `ritz_fg_stale_test 5` every fifth frame is refused, logged, never appears in any captured pair,
-and the capture checker still passes; with `ritz_fg_stale_test 1` the picture holds the last good
-frame on every paint and generation resumes when it is set back to 0. Real stale frames could not
-be provoked there (stopping and continuing the game or the nested compositor for tens of
-milliseconds did not produce one), so the forced test is the proof of the fail-safe path; the guard
-waits for the machine where they happen.
+- normal running: no stale frame and no repeat, every captured real frame different, the capture
+  checker passes, the second look never fires;
+- `ritz_fg_stale_test 5`: every fifth frame is refused and logged, never appears in any captured
+  pair (the ring's ids skip exactly those), the capture checker still passes, two held paints per
+  refused frame; `ritz_fg_stale_test 1`: every paint holds the last good ring frame, and generation
+  resumes at 2x when it is set back to 0;
+- a still picture (a lossless video of one image, presented through Xwayland at about 1000 fps):
+  over 41000 new frames, every one a plain repeat, none stale.
+
+Real stale frames could not be provoked there: stopping and continuing the game (Vulkan client and
+an Xwayland OpenGL client) for 15-40 ms, 150 times, and the nested compositor for 30-50 ms, 100
+times, produced none, neither in the guard's counter nor as repeated real frames in a capture with
+the guard off. The forced test is the proof of the fail-safe path; the guard waits for the machine
+where they happen.
