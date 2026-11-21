@@ -444,10 +444,13 @@ namespace fghost::capture
 								if ( rr.eKind != RepeatDetector::kNone )
 								{
 									( rr.eKind == RepeatDetector::kRepeat ? s->nBurstRepeat : s->nBurstStatic )++;
-									char sz[ 128 ];
-									snprintf( sz, sizeof( sz ), "repeat kind=%s id=%llu same_as=%llu\n", rr.eKind == RepeatDetector::kRepeat ? "repeat" : "static",
-										(unsigned long long)j.ulRealId[ i ], (unsigned long long)rr.ulSameAs );
-									s->sBurstRepeatLines += sz;
+									if ( rr.eKind == RepeatDetector::kRepeat )
+									{
+										char sz[ 64 ];
+										snprintf( sz, sizeof( sz ), "%s%llu:%llu", s->sBurstRepeatLines.empty() ? "" : ",",
+											(unsigned long long)j.ulRealId[ i ], (unsigned long long)rr.ulSameAs );
+										s->sBurstRepeatLines += sz;
+									}
 								}
 							}
 						}
@@ -472,13 +475,17 @@ namespace fghost::capture
 				const int nReals = s->nRealsWritten.load( std::memory_order_relaxed );
 				// Frames that were recorded but never written (a failed disk, an exit) are dropped too.
 				const int nDropped = s->nDropped + ( s->nCaptured - nFrames );
-				char szRepeat[ 128 ];
-				snprintf( szRepeat, sizeof( szRepeat ), "repeat_check reals=%d repeat=%d static=%d\n", s->nBurstRealsChecked, s->nBurstRepeat, s->nBurstStatic );
+				// The repeat test's result rides on the end line as extra tokens (a new record kind would break
+				// readers that only know the burst's kinds).
+				char szRepeat[ 96 ];
+				snprintf( szRepeat, sizeof( szRepeat ), " repeat_checked=%d repeat=%d static=%d repeat_ids=", s->nBurstRealsChecked, s->nBurstRepeat, s->nBurstStatic );
 				if ( s->nBurstRepeat )
-					cap_log.warnf( "capture: %d stored real frame(s) repeat an earlier one with a different frame between (see the repeat lines)", s->nBurstRepeat );
-				const std::string sTiming = s->sBurstRepeatLines + szRepeat + FormatTimingLine( s->ulFirstFrameNs, s->ulLastFrameNs, s->ulMaxDecisionGapNs, s->ulGapAfterCounter,
+					cap_log.warnf( "capture: %d stored real frame(s) repeat an earlier one with a different frame between: %s", s->nBurstRepeat,
+						s->sBurstRepeatLines.c_str() );
+				const std::string sTiming = FormatTimingLine( s->ulFirstFrameNs, s->ulLastFrameNs, s->ulMaxDecisionGapNs, s->ulGapAfterCounter,
 					s->ulLastDecisionToStartNs ) + "\n";
-				const std::string sEnd = sTiming + FormatEndLine( nFrames, nReals, nDropped, pszReason ) + "\n";
+				const std::string sEnd = sTiming + FormatEndLine( nFrames, nReals, nDropped, pszReason ) + szRepeat
+					+ ( s->sBurstRepeatLines.empty() ? std::string( "-" ) : s->sBurstRepeatLines ) + "\n";
 				if ( pText )
 				{
 					fwrite( sEnd.data(), 1, sEnd.size(), pText );

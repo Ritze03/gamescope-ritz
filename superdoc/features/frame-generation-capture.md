@@ -148,15 +148,6 @@ output (`na`). `synth_ret` is `recordSynthBlur`'s return (a frame is only captur
 succeeded, so 1). Slots are the host's output slot (0..2) and ring slots.
 
 ```
-repeat kind=<repeat|static> id=<new> same_as=<old>     (zero or more)
-repeat_check reals=<checked> repeat=<n> static=<n>
-```
-Written before `timing` (2026-11-21): the repeat test (see "The repeat test" below) over the stored
-real frames in the order they were first needed. A `repeat` line means a real frame's image equals
-an earlier one's although a different frame came between: a ring slot carried a new commit id over
-an old image.
-
-```
 timing first_frame_ns= last_frame_ns= burst_ns= max_decision_gap_ns= gap_after_n= last_decision_to_start_ns=
 ```
 Written once, just before `end`. `first_frame_ns` / `last_frame_ns` are `now_ns` of the first and last captured `frame`
@@ -167,7 +158,13 @@ preceded the burst (the pacer drops its history over about 100 ms).
 
 ```
 end frames=<n> reals=<m> dropped=<k> reason=<complete|timeout|disk|settings|resize|format|teardown|shutdown>
+    repeat_checked=<n> repeat=<n> static=<n> repeat_ids=<new:old,...|->
 ```
+The `repeat_*` tokens (2026-11-21) are the repeat test (see "The repeat test" under the watch mode)
+over the stored real frames, in the order they were first needed: `repeat_ids` lists each real frame
+whose image equals an earlier one's although a different frame came between (a ring slot carried a
+new commit id over an old image). They are tokens of `end`, not a record kind of their own, so
+readers that only know the burst's record kinds keep working.
 `dropped` counts generated frames that could not be recorded completely (no partial record is ever
 written) plus recorded ones the writer could not finish. `settings`: a setting of frame generation,
 motion blur or the lag buffer changed during the burst, so the records no longer share one
