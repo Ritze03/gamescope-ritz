@@ -7,6 +7,12 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-21
+
+### Added
+- **Frame generation**: a troubleshooting command can record the frames around a
+  moment to files.
+
 ## 2026-11-20
 
 ### Added

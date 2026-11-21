@@ -136,7 +136,7 @@ steamcompmgr loop described below.
 - **Frame generation, motion blur and the lag spike buffer** (rail group MOTION) —
   `src/FrameGen/`: `FrameGenHost.{h,cpp}` (`fghost`, the renderer glue: frame ring, lazy
   per-slot synthesis, the one `recordSynthBlur` call, own command buffer, status; `Config`,
-  `BlurConfig`, `LagBufferConfig`), `TearHint.h`, `HostShown.h`, and `FrameGenLib.cpp`
+  `BlurConfig`, `LagBufferConfig`), `TearHint.h`, `HostShown.h`, `FrameGenCapture.{h,cpp}` + `FrameGenCaptureSession.cpp` (the `ritz_fg_capture` troubleshooting aid, see [frame-generation-capture](../features/frame-generation-capture.md)), and `FrameGenLib.cpp`
   (compiles the `subprojects/FrameGen` library, including its pacer
   `framegen::pacing` in `gpu/pacing.h`, into the binary). Glue: `FrameGen_OnArrival`,
   `FrameGen_PrePaint`, `FrameGen_PostPaint` in `src/steamcompmgr.cpp`; the hook is

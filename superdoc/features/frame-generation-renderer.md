@@ -76,6 +76,10 @@ Part of [Frame generation](frame-generation.md). The renderer host (`fghost`) an
   "blur mismatch" / "blur resolve" / "blur fixup" stamps as one blurred output = `blurSamples`
   synths, so the published synth time stays *per sample* and the pacer's cost guard
   (`blurSamples x synth`) is right.
+- **Capture**: the ring and output textures are created with `TRANSFER_SRC` so the
+  troubleshooting capture can copy them into its own staging images in the synth's command
+  buffer; see [the capture](frame-generation-capture.md). Note: every `LogScope` registers a
+  ConCommand of its own name, so the capture's scope is `framegen_capture`.
 - **Logs**: the renderer logs under the `framegen` scope (ready / unavailable / UI protection
   warnings); the pacing glue logs under **`framegen_pacing`** (see
   [Logging](frame-generation-settings.md#logging)). They are two scopes because every `LogScope` registers a

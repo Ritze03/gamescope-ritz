@@ -51,4 +51,9 @@ namespace gamescope
     // True when the working tree had uncommitted changes at configure time,
     // which makes the patch date an approximation of what is running.
     static constexpr bool k_bRitzDirty = @RITZ_DIRTY@;
+
+    // The FrameGen library's pinned commit (the submodule's HEAD at configure
+    // time), short form; "unknown" when it could not be read. Written into
+    // ritz_fg_capture's capture.txt.
+    static constexpr const char k_szRitzFrameGenCommit[] = "@RITZ_FRAMEGEN_COMMIT@";
 }

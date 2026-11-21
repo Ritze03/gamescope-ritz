@@ -110,6 +110,7 @@
 #include "Overlay/NullBinds.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/AtRefreshExtra.h"
+#include "FrameGen/FrameGenCapture.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/HostShown.h"
 #include "FrameGen/TearHint.h"
@@ -7933,6 +7934,7 @@ namespace
 		// A real frame arrived since the last paint: the hasRepaint that goes with it
 		// is not a genuine (UI) repaint request.
 		bool bArrivalRepaint = false;
+		uint8_t uLastReason = 0;   // the last pacing status's pass reason (a framegen::pacing::Reason), for ritz_fg_capture's decision ring
 	};
 	FrameGenPacing_t s_FrameGen;
 
@@ -8284,6 +8286,7 @@ static void FrameGen_OnArrival( steamcompmgr_win_t *w, commit_t *pCommit )
 		layer.format = pCommit->vulkanTex->drmFormat();
 	}
 	s_FrameGen.pacer.OnArrival( pCommit->commitID, pCommit->present_time, w->seq, layer );
+	fghost::capture::Arrivals().Note( pCommit->commitID, pCommit->present_time );   // ritz_fg_capture's table: one small write
 	s_FrameGen.bArrivalRepaint = true;
 }
 
@@ -8358,6 +8361,14 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 		s_FrameGen.bRepaintNext = false;
 		s_FrameGen.bExtraWantNext = false;
 		fghost::SetFrame( fghost::FrameRequest{} );
+		{
+			fghost::capture::DecisionRec rec;   // ritz_fg_capture's always-on ring: no Decision was made
+			rec.ns = get_time_in_nanos();
+			rec.inert = true;
+			rec.discontinuity = true;
+			rec.reason = s_FrameGen.uLastReason;
+			fghost::capture::Decisions().Push( rec );
+		}
 		return false;
 	}
 
@@ -8422,6 +8433,27 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.blurRelative = fgpacing::BlurRelative( uint8_t( blurCfg.relative ) );
 
 	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
+	{
+		// ritz_fg_capture's always-on ring: one POD per decision, no allocation. The Decision has no pass reason;
+		// the last pacing status's is stored (up to ~250 ms old).
+		fghost::capture::DecisionRec rec;
+		rec.ns = ulNow;
+		rec.newestId = d.newestId;
+		rec.prevId = d.prevId;
+		rec.currId = d.currId;
+		rec.outId = d.outId;
+		rec.showId = d.showId;
+		rec.t = d.t;
+		rec.t0 = d.t0;
+		rec.t1 = d.t1;
+		rec.inert = d.inert;
+		rec.skip = d.skip;
+		rec.reset = d.reset;
+		rec.repaintNext = d.repaintNext;
+		rec.newOutput = d.newOutput;
+		rec.reason = s_FrameGen.uLastReason;
+		fghost::capture::Decisions().Push( rec );
+	}
 	if ( d.skip )
 	{
 		// Nothing is due: leave the renderer's request and the pacing status alone
@@ -8456,6 +8488,7 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	if ( s_FrameGen.pacer.StatusDue( in.now ) )
 	{
 		const fghost::PacingStatus status = FrameGen_ToStatus( s_FrameGen.pacer.TakeStatus( in, in.now ) );
+		s_FrameGen.uLastReason = uint8_t( status.reason );
 		fghost::PublishPacingStatus( status );
 		FrameGen_LogStatus( status, renderStatus.reason, in.now );
 	}

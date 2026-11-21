@@ -465,6 +465,8 @@ src = [
   'InputEmulation.cpp',
   'LibInputHandler.cpp',
   'FrameGen/FrameGenHost.cpp',
+  'FrameGen/FrameGenCapture.cpp',
+  'FrameGen/FrameGenCaptureSession.cpp',
   'FrameGen/FrameGenLib.cpp',
 ]
 
@@ -610,6 +612,14 @@ ritz_commit_cmd = run_command(
 )
 ritz_commit = ritz_commit_cmd.returncode() == 0 ? ritz_commit_cmd.stdout().strip() : 'unknown'
 
+# The FrameGen library's pinned commit (the submodule's HEAD), for ritz_fg_capture's capture.txt.
+# "unknown" when it cannot be read (no checkout of the submodule, no git).
+ritz_framegen_cmd = run_command(
+  ['git', '-C', ritz_src_root / 'subprojects/FrameGen', 'rev-parse', '--short', 'HEAD'],
+  check : false,
+)
+ritz_framegen_commit = ritz_framegen_cmd.returncode() == 0 ? ritz_framegen_cmd.stdout().strip() : 'unknown'
+
 # A dirty tree makes the commit date an approximation of what is running, so
 # it is surfaced rather than hidden.
 ritz_status_cmd = run_command(
@@ -625,6 +635,7 @@ ritz_version_conf.set('RITZ_BASE_VERIFIED', ritz_base_verified)
 ritz_version_conf.set('RITZ_PATCH_DATE',    ritz_patch_date)
 ritz_version_conf.set('RITZ_COMMIT',        ritz_commit)
 ritz_version_conf.set('RITZ_DIRTY',         ritz_dirty)
+ritz_version_conf.set('RITZ_FRAMEGEN_COMMIT', ritz_framegen_commit)
 
 ritz_version = configure_file(
   input : 'RitzVersion.h.in',
