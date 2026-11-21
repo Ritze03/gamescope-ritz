@@ -256,6 +256,20 @@ no longer takes the border's colour, and a value that is undefined never turns b
 real frames is used there. Very few pixels change, all near the edges. It is not shown that this cures a reported
 black flicker.
 
+## Frames that do not correspond
+
+Since 2026-11-21 (library `6b1db03`) a pair whose two real frames do not belong together (an unrelated or wrong
+picture, a jump to black or flat grey) is treated as a scene cut: every generated frame of that pair is the nearer
+real frame (the previous one before the middle, the current one after) instead of a distorted blend. It is a fixed
+rule in V3's decision, decided from the share of unsure flow pixels and the histogram distance; **no setting
+switches it off** (not the fallback, not `v3_scene_cut` 0, not the trust values), and real motion, even a fast
+sprint, does not trip it in the library's measurements. It misses two different scenes that look alike and a torn
+frame that still holds half or more of the right picture. V3 only: V1, V2 and Learned motion do not have it. The
+host has two guards of its own that act before the library sees a pair:
+[the stale real-frame guard](frame-generation-stale-frames.md) and the pair span guard
+([renderer](frame-generation-renderer.md)). It is one of these three safeguards; it is not shown that it cures a
+reported flicker.
+
 ## Known limits
 
 From the library: the static-structure mask is luma-based; fast pans at a 30 fps base look soft

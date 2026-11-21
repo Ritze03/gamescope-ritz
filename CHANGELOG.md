@@ -22,6 +22,8 @@ All notable user-facing changes, newest first. Categories:
   longer blended into one distorted frame; the real frame is shown.
 - **Frame generation**: a game frame that arrives with the picture of an earlier frame
   is no longer used; it caused single distorted frames.
+- **Motion version 3**: when two frames do not belong together, a real frame is shown
+  instead of a distorted one.
 
 ## 2026-11-20
 

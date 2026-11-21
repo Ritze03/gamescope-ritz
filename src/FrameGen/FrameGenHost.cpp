@@ -906,6 +906,8 @@ namespace fghost
 					want.subpixel = true;
 				}
 				const framegen::MotionVersion eMotionWas = H.interp.settings().motionVersion;
+				const framegen::UiProtection eUiWas = H.interp.settings().uiProtection;
+				const float flUiBoxWas = H.interp.settings().uiBoxHeightFrac;
 				const bool bFlowChange = want.flowScale != H.interp.settings().flowScale;
 				const bool bPyramidChange = want.pyramidMinSide != H.interp.settings().pyramidMinSide;
 				if ( bFlowChange || bPyramidChange )
@@ -959,6 +961,11 @@ namespace fghost
 					H.bEstimateValid = false;
 					InvalidateOutputs( H );
 				}
+				// A change of the UI-protection mode or its box drops the library's estimate too (its synths refuse
+				// until the next recordEstimate): forget ours so the pair is re-estimated at the next paint instead of
+				// showing real frames, flagged as a failed step, for the rest of the pair.
+				else if ( H.interp.settings().uiProtection != eUiWas || H.interp.settings().uiBoxHeightFrac != flUiBoxWas )
+					H.bEstimateValid = false;
 				H.uAppliedConfig = uLibraryConfig;
 				H.uAppliedReach = uReach;
 				H.ulAppliedV3 = ulV3;
