@@ -1118,6 +1118,7 @@ enum ShaderType {
 	SHADER_TYPE_FG_COPY_RGB10, // ... the same source compiled with a rgb10_a2 `dst` (10-bit games)
 	SHADER_TYPE_FG_COPY_F16,   // ... and with an rgba16f `dst` (fp16 / scRGB games)
 	SHADER_TYPE_FG_CROP, // cs_fg_crop.comp: a small 8-bit crop of the game's frame for the Inspector's UI-protection box preview
+	SHADER_TYPE_FG_STALE_PROBE, // cs_fg_stale_probe.comp: frame generation's stale real-frame probe (FrameGen/StaleFrame.h)
 
 	SHADER_TYPE_COUNT
 };

@@ -10,6 +10,7 @@
 #include "FrameGenReach.h"
 #include "FrameGenV3.h"
 #include "FrameGenCapture.h"
+#include "StaleFrame.h"
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +27,7 @@
 #include "steamcompmgr.hpp"
 #include "log.hpp"
 #include "main.hpp"
+#include "convar.h"
 
 static LogScope fg_log( "framegen" );
 
@@ -1442,7 +1444,289 @@ namespace fghost
 			}
 			return pBest;
 		}
+
+		// ---- the stale real-frame guard (StaleFrame.h; superdoc/features/frame-generation-stale-frames.md) ----
+		// A new commit's buffer is not trusted to hold new content: before it is copied into the ring, a probe
+		// compares 64x64 texels of it with the ring's newest, 2-back and 3-back frames. A frame identical to an
+		// older one and not to the newest is a step back in time: it never enters the ring (so no pair can name
+		// it: FindSlot fails), and while it is the newest commit the newest GOOD ring frame is shown instead of
+		// layer 0 (which is that stale buffer). Synchronous (submit + wait) because a synth of this very paint
+		// may use the new frame as `curr`.
+		gamescope::ConVar<bool> cv_ritz_fg_stale_check( "ritz_fg_stale_check", true,
+			"Frame generation: probe every new game frame and drop one that has the content of an earlier frame (0 = no probe, the old behaviour)." );
+		gamescope::ConVar<int> cv_ritz_fg_stale_test( "ritz_fg_stale_test", 0,
+			"Frame generation test: n > 0 marks every n-th new game frame stale on purpose (the fail-safe path); 0 = off." );
+
+		struct StaleState_t
+		{
+			uint64_t ulStaleId = 0;        // the newest commit judged stale (never in the ring); 0 = none
+			uint64_t ulNewFrames = 0;      // new real frames the guard saw (the forced test's clock)
+			uint64_t ulLastLogNs = 0;      // rate limit of the stale line
+			uint64_t ulSuppressed = 0;     // stale lines not printed since the last one
+			uint64_t ulLastRepeatLogNs = 0;
+			uint64_t ulRepeatsAtLog = 0;
+			// Two image sets: [0] the synchronous probe, [1] the diagnostic second look (read later, see StaleDiag*).
+			gamescope::Rc<CVulkanTexture> pMask[ 2 ];      // 64x64 rgba8: the probe's per-texel equality
+			gamescope::Rc<CVulkanTexture> pStaging[ 2 ];   // its mappable copy
+			bool bInitFailLogged = false;
+			// The diagnostic second look: the game's buffer of the newest ring frame probed again against the ring
+			// copy taken of it, at the end of the host's command buffer of the paint that copied it (the game must
+			// not write a buffer gamescope still holds, so any difference means its rendering landed after the copy).
+			uint64_t ulDiagId = 0;          // the last frame given a second look
+			uint64_t ulDiagPendingId = 0;   // recorded, not read yet (0 = none)
+			uint64_t ulDiagSeq = ~0ull;     // its submission (~0 = recorded, not submitted yet)
+			uint64_t ulDiagLastLogNs = 0;
+			uint64_t ulDiagSuppressed = 0;
+		};
+		StaleState_t &g_Stale = *new StaleState_t();   // render thread only; leaked on purpose like the Host (no ~CVulkanTexture at exit)
+		// Read by ritz_fg_stale_stats (console thread).
+		std::atomic<uint64_t> g_ulStaleCount{ 0 }, g_ulStaleForced{ 0 }, g_ulRepeatCount{ 0 }, g_ulProbeCount{ 0 };
+		std::atomic<uint64_t> g_ulProbeNsSum{ 0 }, g_ulProbeNsMax{ 0 };
+		std::atomic<uint64_t> g_ulHeldPaints{ 0 };   // paints that showed the newest good ring frame instead of a stale layer 0
+		std::atomic<uint64_t> g_ulDiagChecks{ 0 }, g_ulDiagChanged{ 0 };
+
+		bool StaleProbeImages( int nSet )
+		{
+			if ( g_Stale.pMask[ nSet ] && g_Stale.pStaging[ nSet ] )
+				return true;
+			CVulkanTexture::createFlags mask;
+			mask.bStorage = true;
+			mask.bSampled = true;
+			mask.bTransferSrc = true;
+			CVulkanTexture::createFlags staging;
+			staging.bMappable = true;
+			staging.bTransferDst = true;
+			gamescope::Rc<CVulkanTexture> pMask = new CVulkanTexture();
+			gamescope::Rc<CVulkanTexture> pStaging = new CVulkanTexture();
+			if ( !pMask->BInit( stale::kGrid, stale::kGrid, 1u, DRM_FORMAT_ABGR8888, mask, nullptr )
+				|| !pStaging->BInit( stale::kGrid, stale::kGrid, 1u, DRM_FORMAT_ABGR8888, staging, nullptr )
+				|| !pStaging->mappedData() )
+			{
+				if ( !g_Stale.bInitFailLogged )
+				{
+					g_Stale.bInitFailLogged = true;
+					fg_log.errorf( "frame generation: could not create the stale-frame probe's images; frames are not checked" );
+				}
+				return false;
+			}
+			g_Stale.pMask[ nSet ] = std::move( pMask );
+			g_Stale.pStaging[ nSet ] = std::move( pStaging );
+			return true;
+		}
+
+		// Records the probe of pTest against up to three references (null = unused) into pCb, image set nSet.
+		void StaleProbeRecord( CVulkanCmdBuffer *pCb, int nSet, const gamescope::Rc<CVulkanTexture> &pTest, const gamescope::Rc<CVulkanTexture> *pRefs )
+		{
+			pCb->bindPipeline( g_device.pipeline( SHADER_TYPE_FG_STALE_PROBE ) );
+			for ( int i = 0; i <= stale::kMaxRef; i++ )
+			{
+				const gamescope::Rc<CVulkanTexture> &p = ( i > 0 && pRefs[ i - 1 ] ) ? pRefs[ i - 1 ] : pTest;
+				pCb->bindTexture( i, p );
+				pCb->setTextureSrgb( i, true );             // raw UNORM views: the encoded values, as the ring copy reads and writes them
+				pCb->setSamplerUnnormalized( i, true );
+				pCb->setSamplerNearest( i, true );
+			}
+			pCb->bindTarget( g_Stale.pMask[ nSet ] );
+			pCb->dispatch( stale::kGrid / 8, stale::kGrid / 8 );
+			for ( int i = 0; i <= stale::kMaxRef; i++ )
+				pCb->bindTexture( i, nullptr );
+			pCb->copyImage( g_Stale.pMask[ nSet ], g_Stale.pStaging[ nSet ] );
+		}
+
+		// Counts the equal texels per reference of image set nSet (its submission must have retired).
+		void StaleProbeCount( int nSet, int pnEqual[ stale::kMaxRef ] )
+		{
+			const uint8_t *pPix = g_Stale.pStaging[ nSet ]->mappedData();
+			const uint32_t uPitch = g_Stale.pStaging[ nSet ]->rowPitch();
+			for ( int i = 0; i < stale::kMaxRef; i++ )
+				pnEqual[ i ] = 0;
+			for ( int y = 0; y < stale::kGrid; y++ )
+			{
+				const uint8_t *pRow = pPix + size_t( y ) * uPitch;
+				for ( int x = 0; x < stale::kGrid; x++ )
+				{
+					for ( int i = 0; i < stale::kMaxRef; i++ )
+						pnEqual[ i ] += pRow[ x * 4 + i ] >= 128 ? 1 : 0;
+				}
+			}
+		}
+
+		// Probes pTest against up to three references (null = unused) and counts the equal texels per reference.
+		// Submits its own command buffer and WAITS for it. False = the probe could not run (no verdict).
+		bool StaleProbe( const gamescope::Rc<CVulkanTexture> &pTest, const gamescope::Rc<CVulkanTexture> *pRefs, int pnEqual[ stale::kMaxRef ] )
+		{
+			if ( !StaleProbeImages( 0 ) )
+				return false;
+			const uint64_t ulStartNs = get_time_in_nanos();
+			std::unique_ptr<CVulkanCmdBuffer> pCb = g_device.commandBuffer();
+			StaleProbeRecord( pCb.get(), 0, pTest, pRefs );
+			const uint64_t ulSeq = g_device.submit( std::move( pCb ) );
+			g_device.wait( ulSeq );
+			StaleProbeCount( 0, pnEqual );
+			const uint64_t ulNs = get_time_in_nanos() - ulStartNs;
+			g_ulProbeCount.fetch_add( 1, std::memory_order_relaxed );
+			g_ulProbeNsSum.fetch_add( ulNs, std::memory_order_relaxed );
+			if ( ulNs > g_ulProbeNsMax.load( std::memory_order_relaxed ) )
+				g_ulProbeNsMax.store( ulNs, std::memory_order_relaxed );
+			return true;
+		}
+
+		// True = the new real frame ulNewestId must not be used (judged stale now, or already before). Called only
+		// for a newestId that is not the ring's newest, right before the ring copy.
+		bool StaleGuard( Host_t &H, const gamescope::Rc<CVulkanTexture> &pLayer0, uint64_t ulNewestId )
+		{
+			if ( !cv_ritz_fg_stale_check )
+			{
+				g_Stale.ulStaleId = 0;
+				return false;
+			}
+			if ( ulNewestId == g_Stale.ulStaleId )
+				return true;   // judged before: a repaint while it is still the newest commit
+			g_Stale.ulNewFrames++;
+			if ( !H.bHaveCur || H.nRing <= 0 )
+				return false;   // nothing to compare with (and nothing else to show)
+
+			// The ring's frames by age: 0 = newest (nCurSlot), 1 = the one before, 2 = the one before that.
+			gamescope::Rc<CVulkanTexture> pRefs[ stale::kMaxRef ];
+			uint64_t ulRefId[ stale::kMaxRef ] = {};
+			bool bValid[ stale::kMaxRef ] = {};
+			for ( int i = 0; i < stale::kMaxRef && i < H.nRing; i++ )
+			{
+				const int nSlot = ( H.nCurSlot - i + H.nRing ) % H.nRing;
+				if ( H.ulSlotId[ nSlot ] != 0 && H.pRing[ nSlot ] )
+				{
+					pRefs[ i ] = H.pRing[ nSlot ];
+					ulRefId[ i ] = H.ulSlotId[ nSlot ];
+					bValid[ i ] = true;
+				}
+			}
+
+			stale::Result r;
+			const bool bForced = stale::ForcedStale( cv_ritz_fg_stale_test, g_Stale.ulNewFrames );
+			if ( bForced )
+			{
+				r.eVerdict = stale::Verdict::Stale;
+			}
+			else
+			{
+				int nEqual[ stale::kMaxRef ] = {};
+				if ( !StaleProbe( pLayer0, pRefs, nEqual ) )
+					return false;
+				r = stale::Judge( stale::kGrid * stale::kGrid, nEqual, bValid, stale::kMaxRef );
+			}
+
+			const uint64_t ulNow = get_time_in_nanos();
+			if ( r.eVerdict == stale::Verdict::Repeat )
+			{
+				const uint64_t ulRepeats = g_ulRepeatCount.fetch_add( 1, std::memory_order_relaxed ) + 1;
+				// Counted, not acted on (a still picture repeats too). At most one line a minute, so a morning
+				// journal shows how often it happens.
+				if ( ulNow - g_Stale.ulLastRepeatLogNs >= 60ull * 1000000000ull )
+				{
+					fg_log.infof( "frame generation: %llu new game frame(s) were plain repeats of the frame before (%llu so far; used as usual)",
+						(unsigned long long)( ulRepeats - g_Stale.ulRepeatsAtLog ), (unsigned long long)ulRepeats );
+					g_Stale.ulLastRepeatLogNs = ulNow;
+					g_Stale.ulRepeatsAtLog = ulRepeats;
+				}
+				return false;
+			}
+			if ( r.eVerdict != stale::Verdict::Stale )
+				return false;
+
+			g_Stale.ulStaleId = ulNewestId;
+			const uint64_t ulCount = g_ulStaleCount.fetch_add( 1, std::memory_order_relaxed ) + 1;
+			if ( bForced )
+				g_ulStaleForced.fetch_add( 1, std::memory_order_relaxed );
+			if ( ulNow - g_Stale.ulLastLogNs >= 1000000000ull )
+			{
+				const unsigned long long ulRepeats = (unsigned long long)g_ulRepeatCount.load( std::memory_order_relaxed );
+				if ( bForced )
+					fg_log.infof( "frame generation: game frame %llu marked stale by ritz_fg_stale_test; not used (%llu so far, %llu not logged since the last line)",
+						(unsigned long long)ulNewestId, (unsigned long long)ulCount, (unsigned long long)g_Stale.ulSuppressed );
+				else
+					fg_log.infof( "frame generation: game frame %llu has the content of the frame %d before it (frame %llu); not used (%llu so far, %llu not logged since the last line; %llu plain repeats)",
+						(unsigned long long)ulNewestId, r.nBack, (unsigned long long)ulRefId[ r.nBack - 1 ], (unsigned long long)ulCount,
+						(unsigned long long)g_Stale.ulSuppressed, ulRepeats );
+				g_Stale.ulLastLogNs = ulNow;
+				g_Stale.ulSuppressed = 0;
+			}
+			else
+			{
+				g_Stale.ulSuppressed++;
+			}
+			return true;
+		}
+
+		// The newest commit is one the guard refused: layer 0 is that stale buffer.
+		bool NewestIsStale( uint64_t ulNewestId )
+		{
+			return ulNewestId != 0 && ulNewestId == g_Stale.ulStaleId;
+		}
+
+		// The diagnostic second look, read side: once its submission retired (a counter read, never a wait),
+		// count; any texel that differs means the game's buffer changed after the ring copy took it.
+		void StaleDiagPoll()
+		{
+			if ( !g_Stale.ulDiagPendingId || g_Stale.ulDiagSeq == ~0ull || g_device.completedSeqNo() < g_Stale.ulDiagSeq )
+				return;
+			int nEqual[ stale::kMaxRef ] = {};
+			StaleProbeCount( 1, nEqual );
+			const uint64_t ulId = g_Stale.ulDiagPendingId;
+			g_Stale.ulDiagPendingId = 0;
+			g_ulDiagChecks.fetch_add( 1, std::memory_order_relaxed );
+			const int nAll = stale::kGrid * stale::kGrid;
+			if ( nEqual[ 0 ] >= nAll )
+				return;
+			const uint64_t ulChanged = g_ulDiagChanged.fetch_add( 1, std::memory_order_relaxed ) + 1;
+			const uint64_t ulNow = get_time_in_nanos();
+			if ( ulNow - g_Stale.ulDiagLastLogNs >= 1000000000ull )
+			{
+				fg_log.infof( "frame generation: game buffer of frame %llu changed after it was taken (%d of %d probed texels differ; %llu so far, %llu not logged since the last line)",
+					(unsigned long long)ulId, nAll - nEqual[ 0 ], nAll, (unsigned long long)ulChanged, (unsigned long long)g_Stale.ulDiagSuppressed );
+				g_Stale.ulDiagLastLogNs = ulNow;
+				g_Stale.ulDiagSuppressed = 0;
+			}
+			else
+			{
+				g_Stale.ulDiagSuppressed++;
+			}
+		}
+
+		// The diagnostic second look, record side: at the end of the host's command buffer of the paint that copied
+		// the newest frame into the ring, probe the game's buffer (layer 0, still held by gamescope) against that copy.
+		bool StaleDiagRecord( Host_t &H, CVulkanCmdBuffer *pCb, const gamescope::Rc<CVulkanTexture> &pLayer0, uint64_t ulNewestId )
+		{
+			if ( !cv_ritz_fg_stale_check || !pCb || !H.bHaveCur || H.ulCurId != ulNewestId || g_Stale.ulDiagId == ulNewestId
+				|| g_Stale.ulDiagPendingId || !H.pRing[ H.nCurSlot ] || !StaleProbeImages( 1 ) )
+				return false;
+			const gamescope::Rc<CVulkanTexture> pRefs[ stale::kMaxRef ] = { H.pRing[ H.nCurSlot ], nullptr, nullptr };
+			StaleProbeRecord( pCb, 1, pLayer0, pRefs );
+			g_Stale.ulDiagId = ulNewestId;
+			g_Stale.ulDiagPendingId = ulNewestId;
+			g_Stale.ulDiagSeq = ~0ull;   // set by StaleDiagSubmitted()
+			return true;
+		}
+
+		void StaleDiagSubmitted( uint64_t ulSeq )
+		{
+			g_Stale.ulDiagSeq = ulSeq;
+		}
 	}
+
+	// `gamescopectl ritz_fg_stale_stats`: the stale-frame guard's counters and the probe's cost.
+	static gamescope::ConCommand cc_ritz_fg_stale_stats( "ritz_fg_stale_stats",
+		"Frame generation: print the stale-frame guard's counters (stale frames dropped, plain repeats, probe time).",
+		[]( std::span<std::string_view> )
+		{
+			const uint64_t ulProbes = g_ulProbeCount.load( std::memory_order_relaxed );
+			const double flMean = ulProbes ? double( g_ulProbeNsSum.load( std::memory_order_relaxed ) ) / double( ulProbes ) * 1e-6 : 0.0;
+			console_log.infof( "ritz_fg_stale_stats: stale %llu (forced %llu), plain repeats %llu, held paints %llu, probes %llu, probe mean %.3f ms, max %.3f ms, "
+				"second looks %llu, changed after taken %llu",
+				(unsigned long long)g_ulStaleCount.load( std::memory_order_relaxed ), (unsigned long long)g_ulStaleForced.load( std::memory_order_relaxed ),
+				(unsigned long long)g_ulRepeatCount.load( std::memory_order_relaxed ), (unsigned long long)g_ulHeldPaints.load( std::memory_order_relaxed ),
+				(unsigned long long)ulProbes, flMean, double( g_ulProbeNsMax.load( std::memory_order_relaxed ) ) * 1e-6,
+				(unsigned long long)g_ulDiagChecks.load( std::memory_order_relaxed ), (unsigned long long)g_ulDiagChanged.load( std::memory_order_relaxed ) );
+		} );
 
 	// ------------------------------------------------------------------
 	//  Public API: config, gate, frame request, reset, status
@@ -1663,6 +1947,7 @@ namespace fghost
 		// size as the renderer sees it.
 		g_ulGameFrameSize.store( ( uint64_t( pLayer0->width() ) << 32 ) | pLayer0->height(), std::memory_order_relaxed );
 		BoxPreviewPoll();
+		StaleDiagPoll();
 
 		// An armed capture whose time has come starts here, as soon as the renderer is live (also while pacing
 		// passes real frames through: the burst then waits for generated frames, and times out if none come).
@@ -1787,8 +2072,8 @@ namespace fghost
 
 		// D11: a newestId not seen before is a new real frame. Copy it into the next
 		// ring slot (in this very command buffer) whatever this composite shows, so
-		// later pairs always have it.
-		if ( !H.bHaveCur || req.newestId != H.ulCurId )
+		// later pairs always have it. Unless the stale guard refuses it (StaleGuard: its content is an older frame's).
+		if ( ( !H.bHaveCur || req.newestId != H.ulCurId ) && !StaleGuard( H, pLayer0, req.newestId ) )
 		{
 			const int nNewSlot = H.bHaveCur ? ( H.nCurSlot + 1 ) % H.nRing : 0;
 			H.nCurSlot = nNewSlot;
@@ -2112,10 +2397,22 @@ namespace fghost
 				pResult = H.pRing[ nShowSlot ];
 		}
 
+		// The stale guard: layer 0 is the refused stale buffer too, so the real frame shown is the newest GOOD one.
+		if ( !pResult && NewestIsStale( req.newestId ) && H.bHaveCur && H.pRing[ H.nCurSlot ] )
+		{
+			pResult = H.pRing[ H.nCurSlot ];
+			g_ulHeldPaints.fetch_add( 1, std::memory_order_relaxed );
+		}
+		// The stale guard's diagnostic second look: only in a command buffer this paint records anyway (the one
+		// that copied the frame), as its last dispatch.
+		const bool bDiagRecorded = StaleDiagRecord( H, pCmd.get(), pLayer0, req.newestId );
+
 		if ( pCmd )
 		{
 			vulkan_paint_split_end( pCmd.get() );
 			const uint64_t ulSeq = g_device.submit( std::move( pCmd ) );
+			if ( bDiagRecorded )
+				StaleDiagSubmitted( ulSeq );
 			if ( bProfileWritten )
 				H.ulProfileSeq = ulSeq;
 			if ( bBoxPreviewRecorded )

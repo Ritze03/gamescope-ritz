@@ -96,6 +96,7 @@ shader_src = [
   'shaders/cs_rgb_to_nv12.comp',
   'shaders/cs_fg_copy.comp',
   'shaders/cs_fg_crop.comp',
+  'shaders/cs_fg_stale_probe.comp',
 ]
 
 spirv_shaders = glsl_generator.process(shader_src)
