@@ -367,6 +367,9 @@ namespace fghost
 			uint64_t ulOutId = 0;
 			bool bValid = false;
 			uint64_t ulUse = 0;   // LRU clock
+			// The pair and window it was generated from (ritz_fg_capture: a repaint reports the output's own).
+			uint64_t ulPrevId = 0, ulCurrId = 0;
+			float flT0 = 1.0f, flT1 = 1.0f;
 		};
 
 		struct Host_t
@@ -388,7 +391,12 @@ namespace fghost
 			// here is ever a game buffer.
 			gamescope::Rc<CVulkanTexture> pRing[ kRingMax ];
 			uint64_t ulSlotId[ kRingMax ] = {};
-			int nRing = 0;           // slots created (kRingMin..kRingMax); FOLLOWS the pacer's depth: grows at once, shrinks after a dwell
+			// ritz_fg_capture watch (the `stale` flag): a stamp per slot, new on every write of the slot, moved with
+			// the texture by ResizeRing; the estimate remembers the stamps of the two slots it was recorded from.
+			uint64_t ulSlotWrite[ kRingMax ] = {};
+			uint64_t ulWriteClock = 0;
+			uint64_t ulEstPrevStamp = 0, ulEstCurrStamp = 0;
+			int nRing = 0;          // slots created (kRingMin..kRingMax); FOLLOWS the pacer's depth: grows at once, shrinks after a dwell
 			// Ring shrink bookkeeping (the dwell before a deliberate waitIdle + free).
 			uint64_t ulShrinkSinceNs = 0;   // when the wanted depth first stayed >= kRingShrinkSlack below nRing (0 = not shrinking)
 			int nShrinkMaxWant = 0;         // the largest depth wanted since then
@@ -639,6 +647,25 @@ namespace fghost
 			return -1;
 		}
 
+		// ritz_fg_capture watch flags (detection only, FrameGenCapture.h FlagInput). Stale: the library's estimate is
+		// reused, but a slot of its pair was written since it was recorded.
+		bool CaptureStale( const Host_t &H, int nPrevSlot, int nCurrSlot )
+		{
+			return nPrevSlot >= 0 && nCurrSlot >= 0
+				&& ( H.ulSlotWrite[ nPrevSlot ] != H.ulEstPrevStamp || H.ulSlotWrite[ nCurrSlot ] != H.ulEstCurrStamp );
+		}
+		// Mismatch: an id of the pair is held by more than one ring slot (which one is read is then a guess).
+		bool CaptureDupIds( const Host_t &H, uint64_t ulPrevId, uint64_t ulCurrId )
+		{
+			int nPrev = 0, nCurr = 0;
+			for ( int i = 0; i < H.nRing; i++ )
+			{
+				nPrev += ulPrevId && H.ulSlotId[ i ] == ulPrevId;
+				nCurr += ulCurrId && H.ulSlotId[ i ] == ulCurrId;
+			}
+			return nPrev > 1 || nCurr > 1;
+		}
+
 		// Release everything. DECISION: g_device.waitIdle() first -- the library
 		// has no deferred free, and earlier records (ours and the composite's
 		// that sampled our outputs) may still be on the queue.
@@ -705,6 +732,7 @@ namespace fghost
 
 			gamescope::Rc<CVulkanTexture> pTex[ kRingMax ];
 			uint64_t ulId[ kRingMax ] = {};
+			uint64_t ulStamp[ kRingMax ] = {};
 			int n = 0;
 			for ( ; n < nNew - nOld; n++ )
 			{
@@ -718,12 +746,14 @@ namespace fghost
 				const int nSrc = ( nCurEff + 1 + i ) % nOld;
 				pTex[ n ] = std::move( H.pRing[ nSrc ] );
 				ulId[ n ] = H.ulSlotId[ nSrc ];
+				ulStamp[ n ] = H.ulSlotWrite[ nSrc ];
 				n++;
 			}
 			for ( int i = 0; i < kRingMax; i++ )
 			{
 				H.pRing[ i ] = i < nNew ? std::move( pTex[ i ] ) : nullptr;
 				H.ulSlotId[ i ] = i < nNew ? ulId[ i ] : 0;
+				H.ulSlotWrite[ i ] = i < nNew ? ulStamp[ i ] : 0;
 			}
 			H.nRing = nNew;
 			H.nCurSlot = nNew - 1;
@@ -1976,6 +2006,7 @@ namespace fghost
 			H.bHaveCur = true;
 			H.ulCurId = req.newestId;
 			H.ulSlotId[ nNewSlot ] = req.newestId;
+			H.ulSlotWrite[ nNewSlot ] = ++H.ulWriteClock;
 			// The estimate and the cached outputs belong to pairs of frames; the
 			// estimate's frames may now be gone from the ring (overwritten), the
 			// outputs stay valid (they are finished images keyed by outId).
@@ -2080,6 +2111,7 @@ namespace fghost
 					fi.flT1 = req.t1;
 					fi.nSynthRet = 1;
 					fi.bCached = true;
+					fi.bMismatchHost = pHit->ulPrevId != req.prevId || pHit->ulCurrId != req.currId || CaptureDupIds( H, req.prevId, req.currId );
 					fi.nOutSlot = int( pHit - H.out );
 					fi.nPrevSlot = nPrevSlot;
 					fi.nCurrSlot = nCurrSlot;
@@ -2121,6 +2153,8 @@ namespace fghost
 						H.bEstimateValid = true;
 						H.ulEstPrev = req.prevId;
 						H.ulEstCurr = req.currId;
+						H.ulEstPrevStamp = H.ulSlotWrite[ nPrevSlot ];
+						H.ulEstCurrStamp = H.ulSlotWrite[ nCurrSlot ];
 						H.nPairSynths = 0;
 						if ( H.bProfiling )
 						{
@@ -2142,7 +2176,34 @@ namespace fghost
 							pNear = &o;
 					}
 					if ( pNear )
+					{
 						pResult = pNear->pTex;
+						if ( capture::Running() )
+						{
+							// ritz_fg_capture: the over-the-cap repaint, with the output's OWN pair, window and id.
+							const int nNearPrev = FindSlot( H, pNear->ulPrevId ), nNearCurr = FindSlot( H, pNear->ulCurrId );
+							capture::FrameIn fi;
+							fi.pOut = pNear->pTex;
+							if ( nNearPrev >= 0 )
+								fi.pPrev = H.pRing[ nNearPrev ];
+							if ( nNearCurr >= 0 )
+								fi.pCurr = H.pRing[ nNearCurr ];
+							fi.ulOutId = pNear->ulOutId;
+							fi.ulPrevId = pNear->ulPrevId;
+							fi.ulCurrId = pNear->ulCurrId;
+							fi.ulNewestId = req.newestId;
+							fi.flT0 = pNear->flT0;
+							fi.flT1 = pNear->flT1;
+							fi.nEstimateRet = nEstimateRet;
+							fi.nSynthRet = 1;
+							fi.bNear = true;
+							fi.bMismatchHost = CaptureDupIds( H, pNear->ulPrevId, pNear->ulCurrId );
+							fi.nOutSlot = int( pNear - H.out );
+							fi.nPrevSlot = nNearPrev;
+							fi.nCurrSlot = nNearCurr;
+							capture::RecordFrame( Cmd(), fi );
+						}
+					}
 				}
 				else if ( bOk )
 				{
@@ -2171,6 +2232,10 @@ namespace fghost
 							pCb->insertBarrier();   // flush for the consumers in later command buffers
 							pSlot->bValid = true;
 							pSlot->ulOutId = req.outId;
+							pSlot->ulPrevId = req.prevId;
+							pSlot->ulCurrId = req.currId;
+							pSlot->flT0 = req.t0;
+							pSlot->flT1 = req.t1;
 							pSlot->ulUse = ++H.ulUseClock;
 							H.nPairSynths++;
 							if ( H.bProfileOpen )
@@ -2196,6 +2261,8 @@ namespace fghost
 								fi.nEstimateRet = nEstimateRet;
 								fi.nSynthRet = 1;
 								fi.bCached = false;
+								fi.bStaleHost = nEstimateRet < 0 && CaptureStale( H, nPrevSlot, nCurrSlot );
+								fi.bMismatchHost = H.ulEstPrev != req.prevId || H.ulEstCurr != req.currId || CaptureDupIds( H, req.prevId, req.currId );
 								fi.nOutSlot = int( pSlot - H.out );
 								fi.nPrevSlot = nPrevSlot;
 								fi.nCurrSlot = nCurrSlot;
@@ -2226,6 +2293,22 @@ namespace fghost
 					// the real frame is shown for this output (library contract: never
 					// present an `out` whose record returned false).
 					SetReason( Unavailable::RecordFailed );
+				}
+				if ( !bOk && capture::Running() )
+				{
+					// ritz_fg_capture watch: a refused estimate / synth is a telemetry record (no image: the real frame is shown).
+					capture::FrameIn fi;
+					fi.ulOutId = req.outId;
+					fi.ulPrevId = req.prevId;
+					fi.ulCurrId = req.currId;
+					fi.ulNewestId = req.newestId;
+					fi.flT0 = req.t0;
+					fi.flT1 = req.t1;
+					fi.nEstimateRet = nEstimateRet;
+					fi.nSynthRet = bSynthRefused ? 0 : -1;
+					fi.nPrevSlot = nPrevSlot;
+					fi.nCurrSlot = nCurrSlot;
+					capture::RecordFrame( nullptr, fi );
 				}
 			}
 			// else: a frame of the pair is gone from the ring -- the real frame is shown.
