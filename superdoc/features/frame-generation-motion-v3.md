@@ -249,6 +249,13 @@ Saved profiles: the row existed for hours with 0.45 as its default, so profiles 
 read as 0. Deliberate simplification: exactly 0.45 can no longer be kept (0.40 and 0.50 can); remove the
 mapping once no profile from 2026-11-19 is around. No schema version change.
 
+## Picture edge and undefined values
+
+Since 2026-11-21 (library `2dc54bb`) a generated pixel whose motion points out of the picture in both real frames
+no longer takes the border's colour, and a value that is undefined never turns black: the plain blend of the two
+real frames is used there. Very few pixels change, all near the edges. It is not shown that this cures a reported
+black flicker.
+
 ## Known limits
 
 From the library: the static-structure mask is luma-based; fast pans at a 30 fps base look soft

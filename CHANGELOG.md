@@ -13,6 +13,10 @@ All notable user-facing changes, newest first. Categories:
 - **Frame generation**: a troubleshooting command can record the frames around a
   moment to files.
 
+### Fixed
+- **Motion version 3**: fast motion near the picture's edge can no longer darken a
+  moving area with the border's colour.
+
 ## 2026-11-20
 
 ### Added
