@@ -133,8 +133,12 @@ about every 250 ms, not of this decision: the `Decision` struct carries none. Va
 ```
 frame seq= outId= prevId= currId= newestId= t0= t1= arrival_prev_ns= arrival_curr_ns= now_ns=
       width= height= estimate=<recorded|reused> estimate_ret=<1|0|na> synth_ret=<0|1> cached=<0|1>
-      out_slot= prev_slot= curr_slot= out_file= prev_file= curr_file=
+      near=<0|1> out_slot= prev_slot= curr_slot= out_file= prev_file= curr_file=
 ```
+`near=1` (2026-11-21) is the over-the-cap repaint: past `kMaxSynthsPerPair` synths of one pair the
+host shows the most recently used output slot again (`pNear` in `RecordBaseLayer()`); its `outId`,
+pair and `t0`/`t1` are that output's own (the output slots remember them), not the request's. It
+counts toward the 40.
 `t0`/`t1` are the arguments of `recordSynthBlur` (equal when blur is off). The arrival times are
 the host's `OnArrival` timestamps of the pair's two real frames (ns, monotonic, same clock as
 `now_ns` and the decisions), `-1` when the id is no longer in the host's small table (the last 16
@@ -142,6 +146,15 @@ ids). `estimate=recorded` means `recordEstimate` was recorded in this very compo
 `estimate_ret` is its return value; `reused` means an earlier composite's estimate served this
 output (`na`). `synth_ret` is `recordSynthBlur`'s return (a frame is only captured when it
 succeeded, so 1). Slots are the host's output slot (0..2) and ring slots.
+
+```
+repeat kind=<repeat|static> id=<new> same_as=<old>     (zero or more)
+repeat_check reals=<checked> repeat=<n> static=<n>
+```
+Written before `timing` (2026-11-21): the repeat test (see "The repeat test" below) over the stored
+real frames in the order they were first needed. A `repeat` line means a real frame's image equals
+an earlier one's although a different frame came between: a ring slot carried a new commit id over
+an old image.
 
 ```
 timing first_frame_ns= last_frame_ns= burst_ns= max_decision_gap_ns= gap_after_n= last_decision_to_start_ns=
@@ -198,6 +211,104 @@ a resize, a format change, frame generation being torn down, a disk error, a tim
 exit. One capture at a time. Only a frame in the host's ring can be copied: the pair of a repainted
 cached output is normally still there. The decisions' `reason` is up to 250 ms old (see above).
 The capture does not record the host's later stages (effects, scaling, overlays).
+
+## Watch mode (`ritz_fg_capture watch`, 2026-11-21)
+
+```
+gamescopectl ritz_fg_capture "watch [seconds] [sensitivity]"
+```
+`gamescopectl` sends everything after the command name as ONE argument string, which the server
+splits on spaces, so the words after `ritz_fg_capture` must be quoted together (an unquoted
+`watch 30` reaches the server as `watch` alone and runs the default). `seconds` 1..600, default 60;
+`sensitivity` a number >= 0, default 1, that divides the pixel trigger's threshold; `0` makes every
+measured frame trigger (to test the dump path live). Starts at once (staging prepared on the next
+live composite, as the burst does); refused while any capture is armed, running or writing.
+
+A burst catches the next 40 generated frames, about 0.14 s at 300 presented fps, so an
+intermittent defect needs luck. A watch observes **every** composite that shows (or tries to show)
+a generated frame for the whole time and saves the frames around a suspicious one by itself.
+
+**Telemetry.** One `rec` record per such composite, kept in memory (reserved for
+`kWatchRecordsPerSecond` = 500 per second; more are counted as `dropped_records`) and written to
+`watch.txt` at the end: fresh synths, cached repaints, the over-the-cap repaint (`near=1`) and
+refused estimates / synths (no image).
+
+**Host-state flags** (`flags=`, `-` for none; each kind counted in the summary): `gap` (`currId !=
+prevId + 1`), `back` (`currId` or `outId` smaller than in the previous record), `near` (the
+over-the-cap repaint), `stale` (the estimate is reused although a ring slot of its pair was written
+since it was recorded: the host stamps each ring slot on every write, moves the stamps with the
+textures in `ResizeRing()`, and the estimate remembers its two stamps), `refused` (`recordEstimate`
+or the synth returned false), `pairmismatch` (the host's estimate pair is not the requested pair, a
+cached output was generated from another pair than the one now requested under its `outId`, or an
+id of the pair is held by two ring slots), `repeat` / `static` (the repeat test, below). The first
+three and `static` can be routine; `stale`, `refused`, `pairmismatch` and `repeat` should never
+happen and trigger a dump. Detection only: the host's behaviour is unchanged.
+
+**The pixel trigger ("coarse error").** Per measured frame the output and the plain blend
+`(1 - t) * prev + t * curr` of its pair (`t` the middle of `t0`..`t1`) are reduced to 16x16 block
+means per colour channel; `coarse` is the mean absolute difference of the two, `pair` the same
+measure between prev and curr. It flags when `coarse > (6 + 1.5 * pair) / sensitivity`. `Why:` a
+correct frame differs from the blend only by local motion, which block means mostly average away,
+while a frame built from a wrong estimate moves whole blocks of wrong content; the allowance grows
+with `pair` because more motion between the reals makes a correct frame legitimately farther from
+the blend. With full sampling the largest `coarse` of a good frame in a real capture with motion
+was 8.5 at `pair` 14.6 (ratio 0.41). The watch estimates each block mean from every 4th pixel in x
+and y (16 samples per block, `kMetricStep`), which reads about 1.5-3.5 higher on both measures on
+fine game texture (sampling noise); on that capture the sparse ratio stayed at or below 0.33. The
+means of a real frame are computed once and reused by every output of it. Channel values are on a
+0..255 scale for every format (10-bit / 4, fp16 x 255). The arithmetic is in `FrameGenCapture.cpp`
+(`ComputeBlockMeans`, `BlendDiff`, `BlockDiff`, `Threshold`), unit tested.
+
+**The repeat test.** A real frame seen for the first time is compared with the last 16 real frames
+(`RepeatDetector`): equal sparse block means AND an equal hash of three full rows (1/4, 1/2, 3/4
+height) count as the same image. When a different frame lies between the two (A B A) it is a
+`repeat` (dump trigger; the trigger line names both ids); when every frame between is the same too
+(A A) it is `static`, a counter only. A truly still picture repeats too, which is why a repeat
+needs a different frame between; a picture that alternates between two exact images (a blinking
+cursor over a frozen scene) would still be reported as a repeat.
+
+**Rolling window and dumps.** Every recorded composite is also copied into the staging images as
+in a burst, but cyclically (`RollingWindow`: 40 outputs, 42 real frames). A real frame's staging
+image is reused only when no output still in the window refers to it, and no record leaves the
+window before the analysis thread has measured it. When a dump trigger fires, about 12 more
+records are kept (`kWatchAfterTrigger`), then the window freezes and is written as a normal v=1
+capture folder (`dump-1/`, `dump-2/`, ...; at most `kWatchMaxDumps` = 3 per watch) that the replay
+and check tools read as-is, with one extra record kind after the decisions, before the `frame` lines:
+```
+trigger kind=<pixel|stale|refused|pairmismatch|repeat> record=<watch record index> seq=<frame seq in this dump, -1 if none>
+        coarse= pair= threshold=   [id=<new> same_as=<old>   for repeat]
+```
+Its `end` reason is `trigger_<kind>`; the decisions are those at the freeze. While a dump is
+written, telemetry continues but frames are not imaged or measured (`not_measured_dumping`). A
+frame whose reals are gone from the ring, or that would push an unmeasured record out of the
+window, is skipped whole (`images_skipped`).
+
+**Files.** `${XDG_CACHE_HOME:-$HOME/.cache}/gamescope-ritz/fg-capture/<YYYYMMDD-HHMMSS>-watch/` with
+`watch.txt` and the `dump-N/` folders. `watch.txt`:
+```
+watch v=1 start_wall= start_mono_ns= width= height= vk_format= format_name= bytes_per_pixel= library_commit=
+      ritz_version= ritz_commit= ritz_dirty= motion_wanted= motion_effective= fallback_v1= flowScale= seconds=
+      sensitivity= threshold=(6+1.5*pair)/sensitivity block=16 sample_step=4 max_dumps=3 window=40 after_trigger=12
+rec i= ns= outId= prevId= currId= newestId= t0= t1= arrival_prev_ns= arrival_curr_ns= span_ms=
+    estimate=<recorded|reused> estimate_ret=<1|0|na> synth_ret= cached= near= out_slot= prev_slot= curr_slot=
+    coarse=<x|na> pair=<x|na> flags=<a,b|->
+cost analysed= analysis_avg_ms= analysis_max_ms= images_skipped= pixel_triggers=
+summary records= measured= not_measured= not_measured_dumping= dropped_records= dumps= triggers=
+        max_ratio= max_record= max_outId= max_prevId= max_currId= max_coarse= max_pair=
+        flag_<kind>=... repeat= static= span_known= span_median_ms= span_max_ms= span_max_record=
+        span_max_prevId= span_max_currId= span_gt2= span_gt3= span_gt5= span_gt8= reason=
+```
+`span_ms` is the pair's arrival span (curr minus prev; `na` when an arrival is unknown). The
+summary is the point of the mode: `max_ratio` is the largest `coarse / threshold` at sensitivity 1
+with that record's ids, so a watch with no trigger still says how close the library's output ever
+came to looking structurally wrong; `span_gtK` counts distinct pairs whose span exceeded K times
+the median span (a pair spanning a stall). `reason` is `watch_done` (ran its time) or one of the
+burst's end reasons. A watch has no inactivity timeout: a paused game is no reason to stop.
+
+**Cost.** Text: one ~400-byte line per record in memory. Pixels: a copy or two per generated frame
+(as a burst), and on the writer thread about 0.06 ms of analysis per frame at 500x500 and about
+0.2 ms of block means per 1440x1080 image (the staging is `HOST_CACHED`). Free space for three
+dumps plus the text is checked first. The same staging as a burst (about 0.5 GB at 1440x1080).
 
 ## Why
 

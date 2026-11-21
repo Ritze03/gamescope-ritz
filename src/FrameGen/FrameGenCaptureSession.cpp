@@ -48,13 +48,17 @@ namespace fghost::capture
 
 		std::atomic<uint32_t> g_uState{ kIdle };
 		std::atomic<uint64_t> g_ulDueNs{ 0 };   // the armed capture's start time (monotonic); written before g_uState goes to kArmed
+		// The watch request (written before g_uState goes to kArmed, read by Start()).
+		std::atomic<bool> g_bWatchReq{ false };
+		std::atomic<int> g_nWatchSeconds{ kWatchDefaultSeconds };
+		std::atomic<float> g_flWatchSens{ 1.0f };
 
 		// One thing for the writer to do, in order.
 		struct Job
 		{
-			enum Kind { Header, Frame, End } eKind = Frame;
-			uint64_t ulSeq = 0;                  // Frame: the submission that carries its copies
-			std::string sText;                   // Header: all lines; Frame: its line; End: unused
+			enum Kind { Header, Frame, End, Measure, Dump } eKind = Frame;
+			uint64_t ulSeq = 0;                  // Frame / Measure / Dump: the submission that carries (the last of) its copies
+			std::string sText;                   // Header: all lines; Frame: its line; Dump: the lines before the frame lines
 			std::string sReason;                 // End
 			struct Image
 			{
@@ -65,6 +69,38 @@ namespace fghost::capture
 			Image out;
 			Image reals[ 2 ];
 			int nReals = 0;
+			// Measure: the record, its pair (ids + staging, always both) and the blend position.
+			uint64_t ulRec = 0;
+			uint64_t ulRealId[ 2 ] = {};
+			float flT = 0.0f;
+			// Dump: one frame line + images per record in the window; the reals listed once in `dumpReals`.
+			struct DumpFrame { std::string sLine; Image out; };
+			std::vector<DumpFrame> dumpFrames;
+			std::vector<Image> dumpReals;
+			std::string sTail;                   // Dump: timing + end lines
+			int nDump = 0;
+		};
+
+		// The block means of the real frames, by commit id (each real is used by several outputs).
+		struct MeansCache
+		{
+			std::deque<std::pair<uint64_t, BlockMeans>> v;
+			const BlockMeans *Find( uint64_t ulId ) const
+			{
+				for ( const auto &e : v )
+				{
+					if ( e.first == ulId )
+						return &e.second;
+				}
+				return nullptr;
+			}
+			const BlockMeans *Put( uint64_t ulId, BlockMeans &&m )
+			{
+				if ( v.size() >= 8 )
+					v.pop_front();
+				v.emplace_back( ulId, std::move( m ) );
+				return &v.back().second;
+			}
 		};
 
 		struct Session
@@ -103,6 +139,39 @@ namespace fghost::capture
 			std::atomic<bool> bDone{ false };
 			std::atomic<int> nFramesWritten{ 0 };
 			std::atomic<int> nRealsWritten{ 0 };
+
+			// ---- watch mode (bWatch) ----
+			bool bWatch = false;
+			int nWatchSeconds = 0;
+			float flSens = 1.0f;
+			uint64_t ulWatchEndNs = 0;
+			std::string sWatchHeader;          // `watch v=1 ...`
+			HeaderInfo header;                 // for the dumps' capture lines
+			std::string sSettingsText;         // the setting lines, for the dumps
+			std::unique_ptr<RollingWindow> pWindow;
+			std::vector<WatchRec> recs;        // reserved at the start, never reallocated (the writer fills coarse / pair in place)
+			size_t nRecCap = 0;
+			uint64_t ulDroppedRecs = 0, ulNotMeasuredDumping = 0, ulTriggers = 0;
+			uint64_t ulLastCurr = 0, ulLastOut = 0;
+			std::atomic<uint64_t> ulAnalysedEnd{ 0 };   // every record < this one with images was analysed
+			// The pending dump trigger (paint thread and writer).
+			std::mutex trigMutex;
+			bool bTrig = false;
+			std::string sTrigKind;
+			uint64_t ulTrigRec = 0;
+			float flTrigCoarse = -1.0f, flTrigPair = -1.0f, flTrigThr = -1.0f;
+			bool bBlockedNow = false;          // this composite's Add() was refused because of the trigger record
+			bool bFrozen = false;              // a dump is being written: nothing is admitted
+			std::atomic<bool> bDumpDone{ false };
+			int nDumps = 0;
+			// Analysis cost (writer).
+			uint64_t ulAnalysisNs = 0, ulAnalysisMaxNs = 0, ulAnalysed = 0, ulPixelTriggers = 0;
+			MeansCache means;
+			uint64_t ulTrigId = 0, ulTrigSameAs = 0;   // a `repeat` trigger's two identical frames
+			// The repeat test (writer): the watch's, and the burst's over its stored real frames.
+			RepeatDetector repeat;
+			std::string sBurstRepeatLines;
+			int nBurstRealsChecked = 0, nBurstRepeat = 0, nBurstStatic = 0;
 		};
 
 		Session *g_pSession = nullptr;   // paint thread; the writer gets its own pointer
@@ -161,6 +230,172 @@ namespace fghost::capture
 					}
 				}
 
+				// Waits for the submission `ulSeq` to retire. A counter read, never a device wait. False: aborted / failed.
+				auto WaitSeq = [ & ]( uint64_t ulSeq ) -> bool
+				{
+					const auto tStart = std::chrono::steady_clock::now();
+					while ( g_device.completedSeqNo() < ulSeq )
+					{
+						if ( s->bAbort.load( std::memory_order_relaxed ) )
+							return false;
+						if ( std::chrono::steady_clock::now() - tStart > std::chrono::seconds( 10 ) )
+						{
+							Bad( "a staging copy never retired" );
+							return false;
+						}
+						std::this_thread::sleep_for( std::chrono::microseconds( 250 ) );
+					}
+					return !s->bAbort.load( std::memory_order_relaxed );
+				};
+
+				if ( j.eKind == Job::Measure )
+				{
+					// The pixel trigger: block means of the output against the blend of its pair (FrameGenCapture.h).
+					if ( !bBad && WaitSeq( j.ulSeq ) )
+					{
+						const auto t0 = std::chrono::steady_clock::now();
+						BlockMeans mOut;
+						const BlockMeans *pM[ 2 ] = {};
+						bool bOk = ComputeBlockMeans( j.out.pPixels, j.out.uPitch, s->uWidth, s->uHeight, s->nVkFormat, kMetricStep, &mOut );
+						for ( int i = 0; i < 2 && bOk; i++ )
+						{
+							pM[ i ] = s->means.Find( j.ulRealId[ i ] );
+							if ( !pM[ i ] )
+							{
+								BlockMeans m;
+								bOk = ComputeBlockMeans( j.reals[ i ].pPixels, j.reals[ i ].uPitch, s->uWidth, s->uHeight, s->nVkFormat, kMetricStep, &m );
+								if ( bOk )
+								{
+									// A real frame seen for the first time: the repeat test (a slot carrying a new id over an old image).
+									const RepeatDetector::Result rr = s->repeat.Add( j.ulRealId[ i ], m,
+										RowHash( j.reals[ i ].pPixels, j.reals[ i ].uPitch, s->uWidth, s->uHeight, s->uBpp ) );
+									if ( rr.eKind == RepeatDetector::kStatic )
+										s->recs[ size_t( j.ulRec ) ].uFlags |= kFlagStatic;
+									else if ( rr.eKind == RepeatDetector::kRepeat )
+									{
+										s->recs[ size_t( j.ulRec ) ].uFlags |= kFlagRepeat;
+										cap_log.warnf( "watch: real frame %llu is identical to real frame %llu (a different frame between): a repeat",
+											(unsigned long long)j.ulRealId[ i ], (unsigned long long)rr.ulSameAs );
+										std::lock_guard<std::mutex> lock( s->trigMutex );
+										if ( !s->bTrig )
+										{
+											s->bTrig = true;
+											s->sTrigKind = "repeat";
+											s->ulTrigRec = j.ulRec;
+											s->flTrigCoarse = s->flTrigPair = s->flTrigThr = -1.0f;
+											s->ulTrigId = j.ulRealId[ i ];
+											s->ulTrigSameAs = rr.ulSameAs;
+										}
+									}
+									pM[ i ] = s->means.Put( j.ulRealId[ i ], std::move( m ) );
+								}
+							}
+						}
+						// A cache insert may have dropped pM[0] (deque front): look it up again.
+						if ( bOk )
+							pM[ 0 ] = s->means.Find( j.ulRealId[ 0 ] );
+						if ( bOk && pM[ 0 ] && pM[ 1 ] )
+						{
+							const float flCoarse = BlendDiff( mOut, *pM[ 0 ], *pM[ 1 ], j.flT );
+							const float flPair = BlockDiff( *pM[ 0 ], *pM[ 1 ] );
+							if ( flCoarse >= 0.0f && flPair >= 0.0f )
+							{
+								WatchRec &r = s->recs[ size_t( j.ulRec ) ];
+								r.flCoarse = flCoarse;
+								r.flPair = flPair;
+								if ( PixelTriggers( flCoarse, flPair, s->flSens ) )
+								{
+									s->ulPixelTriggers++;
+									std::lock_guard<std::mutex> lock( s->trigMutex );
+									if ( !s->bTrig )
+									{
+										s->bTrig = true;
+										s->sTrigKind = "pixel";
+										s->ulTrigRec = j.ulRec;
+										s->flTrigCoarse = flCoarse;
+										s->flTrigPair = flPair;
+										s->flTrigThr = Threshold( flPair, s->flSens );
+										s->ulTrigId = s->ulTrigSameAs = 0;
+									}
+								}
+							}
+						}
+						const uint64_t ulNs = uint64_t( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
+						s->ulAnalysisNs += ulNs;
+						s->ulAnalysisMaxNs = std::max( s->ulAnalysisMaxNs, ulNs );
+						s->ulAnalysed++;
+					}
+					// Published AFTER the trigger: the paint thread never evicts a triggering record unseen.
+					s->ulAnalysedEnd.store( j.ulRec + 1, std::memory_order_release );
+					continue;
+				}
+
+				if ( j.eKind == Job::Dump )
+				{
+					// A frozen window, written as a normal v=1 capture folder.
+					if ( !bBad && WaitSeq( j.ulSeq ) )
+					{
+						const std::string sDumpDir = s->sDir + "/dump-" + std::to_string( j.nDump );
+						bool bOk = mkdir( sDumpDir.c_str(), 0755 ) == 0;
+						int nRealsOk = 0;
+						for ( const Job::Image &im : j.dumpReals )
+						{
+							if ( bOk && WriteImageFile( sDumpDir + "/" + im.sName, im, uRowBytes, s->uHeight ) )
+								nRealsOk++;
+							else
+								bOk = false;
+						}
+						std::string sText = j.sText;
+						for ( const Job::DumpFrame &f : j.dumpFrames )
+						{
+							bOk = bOk && WriteImageFile( sDumpDir + "/" + f.out.sName, f.out, uRowBytes, s->uHeight );
+							sText += f.sLine + "\n";
+						}
+						sText += j.sTail;
+						FILE *f = bOk ? fopen( ( sDumpDir + "/capture.txt" ).c_str(), "wb" ) : nullptr;
+						bOk = f && fwrite( sText.data(), 1, sText.size(), f ) == sText.size();
+						if ( f )
+							bOk = ( fclose( f ) == 0 ) && bOk;
+						if ( bOk )
+							cap_log.infof( "watch: dump %d written (%zu frames, %d real frames) into %s", j.nDump, j.dumpFrames.size(), nRealsOk, sDumpDir.c_str() );
+						else
+							Bad( "a dump could not be written (disk full or not writable)" );
+					}
+					s->bDumpDone.store( true, std::memory_order_release );
+					continue;
+				}
+
+				if ( j.eKind == Job::End && s->bWatch )
+				{
+					const char *pszReason = bBad ? "disk" : s->bAbort.load( std::memory_order_relaxed ) ? "shutdown" : j.sReason.c_str();
+					WatchSummary sum;
+					std::string sOut = s->sWatchHeader + "\n";
+					for ( const WatchRec &r : s->recs )
+					{
+						SummaryAdd( &sum, r );
+						sOut += FormatWatchLine( r ) + "\n";
+					}
+					sum.ulDroppedRecords = s->ulDroppedRecs;
+					sum.ulNotMeasuredDumping = s->ulNotMeasuredDumping;
+					sum.nDumps = s->nDumps;
+					sum.ulTriggers = s->ulTriggers + s->ulPixelTriggers;
+					char szCost[ 200 ];
+					snprintf( szCost, sizeof( szCost ), "cost analysed=%llu analysis_avg_ms=%.3f analysis_max_ms=%.3f images_skipped=%d pixel_triggers=%llu",
+						(unsigned long long)s->ulAnalysed, s->ulAnalysed ? double( s->ulAnalysisNs ) / double( s->ulAnalysed ) / 1e6 : 0.0,
+						double( s->ulAnalysisMaxNs ) / 1e6, s->nDropped, (unsigned long long)s->ulPixelTriggers );
+					sOut += std::string( szCost ) + "\n";
+					const std::string sSummary = FormatWatchSummary( sum, pszReason, FormatSpanTokens( ComputeSpanStats( s->recs ) ) );
+					sOut += sSummary + "\n";
+					FILE *f = fopen( ( s->sDir + "/watch.txt" ).c_str(), "wb" );
+					if ( !f || fwrite( sOut.data(), 1, sOut.size(), f ) != sOut.size() )
+						cap_log.errorf( "watch: could not write watch.txt" );
+					if ( f )
+						fclose( f );
+					cap_log.infof( "watch finished (%s): %s; %s; in %s", pszReason, sSummary.c_str(), szCost, s->sDir.c_str() );
+					s->bDone.store( true, std::memory_order_release );
+					return;
+				}
+
 				if ( j.eKind == Job::Header )
 				{
 					pText = fopen( ( s->sDir + "/capture.txt" ).c_str(), "wb" );
@@ -197,7 +432,25 @@ namespace fghost::capture
 					{
 						bOk = WriteImageFile( s->sDir + "/" + j.reals[ i ].sName, j.reals[ i ], uRowBytes, s->uHeight );
 						if ( bOk )
+						{
 							nRealsOk++;
+							// The repeat test over the stored real frames (in the order they were first needed).
+							BlockMeans m;
+							if ( ComputeBlockMeans( j.reals[ i ].pPixels, j.reals[ i ].uPitch, s->uWidth, s->uHeight, s->nVkFormat, kMetricStep, &m ) )
+							{
+								s->nBurstRealsChecked++;
+								const RepeatDetector::Result rr = s->repeat.Add( j.ulRealId[ i ], m,
+									RowHash( j.reals[ i ].pPixels, j.reals[ i ].uPitch, s->uWidth, s->uHeight, s->uBpp ) );
+								if ( rr.eKind != RepeatDetector::kNone )
+								{
+									( rr.eKind == RepeatDetector::kRepeat ? s->nBurstRepeat : s->nBurstStatic )++;
+									char sz[ 128 ];
+									snprintf( sz, sizeof( sz ), "repeat kind=%s id=%llu same_as=%llu\n", rr.eKind == RepeatDetector::kRepeat ? "repeat" : "static",
+										(unsigned long long)j.ulRealId[ i ], (unsigned long long)rr.ulSameAs );
+									s->sBurstRepeatLines += sz;
+								}
+							}
+						}
 					}
 					s->nRealsWritten.fetch_add( nRealsOk, std::memory_order_relaxed );
 					if ( bOk )
@@ -219,7 +472,11 @@ namespace fghost::capture
 				const int nReals = s->nRealsWritten.load( std::memory_order_relaxed );
 				// Frames that were recorded but never written (a failed disk, an exit) are dropped too.
 				const int nDropped = s->nDropped + ( s->nCaptured - nFrames );
-				const std::string sTiming = FormatTimingLine( s->ulFirstFrameNs, s->ulLastFrameNs, s->ulMaxDecisionGapNs, s->ulGapAfterCounter,
+				char szRepeat[ 128 ];
+				snprintf( szRepeat, sizeof( szRepeat ), "repeat_check reals=%d repeat=%d static=%d\n", s->nBurstRealsChecked, s->nBurstRepeat, s->nBurstStatic );
+				if ( s->nBurstRepeat )
+					cap_log.warnf( "capture: %d stored real frame(s) repeat an earlier one with a different frame between (see the repeat lines)", s->nBurstRepeat );
+				const std::string sTiming = s->sBurstRepeatLines + szRepeat + FormatTimingLine( s->ulFirstFrameNs, s->ulLastFrameNs, s->ulMaxDecisionGapNs, s->ulGapAfterCounter,
 					s->ulLastDecisionToStartNs ) + "\n";
 				const std::string sEnd = sTiming + FormatEndLine( nFrames, nReals, nDropped, pszReason ) + "\n";
 				if ( pText )
@@ -338,10 +595,36 @@ namespace fghost::capture
 					: uExpected == kWriting ? "a capture is still writing its files; refused" : "a capture is already armed; refused";
 			return false;
 		}
+		g_bWatchReq.store( false, std::memory_order_relaxed );
 		g_ulDueNs.store( get_time_in_nanos() + uint64_t( nSeconds ) * 1000ull * 1000ull * 1000ull, std::memory_order_relaxed );
 		g_uState.store( kArmed, std::memory_order_release );
 		if ( psMessage )
 			*psMessage = nSeconds > 0 ? "capture armed: it starts in " + std::to_string( nSeconds ) + " s" : "capture starting now";
+		return true;
+	}
+
+	bool RequestWatch( int nSeconds, float flSensitivity, std::string *psMessage )
+	{
+		uint32_t uExpected = kIdle;
+		if ( !g_uState.compare_exchange_strong( uExpected, kArming, std::memory_order_acquire, std::memory_order_relaxed ) )
+		{
+			if ( psMessage )
+				*psMessage = uExpected == kRunning ? "a capture is running; refused"
+					: uExpected == kWriting ? "a capture is still writing its files; refused" : "a capture is already armed; refused";
+			return false;
+		}
+		g_bWatchReq.store( true, std::memory_order_relaxed );
+		g_nWatchSeconds.store( nSeconds, std::memory_order_relaxed );
+		g_flWatchSens.store( flSensitivity, std::memory_order_relaxed );
+		g_ulDueNs.store( get_time_in_nanos(), std::memory_order_relaxed );
+		g_uState.store( kArmed, std::memory_order_release );
+		if ( psMessage )
+		{
+			char sz[ 160 ];
+			snprintf( sz, sizeof( sz ), "watch starting now for %d s, sensitivity %g%s", nSeconds, double( flSensitivity ),
+				flSensitivity > 0.0f ? "" : " (every measured frame triggers)" );
+			*psMessage = sz;
+		}
 		return true;
 	}
 
@@ -387,7 +670,9 @@ namespace fghost::capture
 				Finish( *s, "disk" );
 			else if ( ulConfigKey != s->ulConfigKey )
 				Finish( *s, "settings" );
-			else if ( ulNowNs - s->ulLastProgressNs > kTimeoutNs )
+			else if ( s->bWatch && ulNowNs >= s->ulWatchEndNs )
+				Finish( *s, "watch_done" );   // a watch ends on its time only (a paused game is no reason to stop)
+			else if ( !s->bWatch && ulNowNs - s->ulLastProgressNs > kTimeoutNs )
 				Finish( *s, "timeout" );
 			return;
 		}
@@ -441,7 +726,9 @@ namespace fghost::capture
 				if ( statvfs( sAnc.c_str(), &sv ) != 0 )
 					return Refuse( "could not read the free space of the cache directory" );
 				const uint64_t ulAvail = uint64_t( sv.f_bavail ) * uint64_t( sv.f_frsize );
-				const uint64_t ulNeed = RequiredBytes( env.uWidth, env.uHeight, uBpp, kFrames );
+				const bool bWatch = g_bWatchReq.load( std::memory_order_relaxed );
+				const uint64_t ulNeed = bWatch ? WatchRequiredBytes( env.uWidth, env.uHeight, uBpp, g_nWatchSeconds.load( std::memory_order_relaxed ) )
+					: RequiredBytes( env.uWidth, env.uHeight, uBpp, kFrames );
 				if ( !HasEnoughSpace( ulAvail, ulNeed ) )
 				{
 					cap_log.errorf( "capture refused: not enough free space in %s (%llu MiB free, %llu MiB needed)", sAnc.c_str(),
@@ -479,12 +766,13 @@ namespace fghost::capture
 			strftime( szStamp, sizeof( szStamp ), "%Y%m%d-%H%M%S", &tmLocal );
 			if ( !MakeDirs( sBase ) )
 				return Refuse( "could not create the cache directory" );
-			std::string sDir = sBase + "/" + szStamp;
+			const std::string sStamp = std::string( szStamp ) + ( g_bWatchReq.load( std::memory_order_relaxed ) ? "-watch" : "" );
+			std::string sDir = sBase + "/" + sStamp;
 			for ( int n = 1; mkdir( sDir.c_str(), 0755 ) != 0; n++ )
 			{
 				if ( errno != EEXIST || n > 99 )
 					return Refuse( "could not create the capture directory" );
-				sDir = sBase + "/" + szStamp + "-" + std::to_string( n );
+				sDir = sBase + "/" + sStamp + "-" + std::to_string( n );
 			}
 			pS->sDir = sDir;
 			pS->flPrepareMs = float( std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - tStart ).count() );
@@ -561,6 +849,26 @@ namespace fghost::capture
 
 		static ExitJoiner s_Joiner;
 		(void)s_Joiner;
+		if ( g_bWatchReq.load( std::memory_order_relaxed ) )
+		{
+			// The watch keeps everything in memory; the writer writes watch.txt at the end and the dumps in between.
+			s.bWatch = true;
+			s.nWatchSeconds = g_nWatchSeconds.load( std::memory_order_relaxed );
+			s.flSens = g_flWatchSens.load( std::memory_order_relaxed );
+			s.ulWatchEndNs = ulNowNs + uint64_t( s.nWatchSeconds ) * 1000000000ull;
+			s.header = h;
+			s.sWatchHeader = FormatWatchHeader( h, s.nWatchSeconds, s.flSens );
+			for ( const std::string &sLine : FormatSettingLines( *env.pSettings ) )
+				s.sSettingsText += sLine + "\n";
+			s.pWindow = std::make_unique<RollingWindow>( int( s.pOuts.size() ), int( s.pReals.size() ) );
+			s.nRecCap = size_t( s.nWatchSeconds ) * kWatchRecordsPerSecond + 1000;
+			s.recs.reserve( s.nRecCap );
+			s.thread = std::thread( WriterMain, &s );
+			g_uState.store( kRunning, std::memory_order_release );
+			cap_log.infof( "watch started: %d s, sensitivity %g, %ux%u (format %s), into %s", s.nWatchSeconds, double( s.flSens ), env.uWidth,
+				env.uHeight, VkFormatName( env.nVkFormat ), s.sDir.c_str() );
+			return true;
+		}
 		s.thread = std::thread( WriterMain, &s );
 		Enqueue( s, std::move( head ) );
 		g_uState.store( kRunning, std::memory_order_release );
@@ -569,10 +877,251 @@ namespace fghost::capture
 		return true;
 	}
 
+	namespace
+	{
+		// The watch's per-record work (paint thread): the telemetry record with its flags, a host-flag trigger,
+		// and -- unless a dump is being written -- the record's images into the rolling window plus a Measure job.
+		void WatchRecord( Session &s, CVulkanCmdBuffer *pCmd, const FrameIn &in )
+		{
+			if ( s.recs.size() >= s.nRecCap )
+			{
+				s.ulDroppedRecs++;
+				return;
+			}
+			WatchRec r;
+			r.ulIndex = s.recs.size();
+			r.ulNs = get_time_in_nanos();
+			r.ulOutId = in.ulOutId;
+			r.ulPrevId = in.ulPrevId;
+			r.ulCurrId = in.ulCurrId;
+			r.ulNewestId = in.ulNewestId;
+			r.flT0 = in.flT0;
+			r.flT1 = in.flT1;
+			r.nArrivalPrevNs = Arrivals().Find( in.ulPrevId );
+			r.nArrivalCurrNs = Arrivals().Find( in.ulCurrId );
+			r.bEstimateRecorded = in.nEstimateRet >= 0;
+			r.nEstimateRet = int8_t( in.nEstimateRet );
+			r.nSynthRet = int8_t( in.nSynthRet );
+			r.bCached = in.bCached;
+			r.bNear = in.bNear;
+			r.nOutSlot = int8_t( in.nOutSlot );
+			r.nPrevSlot = int8_t( in.nPrevSlot );
+			r.nCurrSlot = int8_t( in.nCurrSlot );
+			FlagInput fl;
+			fl.ulOutId = in.ulOutId;
+			fl.ulPrevId = in.ulPrevId;
+			fl.ulCurrId = in.ulCurrId;
+			fl.bEstimateRecorded = r.bEstimateRecorded;
+			fl.nEstimateRet = in.nEstimateRet;
+			fl.nSynthRet = in.nSynthRet;
+			fl.bNear = in.bNear;
+			fl.bStaleHost = in.bStaleHost;
+			fl.bMismatchHost = in.bMismatchHost;
+			r.uFlags = EvalFlags( fl, &s.ulLastCurr, &s.ulLastOut );
+
+			if ( r.uFlags & kDumpFlags )
+			{
+				s.ulTriggers++;
+				std::lock_guard<std::mutex> lock( s.trigMutex );
+				if ( !s.bTrig && !s.bFrozen && s.nDumps < kWatchMaxDumps )
+				{
+					s.bTrig = true;
+					s.sTrigKind = ( r.uFlags & kFlagStale ) ? "stale" : ( r.uFlags & kFlagPairMismatch ) ? "pairmismatch" : "refused";
+					s.ulTrigRec = r.ulIndex;
+					s.flTrigCoarse = s.flTrigPair = s.flTrigThr = -1.0f;
+					s.ulTrigId = s.ulTrigSameAs = 0;
+				}
+			}
+
+			if ( s.bFrozen )
+				s.ulNotMeasuredDumping++;
+			else if ( pCmd && in.pOut )
+			{
+				// The images: the reals must be in the window already or still in the host's ring.
+				const RollingWindow &w = *s.pWindow;
+				auto InWindow = [ & ]( uint64_t ulId )
+				{
+					for ( int k = 0; k < int( s.pReals.size() ); k++ )
+					{
+						if ( w.RealId( k ) == ulId && ulId )
+							return true;
+					}
+					return false;
+				};
+				const bool bReals = ( InWindow( in.ulPrevId ) || in.pPrev ) && ( InWindow( in.ulCurrId ) || in.pCurr );
+				if ( !bReals )
+					s.nDropped++;
+				else
+				{
+					uint64_t ulTrigRec = ~0ull;
+					{
+						std::lock_guard<std::mutex> lock( s.trigMutex );
+						if ( s.bTrig )
+							ulTrigRec = s.ulTrigRec;
+					}
+					const uint64_t ulAnalysed = s.ulAnalysedEnd.load( std::memory_order_acquire );
+					const RollingWindow::AddResult a = s.pWindow->Add( r.ulIndex, in.ulPrevId, in.ulCurrId,
+						[ & ]( uint64_t ulRec ) { return ulRec < ulAnalysed && ulRec != ulTrigRec; } );
+					if ( !a.ok )
+					{
+						s.nDropped++;
+						if ( a.bBlocked && ulTrigRec != ~0ull )
+							s.bBlockedNow = true;
+					}
+					else
+					{
+						pCmd->copyImage( in.pOut, s.pOuts[ size_t( a.nOut ) ] );
+						const gamescope::Rc<CVulkanTexture> *pSrc[ 2 ] = { &in.pPrev, &in.pCurr };
+						for ( int i = 0; i < 2; i++ )
+						{
+							if ( a.bRealNew[ i ] )
+								pCmd->copyImage( *pSrc[ i ], s.pReals[ size_t( a.nReal[ i ] ) ] );
+						}
+						Job j;
+						j.eKind = Job::Measure;
+						j.ulRec = r.ulIndex;
+						j.flT = 0.5f * ( in.flT0 + in.flT1 );
+						j.out = { std::string(), s.pOuts[ size_t( a.nOut ) ]->mappedData(), s.pOuts[ size_t( a.nOut ) ]->rowPitch() };
+						for ( int i = 0; i < 2; i++ )
+						{
+							j.ulRealId[ i ] = i == 0 ? in.ulPrevId : in.ulCurrId;
+							j.reals[ i ] = { std::string(), s.pReals[ size_t( a.nReal[ i ] ) ]->mappedData(), s.pReals[ size_t( a.nReal[ i ] ) ]->rowPitch() };
+						}
+						s.pending.push_back( std::move( j ) );
+					}
+				}
+			}
+			s.recs.push_back( r );
+		}
+
+		// After this composite's jobs are queued (paint thread): resume after a written dump, or freeze the
+		// window and queue a dump once the trigger has kWatchAfterTrigger records after it (or blocks the window).
+		void WatchAfterSubmit( Session &s, uint64_t ulSeq )
+		{
+			if ( s.bFrozen )
+			{
+				if ( !s.bDumpDone.load( std::memory_order_acquire ) )
+					return;
+				s.bFrozen = false;
+				s.bDumpDone.store( false, std::memory_order_relaxed );
+				s.pWindow->Clear();
+				// Everything older was analysed or never will be: the cleared window holds nothing.
+				std::lock_guard<std::mutex> lock( s.trigMutex );
+				s.bTrig = false;
+				return;
+			}
+			std::string sKind;
+			uint64_t ulTrigRec = 0;
+			float flC = -1.0f, flP = -1.0f, flThr = -1.0f;
+			uint64_t ulTrigId = 0, ulTrigSameAs = 0;
+			{
+				std::lock_guard<std::mutex> lock( s.trigMutex );
+				if ( !s.bTrig )
+					return;
+				if ( s.nDumps >= kWatchMaxDumps )
+				{
+					s.bTrig = false;
+					return;
+				}
+				sKind = s.sTrigKind;
+				ulTrigRec = s.ulTrigRec;
+				flC = s.flTrigCoarse;
+				flP = s.flTrigPair;
+				flThr = s.flTrigThr;
+				ulTrigId = s.ulTrigId;
+				ulTrigSameAs = s.ulTrigSameAs;
+			}
+			const std::vector<RollingWindow::Entry> &e = s.pWindow->Entries();
+			int nAfter = 0;
+			for ( const RollingWindow::Entry &x : e )
+				nAfter += x.ulRec > ulTrigRec;
+			const bool bLast = g_uState.load( std::memory_order_relaxed ) != kRunning;   // the watch is ending: dump what there is
+			if ( nAfter < kWatchAfterTrigger && !s.bBlockedNow && !bLast )
+				return;
+			s.bBlockedNow = false;
+			if ( s.bEndQueued || e.empty() )
+				return;
+
+			// Freeze: build the dump from the window (its records' copies all ride in submissions <= ulSeq).
+			s.bFrozen = true;
+			s.nDumps++;
+			Job d;
+			d.eKind = Job::Dump;
+			d.ulSeq = ulSeq;
+			d.nDump = s.nDumps;
+			HeaderInfo h = s.header;
+			h.nFrames = int( e.size() );
+			d.sText = FormatHeaderLine( h ) + "\n" + s.sSettingsText;
+			const std::vector<DecisionRec> decisions = Decisions().Snapshot( kDecisionsDumped );
+			for ( const DecisionRec &r : decisions )
+				d.sText += FormatDecisionLine( r ) + "\n";
+			int nTrigSeq = -1;
+			std::map<uint64_t, int> realsDone;
+			for ( size_t k = 0; k < e.size(); k++ )
+			{
+				const WatchRec &r = s.recs[ size_t( e[ k ].ulRec ) ];
+				if ( e[ k ].ulRec == ulTrigRec )
+					nTrigSeq = int( k );
+				FrameInfo f;
+				f.nSeq = int( k );
+				f.ulOutId = r.ulOutId;
+				f.ulPrevId = r.ulPrevId;
+				f.ulCurrId = r.ulCurrId;
+				f.ulNewestId = r.ulNewestId;
+				f.flT0 = r.flT0;
+				f.flT1 = r.flT1;
+				f.nArrivalPrevNs = r.nArrivalPrevNs;
+				f.nArrivalCurrNs = r.nArrivalCurrNs;
+				f.ulNowNs = r.ulNs;
+				f.uWidth = s.uWidth;
+				f.uHeight = s.uHeight;
+				f.bEstimateRecorded = r.bEstimateRecorded;
+				f.nEstimateRet = r.nEstimateRet;
+				f.nSynthRet = r.nSynthRet;
+				f.bCached = r.bCached;
+				f.bNear = r.bNear;
+				f.nOutSlot = r.nOutSlot;
+				f.nPrevSlot = r.nPrevSlot;
+				f.nCurrSlot = r.nCurrSlot;
+				f.sOutFile = OutFileName( int( k ) );
+				f.sPrevFile = RealFileName( r.ulPrevId );
+				f.sCurrFile = RealFileName( r.ulCurrId );
+				Job::DumpFrame df;
+				df.sLine = FormatFrameLine( f );
+				df.out = { f.sOutFile, s.pOuts[ size_t( e[ k ].nOut ) ]->mappedData(), s.pOuts[ size_t( e[ k ].nOut ) ]->rowPitch() };
+				d.dumpFrames.push_back( std::move( df ) );
+				for ( int i = 0; i < 2; i++ )
+				{
+					if ( realsDone.count( e[ k ].ulId[ i ] ) )
+						continue;
+					realsDone[ e[ k ].ulId[ i ] ] = 1;
+					const size_t nR = size_t( e[ k ].nReal[ i ] );
+					d.dumpReals.push_back( { RealFileName( e[ k ].ulId[ i ] ), s.pReals[ nR ]->mappedData(), s.pReals[ nR ]->rowPitch() } );
+				}
+			}
+			d.sText += FormatTriggerLine( sKind.c_str(), ulTrigRec, nTrigSeq, flC, flP, flThr, ulTrigId, ulTrigSameAs ) + "\n";
+			uint64_t ulMaxGap = 0, ulGapAfter = 0;
+			ulMaxGap = MaxDecisionGapNs( decisions, &ulGapAfter );
+			const uint64_t ulFirst = s.recs[ size_t( e.front().ulRec ) ].ulNs, ulLast = s.recs[ size_t( e.back().ulRec ) ].ulNs;
+			d.sTail = FormatTimingLine( ulFirst, ulLast, ulMaxGap, ulGapAfter, 0 ) + "\n"
+				+ FormatEndLine( int( e.size() ), int( d.dumpReals.size() ), 0, ( "trigger_" + sKind ).c_str() ) + "\n";
+			cap_log.infof( "watch: %s trigger at record %llu; writing dump %d (%zu frames)", sKind.c_str(), (unsigned long long)ulTrigRec,
+				d.nDump, e.size() );
+			Enqueue( s, std::move( d ) );
+		}
+	}
+
 	void RecordFrame( CVulkanCmdBuffer *pCmd, const FrameIn &in )
 	{
 		Session *s = g_pSession;
-		if ( !s || g_uState.load( std::memory_order_relaxed ) != kRunning || !pCmd || !in.pOut )
+		if ( !s || g_uState.load( std::memory_order_relaxed ) != kRunning )
+			return;
+		if ( s->bWatch )
+		{
+			WatchRecord( *s, pCmd, in );
+			return;
+		}
+		if ( !pCmd || !in.pOut )
 			return;
 		s->ulLastProgressNs = get_time_in_nanos();
 
@@ -622,6 +1171,7 @@ namespace fghost::capture
 				continue;
 			pCmd->copyImage( *need[ i ].pSrc, s->pReals[ need[ i ].nIdx ] );
 			s->realByCommit[ need[ i ].ulId ] = need[ i ].nIdx;
+			j.ulRealId[ j.nReals ] = need[ i ].ulId;
 			j.reals[ j.nReals++ ] = { RealFileName( need[ i ].ulId ), s->pReals[ need[ i ].nIdx ]->mappedData(), s->pReals[ need[ i ].nIdx ]->rowPitch() };
 		}
 		s->nRealsUsed = nRealsToUse;
@@ -646,6 +1196,7 @@ namespace fghost::capture
 		f.nEstimateRet = in.nEstimateRet;
 		f.nSynthRet = in.nSynthRet;
 		f.bCached = in.bCached;
+		f.bNear = in.bNear;
 		f.nOutSlot = in.nOutSlot;
 		f.nPrevSlot = in.nPrevSlot;
 		f.nCurrSlot = in.nCurrSlot;
@@ -662,7 +1213,7 @@ namespace fghost::capture
 	void Submitted( uint64_t ulSeq )
 	{
 		Session *s = g_pSession;
-		if ( !s || s->pending.empty() )
+		if ( !s )
 			return;
 		for ( Job &j : s->pending )
 		{
@@ -670,6 +1221,8 @@ namespace fghost::capture
 			Enqueue( *s, std::move( j ) );
 		}
 		s->pending.clear();
+		if ( s->bWatch && s->pWindow && !s->bEndQueued )
+			WatchAfterSubmit( *s, ulSeq );
 		if ( !s->sFinishReason.empty() && !s->bEndQueued )
 		{
 			Job e;
@@ -693,7 +1246,9 @@ static gamescope::ConCommand cc_ritz_fg_capture(
 	"ritz_fg_capture",
 	"Troubleshooting: record the next 40 generated frames of Frame generation, with the real frames they were made from, "
 	"the library settings and the pacer's recent decisions, to files under ~/.cache/gamescope-ritz/fg-capture/. "
-	"ritz_fg_capture starts now; ritz_fg_capture <seconds> (0..600) starts that many seconds later.",
+	"ritz_fg_capture starts now; ritz_fg_capture <seconds> (0..600) starts that many seconds later. "
+	"ritz_fg_capture watch [seconds 1..600, default 60] [sensitivity, default 1; 0 = every frame triggers] watches every generated "
+	"frame for that long, writes watch.txt and saves up to 3 dumps around a faulty-looking frame by itself.",
 	[]( std::span<std::string_view> args )
 	{
 		const fghost::capture::ArgResult r = fghost::capture::ParseArgs( args );
@@ -703,7 +1258,7 @@ static gamescope::ConCommand cc_ritz_fg_capture(
 			return;
 		}
 		std::string sMessage;
-		if ( !fghost::capture::Request( r.seconds, &sMessage ) )
+		if ( !( r.watch ? fghost::capture::RequestWatch( r.seconds, r.sensitivity, &sMessage ) : fghost::capture::Request( r.seconds, &sMessage ) ) )
 		{
 			console_log.errorf( "ritz_fg_capture: %s", sMessage.c_str() );
 			return;

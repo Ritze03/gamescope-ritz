@@ -281,7 +281,7 @@ TEST_CASE( "capture: the frame line and the end line", "[framegen_capture]" )
 	f.sCurrFile = RealFileName( 9 );
 	const std::string s = FormatFrameLine( f );
 	REQUIRE( s == "frame seq=3 outId=100 prevId=8 currId=9 newestId=9 t0=0.25 t1=0.25 arrival_prev_ns=1000 arrival_curr_ns=-1 now_ns=2000 "
-		"width=1440 height=1080 estimate=recorded estimate_ret=1 synth_ret=1 cached=0 out_slot=2 prev_slot=0 curr_slot=1 "
+		"width=1440 height=1080 estimate=recorded estimate_ret=1 synth_ret=1 cached=0 near=0 out_slot=2 prev_slot=0 curr_slot=1 "
 		"out_file=003_out.bgra prev_file=id8_real.bgra curr_file=id9_real.bgra" );
 
 	f.bEstimateRecorded = false;
@@ -354,4 +354,479 @@ TEST_CASE( "capture: the header carries the preparation time", "[framegen_captur
 	REQUIRE( FormatHeaderLine( h ).find( " n=40 prepare_ms=12.500 prepared_early=1" ) != std::string::npos );
 	h.bPreparedEarly = false;
 	REQUIRE( FormatHeaderLine( h ).find( "prepared_early=0" ) != std::string::npos );
+}
+
+// ---------------------------------------------------------------------------
+//  Watch mode
+// ---------------------------------------------------------------------------
+
+TEST_CASE( "capture watch: the argument parsing (and the old forms unchanged)", "[framegen_capture]" )
+{
+	auto a = Args( { "ritz_fg_capture", "watch" } );
+	ArgResult r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE( r.watch );
+	REQUIRE( r.seconds == 60 );
+	REQUIRE( r.sensitivity == 1.0f );
+
+	a = Args( { "ritz_fg_capture", "watch", "30" } );
+	r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE( r.seconds == 30 );
+	REQUIRE( r.sensitivity == 1.0f );
+
+	a = Args( { "ritz_fg_capture", "watch", "30", "0" } );
+	r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE( r.sensitivity == 0.0f );
+
+	a = Args( { "ritz_fg_capture", "watch", "600", "2.5" } );
+	r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE( r.seconds == 600 );
+	REQUIRE( r.sensitivity == 2.5f );
+
+	for ( auto l : { Args( { "ritz_fg_capture", "watch", "0" } ), Args( { "ritz_fg_capture", "watch", "601" } ),
+		Args( { "ritz_fg_capture", "watch", "abc" } ), Args( { "ritz_fg_capture", "watch", "10", "-1" } ),
+		Args( { "ritz_fg_capture", "watch", "10", "x" } ), Args( { "ritz_fg_capture", "watch", "10", "1.2.3" } ),
+		Args( { "ritz_fg_capture", "watch", "10", "1", "2" } ), Args( { "ritz_fg_capture", "watch", "1.5" } ),
+		Args( { "ritz_fg_capture", "Watch" } ) } )
+	{
+		REQUIRE_FALSE( ParseArgs( l ).ok );
+		REQUIRE_FALSE( ParseArgs( l ).error.empty() );
+	}
+
+	// The old forms.
+	a = Args( { "ritz_fg_capture" } );
+	r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE_FALSE( r.watch );
+	REQUIRE( r.seconds == 0 );
+	a = Args( { "ritz_fg_capture", "5" } );
+	r = ParseArgs( a );
+	REQUIRE( r.ok );
+	REQUIRE_FALSE( r.watch );
+	REQUIRE( r.seconds == 5 );
+}
+
+namespace
+{
+	// A w x h BGRA image filled by f( x, y, c ).
+	template <typename F>
+	std::vector<uint8_t> Img( uint32_t w, uint32_t h, uint32_t uPitch, F f )
+	{
+		std::vector<uint8_t> v( size_t( uPitch ) * h, 0 );
+		for ( uint32_t y = 0; y < h; y++ )
+			for ( uint32_t x = 0; x < w; x++ )
+				for ( uint32_t c = 0; c < 4; c++ )
+					v[ size_t( y ) * uPitch + x * 4 + c ] = uint8_t( f( x, y, c ) );
+		return v;
+	}
+	BlockMeans Means( const std::vector<uint8_t> &v, uint32_t w, uint32_t h, uint32_t uPitch, uint32_t uStep = kMetricStep )
+	{
+		BlockMeans m;
+		REQUIRE( ComputeBlockMeans( v.data(), uPitch, w, h, 44, uStep, &m ) );
+		return m;
+	}
+	uint32_t Hash( uint32_t x )
+	{
+		x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
+		return x;
+	}
+}
+
+TEST_CASE( "capture watch: the coarse-error metric on synthetic frames", "[framegen_capture]" )
+{
+	const uint32_t w = 160, h = 100, p = w * 4 + 32;   // a padded pitch; 10 x 6 whole blocks (the last 4 rows ignored)
+	auto prev = Img( w, h, p, []( uint32_t x, uint32_t y, uint32_t c ) { return ( x + 2 * y + 40 * c ) & 0xff; } );
+	auto curr = Img( w, h, p, []( uint32_t x, uint32_t y, uint32_t c ) { return ( x + 8 + 2 * y + 40 * c ) & 0xff; } );
+	const BlockMeans mp = Means( prev, w, h, p ), mc = Means( curr, w, h, p );
+	REQUIRE( mp.uBw == 10 );
+	REQUIRE( mp.uBh == 6 );
+	REQUIRE( mp.v.size() == 10 * 6 * 3 );
+
+	SECTION( "identical frames give 0" )
+	{
+		REQUIRE( BlockDiff( mp, mp ) == 0.0f );
+		REQUIRE( BlendDiff( mp, mp, mp, 0.3f ) == 0.0f );
+		REQUIRE_FALSE( PixelTriggers( 0.0f, 0.0f, 1.0f ) );
+	}
+	SECTION( "an output that is the blend gives about 0" )
+	{
+		const float t = 0.5f;
+		auto out = Img( w, h, p, [ & ]( uint32_t x, uint32_t y, uint32_t c ) {
+			return uint32_t( ( 1 - t ) * prev[ size_t( y ) * p + x * 4 + c ] + t * curr[ size_t( y ) * p + x * 4 + c ] + 0.5f ); } );
+		const float flCoarse = BlendDiff( Means( out, w, h, p ), mp, mc, t );
+		REQUIRE( flCoarse < 0.6f );
+		REQUIRE_FALSE( PixelTriggers( flCoarse, BlockDiff( mp, mc ), 1.0f ) );
+	}
+	SECTION( "unrelated noise blocks are flagged" )
+	{
+		auto out = Img( w, h, p, []( uint32_t x, uint32_t y, uint32_t c ) { return Hash( ( x / 16 ) * 131 + ( y / 16 ) * 7919 + c ) & 0xff; } );
+		const float flPair = BlockDiff( mp, mc );
+		const float flCoarse = BlendDiff( Means( out, w, h, p ), mp, mc, 0.5f );
+		REQUIRE( flCoarse > Threshold( flPair, 1.0f ) );
+		REQUIRE( PixelTriggers( flCoarse, flPair, 1.0f ) );
+	}
+	SECTION( "a bright / dark shift is flagged" )
+	{
+		auto out = Img( w, h, p, [ & ]( uint32_t x, uint32_t y, uint32_t c ) {
+			const int v = int( prev[ size_t( y ) * p + x * 4 + c ] ) + ( c < 3 ? 40 : 0 );
+			return uint32_t( std::min( v, 255 ) ); } );
+		const float flCoarse = BlendDiff( Means( out, w, h, p ), mp, mp, 0.5f );
+		REQUIRE( flCoarse > 20.0f );
+		REQUIRE( PixelTriggers( flCoarse, 0.0f, 1.0f ) );
+		auto dark = Img( w, h, p, [ & ]( uint32_t x, uint32_t y, uint32_t c ) { return c < 3 ? prev[ size_t( y ) * p + x * 4 + c ] / 2 : 255u; } );
+		REQUIRE( PixelTriggers( BlendDiff( Means( dark, w, h, p ), mp, mp, 0.5f ), 0.0f, 1.0f ) );
+	}
+	SECTION( "the threshold formula and the sensitivity" )
+	{
+		REQUIRE( Threshold( 0.0f, 1.0f ) == 6.0f );
+		REQUIRE( Threshold( 14.6f, 1.0f ) == ( 6.0f + 1.5f * 14.6f ) );
+		REQUIRE( Threshold( 2.0f, 2.0f ) == 4.5f );
+		REQUIRE( Threshold( 2.0f, 0.0f ) == 0.0f );
+		REQUIRE_FALSE( PixelTriggers( 8.5f, 14.6f, 1.0f ) );   // the largest good frame of a real capture
+		REQUIRE( PixelTriggers( 0.0f, 0.0f, 0.0f ) );          // sensitivity 0: every measured frame
+	}
+	SECTION( "the sparse estimate is close to the full mean on smooth content" )
+	{
+		const BlockMeans full = Means( prev, w, h, p, 1 );
+		REQUIRE( BlockDiff( full, mp ) < 3.0f );
+	}
+	SECTION( "bad input is refused" )
+	{
+		BlockMeans m;
+		REQUIRE_FALSE( ComputeBlockMeans( prev.data(), p, 8, 8, 44, 4, &m ) );     // smaller than a block
+		REQUIRE_FALSE( ComputeBlockMeans( prev.data(), p, w, h, 12345, 4, &m ) );  // unknown format
+		REQUIRE_FALSE( ComputeBlockMeans( prev.data(), p, w, h, 44, 3, &m ) );     // step must divide 16
+		BlockMeans small;
+		REQUIRE( ComputeBlockMeans( prev.data(), p, 32, 32, 44, 4, &small ) );
+		REQUIRE( BlockDiff( small, mp ) < 0.0f );
+	}
+}
+
+TEST_CASE( "capture watch: 10-bit and fp16 pixels are read on the 0..255 scale", "[framegen_capture]" )
+{
+	const uint32_t w = 16, h = 16;
+	std::vector<uint32_t> px( w * h, ( 1020u ) | ( 400u << 10 ) | ( 0u << 20 ) | ( 3u << 30 ) );
+	BlockMeans m;
+	REQUIRE( ComputeBlockMeans( reinterpret_cast<const uint8_t *>( px.data() ), w * 4, w, h, 58, 4, &m ) );
+	REQUIRE( m.v[ 0 ] == 255.0f );
+	REQUIRE( m.v[ 1 ] == 100.0f );
+	REQUIRE( m.v[ 2 ] == 0.0f );
+	std::vector<uint16_t> hp( w * h * 4 );
+	for ( size_t i = 0; i < w * h; i++ )
+	{
+		hp[ i * 4 + 0 ] = 0x3c00;   // 1.0
+		hp[ i * 4 + 1 ] = 0x3800;   // 0.5
+		hp[ i * 4 + 2 ] = 0x0000;
+		hp[ i * 4 + 3 ] = 0x3c00;
+	}
+	REQUIRE( ComputeBlockMeans( reinterpret_cast<const uint8_t *>( hp.data() ), w * 8, w, h, 97, 4, &m ) );
+	REQUIRE( m.v[ 0 ] == 255.0f );
+	REQUIRE( m.v[ 1 ] == 127.5f );
+	REQUIRE( m.v[ 2 ] == 0.0f );
+}
+
+TEST_CASE( "capture watch: the flags", "[framegen_capture]" )
+{
+	uint64_t ulCurr = 0, ulOut = 0;
+	FlagInput in;
+	in.ulOutId = 10; in.ulPrevId = 4; in.ulCurrId = 5; in.bEstimateRecorded = true; in.nEstimateRet = 1; in.nSynthRet = 1;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == 0 );
+	REQUIRE( ulCurr == 5 );
+	REQUIRE( ulOut == 10 );
+	REQUIRE( FormatFlags( 0 ) == "-" );
+
+	in.ulOutId = 11; in.ulPrevId = 5; in.ulCurrId = 7;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == kFlagGap );
+
+	in.ulOutId = 9; in.ulPrevId = 5; in.ulCurrId = 6;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == kFlagBack );   // outId 9 < 11, currId 6 < 7
+
+	in.ulOutId = 12; in.ulPrevId = 6; in.ulCurrId = 7;
+	in.bEstimateRecorded = false; in.nEstimateRet = -1; in.bStaleHost = true;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == kFlagStale );
+	in.bEstimateRecorded = true; in.nEstimateRet = 1;   // a fresh estimate is never stale
+	in.ulOutId = 13;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == 0 );
+	in.bStaleHost = false;
+
+	in.ulOutId = 14; in.nEstimateRet = 0;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == kFlagRefused );
+	in.ulOutId = 15; in.nEstimateRet = 1; in.nSynthRet = 0;
+	REQUIRE( EvalFlags( in, &ulCurr, &ulOut ) == kFlagRefused );
+	in.nSynthRet = 1;
+
+	in.ulOutId = 15; in.bNear = true; in.bMismatchHost = true;
+	const uint32_t u = EvalFlags( in, &ulCurr, &ulOut );
+	REQUIRE( u == ( kFlagNear | kFlagPairMismatch ) );
+	REQUIRE( FormatFlags( u ) == "near,pairmismatch" );
+	REQUIRE( ( u & kDumpFlags ) == kFlagPairMismatch );
+	REQUIRE( ( ( kFlagGap | kFlagBack | kFlagNear ) & kDumpFlags ) == 0 );
+	REQUIRE( FormatFlags( kFlagGap | kFlagBack | kFlagStale | kFlagRefused ) == "gap,back,stale,refused" );
+}
+
+TEST_CASE( "capture watch: the rolling window never reuses a real under a kept output", "[framegen_capture]" )
+{
+	RollingWindow w( 4, 6 );
+	auto All = []( uint64_t ) { return true; };
+	// Invariant: every entry's reals hold its ids, refcounts equal the references, outputs are distinct.
+	auto Check = [ & ]()
+	{
+		std::vector<int> ref( 6, 0 );
+		std::set<int> outs;
+		for ( const auto &e : w.Entries() )
+		{
+			REQUIRE( outs.insert( e.nOut ).second );
+			for ( int i = 0; i < 2; i++ )
+			{
+				REQUIRE( w.RealId( e.nReal[ i ] ) == e.ulId[ i ] );
+				ref[ size_t( e.nReal[ i ] ) ]++;
+			}
+		}
+		for ( int k = 0; k < 6; k++ )
+			REQUIRE( w.RefCount( k ) == ref[ size_t( k ) ] );
+	};
+
+	auto a = w.Add( 0, 1, 2, All );
+	REQUIRE( a.ok );
+	REQUIRE( a.bRealNew[ 0 ] );
+	REQUIRE( a.bRealNew[ 1 ] );
+	a = w.Add( 1, 1, 2, All );   // the same pair again (a second output of it): no new reals
+	REQUIRE( a.ok );
+	REQUIRE_FALSE( a.bRealNew[ 0 ] );
+	REQUIRE_FALSE( a.bRealNew[ 1 ] );
+	a = w.Add( 2, 2, 3, All );
+	REQUIRE( a.ok );
+	REQUIRE_FALSE( a.bRealNew[ 0 ] );
+	REQUIRE( a.bRealNew[ 1 ] );
+	Check();
+
+	// Consecutive pairs and scattered ones: the window keeps the newest 4 records.
+	uint64_t rec = 3;
+	for ( uint64_t id = 3; id < 40; id++, rec++ )
+	{
+		const uint64_t ulPrev = ( id % 7 == 0 ) ? id + 100 : id;   // now and then a pair not sharing frames
+		a = w.Add( rec, ulPrev, id + 1, All );
+		REQUIRE( a.ok );
+		REQUIRE( w.Entries().size() <= 4 );
+		REQUIRE( w.Entries().back().ulRec == rec );
+		Check();
+	}
+	REQUIRE( w.Entries().size() == 4 );
+	REQUIRE( w.Entries().front().ulRec == rec - 4 );
+
+	// Nothing may leave (not analysed yet): Add fails, blocked, and the window is unchanged.
+	const auto before = w.Entries();
+	a = w.Add( rec, 500, 501, []( uint64_t ) { return false; } );
+	REQUIRE_FALSE( a.ok );
+	REQUIRE( a.bBlocked );
+	REQUIRE( w.Entries().size() == before.size() );
+	Check();
+
+	// Only the trigger record (the oldest) is protected: blocked as well.
+	const uint64_t ulTrig = w.Entries().front().ulRec;
+	a = w.Add( rec, 600, 601, [ & ]( uint64_t u ) { return u != ulTrig; } );
+	REQUIRE_FALSE( a.ok );
+	REQUIRE( a.bBlocked );
+	Check();
+
+	w.Clear();
+	REQUIRE( w.Entries().empty() );
+	for ( int k = 0; k < 6; k++ )
+		REQUIRE( w.RefCount( k ) == 0 );
+	// Too few real slots for a pair: refused, never a shared slot.
+	RollingWindow tiny( 4, 1 );
+	REQUIRE_FALSE( tiny.Add( 0, 1, 2, All ).ok );
+}
+
+TEST_CASE( "capture watch: the repeat test (a new id over an old image)", "[framegen_capture]" )
+{
+	const uint32_t w = 64, h = 48, p = w * 4;
+	auto Frame = [ & ]( uint32_t seed )
+	{
+		auto v = Img( w, h, p, [ & ]( uint32_t x, uint32_t y, uint32_t c ) { return Hash( seed * 7777 + y * 911 + x * 4 + c ) & 0xff; } );
+		return std::make_pair( Means( v, w, h, p ), RowHash( v.data(), p, w, h, 4 ) );
+	};
+	const auto A = Frame( 1 ), B = Frame( 2 ), C = Frame( 3 );
+
+	SECTION( "A B C A' triggers, naming both ids" )
+	{
+		RepeatDetector d;
+		REQUIRE( d.Add( 10, A.first, A.second ).eKind == RepeatDetector::kNone );
+		REQUIRE( d.Add( 11, B.first, B.second ).eKind == RepeatDetector::kNone );
+		REQUIRE( d.Add( 12, C.first, C.second ).eKind == RepeatDetector::kNone );
+		const auto r = d.Add( 13, A.first, A.second );
+		REQUIRE( r.eKind == RepeatDetector::kRepeat );
+		REQUIRE( r.ulSameAs == 10 );
+		REQUIRE( d.Add( 13, A.first, A.second ).eKind == RepeatDetector::kNone );   // the same id again: ignored
+	}
+	SECTION( "A A A is a still picture, not a repeat" )
+	{
+		RepeatDetector d;
+		REQUIRE( d.Add( 1, A.first, A.second ).eKind == RepeatDetector::kNone );
+		auto r = d.Add( 2, A.first, A.second );
+		REQUIRE( r.eKind == RepeatDetector::kStatic );
+		REQUIRE( r.ulSameAs == 1 );
+		REQUIRE( d.Add( 3, A.first, A.second ).eKind == RepeatDetector::kStatic );
+	}
+	SECTION( "A B A triggers" )
+	{
+		RepeatDetector d;
+		d.Add( 1, A.first, A.second );
+		d.Add( 2, B.first, B.second );
+		const auto r = d.Add( 3, A.first, A.second );
+		REQUIRE( r.eKind == RepeatDetector::kRepeat );
+		REQUIRE( r.ulSameAs == 1 );
+	}
+	SECTION( "same block means but different full rows: not the same frame" )
+	{
+		auto v = Img( w, h, p, [ & ]( uint32_t x, uint32_t y, uint32_t c ) { return Hash( 1 * 7777 + y * 911 + x * 4 + c ) & 0xff; } );
+		v[ size_t( h / 2 ) * p + 1 ] ^= 1;   // a pixel the sparse sample does not read, on a hashed row
+		RepeatDetector d;
+		d.Add( 1, A.first, A.second );
+		d.Add( 2, B.first, B.second );
+		REQUIRE( d.Add( 3, Means( v, w, h, p ), RowHash( v.data(), p, w, h, 4 ) ).eKind == RepeatDetector::kNone );
+	}
+	SECTION( "older than the history is forgotten" )
+	{
+		RepeatDetector d;
+		d.Add( 1, A.first, A.second );
+		for ( uint64_t i = 0; i < RepeatDetector::kHistory; i++ )
+		{
+			const auto f = Frame( 100 + uint32_t( i ) );
+			d.Add( 2 + i, f.first, f.second );
+		}
+		REQUIRE( d.Add( 999, A.first, A.second ).eKind == RepeatDetector::kNone );
+	}
+	auto t = Tokens( FormatTriggerLine( "repeat", 9, 2, -1.0f, -1.0f, -1.0f, 16146, 16143 ) );
+	REQUIRE( t.size() == 9 );
+	REQUIRE( t[ 7 ] == "id=16146" );
+	REQUIRE( t[ 8 ] == "same_as=16143" );
+	REQUIRE( FormatFlags( kFlagRepeat | kFlagStatic ) == "repeat,static" );
+	REQUIRE( ( kFlagRepeat & kDumpFlags ) != 0 );
+	REQUIRE( ( kFlagStatic & kDumpFlags ) == 0 );
+}
+
+TEST_CASE( "capture watch: the pair span, its median and the distinct pairs over it", "[framegen_capture]" )
+{
+	std::vector<WatchRec> v;
+	auto Add = [ & ]( uint64_t ulPrev, uint64_t ulCurr, int64_t nPrevNs, int64_t nCurrNs )
+	{
+		WatchRec r;
+		r.ulIndex = v.size();
+		r.ulPrevId = ulPrev;
+		r.ulCurrId = ulCurr;
+		r.nArrivalPrevNs = nPrevNs;
+		r.nArrivalCurrNs = nCurrNs;
+		v.push_back( r );
+	};
+	// Ten pairs at 5 ms, each synthesised twice (counted once), one at 12 ms (x2.4), one at 45 ms (x9), one unknown.
+	for ( uint64_t i = 1; i <= 10; i++ )
+	{
+		Add( i, i + 1, int64_t( i ) * 5000000, int64_t( i + 1 ) * 5000000 );
+		Add( i, i + 1, int64_t( i ) * 5000000, int64_t( i + 1 ) * 5000000 );
+	}
+	Add( 20, 21, 100000000, 112000000 );
+	Add( 20, 21, 100000000, 112000000 );
+	Add( 21, 22, 112000000, 157000000 );
+	Add( 22, 23, -1, 160000000 );
+	REQUIRE( PairSpanNs( v.back() ) == -1 );
+	REQUIRE( PairSpanNs( v[ 0 ] ) == 5000000 );
+	const SpanStats st = ComputeSpanStats( v );
+	REQUIRE( st.ulKnown == 23 );
+	REQUIRE( st.flMedianMs == 5.0 );
+	REQUIRE( st.flMaxMs == 45.0 );
+	REQUIRE( st.ulMaxRec == 22 );
+	REQUIRE( st.ulMaxPrevId == 21 );
+	REQUIRE( st.ulPairsOver[ 0 ] == 2 );   // > 10 ms: the 12 ms pair (once) and the 45 ms pair
+	REQUIRE( st.ulPairsOver[ 1 ] == 1 );   // > 15 ms
+	REQUIRE( st.ulPairsOver[ 2 ] == 1 );   // > 25 ms
+	REQUIRE( st.ulPairsOver[ 3 ] == 1 );   // > 40 ms
+	auto t = Tokens( FormatSpanTokens( st ) );
+	for ( const char *psz : { "span_median_ms=5.000", "span_max_ms=45.000", "span_max_record=22", "span_gt2=2", "span_gt3=1", "span_gt8=1" } )
+	{
+		INFO( psz );
+		REQUIRE( std::find( t.begin(), t.end(), psz ) != t.end() );
+	}
+	t = Tokens( FormatWatchLine( v[ 0 ] ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "span_ms=5.000" ) ) != t.end() );
+	t = Tokens( FormatWatchLine( v.back() ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "span_ms=na" ) ) != t.end() );
+	t = Tokens( FormatSpanTokens( ComputeSpanStats( {} ) ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "span_median_ms=na" ) ) != t.end() );
+	t = Tokens( FormatWatchSummary( WatchSummary(), "watch_done", FormatSpanTokens( st ) ) );
+	REQUIRE( t.back() == "reason=watch_done" );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "span_gt5=1" ) ) != t.end() );
+}
+
+TEST_CASE( "capture watch: the text formats", "[framegen_capture]" )
+{
+	WatchRec r;
+	r.ulIndex = 7; r.ulNs = 123; r.ulOutId = 50; r.ulPrevId = 9; r.ulCurrId = 10; r.ulNewestId = 11;
+	r.flT0 = r.flT1 = 0.5f; r.bEstimateRecorded = false; r.nSynthRet = 1; r.bNear = true; r.nOutSlot = 2;
+	r.uFlags = kFlagNear;
+	auto t = Tokens( FormatWatchLine( r ) );
+	REQUIRE( t[ 0 ] == "rec" );
+	for ( const char *psz : { "i=7", "outId=50", "prevId=9", "currId=10", "newestId=11", "estimate=reused", "estimate_ret=na", "synth_ret=1",
+		"cached=0", "near=1", "out_slot=2", "coarse=na", "pair=na", "flags=near" } )
+	{
+		INFO( psz );
+		REQUIRE( std::find( t.begin(), t.end(), psz ) != t.end() );
+	}
+	for ( size_t i = 1; i < t.size(); i++ )
+		REQUIRE( t[ i ].find( '=' ) != std::string::npos );
+	r.flCoarse = 3.25f; r.flPair = 1.5f; r.uFlags = 0;
+	t = Tokens( FormatWatchLine( r ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "coarse=3.250" ) ) != t.end() );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "flags=-" ) ) != t.end() );
+
+	WatchSummary sum;
+	SummaryAdd( &sum, r );                 // ratio 3.25 / 8.25
+	WatchRec r2 = r;
+	r2.ulIndex = 8; r2.flCoarse = 9.0f; r2.flPair = 2.0f; r2.uFlags = kFlagGap | kFlagStale;   // ratio 1.0
+	SummaryAdd( &sum, r2 );
+	WatchRec r3;
+	r3.ulIndex = 9; r3.uFlags = kFlagRefused;   // not measured
+	SummaryAdd( &sum, r3 );
+	REQUIRE( sum.ulRecords == 3 );
+	REQUIRE( sum.ulMeasured == 2 );
+	REQUIRE( sum.ulNotMeasured == 1 );
+	REQUIRE( sum.maxRec.ulIndex == 8 );
+	t = Tokens( FormatWatchSummary( sum, "watch_done" ) );
+	REQUIRE( t[ 0 ] == "summary" );
+	REQUIRE( t.back() == "reason=watch_done" );
+	for ( const char *psz : { "records=3", "measured=2", "not_measured=1", "max_ratio=1.0000", "max_record=8", "max_coarse=9.000",
+		"max_pair=2.000", "flag_gap=1", "flag_stale=1", "flag_refused=1", "flag_near=0", "flag_pairmismatch=0" } )
+	{
+		INFO( psz );
+		REQUIRE( std::find( t.begin(), t.end(), psz ) != t.end() );
+	}
+	t = Tokens( FormatWatchSummary( WatchSummary(), "x" ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "max_ratio=na" ) ) != t.end() );
+
+	t = Tokens( FormatTriggerLine( "pixel", 42, 3, 20.0f, 4.0f, 12.0f ) );
+	REQUIRE( t == std::vector<std::string>{ "trigger", "kind=pixel", "record=42", "seq=3", "coarse=20.000", "pair=4.000", "threshold=12.000" } );
+	t = Tokens( FormatTriggerLine( "refused", 5, -1, -1.0f, -1.0f, -1.0f ) );
+	REQUIRE( t[ 3 ] == "seq=-1" );
+	REQUIRE( t[ 4 ] == "coarse=na" );
+
+	HeaderInfo h;
+	h.uWidth = 64; h.uHeight = 32; h.nVkFormat = 44; h.uBytesPerPixel = 4; h.sMotionWanted = "V3"; h.sMotionEffective = "V3";
+	t = Tokens( FormatWatchHeader( h, 30, 0.0f ) );
+	REQUIRE( t[ 0 ] == "watch" );
+	REQUIRE( t[ 1 ] == "v=1" );
+	for ( const char *psz : { "seconds=30", "sensitivity=0", "width=64", "motion_effective=V3", "threshold=(6+1.5*pair)/sensitivity" } )
+	{
+		INFO( psz );
+		REQUIRE( std::find( t.begin(), t.end(), psz ) != t.end() );
+	}
+
+	// The burst's frame line carries near=.
+	FrameInfo f;
+	f.bNear = true;
+	t = Tokens( FormatFrameLine( f ) );
+	REQUIRE( std::find( t.begin(), t.end(), std::string( "near=1" ) ) != t.end() );
+	REQUIRE( WatchRequiredBytes( 100, 100, 4, 60 ) >= 3 * RequiredBytes( 100, 100, 4, kFrames ) );
 }
