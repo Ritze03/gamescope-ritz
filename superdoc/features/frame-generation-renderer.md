@@ -31,6 +31,34 @@ Part of [Frame generation](frame-generation.md). The renderer host (`fghost`) an
   The same `outId` is the same image, so a repaint (cursor, overlay, screenshot) reuses the
   cached output. `Why` the pair is named by id and not "the newest pair": Smoothness may
   still be playing the pair before the newest one.
+- **Pair span guard** (2026-11-21; `FrameGen_PairSpanGuard()` in `steamcompmgr.cpp`, the
+  predicate in `FrameGen/PairSpanGuard.h`, tests in `tests/test_framegen_pair_span.cpp`). Right
+  after the pacer's `OnPaint()`, before the Decision is recorded for the capture or handed to
+  `SetFrame()`: a Decision that uses a pair (`prevId != 0`: a generated frame, or with blur a
+  blurred real frame) whose two real frames **arrived** more than `k x` the game's frame
+  interval apart is rewritten to a plain real frame (`prevId = currId = 0`, `t = t0 = t1 = 1`,
+  `showId` = the pair's later frame `currId`). Arrival times come from the capture's always-on
+  `fghost::capture::Arrivals()` table, the interval from `Pacer::IntervalMs()` (the median of
+  the last 8 arrival intervals, clamped to 1..50 ms, 0 right after a reset); an unknown time or
+  interval never guards. `RecordBaseLayer()` then still copies and observes a new `newestId`,
+  skips the pair branch (no estimate, no synth, no cached output of that pair), and shows layer
+  0 when `currId` is the newest, else `currId`'s ring copy. `k` is the ConVar
+  **`ritz_fg_pair_span_limit`** (default 3.0; 0 or below = off; `gamescopectl
+  ritz_fg_pair_span_limit 0` to compare) -- a test knob, no setting and no profile key. The
+  log says `frame generation: pair of frames X ms apart (limit Y ms ...): real frame shown; N
+  pairs (M paints) so far` at most once a second, and the pacing status lines end with `pair
+  span guard N pairs (M paints)`. `Why:` the pacer resets only after an arrival gap of 100 ms
+  or more, so a shorter hitch of the game (40-50 ms at a 5.5 ms interval was seen) left a pair
+  spanning many frame intervals of camera motion that was interpolated like any other; with
+  fast motion the motion search cannot cover that span, and with Artifact safety Off none of
+  the library's fallbacks catches it, so one whole generated frame was built from a wrong
+  motion estimate. A real frame after a hitch is what the game shows without frame generation.
+  `Why currId and not the newest:` Smoothness may play the pair before the newest; showing the
+  newest there and then the next pair at `t < 1` would step back in time. `Why no floor` (such
+  as 25 ms): it would blind the guard at high frame rates, where a 20 ms hitch is already
+  several intervals. Known side effect: the median trails a sudden drop of the game's rate by
+  about four frames, so a drop by more than `k x` (seen once at a game's start, when the first
+  frames came fast) guards those few pairs too; that only shows real frames.
 - **Own command buffer**, submitted just before the composite on the same queue.
   `Why:` a GPU wait (needed before a resize/reconfigure) in the middle of the composite
   would reset the device's upload-buffer offset and corrupt it, and the hook must run

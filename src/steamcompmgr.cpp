@@ -113,6 +113,7 @@
 #include "FrameGen/FrameGenCapture.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/HostShown.h"
+#include "FrameGen/PairSpanGuard.h"
 #include "FrameGen/TearHint.h"
 #include "../subprojects/FrameGen/gpu/pacing.h"
 #include "Config/ConfigManager.h"
@@ -7980,6 +7981,26 @@ namespace
 	};
 	FrameGenLog_t s_FrameGenLog;
 
+	// THE PAIR SPAN GUARD (FrameGen/PairSpanGuard.h; superdoc/features/frame-generation-renderer.md). The pacer
+	// resets only after an arrival gap of 100 ms or more, so a shorter hitch leaves a pair whose two real frames
+	// arrived many frame intervals apart; with fast motion its estimate fails, and with the library's fallbacks
+	// off (Artifact safety Off) the failed estimate is shown as it is. Such a pair is not interpolated: the
+	// paint shows the pair's later real frame instead. A test knob, no setting: `gamescopectl
+	// ritz_fg_pair_span_limit 0` switches it off.
+	gamescope::ConVar<float> cv_ritz_fg_pair_span_limit( "ritz_fg_pair_span_limit", 3.0f,
+		"Frame generation: a pair of real frames that arrived more than this many game frame intervals apart is not interpolated, its later real frame is shown instead (0 = off)." );
+
+	// The guard's counters and its rate-limited log. steamcompmgr thread only.
+	struct FrameGenSpanGuard_t
+	{
+		uint64_t ulPaints = 0;      // paints that showed a real frame instead of a pair's output
+		uint64_t ulPairs = 0;       // distinct pairs guarded
+		uint64_t ulLastPrev = 0;    // the last guarded pair, to count pairs (a pair spans several paints)
+		uint64_t ulLastCurr = 0;
+		uint64_t ulLastLogNs = 0;   // at most one line per second
+	};
+	FrameGenSpanGuard_t s_FrameGenSpan;
+
 	// Is the pacer planning right now, i.e. should the main loop pace its paints
 	// on the vblank timer? True while frame generation or motion blur is on and the
 	// pacer's last plan was to produce outputs (Planning(): frame generation,
@@ -8229,15 +8250,17 @@ namespace
 		// 257-279 presented against a 280 target while still "generating") never
 		// changes state, so it never appeared. One line per 5 s, only while active.
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
 				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szSplit );
+				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szSplit,
+				(unsigned long long)s_FrameGenSpan.ulPairs, (unsigned long long)s_FrameGenSpan.ulPaints );
 		else
-			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s",
+			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
 				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
-				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szSplit );
+				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szSplit,
+				(unsigned long long)s_FrameGenSpan.ulPairs, (unsigned long long)s_FrameGenSpan.ulPaints );
 	}
 
 	fghost::PacingStatus FrameGen_ToStatus( const fgpacing::Pacer::Report &r )
@@ -8265,6 +8288,55 @@ namespace
 		status.steadyMultiplier = r.steadyMultiplier;
 		status.generating = r.generating;
 		return status;
+	}
+
+	// The pair span guard, applied to the pacer's Decision before it is recorded or handed to the renderer.
+	// A Decision that would use a pair (prevId != 0: a generated frame, or a blurred real frame) whose two real
+	// frames arrived more than ritz_fg_pair_span_limit x the game's frame interval apart becomes a plain real
+	// frame: no pair, t = 1, showId = the pair's LATER frame currId. RecordBaseLayer() (FrameGenHost.cpp) then
+	// still copies a new newestId into its ring and observes it (that happens before and independent of the
+	// pair), skips the pair branch (no estimate, no synth, no cached output of the pair), and shows layer 0
+	// when currId is the newest, else currId's ring copy -- the lag-spike buffer's path.
+	// `Why currId, not newestId:` Smoothness may play the older pair (currId one behind the newest); showing
+	// the newest there and then the next pair (currId, newest) at t < 1 would step back in time. currId is at
+	// or after this paint's content time, and every later pair starts at it: monotonic.
+	// `Why no floor (e.g. 25 ms):` a floor blinds the guard at high frame rates, where a 20 ms hitch is already
+	// several frame intervals of camera motion. The pacer's interval is clamped to [1, 50] ms, and the 8-sample
+	// median does not move on one hitch, so a single long interval cannot widen its own limit.
+	void FrameGen_PairSpanGuard( fgpacing::Pacer::Decision &d, uint64_t ulNow )
+	{
+		if ( d.skip || d.inert || d.prevId == 0 || d.currId == 0 || d.prevId == d.currId )
+			return;
+		const float flK = cv_ritz_fg_pair_span_limit;
+		if ( !( flK > 0.0f ) )
+			return;   // off: not even the table lookup
+		const fghost::capture::ArrivalTable &arr = fghost::capture::Arrivals();
+		const fgspan::Verdict v = fgspan::Check( arr.Find( d.prevId ), arr.Find( d.currId ), s_FrameGen.pacer.IntervalMs(), double( flK ) );
+		if ( !v.guard )
+			return;
+
+		FrameGenSpanGuard_t &G = s_FrameGenSpan;
+		const bool bNewPair = d.prevId != G.ulLastPrev || d.currId != G.ulLastCurr;
+		G.ulPaints++;
+		if ( bNewPair )
+		{
+			G.ulPairs++;
+			G.ulLastPrev = d.prevId;
+			G.ulLastCurr = d.currId;
+			constexpr uint64_t kLogPeriodNs = 1000ull * 1000ull * 1000ull;
+			if ( G.ulLastLogNs == 0 || ulNow - G.ulLastLogNs >= kLogPeriodNs )
+			{
+				G.ulLastLogNs = ulNow;
+				fg_log.infof( "frame generation: pair of frames %.1f ms apart (limit %.1f ms = %.2f x %.2f ms, ids %llu-%llu): real frame shown; %llu pairs (%llu paints) so far",
+					v.spanMs, v.limitMs, double( flK ), s_FrameGen.pacer.IntervalMs(), (unsigned long long)d.prevId, (unsigned long long)d.currId,
+					(unsigned long long)G.ulPairs, (unsigned long long)G.ulPaints );
+			}
+		}
+
+		d.showId = d.currId;
+		d.prevId = 0;
+		d.currId = 0;
+		d.t = d.t0 = d.t1 = 1.0f;
 	}
 }
 
@@ -8432,7 +8504,8 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.blurAmount = double( blurCfg.amountPercent ) / 100.0;
 	in.blurRelative = fgpacing::BlurRelative( uint8_t( blurCfg.relative ) );
 
-	const fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
+	fgpacing::Pacer::Decision d = s_FrameGen.pacer.OnPaint( in, ulLayer0Id, bVblank, !bGenuineRepaint );
+	FrameGen_PairSpanGuard( d, ulNow );   // before the capture records it and the renderer gets it
 	{
 		// ritz_fg_capture's always-on ring: one POD per decision, no allocation. The Decision has no pass reason;
 		// the last pacing status's is stored (up to ~250 ms old).

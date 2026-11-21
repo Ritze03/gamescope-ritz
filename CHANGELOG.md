@@ -16,6 +16,8 @@ All notable user-facing changes, newest first. Categories:
 ### Fixed
 - **Motion version 3**: fast motion near the picture's edge can no longer darken a
   moving area with the border's colour.
+- **Frame generation**: after a short stutter of the game the frames around it are no
+  longer blended into one distorted frame; the real frame is shown.
 
 ## 2026-11-20
 
