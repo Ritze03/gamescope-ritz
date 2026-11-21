@@ -322,6 +322,7 @@ namespace gamescope
         wp_tearing_control_v1 *m_pTearingControl = nullptr;
         // Last hint sent. The protocol's own default (until set) is vsync.
         bool m_bSentAsyncHint = false;
+        fghostshown::VsyncVerdict m_VsyncVerdict;
         wl_subsurface *m_pSubsurface = nullptr;
         libdecor_frame *m_pFrame = nullptr;
         libdecor_window_state m_eWindowState = LIBDECOR_WINDOW_STATE_NONE;
@@ -2339,6 +2340,11 @@ namespace gamescope
         fghostshown::Get().ulShown.fetch_add( 1, std::memory_order_relaxed );
         if ( uFlags & WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY )
             fghostshown::Get().ulZeroCopy.fetch_add( 1, std::memory_order_relaxed );
+        // Does the host honour the async hint? (HostShown.h, VsyncVerdict.) Only commits
+        // sent while the hint is async tell; the hint changes rarely, so a few feedbacks of
+        // commits from before a change are noise the verdict's window absorbs.
+        if ( m_bSentAsyncHint )
+            fghostshown::Get().bHostVsync.store( m_VsyncVerdict.Note( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ), std::memory_order_relaxed );
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );
 

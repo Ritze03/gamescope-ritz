@@ -94,3 +94,43 @@ TEST_CASE( "Tear hint: an exclusion that pulses faster than the dwell stays on v
 	CHECK_FALSE( r.last );
 	CHECK( r.flips == 2 );   // on, off, and no flapping after that
 }
+
+// Does the nested host honour the async hint? (src/FrameGen/HostShown.h, VsyncVerdict.)
+// A user's journal (nested Wayland, 280 Hz, async hint sent): the host never showed more
+// than 280 frames a second of 290-540 sent, so frame generation's 0.9-tick output beat
+// against its vblank.
+#include "FrameGen/HostShown.h"
+
+TEST_CASE( "VsyncVerdict: starts as tearing and needs a full window", "[framegen][tearhint]" )
+{
+	fghostshown::VsyncVerdict v;
+	for ( int i = 0; i < fghostshown::VsyncVerdict::kWindow - 1; i++ )
+		REQUIRE_FALSE( v.Note( true ) );
+	REQUIRE( v.Note( true ) );
+}
+
+TEST_CASE( "VsyncVerdict: a host that tears stays tearing", "[framegen][tearhint]" )
+{
+	fghostshown::VsyncVerdict v;
+	for ( int i = 0; i < 1000; i++ )
+		REQUIRE_FALSE( v.Note( i % 3 == 0 ) );   // a third on its vblank by chance
+}
+
+TEST_CASE( "VsyncVerdict: hysteresis, a few stray samples do not flip it", "[framegen][tearhint]" )
+{
+	fghostshown::VsyncVerdict v;
+	for ( int i = 0; i < 64; i++ )
+		v.Note( true );
+	REQUIRE( v.Vsync() );
+	for ( int i = 0; i < 10; i++ )
+		v.Note( false );   // 22 of 32: between the thresholds, unchanged
+	REQUIRE( v.Vsync() );
+	for ( int i = 0; i < 6; i++ )
+		v.Note( false );   // 16 of 32: the host tears now
+	REQUIRE_FALSE( v.Vsync() );
+	for ( int i = 0; i < 27; i++ )
+		v.Note( true );    // 27 of 32: not yet
+	REQUIRE_FALSE( v.Vsync() );
+	v.Note( true );         // 28 of 32
+	REQUIRE( v.Vsync() );
+}

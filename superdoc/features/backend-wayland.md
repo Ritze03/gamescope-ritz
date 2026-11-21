@@ -142,6 +142,11 @@ if the host offers it.
   times in 44 minutes (about 23 per second) in a Forza Horizon 6 session. Each hint change is logged
   (`wayland: tearing hint -> async` / `vsync`), so the log is one line per real transition. See
   [frame-generation.md](frame-generation.md).
+- **Does the host honour it?** (2026-11-21.) `Wayland_PresentationFeedback_Presented()` feeds
+  the `VSYNC` flag of each commit sent while the hint is `async` into
+  `fghostshown::VsyncVerdict` (`src/FrameGen/HostShown.h`); a host that keeps vsyncing them
+  makes frame generation pace at the refresh on the vblank timer instead of oversupplying. See
+  [frame-generation-pacing.md](frame-generation-pacing.md), "A host that does not tear".
 - **Tearing off, or a host without the protocol:** `async` is only ever requested when
   `bTearing` (or the output-timer state above, which needs the setting too) holds, so with the setting off the hint stays at its initial `vsync` and no
   request is sent; without the protocol no object is created. Wire behaviour is as before.

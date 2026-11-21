@@ -27,6 +27,8 @@ All notable user-facing changes, newest first. Categories:
 - **Game frames**: a game's frame is no longer handed back to the game while it is
   still being shown; this caused single distorted frames and short hitches.
 - **Settings crash**: opening the settings no longer closes gamescope.
+- **Frame generation**: in a window that the desktop does not let tear, the generated
+  frames no longer stutter in motion at the display's refresh rate.
 
 ## 2026-11-20
 
