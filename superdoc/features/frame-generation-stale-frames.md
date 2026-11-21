@@ -63,9 +63,10 @@ newer release point of that buffer. `Why` park instead of building a disarmable 
 `Timeline.h`, and the extra signal of the same value is what upstream already does when the fb's own
 object fires.
 
-Not known yet: which commits the user's game sends without a new buffer, and why they showed up only
-while frame generation presented more frames than the refresh setting. The counters below say how many
-there are in each mode.
+Confirmed in the field (2026-11-21): with this fix the user's game shows neither the single distorted
+frames nor the hitches any more. Still not known: which commits that game sends without a new buffer, and
+why they showed up only while frame generation presented more frames than the refresh setting. The
+counters below say how many there are in each mode.
 
 ### Measured headless (2026-11-21, nested Wayland backend, vkcube through the WSI layer)
 
