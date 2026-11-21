@@ -8117,13 +8117,29 @@ namespace
 		return pszName && strcmp( pszName, "Wayland" ) == 0;
 	}
 
+	// A nested host that shows our async-hinted commits on its vblank (HostShown.h,
+	// VsyncVerdict) shows at most one buffer per refresh. Output faster than that
+	// beats against its vblank: at 0.9 tick about one frame in nine is dropped, a
+	// double content step some 30 times a second, which is visible as stutter in
+	// motion. On such a host the output is capped at the refresh and paced by the
+	// vblank timer, which the host's presentation feedback keeps on its vblanks, so
+	// it gets exactly one new frame per refresh. 0 = the behaviour before (2026-11-21).
+	gamescope::ConVar<bool> cv_ritz_fg_host_vsync( "ritz_fg_host_vsync", true,
+		"Nested Wayland: when the host shows the async-hinted output on its vblank (it does not tear), "
+		"cap frame generation's output at the refresh and pace it on the vblank timer. 0 = always pace past the refresh." );
+
+	bool FrameGen_HostVsync()
+	{
+		return cv_ritz_fg_host_vsync && fghostshown::Get().bHostVsync.load( std::memory_order_relaxed );
+	}
+
 	bool FrameGen_CanExceedRefresh( bool bTearingNow )
 	{
 		gamescope::IBackend *pBackend = GetBackend();
 		if ( !pBackend || !pBackend->GetCurrentConnector() )
 			return false;
 		if ( FrameGen_IsNestedWayland() )
-			return true;
+			return !FrameGen_HostVsync();
 		return pBackend->SupportsTearing() && bTearingNow;
 	}
 
@@ -8288,8 +8304,9 @@ namespace
 			if ( shown.bValid )
 			{
 				const size_t n = strlen( szSplit );
-				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s no free image %.0f/s",
-					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flNoFreeImage );
+				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s no free image %.0f/s, %s",
+					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flNoFreeImage,
+					fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) ? "host vsync yes" : "host vsync no" );
 			}
 		}
 
@@ -11355,7 +11372,13 @@ steamcompmgr_main(int argc, char **argv)
 			// (see superdoc/features/backend-wayland.md, Tearing).
 			const bool bHostTearOk = cv_tearing_enabled && GetBackend()->SupportsTearing() && FrameGen_IsNestedWayland();
 			const bool bFGHostAsync = bHostTearOk &&
-				s_TearHint.Update( get_time_in_nanos(), bFGExtraPaced, bHasOverlay || is_fading_out() );
+				s_TearHint.Update( get_time_in_nanos(),
+					// On a host found not to tear (FrameGen_HostVsync()) the output timer is
+					// off, but the hint stays async so its feedback keeps telling whether the
+					// host still ignores it (it does nothing there); otherwise the verdict
+					// could never notice the host starting to tear (e.g. made fullscreen).
+					bFGExtraPaced || ( bFGTimerPaced && FrameGen_HostVsync() && !fghost::GetConfig().pauseAtRefresh ),
+					bHasOverlay || is_fading_out() );
 			// Real-frame tearing (the game's own async request) while frame generation
 			// paces on the vblank timer: unchanged, per paint.
 			const bool bFGTearPresent = bFGHostAsync ||

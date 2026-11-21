@@ -480,13 +480,51 @@ machine, runs discarded) and a heavy GPU-saturated case. Also seen: the host sho
 "Frames the host shows" under Logging).
 `Why:` do not lower the value on this evidence; revisit with a late-paint workload.
 
+**A host that does not tear (2026-11-21, ConVar `ritz_fg_host_vsync`, default 1).** A user's
+report (nested Wayland, 280 Hz, not VRR, tearing hint `async`, Target = display refresh, Low
+latency): *"stutter in motion"*, *"no matter if frames are native or framegen, if FPS >
+refreshrate set in gamescope, then it starts stuttering"*; a target of 250 on the same screen
+was fine. The journal's host counters gave the cause: in every status line of the day the host
+**showed at most 280-281 frames a second**, whatever was sent (290-311 from the extra timer,
+up to 546 at a 500 Hz setting), and discarded the rest, so it did not tear for us despite the
+hint (Hyprland tears only a fullscreen window with tearing allowed). A vsync host shows the
+newest buffer at each vblank, so a stream at 0.9 tick beats against it: about one frame in nine
+is dropped, a double content step some 30 times a second -- a low-frequency judder. Modelled
+from that session's watch capture (an ideal 0.9-tick stream with even content into a 280 Hz
+host that shows the newest commit per vblank): 31 double steps/s, 11% of shown frames off the
+mean step by more than 1 ms; one paint per host vblank: 0. Native frames above the gamescope
+refresh beat the same way; for those nothing in gamescope can help (a frame limiter at the
+refresh, or a host that tears, does).
+
+Fix (`FrameGen_HostVsync()` / `FrameGen_CanExceedRefresh()`, `steamcompmgr.cpp`;
+`fghostshown::VsyncVerdict`, `src/FrameGen/HostShown.h`): the Wayland backend feeds the
+`presented` feedback of every commit sent while the hint is `async` into a verdict:
+`WP_PRESENTATION_FEEDBACK_KIND_VSYNC` set on 28 of the last 32 = **vsync host**, 16 or fewer =
+tearing host, in between unchanged; it starts as "tearing". On a vsync host nested Wayland
+counts as unable to exceed the refresh: the library caps the output at the refresh (also an
+explicit target above it), the at-refresh extra timer is off, and the **vblank timer** paces the
+output. That timer is re-anchored to the host's `presented` timestamps (`MarkVBlank()`), which
+on a vsync host lie on its vblanks, so each host refresh gets exactly one new frame. The tearing
+hint stays `async` while frame generation paces on the timer on such a host (it does nothing
+there), so the feedback keeps sampling and the verdict flips back if the host starts tearing
+(made fullscreen), which re-enables the extra timer. `ritz_fg_host_vsync 0` restores the old
+behaviour for a live comparison. The status line's host part ends with `host vsync yes` / `no`.
+`Why` the feedback flag and not the shown rate: the flag is per frame and is exactly the host's
+statement that it waited for a vblank (Hyprland sets it on every non-tearing presentation); a
+rate needs a period and a guess at the refresh. `Why` only async-hinted commits: a host asked to
+wait always reports VSYNC, which says nothing about whether it would tear. Not covered: with
+Allow tearing off (no async hint is ever sent) the verdict never forms and the behaviour is the
+old one. Headless sway reports no VSYNC flag, so the verdict was exercised only by unit tests;
+with the verdict forced on (a temporary build), headless sway at 120 Hz went from 133 sent /
+125 shown / 9 discarded a second to 122 / 122 / 0. Not yet confirmed on the user's screen.
+
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
 connector's name, `"Wayland"`):
 
 | Backend | Predicate | Flip |
 | --- | --- | --- |
-| Nested Wayland | connector name `Wayland` | normal commit at once; the host shows the newest buffer and discards the rest (`Wayland_PresentationFeedback_Discarded`); `Present()` never blocks |
+| Nested Wayland | connector name `Wayland`, and the host not found to vsync our async-hinted commits (`FrameGen_HostVsync()`, see "A host that does not tear") | normal commit at once; the host shows the newest buffer and discards the rest (`Wayland_PresentationFeedback_Discarded`); `Present()` never blocks |
 | DRM | `SupportsTearing()` and a tearing flip would be chosen for this paint (`cv_tearing_enabled`, the surface wants async, no overlay up) | `FlipType::Async` for the extra ticks |
 | DRM without tearing | -- | capped at the refresh: Off behaves as On (a second atomic commit while a flip is pending fails with `EBUSY`) |
 | SDL, OpenVR, headless | -- | capped at the refresh: Off behaves as On |

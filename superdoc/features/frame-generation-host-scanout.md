@@ -18,7 +18,10 @@ zero-copy 0/s no free image 0/s` (`src/FrameGen/HostShown.h`, counted in the Way
 `wp_presentation` feedback handlers; one feedback object per commit of the toplevel surface,
 so `sent` = commits, `shown` = `presented`, `discarded` = replaced by a newer commit before the
 host drew, `zero-copy` = shown frames the host scanned out directly, `no free image` = paints
-dropped because the host held every output image; other backends print nothing). `Why:` the "presented 311 fps" figure counts
+dropped because the host held every output image; other backends print nothing; since
+2026-11-21 it ends with `host vsync yes|no`, whether the host shows our async-hinted commits on
+its vblank, see [frame-generation-pacing.md](frame-generation-pacing.md), "A host that does not
+tear"). `Why:` the "presented 311 fps" figure counts
 what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and
 nothing in the log said so.
 

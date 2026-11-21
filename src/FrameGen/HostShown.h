@@ -20,6 +20,45 @@ namespace fghostshown
 		std::atomic<uint64_t> ulDiscarded{ 0 };
 		std::atomic<uint64_t> ulZeroCopy{ 0 };
 		std::atomic<uint64_t> ulNoFreeImage{ 0 };
+		// The host showed our async-hinted commits on its vblank (VsyncVerdict below).
+		std::atomic<bool> bHostVsync{ false };
+	};
+
+	// Does the host tear for us, or show at most one buffer per refresh? Fed with the
+	// `presented` feedback of commits sent with the async tearing hint only: a host that
+	// honours the hint reports them without WP_PRESENTATION_FEEDBACK_KIND_VSYNC, a host
+	// that does not (window not fullscreen, tearing not allowed there) with it. Feedback
+	// of vsync-hinted commits says nothing (the host was asked to wait) and is not fed.
+	// Of the last 32 samples, 28 or more with VSYNC -> vsync host; 16 or fewer -> tearing
+	// host; in between the verdict stays. Starts as "tearing" (the behaviour before the
+	// verdict existed). Pure: one writer, no clock, unit-tested.
+	class VsyncVerdict
+	{
+	public:
+		static constexpr int kWindow = 32, kVsyncAt = 28, kTearAt = 16;
+
+		bool Note( bool bVsync )
+		{
+			m_uBits = ( m_uBits << 1 ) | ( bVsync ? 1u : 0u );
+			if ( m_nCount < kWindow )
+				m_nCount++;
+			if ( m_nCount == kWindow )
+			{
+				const int nVsync = __builtin_popcount( m_uBits );
+				if ( nVsync >= kVsyncAt )
+					m_bVsync = true;
+				else if ( nVsync <= kTearAt )
+					m_bVsync = false;
+			}
+			return m_bVsync;
+		}
+
+		bool Vsync() const { return m_bVsync; }
+
+	private:
+		uint32_t m_uBits = 0;
+		int m_nCount = 0;
+		bool m_bVsync = false;
 	};
 
 	inline Counters &Get()
