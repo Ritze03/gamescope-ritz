@@ -37,7 +37,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.v3_unsure` | float 0.25-4 (default 1.0), clamped on load | the row "Unsure sensitivity" (slider, step 0.05), V3 only. Runtime. Additive (2026-11-19) |
 | `framegen.v3_scene_cut` | float 0-4 (default 0 = Never since 2026-11-19), clamped on load; a stored 0.45 (the old default) loads as 0, see [motion-v3](frame-generation-motion-v3.md#scene-cut-default-never) | the row "Scene cut threshold" (slider, step 0.05, 0 shown as "Never"), V3 only. Runtime, read by the estimate (applies from the next real pair). Additive (2026-11-19) |
 | `framegen.v3_colour_window` | bool (default false; absent or wrong type: false) | the row "Colour-weighted matching" (switch), V3 only. Runtime, applies from the next real pair. Experiment: motion search weighted by colour similarity. Additive (2026-11-19) |
-| `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"off"`; absent, wrong type or unknown: `"off"`) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Motion version 3"), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
+| `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"guard"` since 2026-11-22, was `"off"`; absent, wrong type or unknown: `"guard"`; a stored `"off"` stays `"off"`) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Motion version 3"), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
 | `framegen.expert` | bool (default false; wrong type: false; absent: false, also for an old profile with changed tuning values, see "Expert settings") | the row "Expert settings" (switch, last row of group "Frame generation"): shows the 15 tuning rows of the selected Motion version and puts their stored values in force; off hides them and the defaults act. Additive (2026-11-20), schema stays 5 |
 | `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
@@ -126,7 +126,9 @@ returns `f` unchanged when `f.expert`, else a copy whose 15 values (`learned_net
 settings become the host config, `PushToRenderer()` -> `ToHostConfig()` in `PanelFrameGen.cpp`;
 everything downstream (`fghost::GetConfig()`, which `steamcompmgr.cpp` and the Motion blur panel
 read, and the library's `setSettings()` / `reconfigure()`) therefore sees effective values. The
-panel's own `V3GuardOn()` uses it too (guard effectively Off with Expert off). The rows' getters and
+panel's own `V3GuardOn()` uses it too (since 2026-11-22 the guard is effectively **Guard** with Expert off,
+its default, so under V3 the search rows act and are usable then; a profile saved with `"v3_guard": "off"`
+runs Guard while Expert is off and Off again when Expert is on). The rows' getters and
 setters keep reading and writing the **stored** values, and the switch never touches them: turning
 Expert on again applies the user's own values again, at once (a switch is an ordinary
 "setting changed" push). `Why:` the user: *"When expert settings is turned off, it should always

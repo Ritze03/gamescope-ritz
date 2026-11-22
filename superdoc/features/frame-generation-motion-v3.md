@@ -109,7 +109,7 @@ ranges there; only Off matters).
 
 (2026-11-20, library `f301d7d`.) One more V3 setting, `v3_guard` (`framegen::Settings::v3Guard`): a Choice
 row **Motion guard** in the group "Motion version 3", after the two switches, segmented, Off / Guard / V2 motion,
-default Off, usable while V3 runs (`V3RowsUsable()`), changeable while a game runs. With **Off** nothing changes
+default **Guard** (Off until 2026-11-22), usable while V3 runs (`V3RowsUsable()`), changeable while a game runs. With **Off** nothing changes
 (the library's output is byte-identical to V3 without it; no pass, no memory).
 
 - **Guard**: V2's motion search also runs on every real pair and replaces V3's vector (both directions) where V2's
@@ -135,8 +135,10 @@ usable under V3 only while the guard is on (see the table above). A pyramid chan
 **Memory, refusal, descriptors.** The first time the guard is on, `setSettings()` creates V2's estimate pipelines and
 two buffers (14.06 MiB at 1080p `flowScale` 2). This host never calls `releaseUnusedMotion()` (see the note in
 `EnsureReady()`), so they stay until a resize or teardown. A device that cannot run V2 is refused by
-`settingsError()` with V2's reason: `ResolveMotion()` then runs V1 with that reason in the Status line and the log,
-like any refused version; a later allocation failure inside `setSettings()` keeps the previous settings and sets
+`settingsError()` with V2's reason: `ResolveMotion()` then checks V3 with the guard Off and, when that passes, runs
+V3 without the guard, with an info line in the log and no Status note (only if V3 itself is refused does it run V1
+with the reason in the Status line, like any refused version). `Why:` Guard is the default, so a device without
+V2's subgroup operations would otherwise lose V3 and show a lasting note to everyone on it; a later allocation failure inside `setSettings()` keeps the previous settings and sets
 the note "the library could not create the Motion guard (V2's pipelines or buffers)". The host records one estimate
 per `beginFrame()`, so the guard's two descriptor sets per estimate (at most 16 estimates per `beginFrame()`) are
 never near the limit. The guard's value is part of the V3 word's comparison, so a change reaches `setSettings()`
@@ -144,7 +146,15 @@ once.
 
 `Why:` the user found V3's large artifacts worse than V2's and proposed V2's motion detection with V3's picture
 generation. The library implements exactly that as a setting; it is an experiment with three values to compare by eye,
-so the default stays Off.
+so the default stayed Off at first.
+
+**Default Guard (2026-11-22).** `v3_guard` defaults to `"guard"`; the row is an Expert row, so with Expert settings
+off every V3 user runs Guard (`FrameGenEffective()` hands the interpolator the default). An absent, wrong-typed or
+unknown value loads Guard; an explicitly stored `"off"` stays Off and is honoured while Expert is on. No migration:
+profiles saved since 2026-11-20 hold `"v3_guard": "off"` (the save writes the key always) and run Guard with Expert
+off, Off with Expert on. The host's raw `fghost::Config::v3Guard` stays 0: its only producer is `ToHostConfig()`,
+which always maps the effective setting. `Why:` the user asked for Guard as V3's default, hidden in the expert
+settings (2026-11-22).
 
 ## Static HUD protection under V3
 

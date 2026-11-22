@@ -135,6 +135,9 @@ namespace gamescope
     gamescope::ConVar<bool> cv_wayland_mouse_warp_without_keyboard_focus( "wayland_mouse_warp_without_keyboard_focus", true, "Should we only forward mouse warps to the app when we have keyboard focus?" );
     gamescope::ConVar<bool> cv_wayland_mouse_relmotion_without_keyboard_focus( "wayland_mouse_relmotion_without_keyboard_focus", false, "Should we only forward mouse relative motion to the app when we have keyboard focus?" );
     gamescope::ConVar<bool> cv_wayland_use_modifiers( "wayland_use_modifiers", true, "Use DMA-BUF modifiers?" );
+    // Test hook for the host-vsync verdict (HostShown.h): headless sway never reports the VSYNC kind flag.
+    gamescope::ConVar<int> cv_ritz_host_vsync_test( "ritz_host_vsync_test", -1,
+        "Test only: -1 measure the host (default); 0 / 1 report a tearing / vsync host while the tearing hint is async." );
 
     gamescope::ConVar<float> cv_wayland_hdr10_saturation_scale( "wayland_hdr10_saturation_scale", 1.0, "Saturation scale for HDR10 content by gamut expansion. 1.0 - 1.2 is a good range to play with." );
 
@@ -243,6 +246,9 @@ namespace gamescope
         // the next one. Sent only when it changes. A no-op when the host does
         // not offer the protocol. Toplevel only -- see SupportsTearing().
         void SetPresentationHint( bool bAsync );
+        // Creates the wp_tearing_control_v1 object once the xdg_toplevel exists. Toplevel only: the host
+        // decides tearing from the window's root surface; the sync subsurfaces latch with it.
+        void EnsureTearingControl();
         // INestedHints::RequestOutputSize(): make the next Commit() send a
         // libdecor state carrying the (already updated) g_nOutputWidth/Height,
         // the same way LibDecor_Frame_Commit() re-arms one.
@@ -1868,11 +1874,6 @@ namespace gamescope
                 wp_fractional_scale_v1_add_listener( m_pFractionalScale, &s_FractionalScaleListener, this );
         }
 
-        // Toplevel only: the host decides tearing from the window's root
-        // surface; the sync subsurfaces latch with it.
-        if ( !pParent && m_pBackend->GetTearingControlManager() )
-            m_pTearingControl = wp_tearing_control_manager_v1_get_tearing_control( m_pBackend->GetTearingControlManager(), m_pSurface );
-
         if ( !pParent )
         {
 			wl_proxy_set_tag( (wl_proxy *)m_pSurface, &GAMESCOPE_toplevel_tag );
@@ -1891,6 +1892,7 @@ namespace gamescope
                 libdecor_frame_set_app_id( m_pFrame, m_pConnector->m_szAppId.c_str() );
             }
             libdecor_frame_map( m_pFrame );
+            EnsureTearingControl();
         }
         else
         {
@@ -1977,6 +1979,10 @@ namespace gamescope
                 struct wp_presentation_feedback *pFeedback = wp_presentation_feedback( m_pBackend->GetPresentation(), m_pSurface );
                 wp_presentation_feedback_add_listener( pFeedback, &s_PresentationFeedbackListener, this );
                 fghostshown::Get().ulCommits.fetch_add( 1, std::memory_order_relaxed );
+                // Test hook (ritz_host_vsync_test): forces the verdict per commit sent while the hint is
+                // async, so a forced value also stops being applied when the hint goes vsync.
+                if ( m_bSentAsyncHint && cv_ritz_host_vsync_test >= 0 )
+                    fghostshown::Get().bHostVsync.store( cv_ritz_host_vsync_test != 0, std::memory_order_relaxed );
             }
 
             if ( m_pWPColorManagedSurface )
@@ -2158,8 +2164,22 @@ namespace gamescope
         wl_surface_commit( m_pSurface );
     }
 
+    void CWaylandPlane::EnsureTearingControl()
+    {
+        // The ORDER matters: a host may bind the hint to its window when the object is created
+        // (Hyprland looks up the window whose surface it is, once, in the object's constructor; a
+        // window exists only from xdg_surface.get_toplevel on). Created before the toplevel, the
+        // object stays unbound and every hint is dropped. libdecor creates xdg_surface + xdg_toplevel
+        // in libdecor_decorate() / libdecor_frame_map() once its registry is ready, else later from
+        // its dispatch, so this is retried from SetPresentationHint() until the toplevel exists.
+        if ( m_pTearingControl || !m_pBackend->GetTearingControlManager() || !GetXdgToplevel() )
+            return;
+        m_pTearingControl = wp_tearing_control_manager_v1_get_tearing_control( m_pBackend->GetTearingControlManager(), m_pSurface );
+    }
+
     void CWaylandPlane::SetPresentationHint( bool bAsync )
     {
+        EnsureTearingControl();
         if ( !m_pTearingControl || bAsync == m_bSentAsyncHint )
             return;
 
@@ -2340,10 +2360,12 @@ namespace gamescope
         fghostshown::Get().ulShown.fetch_add( 1, std::memory_order_relaxed );
         if ( uFlags & WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY )
             fghostshown::Get().ulZeroCopy.fetch_add( 1, std::memory_order_relaxed );
+        if ( !( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ) )
+            fghostshown::Get().ulTorn.fetch_add( 1, std::memory_order_relaxed );
         // Does the host honour the async hint? (HostShown.h, VsyncVerdict.) Only commits
         // sent while the hint is async tell; the hint changes rarely, so a few feedbacks of
         // commits from before a change are noise the verdict's window absorbs.
-        if ( m_bSentAsyncHint )
+        if ( m_bSentAsyncHint && cv_ritz_host_vsync_test < 0 )
             fghostshown::Get().bHostVsync.store( m_VsyncVerdict.Note( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ), std::memory_order_relaxed );
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );
@@ -2880,8 +2902,10 @@ namespace gamescope
     bool CWaylandBackend::SupportsTearing() const
     {
         // Only when the host offers wp_tearing_control_v1. Whether it then really
-        // tears is the host's call (Hyprland: allow_tearing + an immediate rule +
-        // fullscreen) -- see superdoc/features/backend-wayland.md.
+        // tears is the host's call (Hyprland: the window may tear when
+        // general:allow_tearing is on AND a window rule sets tearing or the client's
+        // async hint is set; the monitor also needs the window to be its solitary,
+        // fullscreen client) -- see superdoc/features/backend-wayland.md.
         return m_pTearingControlManager != nullptr;
     }
     bool CWaylandBackend::UsesVulkanSwapchain() const

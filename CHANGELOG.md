@@ -7,6 +7,19 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-22
+
+### Added
+- **Auto V-Sync**: a new switch under Display > General limits the game to the refresh rate
+  while the desktop does not let its window tear.
+
+### Fixed
+- **Allow tearing**: tearing now takes effect on Hyprland without a window rule.
+- **Tearing in a window**: frames are no longer dropped while the desktop tears the window.
+
+### Info
+- **Motion guard**: Motion version 3 now uses the Guard setting by default.
+
 ## 2026-11-21
 
 ### Added

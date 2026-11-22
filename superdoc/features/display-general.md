@@ -3,13 +3,15 @@
 The Display > **General** area (`display.general`, `src/Overlay/PanelDisplay.cpp`,
 `RegisterGeneral()`) holds the switches a user flips mid-game, so it is registered first and sits above
 the other Display areas. Its Summary line reads like `VRR off · tearing off`, plus
-` · nested windows maximized` when that switch is on. Four switches persisted per profile in the
+` · nested windows maximized` when that switch is on and ` · auto v-sync N` while Auto V-Sync
+holds the game at N fps. Five switches persisted per profile in the
 `gamescope.*` config block and mirrored into a live global:
 
 | Row id | Label | Config key | Live target | Launch flag (locks the row) |
 |---|---|---|---|---|
 | `display.adaptive_sync` | Adaptive sync (VRR) | `gamescope.vrr_enabled` | `cv_adaptive_sync` | `--adaptive-sync` |
 | `display.allow_tearing` | Allow tearing | `gamescope.tearing_enabled` | `cv_tearing_enabled` | `--immediate-flips` |
+| `display.auto_vsync` | Auto V-Sync | `gamescope.auto_vsync` | `cv_ritz_auto_vsync` (`ritz_auto_vsync`) | none |
 | `display.low_latency_wakeup` | Low-latency wake-up | `gamescope.low_latency_wakeup` | `vblank_measured_lead` | none |
 | `display.force_windows_fullscreen` | Force maximize nested window | `gamescope.force_windows_fullscreen` | `steamcompmgr_set_force_windows_fullscreen()` | `--force-windows-fullscreen` |
 
@@ -45,6 +47,62 @@ supports tearing (`IBackend::SupportsTearing()`) **and** the focused surface ask
 `GAMESCOPE_ALLOW_TEARING` root-window property writes the same ConVar. Under the Wayland backend with
 frame generation the host tearing hint has its own rules, in
 [backend-wayland.md](backend-wayland.md#tearing) and [frame-generation-pacing.md](frame-generation-pacing.md).
+
+## Auto V-Sync (`display.auto_vsync`)
+
+Added 2026-11-22, directly after Allow tearing. **Default Off**, config key `gamescope.auto_vsync`
+(per profile, additive, absent = false, in the `display.general` export group), mirrored into the
+ConVar `ritz_auto_vsync` the same plain way as Low-latency wake-up (`main.cpp` at start-up,
+`PushCachedSettingsToLiveState()` on a profile switch), so a test can flip it with `gamescopectl`.
+
+While on, the game is limited to the refresh **while the output cannot show frames faster than the
+refresh**, and the limit lifts as soon as it can. The rule is the pure
+`autovsync::EffectiveLimit()` (`src/AutoVsync.h`, unit-tested in `tests/test_limiter_pace.cpp`):
+
+- Only on the nested Wayland backend (`FrameGen_IsNestedWayland()`), not under VRR, and not while
+  frame generation or motion blur is on (`fghost::Active()`). `Why` not with frame generation: it
+  makes the limiter pace on the layer's timer (not locked to the host's refreshes, so it would beat
+  anyway) and caps its own output on such a host; leaving it out also guarantees Auto V-Sync never
+  changes frame generation. Other backends: no effect (a `ponytail:` note names DRM without tearing
+  and SDL as the upgrade path).
+- "Cannot show faster": Allow tearing is off (or the backend cannot tear), **or** the host was found
+  to show our tearing-hinted commits on its vblank anyway (the raw verdict
+  `fghostshown::Get().bHostVsync`, see [frame-generation-pacing.md](frame-generation-pacing.md),
+  "A host that does not tear"; deliberately not `FrameGen_HostVsync()`, whose `ritz_fg_host_vsync`
+  is frame generation's own switch).
+- The refresh is the one the vblank timer ticks at (`g_nNestedRefresh`, else `g_nOutputRefresh`),
+  the value the limiter's main-loop code and frame generation read.
+- A user limit at or below the refresh is left alone; no limit or one above the refresh becomes the
+  refresh. Applied in `update_app_target_refresh_cycle()` (`steamcompmgr.cpp`) as a runtime overlay on
+  `g_nSteamCompMgrTargetFPS` after it was computed from the user's own limit, so the stored
+  `gamescope.fps_limit`, the stepper, `--framerate-limit`, the `gamescope_control` protocol and
+  `debug_set_fps_limit` are never rewritten; when it lifts, the user's limit (or none) applies again.
+  Also re-evaluated on every vblank, so it follows the verdict while nothing paints.
+- The tearing hint stays `async` while Auto V-Sync holds the game on a host that does not tear
+  (`bAutoVsyncAsync` beside `paint_all()`): the held game reports FIFO, so without this the hint would
+  turn to vsync, the verdict would stop sampling and the limit could never lift when the host starts
+  to tear (e.g. the window made fullscreen). Overlay up or a fade: vsync, as for every hint.
+- One log line per change of state, e.g. `auto v-sync: limiting the game to 280 fps (the host does
+  not tear)` / `(tearing is not requested)` and `auto v-sync: limit lifted (the host tears)`.
+
+The limit equals the refresh, so the existing limiter keeps it **on the vblank grid** with divisor 1
+(see [frame-limiter.md](frame-limiter.md)): a Vulkan game through our layer is told FIFO and the
+compositor releases one held commit per vblank; the vblank timer is re-anchored to the host's
+`presented` times, so it stays phase-locked to the host. A game without our layer (OpenGL through
+Xwayland) gets nothing from divisor 1 (frame callbacks are sent every vblank anyway), so Auto V-Sync
+does not limit it; not tested.
+
+`Why:` the user's request (2026-11-22): on a desktop that does not tear for gamescope's window
+(some desktops tear only a fullscreen window), native game frames above the refresh beat against the host
+and stutter; frame generation's own cap does not cover them. It must be automatic because other
+desktops (and the same desktop with the window fullscreen) do tear, and there the limit would only
+cost frames.
+
+Tested headless only (sway, 120 Hz, vkcube): switch on with tearing off holds the game at 120; with
+tearing on and the verdict forced to vsync (test ConVar `ritz_host_vsync_test`, `WaylandBackend.cpp`;
+headless sway sends no `presented` event for async-hinted commits, so the real verdict cannot form
+there) it holds 120 and the hint stays async; forcing the verdict back to tearing lifts it. Not tested:
+a real host that reports vsync, 280 Hz, a real game.
 
 ## Force maximize nested window (`display.force_windows_fullscreen`)
 

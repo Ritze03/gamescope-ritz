@@ -41,7 +41,7 @@ namespace gamescope::config::profile_export
             add( "display.general", "Display", "General, Upscaling, Frame limiter, HDR", "", true,
                  { "gamescope.filter", "gamescope.scaler", "gamescope.sharpness", "gamescope.vrr_enabled",
                    "gamescope.hdr_enabled", "gamescope.tearing_enabled", "gamescope.fps_limit",
-                   "gamescope.force_grab_cursor", "gamescope.low_latency_wakeup",
+                   "gamescope.force_grab_cursor", "gamescope.low_latency_wakeup", "gamescope.auto_vsync",
                    "gamescope.force_windows_fullscreen", "gamescope.force_grab_keyboard",
                    "gamescope.sdr_gamut_wideness", "gamescope.sdr_on_hdr_brightness_nits",
                    "gamescope.hdr_input_gain", "gamescope.sdr_input_gain" } );

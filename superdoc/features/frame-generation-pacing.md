@@ -493,8 +493,9 @@ is dropped, a double content step some 30 times a second -- a low-frequency judd
 from that session's watch capture (an ideal 0.9-tick stream with even content into a 280 Hz
 host that shows the newest commit per vblank): 31 double steps/s, 11% of shown frames off the
 mean step by more than 1 ms; one paint per host vblank: 0. Native frames above the gamescope
-refresh beat the same way; for those nothing in gamescope can help (a frame limiter at the
-refresh, or a host that tears, does).
+refresh beat the same way; for those a frame limiter at the refresh helps, which the Display >
+General switch **Auto V-Sync** (2026-11-22, [display-general.md](display-general.md)) applies
+automatically while this verdict says the host does not tear (or tearing is off).
 
 Fix (`FrameGen_HostVsync()` / `FrameGen_CanExceedRefresh()`, `steamcompmgr.cpp`;
 `fghostshown::VsyncVerdict`, `src/FrameGen/HostShown.h`): the Wayland backend feeds the
@@ -519,6 +520,13 @@ with the verdict forced on (a temporary build), headless sway at 120 Hz went fro
 125 shown / 9 discarded a second to 122 / 122 / 0. **Confirmed on the user's screen
 (2026-11-22):** the generated frames no longer pass the refresh and the stutter is gone;
 `ritz_fg_host_vsync 0` removes the cap and brings it back.
+**Why that host did not tear (found 2026-11-22):** gamescope created its tearing-control object
+before its window's `xdg_toplevel`, and Hyprland binds the object to a window only when it is
+created, so the async hint never reached the window (details in
+[backend-wayland.md](backend-wayland.md#tearing)). Fixed the same day: the host is now expected
+to tear for a fullscreen gamescope window while its `allow_tearing` is on, so the vsync verdict
+(and Auto V-Sync) stays inactive there and acts only when the window is not fullscreen or the
+host's tearing is off. **Not yet confirmed on the user's screen.**
 
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its

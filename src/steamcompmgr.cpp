@@ -89,6 +89,7 @@
 #include "steamcompmgr.hpp"
 #include "UpscaleFilterGate.h"
 #include "LimiterPace.h"
+#include "AutoVsync.h"
 #include "vblankmanager.hpp"
 #include "log.hpp"
 #include "Utils/Defer.h"
@@ -485,6 +486,9 @@ create_color_mgmt_luts(const gamescope_color_mgmt_t& newColorMgmt, gamescope_col
 }
 
 gamescope::ConVar<bool> cv_tearing_enabled{ "tearing_enabled", false, "Whether or not tearing is enabled." };
+// Display > General "Auto V-Sync" (gamescope.auto_vsync mirrors into it; AutoVsync.h).
+gamescope::ConVar<bool> cv_ritz_auto_vsync{ "ritz_auto_vsync", false,
+	"Nested Wayland: limit the game to the refresh while the output cannot show frames faster (tearing off, or a host that does not tear)." };
 int g_nSteamMaxHeight = 0;
 bool g_bVRRCapable_CachedValue = false;
 bool g_bVRRInUse_CachedValue = false;
@@ -1040,10 +1044,16 @@ static void _update_app_target_refresh_cycle()
 	}
 }
 
+static int AutoVsync_Apply( int nUserLimit );
+
 static void update_app_target_refresh_cycle()
 {
 	int nPrevFPSLimit = g_nSteamCompMgrTargetFPS;
 	_update_app_target_refresh_cycle();
+	// Auto V-Sync: a runtime overlay on the limit just computed from the user's own
+	// (stepper / protocol / --framerate-limit), which it never rewrites.
+	if ( GetBackend()->GetCurrentConnector() )
+		g_nSteamCompMgrTargetFPS = AutoVsync_Apply( g_nSteamCompMgrTargetFPS );
 	if ( !!g_nSteamCompMgrTargetFPS != !!nPrevFPSLimit )
 		update_runtime_info();
 }
@@ -8256,7 +8266,7 @@ namespace
 		// their vblank) and, second, those longer than one whole refresh; fg gpu = the library's GPU timestamps (last values), n/a without.
 		char szTiming[ 256 ];
 		// "paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 ... ms" (mean/max; see vulkan_paint_split_*)
-		char szSplit[ 320 ];
+		char szSplit[ 400 ];
 		{
 			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			// What the timer actually used last: measured (non-VRR only), VRR's fixed
@@ -8304,9 +8314,12 @@ namespace
 			if ( shown.bValid )
 			{
 				const size_t n = strlen( szSplit );
-				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s no free image %.0f/s, %s",
-					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flNoFreeImage,
-					fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) ? "host vsync yes" : "host vsync no" );
+				// The raw verdict AND what gates the cap (FrameGen_HostVsync(): also needs ritz_fg_host_vsync),
+				// so "host vsync yes" with the output past the refresh cannot mislead.
+				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s torn %.0f/s no free image %.0f/s, %s, refresh cap %s",
+					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flTorn, shown.flNoFreeImage,
+					fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) ? "host vsync yes" : "host vsync no",
+					FrameGen_HostVsync() ? "on" : "off" );
 			}
 		}
 
@@ -8412,6 +8425,46 @@ namespace
 		d.currId = 0;
 		d.t = d.t0 = d.t1 = 1.0f;
 	}
+}
+
+// Auto V-Sync (Display > General; AutoVsync.h): the limit in force, 0 = none. Written by
+// the main loop, read by the overlay's summary.
+static std::atomic<int> s_nAutoVsyncFps{ 0 };
+
+int steamcompmgr_auto_vsync_fps()
+{
+	return s_nAutoVsyncFps.load( std::memory_order_relaxed );
+}
+
+// The user's limit -> the limit to apply; logs each change of state (not per frame).
+// The host verdict is the raw one (fghostshown), not FrameGen_HostVsync(): the
+// ritz_fg_host_vsync switch is frame generation's own test switch, not this feature's.
+static int AutoVsync_Apply( int nUserLimit )
+{
+	gamescope::IBackendConnector *pConnector = GetBackend()->GetCurrentConnector();
+	const bool bOn = cv_ritz_auto_vsync;
+	const bool bNested = FrameGen_IsNestedWayland();
+	const bool bVRR = pConnector && pConnector->IsVRRActive();
+	const bool bFrameGen = fghost::Active();
+	const bool bTearReq = cv_tearing_enabled && GetBackend()->SupportsTearing();
+	const bool bHostVsync = fghostshown::Get().bHostVsync.load( std::memory_order_relaxed );
+	const int nRefreshHz = gamescope::ConvertmHzToHz( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh );
+	const int nLimit = autovsync::EffectiveLimit( bOn, bNested, bVRR, bFrameGen, bTearReq, bHostVsync, nUserLimit, nRefreshHz );
+	const int nAuto = nLimit != nUserLimit ? nLimit : 0;
+	const int nWas = s_nAutoVsyncFps.load( std::memory_order_relaxed );
+	if ( nAuto != nWas )
+	{
+		s_nAutoVsyncFps.store( nAuto, std::memory_order_relaxed );
+		if ( nAuto )
+			xwm_log.infof( "auto v-sync: limiting the game to %d fps (%s)", nAuto,
+				bTearReq ? "the host does not tear" : "tearing is not requested" );
+		else
+			xwm_log.infof( "auto v-sync: limit lifted (%s)",
+				!bOn ? "switched off" : !bNested ? "not nested Wayland" : bVRR ? "VRR in use"
+				: bFrameGen ? "frame generation or motion blur on"
+				: bTearReq && !bHostVsync ? "the host tears" : "the user's own limit applies" );
+	}
+	return nLimit;
 }
 
 // A real frame of the focused window became its newest usable commit.
@@ -11078,6 +11131,7 @@ steamcompmgr_main(int argc, char **argv)
 			g_SteamCompMgrAppRefreshCycle = gamescope::mHzToRefreshCycle( nRealRefreshmHz );
 			g_SteamCompMgrLimitedAppRefreshCycle = g_SteamCompMgrAppRefreshCycle;
 			uint32_t uPaceFps = 0;
+			update_app_target_refresh_cycle();   // Auto V-Sync follows the host verdict also while nothing paints
 			if ( g_nSteamCompMgrTargetFPS )
 			{
 				int nRealRefreshHz = gamescope::ConvertmHzToHz( nRealRefreshmHz );
@@ -11385,6 +11439,12 @@ steamcompmgr_main(int argc, char **argv)
 				( bFGTimerPaced && !bFGExtraPaced && bTearing &&
 				!bHasOverlay && !nIgnoredOverlayRepaints && !is_fading_out() &&
 				( !bForceRepaint || bFGOwnForce ) );
+			// Auto V-Sync holds the game to the refresh on a host found not to tear despite the
+			// tearing hint: the limited game reports FIFO, so bTearing is false, but the hint
+			// must stay async or the verdict stops sampling and the limit could never lift when
+			// the host starts to tear (e.g. made fullscreen). On such a host the hint does nothing.
+			const bool bAutoVsyncAsync = bHostTearOk && steamcompmgr_auto_vsync_fps() != 0 &&
+				!bHasOverlay && !is_fading_out();
 
 			bool bShouldPaint = false;
 
@@ -11461,7 +11521,7 @@ steamcompmgr_main(int argc, char **argv)
 
 				if ( !bFGSkip )
 				{
-					paint_all( pPaintFocus, eFlipType == FlipType::Async || bFGTearPresent );
+					paint_all( pPaintFocus, eFlipType == FlipType::Async || bFGTearPresent || bAutoVsyncAsync );
 
 					bPainted = true;
 				}
