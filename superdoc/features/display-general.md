@@ -65,11 +65,34 @@ refresh**, and the limit lifts as soon as it can. The rule is the pure
   anyway) and caps its own output on such a host; leaving it out also guarantees Auto V-Sync never
   changes frame generation. Other backends: no effect (a `ponytail:` note names DRM without tearing
   and SDL as the upgrade path).
-- "Cannot show faster": Allow tearing is off (or the backend cannot tear), **or** the host was found
-  to show our tearing-hinted commits on its vblank anyway (the raw verdict
-  `fghostshown::Get().bHostVsync`, see [frame-generation-pacing.md](frame-generation-pacing.md),
-  "A host that does not tear"; deliberately not `FrameGen_HostVsync()`, whose `ritz_fg_host_vsync`
-  is frame generation's own switch).
+- "Cannot show faster", any one of (the first that holds is the cause, `autovsync::LimitCause()`):
+  1. Allow tearing is off (or the backend cannot tear);
+  2. the host was found to show our tearing-hinted commits on its vblank anyway (the raw verdict
+     `fghostshown::Get().bHostVsync`, see [frame-generation-pacing.md](frame-generation-pacing.md),
+     "A host that does not tear"; deliberately not `FrameGen_HostVsync()`, whose
+     `ritz_fg_host_vsync` is frame generation's own switch);
+  3. **gamescope composites its paints** (2026-11-22): `autovsync::CompositeGate`, fed after every
+     paint with "this paint can never flip async, whatever the game asks": the backend composited
+     it (`GetVBlankTimer().WasCompositing()`, set from `bNeedsFullComposite` after each Present) or
+     an overlay window was up (`bHasOverlay`). Both are the main loop's own reasons to force a
+     `Normal` flip and neither depends on the game's present mode, which the limit itself turns to
+     FIFO. Left out: `nIgnoredOverlayRepaints` and a fade (one-off paints; the debounce covers them).
+     Debounce: on once such paints kept coming (no gap over 500 ms) for 250 ms, so a lone
+     composited paint never engages it; off once none came for 500 ms. The limit and its log line
+     therefore do not toggle per paint. Measured headless (sway, 120 Hz, vkcube, tearing on):
+     `composite_force` 1 -> 0 -> 1 live gives exactly one log line per change, the game at the
+     tick rate under the limit (`limiter ... grid`, divisor 1) and about 1500 fps without it. At
+     start-up the first paints composite before the game's window can be scanned out directly, so
+     a game that is not composited later shows one engage / lift pair shortly after it starts.
+     `Why:` found in the field 2026-11-22: with scaling or a Shaders effect on (also the HUD, the
+     Crosshair, the settings overlay, ReShade, a colour slider, HDR ITM), every native paint is
+     composited, and a composited paint is never flipped async (`WasCompositing()` in the `bTearing`
+     branch). gamescope then paints once per vblank-timer tick and flips in sync, so it never sends
+     more than one frame per refresh, whatever the host would do with a torn frame; game frames above
+     the refresh are dropped inside gamescope, the very beat this switch removes. The hint never
+     went async, the verdict never sampled and stayed at "tearing", and the switch did nothing (a
+     game at about 220 fps on 280 Hz with tearing on). The host's verdict is irrelevant in that
+     state.
 - The refresh is the one the vblank timer ticks at (`g_nNestedRefresh`, else `g_nOutputRefresh`),
   the value the limiter's main-loop code and frame generation read.
 - A user limit at or below the refresh is left alone; no limit or one above the refresh becomes the
@@ -82,17 +105,21 @@ refresh**, and the limit lifts as soon as it can. The rule is the pure
   (`bAutoVsyncAsync` beside `paint_all()`): the held game reports FIFO, so without this the hint would
   turn to vsync, the verdict would stop sampling and the limit could never lift when the host starts
   to tear (e.g. the window made fullscreen). Overlay up or a fade: vsync, as for every hint.
-  **Known gap (read 2026-11-22, not fixed):** that only holds once the limit is in force. With Allow
-  tearing on, the limit needs the verdict "vsync", the verdict starts as "tearing" and samples only
-  async-hinted commits, and a native game gets the async hint only when `bTearing` picks an `Async`
-  flip (its commits ask for async, no VRR, no overlay, the previous paint did not composite). A game
-  that never gets there (vsynced, or every paint composites because the HUD/Crosshair is up) never
-  feeds the verdict, so Auto V-Sync never engages with tearing on.
+  Only for cause 2 (`s_eAutoVsyncCause == Cause::HostVsync`): a limit held because gamescope
+  composites has nothing to sample, and its composited paints stay the sync flips they always were,
+  so what is sent to the host does not change. The verdict is fed only while gamescope does not
+  composite and the unlimited game asks for async: then cause 3 lifts after its debounce, the paints
+  flip async, the verdict samples, and causes 2 / none decide as before. A vsynced game (FIFO by its
+  own choice) on a host that does not tear, with nothing composited, still never feeds the verdict:
+  it is limited by its own vsync then anyway.
 - One log line per change of state, e.g. `auto v-sync: limiting the game to 280 fps (the host does
-  not tear)` / `(tearing is not requested)` and `auto v-sync: limit lifted (the host tears)`.
+  not tear)` / `(tearing is not requested)` / `(gamescope draws every frame itself, one per
+  refresh)` and `auto v-sync: limit lifted (the host tears and gamescope no longer draws every frame
+  itself)`.
 - Why it does not limit right now: the `auto-vsync` field of the `status:` line (`ritz_status`,
-  [status-line.md](status-line.md)) names the first blocking condition, and its `verdict samples`
-  say whether the verdict is fed at all.
+  [status-line.md](status-line.md)) names the first blocking condition (or, while it limits, the
+  cause), its `composite N% gate N` the share of composited paints and the debounced state, and its
+  `verdict samples` whether the verdict is fed at all.
 
 The limit equals the refresh, so the existing limiter keeps it **on the vblank grid** with divisor 1
 (see [frame-limiter.md](frame-limiter.md)): a Vulkan game through our layer is told FIFO and the

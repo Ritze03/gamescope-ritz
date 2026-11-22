@@ -704,8 +704,8 @@ namespace gamescope
 						[ b ] { cv_ritz_auto_vsync = b; } );
 				} ) )
 			.Key( "gamescope.auto_vsync" )
-			.Help( "Limits the game to the refresh rate while the desktop shows only one frame per "
-			       "refresh, which removes stutter from frames that would be thrown away. No limit while "
+			.Help( "Limits the game to the refresh rate while frames faster than that cannot be shown, "
+			       "which removes stutter from frames that would be thrown away. No limit while "
 			       "frames can really be shown faster (tearing). Only when gamescope runs in a window "
 			       "on a Wayland desktop, without VRR or frame generation." )
 			.Default( false )
