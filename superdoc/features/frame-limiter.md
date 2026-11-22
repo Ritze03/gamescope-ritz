@@ -102,6 +102,27 @@ headless only (vkcube at 280 Hz, frames over time: limit 120 gave 119.5 on X11 b
 119.8 with MAILBOX, 118.6 on native Wayland; limit 140, on the grid, 139.9; at 60 Hz, limit 60,
 60.1), not by eye on a display.
 
+## Auto V-Sync: a runtime limit on top (2026-11-22)
+
+The Display > General switch **Auto V-Sync** ([display-general.md](display-general.md#auto-v-sync-displayauto_vsync))
+lowers "no limit" or a limit above the refresh to the refresh while the nested Wayland output cannot
+show frames faster (tearing off, or a host found not to tear). It is applied in
+`update_app_target_refresh_cycle()` after `g_nSteamCompMgrTargetFPS` was computed from
+`g_nCombinedAppRefreshCycleOverride`, so the stored `gamescope.fps_limit`, the stepper and every
+other way to set a limit keep their values; `steamcompmgr_auto_vsync_fps()` says whether it is in
+force. Measured headless (sway, 120 Hz, vkcube): the stepper and the profile still read 0 after the
+auto limit engaged and lifted; a user limit of 60 stays 60.
+
+**Phase lock.** A limit equal to the refresh must sit on the host's refreshes, or two nearly equal
+clocks drift and a frame is skipped or repeated every few seconds. So Auto V-Sync acts only where
+`limiterpace::LayerPaces()` keeps it on the vblank grid (no VRR, no frame generation / motion blur,
+and the refresh divides itself): divisor 1, the compositor releases one held FIFO commit per vblank,
+and the vblank timer follows the host's `presented` times (`MarkVBlank()`). The layer's own
+sleep-to-deadline timer is never used for it. The game's frame times as the game sees them are
+bursty under this hold (vkcube at 120 Hz: about half 16.6 ms and half 0.2 ms, 120 a second) exactly
+as under a user limit of 120 without Auto V-Sync; that is the held-commit backpressure, not what the
+host is sent (at most one commit per vblank).
+
 ## Related
 
 - [frame-generation.md](frame-generation.md), [frame-generation-limits.md](frame-generation-limits.md) — the capped rate frame generation multiplies.

@@ -9,6 +9,10 @@ All notable user-facing changes, newest first. Categories:
 
 ## 2026-11-22
 
+### Added
+- **Auto V-Sync**: a new switch under Display > General limits the game to the refresh rate
+  while the desktop does not let its window tear.
+
 ### Info
 - **Motion guard**: Motion version 3 now uses the Guard setting by default.
 

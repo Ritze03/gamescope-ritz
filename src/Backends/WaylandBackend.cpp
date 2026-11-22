@@ -135,6 +135,9 @@ namespace gamescope
     gamescope::ConVar<bool> cv_wayland_mouse_warp_without_keyboard_focus( "wayland_mouse_warp_without_keyboard_focus", true, "Should we only forward mouse warps to the app when we have keyboard focus?" );
     gamescope::ConVar<bool> cv_wayland_mouse_relmotion_without_keyboard_focus( "wayland_mouse_relmotion_without_keyboard_focus", false, "Should we only forward mouse relative motion to the app when we have keyboard focus?" );
     gamescope::ConVar<bool> cv_wayland_use_modifiers( "wayland_use_modifiers", true, "Use DMA-BUF modifiers?" );
+    // Test hook for the host-vsync verdict (HostShown.h): headless sway never reports the VSYNC kind flag.
+    gamescope::ConVar<int> cv_ritz_host_vsync_test( "ritz_host_vsync_test", -1,
+        "Test only: -1 measure the host (default); 0 / 1 report a tearing / vsync host while the tearing hint is async." );
 
     gamescope::ConVar<float> cv_wayland_hdr10_saturation_scale( "wayland_hdr10_saturation_scale", 1.0, "Saturation scale for HDR10 content by gamut expansion. 1.0 - 1.2 is a good range to play with." );
 
@@ -1977,6 +1980,10 @@ namespace gamescope
                 struct wp_presentation_feedback *pFeedback = wp_presentation_feedback( m_pBackend->GetPresentation(), m_pSurface );
                 wp_presentation_feedback_add_listener( pFeedback, &s_PresentationFeedbackListener, this );
                 fghostshown::Get().ulCommits.fetch_add( 1, std::memory_order_relaxed );
+                // Test hook (ritz_host_vsync_test): forces the verdict per commit sent while the hint is
+                // async, so a forced value also stops being applied when the hint goes vsync.
+                if ( m_bSentAsyncHint && cv_ritz_host_vsync_test >= 0 )
+                    fghostshown::Get().bHostVsync.store( cv_ritz_host_vsync_test != 0, std::memory_order_relaxed );
             }
 
             if ( m_pWPColorManagedSurface )
@@ -2343,7 +2350,7 @@ namespace gamescope
         // Does the host honour the async hint? (HostShown.h, VsyncVerdict.) Only commits
         // sent while the hint is async tell; the hint changes rarely, so a few feedbacks of
         // commits from before a change are noise the verdict's window absorbs.
-        if ( m_bSentAsyncHint )
+        if ( m_bSentAsyncHint && cv_ritz_host_vsync_test < 0 )
             fghostshown::Get().bHostVsync.store( m_VsyncVerdict.Note( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ), std::memory_order_relaxed );
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );

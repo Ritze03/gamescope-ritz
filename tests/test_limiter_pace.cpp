@@ -1,10 +1,11 @@
-// The Frame limiter's pacing rules (src/LimiterPace.h).
+// The Frame limiter's pacing rules (src/LimiterPace.h) and Auto V-Sync's limit (src/AutoVsync.h).
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
 
 #include "LimiterPace.h"
 #include "FpsLimitApply.h"
+#include "AutoVsync.h"
 
 using namespace limiterpace;
 
@@ -48,4 +49,30 @@ TEST_CASE( "limiter: the saved value is pushed on a change only", "[limiter]" )
 	CHECK( nLast == fpslimit::kMax );
 	int nFresh = -1;
 	CHECK( fpslimit::NeedsPush( nFresh, 0 ) );       // a saved 0 still counts as a first push
+}
+
+// EffectiveLimit( on, nestedWayland, vrr, frameGen, tearingRequested, hostVsync, userLimit, refreshHz )
+TEST_CASE( "auto v-sync: the effective limit", "[limiter]" )
+{
+	using autovsync::EffectiveLimit;
+	// Engages: tearing not requested, or requested but the host vsyncs; no user limit or one above the refresh.
+	CHECK( EffectiveLimit( true, true, false, false, false, false, 0, 120 ) == 120 );
+	CHECK( EffectiveLimit( true, true, false, false, true, true, 0, 280 ) == 280 );
+	CHECK( EffectiveLimit( true, true, false, false, false, false, 300, 280 ) == 280 );
+	CHECK( EffectiveLimit( true, true, false, false, true, true, 480, 280 ) == 280 );
+	// The output can show more than one frame per refresh: the user's limit (or none).
+	CHECK( EffectiveLimit( true, true, false, false, true, false, 0, 280 ) == 0 );
+	CHECK( EffectiveLimit( true, true, false, false, true, false, 300, 280 ) == 300 );
+	// A user limit at or below the refresh is never changed.
+	CHECK( EffectiveLimit( true, true, false, false, false, false, 60, 120 ) == 60 );
+	CHECK( EffectiveLimit( true, true, false, false, true, true, 120, 120 ) == 120 );
+	// Switch off, another backend, VRR, frame generation, or no refresh known: the user's limit.
+	CHECK( EffectiveLimit( false, true, false, false, false, false, 0, 120 ) == 0 );
+	CHECK( EffectiveLimit( false, true, false, false, true, true, 200, 120 ) == 200 );
+	CHECK( EffectiveLimit( true, false, false, false, false, false, 0, 120 ) == 0 );
+	CHECK( EffectiveLimit( true, true, true, false, false, false, 0, 120 ) == 0 );
+	CHECK( EffectiveLimit( true, true, false, true, false, false, 0, 120 ) == 0 );
+	CHECK( EffectiveLimit( true, true, false, false, false, false, 0, 0 ) == 0 );
+	// The auto limit is the refresh, so the existing limiter keeps it on the vblank grid (divisor 1).
+	CHECK_FALSE( limiterpace::LayerPaces( false, false, 280, EffectiveLimit( true, true, false, false, true, true, 0, 280 ) ) );
 }

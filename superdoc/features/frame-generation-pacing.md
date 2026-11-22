@@ -493,8 +493,9 @@ is dropped, a double content step some 30 times a second -- a low-frequency judd
 from that session's watch capture (an ideal 0.9-tick stream with even content into a 280 Hz
 host that shows the newest commit per vblank): 31 double steps/s, 11% of shown frames off the
 mean step by more than 1 ms; one paint per host vblank: 0. Native frames above the gamescope
-refresh beat the same way; for those nothing in gamescope can help (a frame limiter at the
-refresh, or a host that tears, does).
+refresh beat the same way; for those a frame limiter at the refresh helps, which the Display >
+General switch **Auto V-Sync** (2026-11-22, [display-general.md](display-general.md)) applies
+automatically while this verdict says the host does not tear (or tearing is off).
 
 Fix (`FrameGen_HostVsync()` / `FrameGen_CanExceedRefresh()`, `steamcompmgr.cpp`;
 `fghostshown::VsyncVerdict`, `src/FrameGen/HostShown.h`): the Wayland backend feeds the
