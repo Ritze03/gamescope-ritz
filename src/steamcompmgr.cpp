@@ -1004,6 +1004,7 @@ static uint64_t s_ulFGPaintContentNs = 0;
 struct StatusCounters_t
 {
 	uint64_t ulPaints = 0, ulAsyncPaints = 0, ulGameFrames = 0, ulFifoPaints = 0, ulWantsAsyncPaints = 0, ulTimerTicks = 0;
+	uint64_t ulCompositePaints = 0;   // paints the backend composited (WasCompositing() after Present)
 };
 static StatusCounters_t s_Status;
 static uint64_t s_ulStatusLastBaseCommitId = 0;
@@ -3449,6 +3450,8 @@ paint_all( global_focus_t *pFocus, bool async )
 	s_Status.ulPaints++;
 	if ( async )
 		s_Status.ulAsyncPaints++;
+	if ( GetVBlankTimer().WasCompositing() )
+		s_Status.ulCompositePaints++;
 	if ( g_uCurrentBasePlaneCommitID && g_uCurrentBasePlaneCommitID != s_ulStatusLastBaseCommitId )
 	{
 		s_ulStatusLastBaseCommitId = g_uCurrentBasePlaneCommitID;
@@ -8472,6 +8475,9 @@ namespace
 static std::atomic<int> s_nAutoVsyncFps{ 0 };
 static autovsync::Why s_eAutoVsyncWhy = autovsync::Why::Off;   // main loop only
 static int s_nAutoVsyncUserLimit = 0;
+static autovsync::Cause s_eAutoVsyncCause = autovsync::Cause::NoTearing;   // main loop only; meaningful while it limits
+// Debounced "gamescope composites its paints" (AutoVsync.h): Note() after every paint.
+static autovsync::CompositeGate s_AutoVsyncGate;
 
 int steamcompmgr_auto_vsync_fps()
 {
@@ -8490,11 +8496,16 @@ static int AutoVsync_Apply( int nUserLimit )
 	const bool bFrameGen = fghost::Active();
 	const bool bTearReq = cv_tearing_enabled && GetBackend()->SupportsTearing();
 	const bool bHostVsync = fghostshown::Get().bHostVsync.load( std::memory_order_relaxed );
+	// gamescope composites its paints (debounced): they are sync flips, one per vblank-timer
+	// tick, whatever the host would do with a torn frame -- the verdict is irrelevant then,
+	// and never samples (the hint only goes async with the paint).
+	const bool bComposites = s_AutoVsyncGate.Composites( get_time_in_nanos() );
 	const int nRefreshHz = gamescope::ConvertmHzToHz( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh );
-	const int nLimit = autovsync::EffectiveLimit( bOn, bNested, bVRR, bFrameGen, bTearReq, bHostVsync, nUserLimit, nRefreshHz );
+	const int nLimit = autovsync::EffectiveLimit( bOn, bNested, bVRR, bFrameGen, bTearReq, bComposites, bHostVsync, nUserLimit, nRefreshHz );
 	const int nAuto = nLimit != nUserLimit ? nLimit : 0;
 	// For the `status:` line: what this very evaluation decided, from the same inputs.
-	s_eAutoVsyncWhy = autovsync::Reason( bOn, bNested, bVRR, bFrameGen, bTearReq, bHostVsync, nUserLimit, nRefreshHz );
+	s_eAutoVsyncWhy = autovsync::Reason( bOn, bNested, bVRR, bFrameGen, bTearReq, bComposites, bHostVsync, nUserLimit, nRefreshHz );
+	s_eAutoVsyncCause = autovsync::LimitCause( bTearReq, bHostVsync );
 	s_nAutoVsyncUserLimit = nUserLimit;
 	const int nWas = s_nAutoVsyncFps.load( std::memory_order_relaxed );
 	if ( nAuto != nWas )
@@ -8502,12 +8513,13 @@ static int AutoVsync_Apply( int nUserLimit )
 		s_nAutoVsyncFps.store( nAuto, std::memory_order_relaxed );
 		if ( nAuto )
 			xwm_log.infof( "auto v-sync: limiting the game to %d fps (%s)", nAuto,
-				bTearReq ? "the host does not tear" : "tearing is not requested" );
+				autovsync::CauseText( s_eAutoVsyncCause ) );
 		else
 			xwm_log.infof( "auto v-sync: limit lifted (%s)",
 				!bOn ? "switched off" : !bNested ? "not nested Wayland" : bVRR ? "VRR in use"
 				: bFrameGen ? "frame generation or motion blur on"
-				: bTearReq && !bHostVsync ? "the host tears" : "the user's own limit applies" );
+				: bTearReq && !bComposites && !bHostVsync ? "the host tears and gamescope no longer draws every frame itself"
+				: "the user's own limit applies" );
 	}
 	return nLimit;
 }
@@ -8569,18 +8581,19 @@ static void StatusLine_Tick()
 		const char *pszLimiter = !g_nSteamCompMgrTargetFPS ? "off" : g_uLimiterPaceFps ? "layer" : "grid";
 		char szAuto[ 96 ];
 		if ( s_nAutoVsyncFps.load( std::memory_order_relaxed ) )
-			snprintf( szAuto, sizeof( szAuto ), "limit %d", s_nAutoVsyncFps.load( std::memory_order_relaxed ) );
+			snprintf( szAuto, sizeof( szAuto ), "limit %d: %s", s_nAutoVsyncFps.load( std::memory_order_relaxed ),
+				autovsync::CauseText( s_eAutoVsyncCause ) );
 		else
 			snprintf( szAuto, sizeof( szAuto ), "no limit: %s", autovsync::Text( s_eAutoVsyncWhy ) );
 		auto Pct = [&]( uint64_t x ) { return C.ulPaints ? 100.0 * double( x ) / double( C.ulPaints ) : 0.0; };
 
-		fg_log.infof( "status: game %.1f fps fifo %.0f%% wants-async %.0f%% (now fifo %d async %d) | paints %.1f/s async %.1f/s no-free-image %.1f/s"
+		fg_log.infof( "status: game %.1f fps fifo %.0f%% wants-async %.0f%% (now fifo %d async %d) | paints %.1f/s async %.1f/s composite %.0f%% gate %d no-free-image %.1f/s"
 			" | host sent %.1f shown %.1f discarded %.1f zero-copy %.1f torn %.1f /s, feedback refresh %.3f Hz"
 			" | refresh timer %.1f/s nested %.3f output %.3f Hz | vrr adaptive_sync %d host-vrr %d active %d lead %s %.2f ms"
 			" | tearing enabled %d supported %d hint %s | verdict host-vsync %d samples %llu (total %llu) test %d fg_host_vsync %d fg-cap %d"
 			" | limiter user %d target %d file %d,%u %s | auto-vsync %s %s | fg %s%s blur %s",
 			double( C.ulGameFrames ) / flSec, Pct( C.ulFifoPaints ), Pct( C.ulWantsAsyncPaints ), int( bFifoNow ), int( bWantsAsyncNow ),
-			double( C.ulPaints ) / flSec, double( C.ulAsyncPaints ) / flSec, double( dn ) / flSec,
+			double( C.ulPaints ) / flSec, double( C.ulAsyncPaints ) / flSec, Pct( C.ulCompositePaints ), int( s_AutoVsyncGate.bOn ), double( dn ) / flSec,
 			double( dc ) / flSec, double( ds ) / flSec, double( dd ) / flSec, double( dz ) / flSec, double( dt ) / flSec,
 			uFbRefreshNs ? 1e9 / double( uFbRefreshNs ) : 0.0,   // 0: no `presented` yet, or the host reported none (VRR)
 			double( C.ulTimerTicks ) / flSec, g_nNestedRefresh / 1000.0, g_nOutputRefresh / 1000.0,
@@ -11593,7 +11606,10 @@ steamcompmgr_main(int argc, char **argv)
 			// tearing hint: the limited game reports FIFO, so bTearing is false, but the hint
 			// must stay async or the verdict stops sampling and the limit could never lift when
 			// the host starts to tear (e.g. made fullscreen). On such a host the hint does nothing.
+			// Only for that cause: a limit held because gamescope composites its paints has
+			// nothing to sample, and its composited paints stay the sync flips they are.
 			const bool bAutoVsyncAsync = bHostTearOk && steamcompmgr_auto_vsync_fps() != 0 &&
+				s_eAutoVsyncCause == autovsync::Cause::HostVsync &&
 				!bHasOverlay && !is_fading_out();
 
 			bool bShouldPaint = false;
@@ -11673,6 +11689,9 @@ steamcompmgr_main(int argc, char **argv)
 				if ( !bFGSkip )
 				{
 					paint_all( pPaintFocus, eFlipType == FlipType::Async || bFGTearPresent || bAutoVsyncAsync );
+					// Auto V-Sync: was this paint one the loop never flips async, whatever the
+					// game asks (composited, or an overlay window up)? See AutoVsync.h.
+					s_AutoVsyncGate.Note( get_time_in_nanos(), GetVBlankTimer().WasCompositing() || bHasOverlay );
 
 					bPainted = true;
 				}

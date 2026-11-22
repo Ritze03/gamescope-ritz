@@ -106,7 +106,8 @@ headless only (vkcube at 280 Hz, frames over time: limit 120 gave 119.5 on X11 b
 
 The Display > General switch **Auto V-Sync** ([display-general.md](display-general.md#auto-v-sync-displayauto_vsync))
 lowers "no limit" or a limit above the refresh to the refresh while the nested Wayland output cannot
-show frames faster (tearing off, or a host found not to tear). It is applied in
+show frames faster (tearing off, a host found not to tear, or gamescope compositing its paints,
+which makes every paint a sync flip, one per vblank-timer tick). It is applied in
 `update_app_target_refresh_cycle()` after `g_nSteamCompMgrTargetFPS` was computed from
 `g_nCombinedAppRefreshCycleOverride`, so the stored `gamescope.fps_limit`, the stepper and every
 other way to set a limit keep their values; `steamcompmgr_auto_vsync_fps()` says whether it is in
@@ -121,7 +122,9 @@ and the vblank timer follows the host's `presented` times (`MarkVBlank()`). The 
 sleep-to-deadline timer is never used for it. The game's frame times as the game sees them are
 bursty under this hold (vkcube at 120 Hz: about half 16.6 ms and half 0.2 ms, 120 a second) exactly
 as under a user limit of 120 without Auto V-Sync; that is the held-commit backpressure, not what the
-host is sent (at most one commit per vblank).
+host is sent (at most one commit per vblank). The same holds when the limit engages because gamescope
+composites its paints (2026-11-22): measured headless with tearing on and `composite_force 1`, the
+`status:` line reads `limiter user 0 target 120 file 1,0 grid`, the game at the vblank-timer rate.
 
 ## Related
 

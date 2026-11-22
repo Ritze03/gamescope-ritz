@@ -21,7 +21,7 @@ Stable order, `|`-separated groups, values over the interval unless "now":
 
 ```
 status: game 60.0 fps fifo 100% wants-async 0% (now fifo 1 async 0) | paints 62.5/s async 0.0/s
-no-free-image 0.0/s | host sent 62.5 shown 62.5 discarded 0.0 zero-copy 0.0 torn 62.5 /s, feedback
+composite 100% gate 1 no-free-image 0.0/s | host sent 62.5 shown 62.5 discarded 0.0 zero-copy 0.0 torn 62.5 /s, feedback
 refresh 0.000 Hz | refresh timer 124.9/s nested 120.000 output 120.000 Hz | vrr adaptive_sync 0
 host-vrr 1 active 0 lead measured 1.50 ms | tearing enabled 0 supported 1 hint vsync | verdict
 host-vsync 0 samples 0 (total 0) test -1 fg_host_vsync 1 fg-cap 0 | limiter user 60 target 60 file
@@ -35,8 +35,12 @@ host-vsync 0 samples 0 (total 0) test -1 fg_host_vsync 1 fg-cap 0 | limiter user
   was FIFO / asked for async (`commit_t::fifo` / `::async`, from the present mode our WSI layer
   reports, `wlserver_surface_is_async()`); `now` = the held base commit at the time of the line.
 - `paints`: paints that reached the backend's `Present()`; `async` = of those, sent with the async
-  flag (on nested Wayland: the tearing hint `async`); `no-free-image` = paints dropped because the
-  host held every output image.
+  flag (on nested Wayland: the tearing hint `async`); `composite` = share of them the backend
+  composited (`WasCompositing()` right after `Present()`; a composited native paint is never flipped
+  async), `gate` = Auto V-Sync's debounced "gamescope composites its paints" now
+  (`autovsync::CompositeGate`, which also counts paints with an overlay window up; added
+  2026-11-22, when this turned out to be the deciding input); `no-free-image` = paints dropped
+  because the host held every output image.
 - `host`: the `fghostshown` counters (`src/FrameGen/HostShown.h`, nested Wayland only), with their
   own baseline so frame generation's line keeps its interval. `feedback refresh` = the refresh the
   last `presented` reported; 0 = none yet, or the host reports none, which gamescope reads as "host is
@@ -55,7 +59,9 @@ host-vsync 0 samples 0 (total 0) test -1 fg_host_vsync 1 fg-cap 0 | limiter user
   `g_nSteamCompMgrTargetFPS`, the two limiter-file words (on, pace fps) and the mode: `off`,
   `grid` (compositor holds FIFO commits to the vblank grid) or `layer` (the WSI layer paces).
   See [frame-limiter.md](frame-limiter.md).
-- `auto-vsync`: the switch, then `limit N` or `no limit: <first blocking condition>`, from
+- `auto-vsync`: the switch, then `limit N: <cause>` (`autovsync::LimitCause()`: `tearing is not
+  requested`, `the host does not tear`, `gamescope draws every frame itself, one per refresh`) or
+  `no limit: <first blocking condition>`, from
   `autovsync::Reason()` (`src/AutoVsync.h`) evaluated with exactly the inputs of the last
   `AutoVsync_Apply()`, so it cannot disagree with it: `switch off`, `not nested Wayland`,
   `VRR in use`, `frame generation or motion blur on`, `no refresh known`,
