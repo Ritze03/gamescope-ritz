@@ -8266,7 +8266,7 @@ namespace
 		// their vblank) and, second, those longer than one whole refresh; fg gpu = the library's GPU timestamps (last values), n/a without.
 		char szTiming[ 256 ];
 		// "paint split: pair n=170 miss=160 cpu 0.3/0.9 exec 4.1/5.2 wait 0.2/6.8, other n=1000 ... ms" (mean/max; see vulkan_paint_split_*)
-		char szSplit[ 320 ];
+		char szSplit[ 400 ];
 		{
 			gamescope::CVBlankTimer &Timer = GetVBlankTimer();
 			// What the timer actually used last: measured (non-VRR only), VRR's fixed
@@ -8314,9 +8314,12 @@ namespace
 			if ( shown.bValid )
 			{
 				const size_t n = strlen( szSplit );
-				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s no free image %.0f/s, %s",
-					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flNoFreeImage,
-					fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) ? "host vsync yes" : "host vsync no" );
+				// The raw verdict AND what gates the cap (FrameGen_HostVsync(): also needs ritz_fg_host_vsync),
+				// so "host vsync yes" with the output past the refresh cannot mislead.
+				snprintf( szSplit + n, sizeof( szSplit ) - n, ", host: sent %.0f/s shown %.0f/s discarded %.0f/s zero-copy %.0f/s torn %.0f/s no free image %.0f/s, %s, refresh cap %s",
+					shown.flCommits, shown.flShown, shown.flDiscarded, shown.flZeroCopy, shown.flTorn, shown.flNoFreeImage,
+					fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) ? "host vsync yes" : "host vsync no",
+					FrameGen_HostVsync() ? "on" : "off" );
 			}
 		}
 

@@ -3592,9 +3592,12 @@ bool vulkan_remake_swapchain( void )
 
 // A host scanning an image out holds it until the next page flip, and the one committed
 // behind it until that flip too, which left too few images to keep drawing at 280 Hz.
+// Five since 2026-11-22: a host that tears holds one more (on screen, submitted and awaiting
+// its flip, the newest committed one not yet rendered), so four left none while we draw.
+// ponytail: fixed; a start-up knob would need new plumbing, add one if the field wants 6.
 static uint32_t vulkan_output_image_count()
 {
-	return GetBackend()->HostMayScanOutOutputImages() ? 4u : 3u;
+	return GetBackend()->HostMayScanOutOutputImages() ? 5u : 3u;
 }
 
 static bool vulkan_make_output_images( VulkanOutput_t *pOutput )

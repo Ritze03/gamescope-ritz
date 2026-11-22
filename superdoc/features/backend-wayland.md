@@ -200,7 +200,7 @@ While [frame generation](frame-generation.md) is enabled, full composite is forc
 
 ## Output images the host still holds
 
-A full composite draws into one of four output images (`g_output.outputImages`; three on every
+A full composite draws into one of five output images (`g_output.outputImages`; three on every
 other backend, `vulkan_output_image_count()`) and attaches it to the toplevel; the host keeps that image from the attach until it sends
 `wl_buffer.release`, which the backend Fb's acquisition count (and so
 `CVulkanTexture::IsInUse()`) reflects. Before each composite,
@@ -314,6 +314,15 @@ hypothesis, untested. The chosen modifier is logged at creation. See
 one being drawn. With three, 34-46 paints a second found none free and shown stopped at 240-273;
 with four, 7-14 and 261-278. Without scanout four also mostly clears the 4-53 per second the
 uncompressed images otherwise cost.
+
+**Five output images (2026-11-22).** A host that tears holds one more: the image on screen, the one
+submitted and awaiting its flip event, and the newest committed one not yet rendered, so four left
+none free while gamescope draws, and any late release dropped the paint. Found in the field with the
+host really tearing: `no free image` went from 0-1/s (host not tearing) to 6-16/s and later 31-110/s,
+`sent` fell from about 300/s to 183-232/s, felt as lag. `vulkan_output_image_count()` now returns 5
+for this backend (everything sized from the pool uses `size()`); the cost is one more output-sized
+image (and its partial-overlay twin where that exists). Fixed at 5: a start-up knob would need new
+plumbing. **Not yet confirmed on the user's screen**; headless sway does not tear and never ran out.
 
 The picture was checked with `grim`, which makes the host composite for that frame, so it shows
 gamescope's buffer and not the plane's read. 720p game, 1080p output, scanout on, frame generation

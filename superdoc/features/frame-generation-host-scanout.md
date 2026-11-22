@@ -14,14 +14,19 @@ always composites. See the backend pages.
 ### Frames the host shows (nested Wayland, 2026-11-04)
 
 Under nested Wayland the status line ends with `host: sent 311/s shown 217/s discarded 94/s
-zero-copy 0/s no free image 0/s` (`src/FrameGen/HostShown.h`, counted in the Wayland backend's
+zero-copy 0/s torn 0/s no free image 0/s` (`src/FrameGen/HostShown.h`, counted in the Wayland backend's
 `wp_presentation` feedback handlers; one feedback object per commit of the toplevel surface,
 so `sent` = commits, `shown` = `presented`, `discarded` = replaced by a newer commit before the
-host drew, `zero-copy` = shown frames the host scanned out directly, `no free image` = paints
-dropped because the host held every output image; other backends print nothing; since
-2026-11-21 it ends with `host vsync yes|no`, whether the host shows our async-hinted commits on
-its vblank, see [frame-generation-pacing.md](frame-generation-pacing.md), "A host that does not
-tear"). `Why:` the "presented 311 fps" figure counts
+host drew, `zero-copy` = shown frames the host scanned out directly, `torn` (2026-11-22) = shown frames
+without the `VSYNC` kind flag, i.e. presented without waiting for a refresh, counted for every
+`presented` whatever the hint (headless sway sets no flags, so there every shown frame counts),
+`no free image` = paints dropped because the host held every output image; other backends print
+nothing; since 2026-11-21 it ends with `host vsync yes|no`, the raw verdict whether the host shows
+our async-hinted commits on its vblank, see [frame-generation-pacing.md](frame-generation-pacing.md),
+"A host that does not tear"; since 2026-11-22 followed by `refresh cap on|off`, what actually caps
+frame generation's output (`FrameGen_HostVsync()`: the verdict AND `ritz_fg_host_vsync`). `Why`
+both: a field log showed `host vsync yes` while 294-307 frames a second were sent to a 280 Hz
+screen, which the raw verdict alone cannot explain). `Why:` the "presented 311 fps" figure counts
 what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and
 nothing in the log said so.
 

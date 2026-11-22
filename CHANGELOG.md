@@ -15,6 +15,7 @@ All notable user-facing changes, newest first. Categories:
 
 ### Fixed
 - **Allow tearing**: tearing now takes effect on Hyprland without a window rule.
+- **Tearing in a window**: frames are no longer dropped while the desktop tears the window.
 
 ### Info
 - **Motion guard**: Motion version 3 now uses the Guard setting by default.

@@ -3,7 +3,9 @@
 // answers every commit with wp_presentation feedback, `presented` (it reached the screen)
 // or `discarded` (a newer commit replaced it before the screen was updated). `zero-copy`
 // is how many of the shown frames the host scanned out directly, without drawing them
-// itself. `no free image` is how often a paint was dropped because the host still held
+// itself. `torn` is how many shown frames came without the VSYNC kind flag (the host
+// presented them without waiting for a refresh), counted for every `presented` whatever the
+// tearing hint. `no free image` is how often a paint was dropped because the host still held
 // all the output images. Only the nested Wayland backend feeds this; everywhere else the
 // counters stay at zero and the status line leaves the numbers out.
 #pragma once
@@ -19,6 +21,7 @@ namespace fghostshown
 		std::atomic<uint64_t> ulShown{ 0 };
 		std::atomic<uint64_t> ulDiscarded{ 0 };
 		std::atomic<uint64_t> ulZeroCopy{ 0 };
+		std::atomic<uint64_t> ulTorn{ 0 };
 		std::atomic<uint64_t> ulNoFreeImage{ 0 };
 		// The host showed our async-hinted commits on its vblank (VsyncVerdict below).
 		std::atomic<bool> bHostVsync{ false };
@@ -71,17 +74,18 @@ namespace fghostshown
 	struct Rates
 	{
 		bool bValid = false;
-		double flCommits = 0, flShown = 0, flDiscarded = 0, flZeroCopy = 0, flNoFreeImage = 0;
+		double flCommits = 0, flShown = 0, flDiscarded = 0, flZeroCopy = 0, flTorn = 0, flNoFreeImage = 0;
 	};
 
 	inline Rates TakeRates( uint64_t ulNowNs )
 	{
-		static uint64_t s_ulLastNs = 0, s_ulC = 0, s_ulS = 0, s_ulD = 0, s_ulZ = 0, s_ulN = 0;
+		static uint64_t s_ulLastNs = 0, s_ulC = 0, s_ulS = 0, s_ulD = 0, s_ulZ = 0, s_ulT = 0, s_ulN = 0;
 		Counters &C = Get();
 		const uint64_t c = C.ulCommits.load( std::memory_order_relaxed );
 		const uint64_t s = C.ulShown.load( std::memory_order_relaxed );
 		const uint64_t d = C.ulDiscarded.load( std::memory_order_relaxed );
 		const uint64_t z = C.ulZeroCopy.load( std::memory_order_relaxed );
+		const uint64_t t = C.ulTorn.load( std::memory_order_relaxed );
 		const uint64_t n = C.ulNoFreeImage.load( std::memory_order_relaxed );
 		Rates r;
 		if ( s_ulLastNs && ulNowNs > s_ulLastNs && c > s_ulC )
@@ -92,6 +96,7 @@ namespace fghostshown
 			r.flShown = double( s - s_ulS ) / flSec;
 			r.flDiscarded = double( d - s_ulD ) / flSec;
 			r.flZeroCopy = double( z - s_ulZ ) / flSec;
+			r.flTorn = double( t - s_ulT ) / flSec;
 			r.flNoFreeImage = double( n - s_ulN ) / flSec;
 		}
 		s_ulLastNs = ulNowNs;
@@ -99,6 +104,7 @@ namespace fghostshown
 		s_ulS = s;
 		s_ulD = d;
 		s_ulZ = z;
+		s_ulT = t;
 		s_ulN = n;
 		return r;
 	}

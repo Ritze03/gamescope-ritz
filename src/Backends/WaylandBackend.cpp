@@ -2360,6 +2360,8 @@ namespace gamescope
         fghostshown::Get().ulShown.fetch_add( 1, std::memory_order_relaxed );
         if ( uFlags & WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY )
             fghostshown::Get().ulZeroCopy.fetch_add( 1, std::memory_order_relaxed );
+        if ( !( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ) )
+            fghostshown::Get().ulTorn.fetch_add( 1, std::memory_order_relaxed );
         // Does the host honour the async hint? (HostShown.h, VsyncVerdict.) Only commits
         // sent while the hint is async tell; the hint changes rarely, so a few feedbacks of
         // commits from before a change are noise the verdict's window absorbs.
