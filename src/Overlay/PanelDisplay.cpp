@@ -704,10 +704,10 @@ namespace gamescope
 						[ b ] { cv_ritz_auto_vsync = b; } );
 				} ) )
 			.Key( "gamescope.auto_vsync" )
-			.Help( "Limits the game to the refresh rate while frames faster than that cannot be shown, "
-			       "which removes stutter from frames that would be thrown away. No limit while "
-			       "frames can really be shown faster (tearing). Only when gamescope runs in a window "
-			       "on a Wayland desktop, without VRR or frame generation." )
+			.Help( "Limits the game, and frame generation's output, to the refresh rate while frames "
+			       "faster than that cannot be shown, which removes stutter from frames that would be "
+			       "thrown away. No limit while frames can really be shown faster (tearing). Only when "
+			       "gamescope runs in a window on a Wayland desktop, without VRR." )
 			.Default( false )
 			.Keywords( "auto vsync v-sync frame limit refresh stutter tearing cap automatic" );
 

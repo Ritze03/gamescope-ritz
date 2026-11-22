@@ -13,8 +13,8 @@ namespace autovsync
 	// only ever lowers "no limit" or "above the refresh" to the refresh, and only while:
 	//   - the switch is on, on the nested Wayland backend, not under VRR, and frame
 	//     generation / motion blur is off (those pace on the layer's timer, which is not
-	//     locked to the host's refreshes, and frame generation caps its own output on
-	//     such a host);
+	//     locked to the host's refreshes; the same switch caps frame generation's output
+	//     instead, FrameGenCap below);
 	//   - the output cannot show more than one frame per refresh: tearing is not
 	//     requested, or gamescope composites its paints (bComposites, CompositeGate
 	//     below: a composited paint is always a sync flip, one per vblank-timer tick,
@@ -61,6 +61,24 @@ namespace autovsync
 			case Why::UserLimit: return "the user's own limit applies";
 		}
 		return "?";
+	}
+
+	// Frame generation's own refresh cap (steamcompmgr.cpp FrameGen_HostVsync()): the output
+	// is held at the refresh on a host found not to tear, and only while the switch is on
+	// (bTestSwitch is the ritz_fg_host_vsync test ConVar, default on). 2026-11-22: the
+	// cap used to be on by default; it now follows Auto V-Sync.
+	inline bool FrameGenCap( bool bAutoVsyncOn, bool bTestSwitch, bool bHostVsync )
+	{
+		return bAutoVsyncOn && bTestSwitch && bHostVsync;
+	}
+
+	// The `status:` line's wording while frame generation is active (Why::FrameGen): the
+	// limiter applies no limit then, but the switch still caps the output (above).
+	inline const char *FrameGenText( bool bTestSwitch, bool bCap )
+	{
+		return bCap ? "frame generation: capped at the refresh"
+			: !bTestSwitch ? "frame generation: no cap (test switch off)"
+			: "frame generation: no cap (the host tears)";
 	}
 
 	inline int EffectiveLimit( bool bOn, bool bNestedWayland, bool bVRR, bool bFrameGen,

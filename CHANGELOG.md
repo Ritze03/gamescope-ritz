@@ -10,8 +10,8 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-22
 
 ### Added
-- **Auto V-Sync**: a new switch under Display > General limits the game to the refresh rate
-  while frames faster than that cannot be shown.
+- **Auto V-Sync**: a new switch under Display > General limits the game, and frame
+  generation's output, to the refresh rate while frames faster than that cannot be shown.
 
 ### Fixed
 - **Frame limiter**: the frame limit now holds for games started through Steam's runtime
@@ -19,6 +19,8 @@ All notable user-facing changes, newest first. Categories:
 
 ### Info
 - **Motion guard**: Motion version 3 now uses the Guard setting by default.
+- **Frame generation**: it is no longer limited to the refresh rate unless Auto V-Sync
+  is on.
 
 ## 2026-11-21
 

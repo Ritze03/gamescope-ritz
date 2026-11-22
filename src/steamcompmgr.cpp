@@ -8177,13 +8177,17 @@ namespace
 	// motion. On such a host the output is capped at the refresh and paced by the
 	// vblank timer, which the host's presentation feedback keeps on its vblanks, so
 	// it gets exactly one new frame per refresh. 0 = the behaviour before (2026-11-21).
+	// Since 2026-11-22 the cap also needs Auto V-Sync (ritz_auto_vsync); this ConVar stays as
+	// the test switch ANDed in (autovsync::FrameGenCap).
 	gamescope::ConVar<bool> cv_ritz_fg_host_vsync( "ritz_fg_host_vsync", true,
-		"Nested Wayland: when the host shows the async-hinted output on its vblank (it does not tear), "
-		"cap frame generation's output at the refresh and pace it on the vblank timer. 0 = always pace past the refresh." );
+		"Test switch, only acts while Auto V-Sync is on. Nested Wayland: when the host shows the async-hinted "
+		"output on its vblank (it does not tear), cap frame generation's output at the refresh and pace it on "
+		"the vblank timer. 0 = always pace past the refresh." );
 
 	bool FrameGen_HostVsync()
 	{
-		return cv_ritz_fg_host_vsync && fghostshown::Get().bHostVsync.load( std::memory_order_relaxed );
+		return autovsync::FrameGenCap( cv_ritz_auto_vsync, cv_ritz_fg_host_vsync,
+			fghostshown::Get().bHostVsync.load( std::memory_order_relaxed ) );
 	}
 
 	bool FrameGen_CanExceedRefresh( bool bTearingNow )
@@ -8584,7 +8588,8 @@ static void StatusLine_Tick()
 			snprintf( szAuto, sizeof( szAuto ), "limit %d: %s", s_nAutoVsyncFps.load( std::memory_order_relaxed ),
 				autovsync::CauseText( s_eAutoVsyncCause ) );
 		else
-			snprintf( szAuto, sizeof( szAuto ), "no limit: %s", autovsync::Text( s_eAutoVsyncWhy ) );
+			snprintf( szAuto, sizeof( szAuto ), "no limit: %s", s_eAutoVsyncWhy == autovsync::Why::FrameGen
+				? autovsync::FrameGenText( cv_ritz_fg_host_vsync, FrameGen_HostVsync() ) : autovsync::Text( s_eAutoVsyncWhy ) );
 		auto Pct = [&]( uint64_t x ) { return C.ulPaints ? 100.0 * double( x ) / double( C.ulPaints ) : 0.0; };
 
 		fg_log.infof( "status: game %.1f fps fifo %.0f%% wants-async %.0f%% (now fifo %d async %d) | paints %.1f/s async %.1f/s composite %.0f%% gate %d no-free-image %.1f/s"
