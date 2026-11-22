@@ -179,9 +179,28 @@ sessions all ran with `--expose-wayland`. The same build started without it was 
 layer was active in both cases, so it is not the layer. What differs in the log: with
 `--expose-wayland` the game's surface gets commits without a new buffer by the hundreds per
 second (the `xwm: a commit without a new buffer re-committed ...` line; over a million in
-one session), without it none. Who sends them and how they reach the pacing is not
-established. The healthy 25 minutes of the night also ran with the flag, so the flag is
-necessary for the degraded state, not sufficient.
+one session), without it none. The healthy 25 minutes of the night also ran with the flag,
+so the flag is necessary for the degraded state, not sufficient.
+
+What a code read added the same day (nothing of it measured yet):
+
+- The flag changes only what the children are told (`main.cpp`: `XDG_SESSION_TYPE=wayland`
+  and `WAYLAND_DISPLAY`); the compositor is the same, and the layer sends no commit itself.
+  So some client in the container behaves differently; which one is not known.
+- The re-commit line does **not** separate healthy from degraded: sessions with the same
+  rate (about 490/s) were healthy once and degraded once, and several degraded sessions
+  logged none. The line needs explicit sync and the older commit still queued, so its
+  absence proves nothing.
+- A re-commit is not dropped for a surface with the layer's swapchain feedback (the
+  duplicate check in `update_wayland_res()` requires `!feedback`): it becomes a new
+  `commit_t`, counts as a game frame (`FrameGen_OnArrival()`, the status line's `game fps`)
+  and sets `hasRepaint`. With frame generation on it cannot paint outside a tick; without
+  it, an async-flipping game paints on every one.
+- Candidate for the timer: every `Present()` records `now - last timer wake-up` as the draw
+  time (`UpdateLastDrawTime()`), also for a paint that was not the first after that
+  wake-up. One such sample in the 60-sample window puts the measured lead near the whole
+  period, and a lead that long makes the next tick fire right after the host's feedback.
+  It does not explain a degraded session that ran with the fixed 2.00 ms lead.
 
 The same timer runs fast whenever the nested refresh is set below the output's (180 on a
 280 Hz output: 188-225 ticks/s), with or without frame generation, because every host
