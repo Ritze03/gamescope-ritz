@@ -206,7 +206,7 @@ While [frame generation](frame-generation.md) is enabled, full composite is forc
 
 ## Output images the host still holds
 
-A full composite draws into one of five output images (`g_output.outputImages`; three on every
+A full composite draws into one of four output images (`g_output.outputImages`; three on every
 other backend, `vulkan_output_image_count()`) and attaches it to the toplevel; the host keeps that image from the attach until it sends
 `wl_buffer.release`, which the backend Fb's acquisition count (and so
 `CVulkanTexture::IsInUse()`) reflects. Before each composite,
@@ -321,13 +321,11 @@ one being drawn. With three, 34-46 paints a second found none free and shown sto
 with four, 7-14 and 261-278. Without scanout four also mostly clears the 4-53 per second the
 uncompressed images otherwise cost.
 
-**Five output images (2026-11-22).** Added for a host that really tears, on the reading that it
-holds one more image (on screen, awaiting its flip event, newest committed). `vulkan_output_image_count()`
-returns 5 for this backend (everything sized from the pool uses `size()`); the cost is one more
-output-sized image (and its partial-overlay twin where that exists). **It did not help in the field:**
-with the host tearing, `no free image` stayed at 170-180/s (see [Tearing](#tearing)), because the host
-keeps the images far longer than one flip. Without host tearing four were enough (0-1/s), so the
-fifth is a candidate for removal.
+**Five output images were tried and removed (2026-11-22).** Added for a host that really tears, on
+the reading that it holds one more image (on screen, awaiting its flip event, newest committed).
+It did not help in the field: with the host tearing, `no free image` stayed at 170-180/s (see
+[Tearing](#tearing)), because the host keeps the images far longer than one flip. Without host
+tearing four were enough (0-1/s), so the pool is back to four the same day.
 
 The picture was checked with `grim`, which makes the host composite for that frame, so it shows
 gamescope's buffer and not the plane's read. 720p game, 1080p output, scanout on, frame generation

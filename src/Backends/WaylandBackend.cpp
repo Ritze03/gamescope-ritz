@@ -19,6 +19,7 @@
 #include "Overlay/Diagnostics.h"
 
 #include <cstring>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <csignal>
@@ -326,6 +327,11 @@ namespace gamescope
         // Last hint sent. The protocol's own default (until set) is vsync.
         bool m_bSentAsyncHint = false;
         fghostshown::VsyncVerdict m_VsyncVerdict;
+        // Content time of each commit with a feedback object, in commit order (the judder
+        // measure, FrameGen/Judder.h). Presented and discarded both consume their entry.
+        std::mutex m_FeedbackContentMutex;
+        std::deque<std::pair<struct wp_presentation_feedback *, uint64_t>> m_FeedbackContent;
+        uint64_t TakeFeedbackContent( struct wp_presentation_feedback *pFeedback );
         wl_subsurface *m_pSubsurface = nullptr;
         libdecor_frame *m_pFrame = nullptr;
         libdecor_window_state m_eWindowState = LIBDECOR_WINDOW_STATE_NONE;
@@ -451,7 +457,11 @@ namespace gamescope
 
 
         bool HostCompositorIsCurrentlyVRR() const { return m_bHostCompositorIsCurrentlyVRR; }
-        void SetHostCompositorIsCurrentlyVRR( bool bActive ) { m_bHostCompositorIsCurrentlyVRR = bActive; }
+        void SetHostCompositorIsCurrentlyVRR( bool bActive )
+        {
+            m_bHostCompositorIsCurrentlyVRR = bActive;
+            fghostshown::Get().bHostVrr.store( bActive, std::memory_order_relaxed );   // the `status:` line
+        }
         bool CurrentDisplaySupportsVRR() const { return HostCompositorIsCurrentlyVRR(); }
         CWaylandBackend *GetBackend() const { return m_pBackend; }
 
@@ -1980,6 +1990,14 @@ namespace gamescope
                 struct wp_presentation_feedback *pFeedback = wp_presentation_feedback( m_pBackend->GetPresentation(), m_pSurface );
                 wp_presentation_feedback_add_listener( pFeedback, &s_PresentationFeedbackListener, this );
                 fghostshown::Get().ulCommits.fetch_add( 1, std::memory_order_relaxed );
+                fghostshown::Get().nVsyncTestHook.store( cv_ritz_host_vsync_test, std::memory_order_relaxed );
+                {
+                    std::scoped_lock lock( m_FeedbackContentMutex );
+                    // Bounded: a host that never answers must not grow this without end.
+                    if ( m_FeedbackContent.size() >= 64 )
+                        m_FeedbackContent.pop_front();
+                    m_FeedbackContent.emplace_back( pFeedback, fghostshown::Get().ulPaintContentNs );
+                }
                 // Test hook (ritz_host_vsync_test): forces the verdict per commit sent while the hint is
                 // async, so a forced value also stops being applied when the hint goes vsync.
                 if ( m_bSentAsyncHint && cv_ritz_host_vsync_test >= 0 )
@@ -2171,6 +2189,7 @@ namespace gamescope
             return;
 
         m_bSentAsyncHint = bAsync;
+        fghostshown::Get().bAsyncHint.store( bAsync, std::memory_order_relaxed );
         xdg_log.infof( "wayland: tearing hint -> %s", bAsync ? "async" : "vsync" );
         wp_tearing_control_v1_set_presentation_hint( m_pTearingControl,
             bAsync ? WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC : WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC );
@@ -2321,6 +2340,20 @@ namespace gamescope
     void CWaylandPlane::Wayland_PresentationFeedback_SyncOutput( struct wp_presentation_feedback *pFeedback, wl_output *pOutput )
     {
     }
+    uint64_t CWaylandPlane::TakeFeedbackContent( struct wp_presentation_feedback *pFeedback )
+    {
+        std::scoped_lock lock( m_FeedbackContentMutex );
+        for ( auto it = m_FeedbackContent.begin(); it != m_FeedbackContent.end(); ++it )
+        {
+            if ( it->first == pFeedback )
+            {
+                const uint64_t ulContent = it->second;
+                m_FeedbackContent.erase( it );
+                return ulContent;
+            }
+        }
+        return 0;
+    }
     void CWaylandPlane::Wayland_PresentationFeedback_Presented( struct wp_presentation_feedback *pFeedback, uint32_t uTVSecHi, uint32_t uTVSecLo, uint32_t uTVNSec, uint32_t uRefreshCycle, uint32_t uSeqHi, uint32_t uSeqLo, uint32_t uFlags )
     {
         uint64_t ulTime = ( ( ( uint64_t( uTVSecHi ) << 32ul ) | uTVSecLo ) * 1'000'000'000lu ) +
@@ -2354,6 +2387,18 @@ namespace gamescope
         // commits from before a change are noise the verdict's window absorbs.
         if ( m_bSentAsyncHint && cv_ritz_host_vsync_test < 0 )
             fghostshown::Get().bHostVsync.store( m_VsyncVerdict.Note( uFlags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC ), std::memory_order_relaxed );
+        if ( m_bSentAsyncHint )
+            fghostshown::Get().ulVerdictSamples.fetch_add( 1, std::memory_order_relaxed );
+        fghostshown::Get().uFeedbackRefreshNs.store( uRefreshCycle, std::memory_order_relaxed );
+        {
+            // Judder (FrameGen/Judder.h): the refresh period is the host's, else the output's.
+            const uint64_t ulContent = TakeFeedbackContent( pFeedback );
+            const uint64_t ulRefreshNs = uRefreshCycle ? uRefreshCycle
+                : ( g_nOutputRefresh > 0 ? gamescope::mHzToRefreshCycle( g_nOutputRefresh ) : 0 );
+            fghostshown::JudderShared &J = fghostshown::Judder();
+            std::scoped_lock lock( J.mutex );
+            J.meter.Note( ulTime, ulContent, ulRefreshNs );
+        }
         GetVBlankTimer().MarkVBlank( ulTime, true );
         wp_presentation_feedback_destroy( pFeedback );
 
@@ -2363,6 +2408,7 @@ namespace gamescope
     void CWaylandPlane::Wayland_PresentationFeedback_Discarded( struct wp_presentation_feedback *pFeedback )
     {
         fghostshown::Get().ulDiscarded.fetch_add( 1, std::memory_order_relaxed );
+        TakeFeedbackContent( pFeedback );
         wp_presentation_feedback_destroy( pFeedback );
 
         // Nudge so that steamcompmgr releases commits.
@@ -2888,9 +2934,7 @@ namespace gamescope
 
     bool CWaylandBackend::SupportsTearing() const
     {
-        // Only when the host offers wp_tearing_control_v1. Whether it then really
-        // tears is the host's call (Hyprland: allow_tearing + an immediate rule +
-        // fullscreen) -- see superdoc/features/backend-wayland.md.
+        // Host offers wp_tearing_control_v1; whether it tears: superdoc/features/backend-wayland.md, Tearing.
         return m_pTearingControlManager != nullptr;
     }
     bool CWaylandBackend::UsesVulkanSwapchain() const

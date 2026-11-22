@@ -82,8 +82,17 @@ refresh**, and the limit lifts as soon as it can. The rule is the pure
   (`bAutoVsyncAsync` beside `paint_all()`): the held game reports FIFO, so without this the hint would
   turn to vsync, the verdict would stop sampling and the limit could never lift when the host starts
   to tear (e.g. the window made fullscreen). Overlay up or a fade: vsync, as for every hint.
+  **Known gap (read 2026-11-22, not fixed):** that only holds once the limit is in force. With Allow
+  tearing on, the limit needs the verdict "vsync", the verdict starts as "tearing" and samples only
+  async-hinted commits, and a native game gets the async hint only when `bTearing` picks an `Async`
+  flip (its commits ask for async, no VRR, no overlay, the previous paint did not composite). A game
+  that never gets there (vsynced, or every paint composites because the HUD/Crosshair is up) never
+  feeds the verdict, so Auto V-Sync never engages with tearing on.
 - One log line per change of state, e.g. `auto v-sync: limiting the game to 280 fps (the host does
   not tear)` / `(tearing is not requested)` and `auto v-sync: limit lifted (the host tears)`.
+- Why it does not limit right now: the `auto-vsync` field of the `status:` line (`ritz_status`,
+  [status-line.md](status-line.md)) names the first blocking condition, and its `verdict samples`
+  say whether the verdict is fed at all.
 
 The limit equals the refresh, so the existing limiter keeps it **on the vblank grid** with divisor 1
 (see [frame-limiter.md](frame-limiter.md)): a Vulkan game through our layer is told FIFO and the

@@ -993,6 +993,21 @@ uint64_t g_uCurrentBasePlaneCommitID = 0;
 uint32_t g_uCurrentBasePlaneAppID = 0;
 bool g_bCurrentBasePlaneIsFifo = false;
 
+// The base plane's game frame in the paint in progress: its arrival (commit_t::present_time),
+// the content time of a native paint for the judder measure (FrameGen/Judder.h). 0 = none.
+static uint64_t g_ulCurrentBasePlanePresentNs = 0;
+// Frame generation's content time for the paint in progress (FrameGen_PrePaint()); while not
+// set, the paint's content time is the base plane's above.
+static bool s_bFGPaintContentSet = false;
+static uint64_t s_ulFGPaintContentNs = 0;
+// The `status:` line's counters over its interval (ConVar ritz_status, StatusLine_Tick()).
+struct StatusCounters_t
+{
+	uint64_t ulPaints = 0, ulAsyncPaints = 0, ulGameFrames = 0, ulFifoPaints = 0, ulWantsAsyncPaints = 0, ulTimerTicks = 0;
+};
+static StatusCounters_t s_Status;
+static uint64_t s_ulStatusLastBaseCommitId = 0;
+
 static int g_nSteamCompMgrTargetFPS = 0;
 // The frame limiter's rate for the WSI layer to pace the game to, or 0 while the limiter
 // holds commits to the vblank grid here instead (see the main loop).
@@ -2610,6 +2625,7 @@ paint_window(steamcompmgr_win_t *w, steamcompmgr_win_t *scaleW, struct FrameInfo
 			g_CachedPlanes[ HELD_COMMIT_FADE ] = basePlane;
 
 		g_uCurrentBasePlaneCommitID = lastCommit->commitID;
+		g_ulCurrentBasePlanePresentNs = lastCommit->present_time;
 		g_uCurrentBasePlaneAppID = lastCommit->appID;
 		g_bCurrentBasePlaneIsFifo = lastCommit->IsPerfOverlayFIFO();
 	}
@@ -2912,6 +2928,8 @@ paint_all( global_focus_t *pFocus, bool async )
 	xwayland_ctx_t *root_ctx = root_server->ctx.get();
 
 	static long long int paintID = 0;
+
+	g_ulCurrentBasePlanePresentNs = 0;   // set again when this paint draws a base plane
 
 	update_color_mgmt();
 
@@ -3417,9 +3435,31 @@ paint_all( global_focus_t *pFocus, bool async )
 		}
 	}
 
+	// The judder measure's content time travels with this commit to its presentation
+	// feedback (Wayland backend; HostShown.h). Diagnostic only.
+	fghostshown::Get().ulPaintContentNs = s_bFGPaintContentSet ? s_ulFGPaintContentNs : g_ulCurrentBasePlanePresentNs;
+	s_bFGPaintContentSet = false;
+
 	if ( pConnector && pConnector->Present( &frameInfo, async ) != 0 )
 	{
 		return;
+	}
+
+	// The `status:` line (StatusLine_Tick()): paints that reached the backend.
+	s_Status.ulPaints++;
+	if ( async )
+		s_Status.ulAsyncPaints++;
+	if ( g_uCurrentBasePlaneCommitID && g_uCurrentBasePlaneCommitID != s_ulStatusLastBaseCommitId )
+	{
+		s_ulStatusLastBaseCommitId = g_uCurrentBasePlaneCommitID;
+		s_Status.ulGameFrames++;
+	}
+	if ( g_HeldCommits[ HELD_COMMIT_BASE ] != nullptr )
+	{
+		if ( g_HeldCommits[ HELD_COMMIT_BASE ]->fifo )
+			s_Status.ulFifoPaints++;
+		if ( g_HeldCommits[ HELD_COMMIT_BASE ]->async )
+			s_Status.ulWantsAsyncPaints++;
 	}
 
 	std::optional<gamescope::GamescopeScreenshotInfo> oScreenshotInfo =
@@ -8430,6 +8470,8 @@ namespace
 // Auto V-Sync (Display > General; AutoVsync.h): the limit in force, 0 = none. Written by
 // the main loop, read by the overlay's summary.
 static std::atomic<int> s_nAutoVsyncFps{ 0 };
+static autovsync::Why s_eAutoVsyncWhy = autovsync::Why::Off;   // main loop only
+static int s_nAutoVsyncUserLimit = 0;
 
 int steamcompmgr_auto_vsync_fps()
 {
@@ -8451,6 +8493,9 @@ static int AutoVsync_Apply( int nUserLimit )
 	const int nRefreshHz = gamescope::ConvertmHzToHz( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh );
 	const int nLimit = autovsync::EffectiveLimit( bOn, bNested, bVRR, bFrameGen, bTearReq, bHostVsync, nUserLimit, nRefreshHz );
 	const int nAuto = nLimit != nUserLimit ? nLimit : 0;
+	// For the `status:` line: what this very evaluation decided, from the same inputs.
+	s_eAutoVsyncWhy = autovsync::Reason( bOn, bNested, bVRR, bFrameGen, bTearReq, bHostVsync, nUserLimit, nRefreshHz );
+	s_nAutoVsyncUserLimit = nUserLimit;
 	const int nWas = s_nAutoVsyncFps.load( std::memory_order_relaxed );
 	if ( nAuto != nWas )
 	{
@@ -8465,6 +8510,92 @@ static int AutoVsync_Apply( int nUserLimit )
 				: bTearReq && !bHostVsync ? "the host tears" : "the user's own limit applies" );
 	}
 	return nLimit;
+}
+
+// The `status:` line (2026-11-22): one diagnostic log line pair every N seconds that does not
+// need frame generation -- what the game asks for, what is painted and how, what the nested
+// host showed, the refresh / VRR / tearing state, the host verdict, the limiter, Auto V-Sync's
+// reason, and the judder measure. Read-only. See superdoc/features/status-line.md.
+gamescope::ConVar<int> cv_ritz_status( "ritz_status", 0,
+	"Diagnostic: log a `status:` line every N seconds (pacing, tearing, VRR, limiter, host feedback, judder). 0 = off." );
+
+static void StatusLine_Tick()
+{
+	static uint64_t s_ulLast = 0;
+	// The host counters at the previous line: their own baseline, so fghostshown::TakeRates()
+	// (frame generation's status line) keeps its interval.
+	static uint64_t s_ulC = 0, s_ulS = 0, s_ulD = 0, s_ulZ = 0, s_ulT = 0, s_ulN = 0, s_ulV = 0;
+	const int nSec = cv_ritz_status;
+	fghostshown::Counters &H = fghostshown::Get();
+	auto Load = []( const std::atomic<uint64_t> &a ) { return a.load( std::memory_order_relaxed ); };
+	const uint64_t ulNow = get_time_in_nanos();
+	if ( nSec <= 0 )
+	{
+		s_ulLast = 0;
+		return;
+	}
+	if ( s_ulLast == 0 || ulNow - s_ulLast >= uint64_t( nSec ) * 1'000'000'000ull )
+	{
+		const bool bFirst = s_ulLast == 0;
+		const double flSec = bFirst ? 1.0 : double( ulNow - s_ulLast ) / 1e9;
+		s_ulLast = ulNow;
+		const StatusCounters_t C = s_Status;
+		s_Status = {};
+		const uint64_t c = Load( H.ulCommits ), s = Load( H.ulShown ), d = Load( H.ulDiscarded ), z = Load( H.ulZeroCopy ),
+			t = Load( H.ulTorn ), n = Load( H.ulNoFreeImage ), v = Load( H.ulVerdictSamples );
+		fgjudder::Stats J;
+		{
+			fghostshown::JudderShared &JS = fghostshown::Judder();
+			std::scoped_lock lock( JS.mutex );
+			J = JS.meter.Take();
+		}
+		const uint64_t dc = c - s_ulC, ds = s - s_ulS, dd = d - s_ulD, dz = z - s_ulZ, dt = t - s_ulT, dn = n - s_ulN, dv = v - s_ulV;
+		s_ulC = c; s_ulS = s; s_ulD = d; s_ulZ = z; s_ulT = t; s_ulN = n; s_ulV = v;
+		if ( bFirst )
+			return;   // baseline only: the first interval would count from process start
+
+		gamescope::IBackend *pBackend = GetBackend();
+		gamescope::IBackendConnector *pConn = pBackend ? pBackend->GetCurrentConnector() : nullptr;
+		const bool bVrrActive = pConn && pConn->IsVRRActive();
+		gamescope::CVBlankTimer &Timer = GetVBlankTimer();
+		const gamescope::CVBlankTimer::LeadKind eLead = Timer.GetLastLeadKind();
+		const char *pszLead = eLead == gamescope::CVBlankTimer::LeadKind::Measured ? "measured"
+			: eLead == gamescope::CVBlankTimer::LeadKind::Vrr ? "vrr" : "default";
+		const uint32_t uFbRefreshNs = H.uFeedbackRefreshNs.load( std::memory_order_relaxed );
+		const bool bWantsAsyncNow = g_HeldCommits[ HELD_COMMIT_BASE ] != nullptr && g_HeldCommits[ HELD_COMMIT_BASE ]->async;
+		const bool bFifoNow = g_HeldCommits[ HELD_COMMIT_BASE ] != nullptr && g_HeldCommits[ HELD_COMMIT_BASE ]->fifo;
+		const fghost::Config fgCfg = fghost::GetConfig();
+		const fghost::BlurConfig blurCfg = fghost::GetBlurConfig();
+		const char *pszLimiter = !g_nSteamCompMgrTargetFPS ? "off" : g_uLimiterPaceFps ? "layer" : "grid";
+		char szAuto[ 96 ];
+		if ( s_nAutoVsyncFps.load( std::memory_order_relaxed ) )
+			snprintf( szAuto, sizeof( szAuto ), "limit %d", s_nAutoVsyncFps.load( std::memory_order_relaxed ) );
+		else
+			snprintf( szAuto, sizeof( szAuto ), "no limit: %s", autovsync::Text( s_eAutoVsyncWhy ) );
+		auto Pct = [&]( uint64_t x ) { return C.ulPaints ? 100.0 * double( x ) / double( C.ulPaints ) : 0.0; };
+
+		fg_log.infof( "status: game %.1f fps fifo %.0f%% wants-async %.0f%% (now fifo %d async %d) | paints %.1f/s async %.1f/s no-free-image %.1f/s"
+			" | host sent %.1f shown %.1f discarded %.1f zero-copy %.1f torn %.1f /s, feedback refresh %.3f Hz"
+			" | refresh timer %.1f/s nested %.3f output %.3f Hz | vrr adaptive_sync %d host-vrr %d active %d lead %s %.2f ms"
+			" | tearing enabled %d supported %d hint %s | verdict host-vsync %d samples %llu (total %llu) test %d fg_host_vsync %d fg-cap %d"
+			" | limiter user %d target %d file %d,%u %s | auto-vsync %s %s | fg %s%s blur %s",
+			double( C.ulGameFrames ) / flSec, Pct( C.ulFifoPaints ), Pct( C.ulWantsAsyncPaints ), int( bFifoNow ), int( bWantsAsyncNow ),
+			double( C.ulPaints ) / flSec, double( C.ulAsyncPaints ) / flSec, double( dn ) / flSec,
+			double( dc ) / flSec, double( ds ) / flSec, double( dd ) / flSec, double( dz ) / flSec, double( dt ) / flSec,
+			uFbRefreshNs ? 1e9 / double( uFbRefreshNs ) : 0.0,   // 0: no `presented` yet, or the host reported none (VRR)
+			double( C.ulTimerTicks ) / flSec, g_nNestedRefresh / 1000.0, g_nOutputRefresh / 1000.0,
+			int( bool( cv_adaptive_sync ) ), int( H.bHostVrr.load( std::memory_order_relaxed ) ), int( bVrrActive ), pszLead, Timer.GetLastLead() / 1e6,
+			int( bool( cv_tearing_enabled ) ), int( pBackend && pBackend->SupportsTearing() ), H.bAsyncHint.load( std::memory_order_relaxed ) ? "async" : "vsync",
+			int( H.bHostVsync.load( std::memory_order_relaxed ) ), (unsigned long long)dv, (unsigned long long)v,
+			H.nVsyncTestHook.load( std::memory_order_relaxed ), int( bool( cv_ritz_fg_host_vsync ) ), int( FrameGen_HostVsync() ),
+			s_nAutoVsyncUserLimit, g_nSteamCompMgrTargetFPS, g_nSteamCompMgrTargetFPS != 0 ? 1 : 0, g_uLimiterPaceFps, pszLimiter,
+			cv_ritz_auto_vsync ? "on" : "off", szAuto,
+			fgCfg.enabled ? "on" : "off", !fghost::Active() ? "" : fghost::GetPacingStatus().fgActive ? " generating" : " passing through",
+			blurCfg.enabled ? "on" : "off" );
+		fg_log.infof( "status: judder shown %llu (%.1f/s) repeat %llu unknown %llu judged %llu, step err mean %.2f p99 %.2f max %.2f ms, uneven %.1f/s, gap %.1f/s",
+			(unsigned long long)J.shown, double( J.shown ) / flSec, (unsigned long long)J.repeat, (unsigned long long)J.unknown,
+			(unsigned long long)J.judged, J.errMeanMs, J.errP99Ms, J.errMaxMs, double( J.uneven ) / flSec, double( J.gap ) / flSec );
+	}
 }
 
 // A real frame of the focused window became its newest usable commit.
@@ -8685,6 +8816,25 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	fghost::SetFrame( request );
 	s_FrameGen.bRepaintNext = d.repaintNext;
 	s_FrameGen.bExtraWantNext = false;   // this paint answered it; PostPaint sets it again if more is due
+
+	// The content time this decision shows, for the judder measure (paint_all()): a pair at t
+	// between its two arrivals, else the real frame shown. Inert = layer 0 (the native time).
+	// An id no longer in the capture's arrival table = unknown (0).
+	if ( !d.inert )
+	{
+		auto Arrival = []( uint64_t ulId ) -> int64_t { return ulId ? fghost::capture::Arrivals().Find( ulId ) : -1; };
+		int64_t nContent = -1;
+		if ( d.prevId != 0 && d.currId != 0 )
+		{
+			const int64_t nPrev = Arrival( d.prevId ), nCurr = Arrival( d.currId );
+			if ( nPrev > 0 && nCurr > 0 )
+				nContent = nPrev + int64_t( double( nCurr - nPrev ) * double( d.t ) );
+		}
+		else
+			nContent = Arrival( d.showId ? d.showId : d.newestId );
+		s_bFGPaintContentSet = true;
+		s_ulFGPaintContentNs = nContent > 0 ? uint64_t( nContent ) : 0;
+	}
 
 	s_FrameGen.ulLastV = in.presentNs;
 
@@ -11515,6 +11665,7 @@ steamcompmgr_main(int argc, char **argv)
 					( bForceRepaint && !bFGOwnForce ) ||
 					( hasRepaint && !s_FrameGen.bArrivalRepaint ) ||
 					ulFGExtraTarget != 0;
+				s_bFGPaintContentSet = false;   // FrameGen_PrePaint() sets it when it decides this paint
 				const bool bFGSkip = FrameGen_PrePaint( pPaintFocus, bPaintTick, ulFGExtraTarget,
 					FrameGen_CanExceedRefresh( bTearing && !bHasOverlay && !nIgnoredOverlayRepaints ),
 					bGenuineRepaint );
@@ -11558,8 +11709,11 @@ steamcompmgr_main(int argc, char **argv)
 		// no-op, and no timer armed, otherwise).
 		FrameGen_ArmExtraTimer( hasRepaint || hasRepaintNonBasePlane || g_bForceRepaint.load() || is_fading_out() );
 
+		StatusLine_Tick();   // ritz_status: no-op while 0
+
 		if ( bIsVBlankFromTimer )
 		{
+			s_Status.ulTimerTicks++;
 			// Pre-emptively re-arm the vblank timer if it
 			// isn't already re-armed.
 			//

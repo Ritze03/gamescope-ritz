@@ -18,15 +18,50 @@ namespace autovsync
 	//     vblank anyway (bHostVsync, fghostshown::VsyncVerdict).
 	// ponytail: nested Wayland only; DRM without tearing and the SDL backend would gain
 	// from the same rule, once someone can test it there.
+	// Why it limits or not: the FIRST condition that keeps it from limiting, in the order
+	// checked. Limits = it applies the refresh. Text() is the `status:` line's wording.
+	enum class Why { Limits, Off, NotNested, Vrr, FrameGen, NoRefresh, HostTears, UserLimit };
+
+	inline Why Reason( bool bOn, bool bNestedWayland, bool bVRR, bool bFrameGen,
+		bool bTearingRequested, bool bHostVsync, int nUserLimit, int nRefreshHz )
+	{
+		if ( !bOn )
+			return Why::Off;
+		if ( !bNestedWayland )
+			return Why::NotNested;
+		if ( bVRR )
+			return Why::Vrr;
+		if ( bFrameGen )
+			return Why::FrameGen;
+		if ( nRefreshHz <= 0 )
+			return Why::NoRefresh;
+		if ( bTearingRequested && !bHostVsync )
+			return Why::HostTears;
+		if ( nUserLimit > 0 && nUserLimit <= nRefreshHz )
+			return Why::UserLimit;
+		return Why::Limits;
+	}
+
+	inline const char *Text( Why e )
+	{
+		switch ( e )
+		{
+			case Why::Limits: return "limiting";
+			case Why::Off: return "switch off";
+			case Why::NotNested: return "not nested Wayland";
+			case Why::Vrr: return "VRR in use";
+			case Why::FrameGen: return "frame generation or motion blur on";
+			case Why::NoRefresh: return "no refresh known";
+			case Why::HostTears: return "the host tears (verdict)";
+			case Why::UserLimit: return "the user's own limit applies";
+		}
+		return "?";
+	}
+
 	inline int EffectiveLimit( bool bOn, bool bNestedWayland, bool bVRR, bool bFrameGen,
 		bool bTearingRequested, bool bHostVsync, int nUserLimit, int nRefreshHz )
 	{
-		if ( !bOn || !bNestedWayland || bVRR || bFrameGen || nRefreshHz <= 0 )
-			return nUserLimit;
-		if ( bTearingRequested && !bHostVsync )
-			return nUserLimit;
-		if ( nUserLimit > 0 && nUserLimit <= nRefreshHz )
-			return nUserLimit;
-		return nRefreshHz;
+		return Reason( bOn, bNestedWayland, bVRR, bFrameGen, bTearingRequested, bHostVsync, nUserLimit, nRefreshHz ) == Why::Limits
+			? nRefreshHz : nUserLimit;
 	}
 }
