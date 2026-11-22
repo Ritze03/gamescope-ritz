@@ -246,9 +246,6 @@ namespace gamescope
         // the next one. Sent only when it changes. A no-op when the host does
         // not offer the protocol. Toplevel only -- see SupportsTearing().
         void SetPresentationHint( bool bAsync );
-        // Creates the wp_tearing_control_v1 object once the xdg_toplevel exists. Toplevel only: the host
-        // decides tearing from the window's root surface; the sync subsurfaces latch with it.
-        void EnsureTearingControl();
         // INestedHints::RequestOutputSize(): make the next Commit() send a
         // libdecor state carrying the (already updated) g_nOutputWidth/Height,
         // the same way LibDecor_Frame_Commit() re-arms one.
@@ -1874,6 +1871,11 @@ namespace gamescope
                 wp_fractional_scale_v1_add_listener( m_pFractionalScale, &s_FractionalScaleListener, this );
         }
 
+        // Toplevel only: the host decides tearing from the window's root
+        // surface; the sync subsurfaces latch with it.
+        if ( !pParent && m_pBackend->GetTearingControlManager() )
+            m_pTearingControl = wp_tearing_control_manager_v1_get_tearing_control( m_pBackend->GetTearingControlManager(), m_pSurface );
+
         if ( !pParent )
         {
 			wl_proxy_set_tag( (wl_proxy *)m_pSurface, &GAMESCOPE_toplevel_tag );
@@ -1892,7 +1894,6 @@ namespace gamescope
                 libdecor_frame_set_app_id( m_pFrame, m_pConnector->m_szAppId.c_str() );
             }
             libdecor_frame_map( m_pFrame );
-            EnsureTearingControl();
         }
         else
         {
@@ -2164,22 +2165,8 @@ namespace gamescope
         wl_surface_commit( m_pSurface );
     }
 
-    void CWaylandPlane::EnsureTearingControl()
-    {
-        // The ORDER matters: a host may bind the hint to its window when the object is created
-        // (Hyprland looks up the window whose surface it is, once, in the object's constructor; a
-        // window exists only from xdg_surface.get_toplevel on). Created before the toplevel, the
-        // object stays unbound and every hint is dropped. libdecor creates xdg_surface + xdg_toplevel
-        // in libdecor_decorate() / libdecor_frame_map() once its registry is ready, else later from
-        // its dispatch, so this is retried from SetPresentationHint() until the toplevel exists.
-        if ( m_pTearingControl || !m_pBackend->GetTearingControlManager() || !GetXdgToplevel() )
-            return;
-        m_pTearingControl = wp_tearing_control_manager_v1_get_tearing_control( m_pBackend->GetTearingControlManager(), m_pSurface );
-    }
-
     void CWaylandPlane::SetPresentationHint( bool bAsync )
     {
-        EnsureTearingControl();
         if ( !m_pTearingControl || bAsync == m_bSentAsyncHint )
             return;
 
@@ -2902,10 +2889,8 @@ namespace gamescope
     bool CWaylandBackend::SupportsTearing() const
     {
         // Only when the host offers wp_tearing_control_v1. Whether it then really
-        // tears is the host's call (Hyprland: the window may tear when
-        // general:allow_tearing is on AND a window rule sets tearing or the client's
-        // async hint is set; the monitor also needs the window to be its solitary,
-        // fullscreen client) -- see superdoc/features/backend-wayland.md.
+        // tears is the host's call (Hyprland: allow_tearing + an immediate rule +
+        // fullscreen) -- see superdoc/features/backend-wayland.md.
         return m_pTearingControlManager != nullptr;
     }
     bool CWaylandBackend::UsesVulkanSwapchain() const

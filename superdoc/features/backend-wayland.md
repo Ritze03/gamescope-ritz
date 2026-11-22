@@ -119,21 +119,9 @@ gamescope runs as a window. The backend binds the standard `wp_tearing_control_m
 `wl_protocol_dir` in `protocol/meson.build` like `fractional-scale-v1`; no vendored copy)
 if the host offers it.
 
-- **Where the hint is set.** `CWaylandPlane::EnsureTearingControl()` creates one
-  `wp_tearing_control_v1` for the **toplevel plane only** (plane 0, the libdecor surface; the
-  sync subsurfaces latch with it, and a host decides tearing from the window's root surface),
-  **after** the `xdg_toplevel` exists: from `Init()` right after `libdecor_frame_map()`, and
-  retried from `SetPresentationHint()` (libdecor creates `xdg_surface` + `xdg_toplevel`
-  synchronously in `libdecor_decorate()` / `libdecor_frame_map()` once its registry
-  round-trip is done, else from its later dispatch; it never recreates them during a session).
-  A hint wanted before the object exists is sent once it does (`m_bSentAsyncHint` only records
-  what was sent). `Why` the order (found 2026-11-22): Hyprland binds a tearing-control object
-  to a window **once, when the object is created**, by looking up the window whose surface it
-  is, and a window exists only from `xdg_surface.get_toplevel` on. The object used to be
-  created right after `wl_compositor.create_surface`, before the toplevel, so Hyprland never
-  bound it and dropped every hint: its window state showed tearing blocked by "window settings"
-  with `allow_tearing` on and gamescope's window fullscreen and scanned out directly. wlroots
-  hosts (sway) attach the hint to the surface itself, which is why headless sway never showed it.
+- **Where the hint is set.** `CWaylandPlane::Init()` creates one `wp_tearing_control_v1`
+  for the **toplevel plane only** (plane 0, the libdecor surface; the sync subsurfaces
+  latch with it, and a host decides tearing from the window's root surface).
   `CWaylandConnector::Present( pFrameInfo, bAsync )` calls
   `m_Planes[0].SetPresentationHint( bAsync )` just before the commit loop: `async` for an
   async/tearing present, `vsync` otherwise, sent **only when it changes** (the protocol's
@@ -162,13 +150,31 @@ if the host offers it.
 - **Tearing off, or a host without the protocol:** `async` is only ever requested when
   `bTearing` (or the output-timer state above, which needs the setting too) holds, so with the setting off the hint stays at its initial `vsync` and no
   request is sent; without the protocol no object is created. Wire behaviour is as before.
-- **Hyprland** (the user's host): a window may tear when `general:allow_tearing` is on AND
-  (a window rule sets tearing (`immediate`) OR the client's async hint is set); the monitor
-  also needs the window to be its solitary (fullscreen) client. With the hint bound (above),
-  no window rule is needed; until 2026-11-22 the hint never reached the window, so only a rule
-  made it tear. With the fix the host is expected to tear for a fullscreen gamescope window
-  while its `allow_tearing` is on; **not yet confirmed on the user's screen**. This repo does
-  not touch the user's Hyprland config.
+- **Hyprland does not tear for us, and that is left so on purpose (field test 2026-11-22,
+  Hyprland 0.57.2, 280 Hz, fullscreen, direct scanout).** Hyprland lets a window tear when
+  `general:allow_tearing` is on AND (a window rule sets `immediate` OR the client's hint is
+  `async`), and the window is the monitor's solitary (fullscreen) client. Our hint never reaches
+  it: Hyprland binds a `wp_tearing_control_v1` object to a window only in the object's
+  constructor, by looking for an existing window with that surface, and we create the object
+  before the xdg_toplevel exists, so it stays unbound and every later hint is dropped
+  (`hyprctl monitors`: `tearingBlockedBy: ... window settings`). Creating the object after the
+  toplevel (tried, and reverted the same night) makes Hyprland tear, with these results:
+  - In play the host held our output images for about ten refreshes each: `no free image`
+    170-180/s and `sent` 105-115/s (against 280/s and 0/s when it does not tear), with four and
+    with five output images alike. Only about 60 % of the shown frames were zero-copy. A
+    plausible cause, read in the host's sources and not measured: an async flip produces no
+    present event, so the scanned-out buffer is released only at the host's next ordinary frame.
+  - Every `presented` feedback still carried the VSYNC flag (`torn 0/s`), so the vsync verdict
+    said "does not tear" while the host tore.
+  - The presented time of a torn flip is the flip time, not a vblank, and `MarkVBlank()` takes
+    it as one: where images were free the paint loop ran at about 470/s on the 280 Hz screen.
+  - Switching the hint back to `vsync` while the host was tearing left it in a state where
+    every feedback came back `discarded` (0 shown/s) until the hint went back to `async`. The
+    hint also turns `vsync` whenever the overlay is open.
+  - With the host's direct scanout blocked ([diagnostics.md](diagnostics.md)) the window is no
+    tearing candidate at all, and the host showed 163 of 288 frames a second.
+  The same happens with a host window rule `immediate` for gamescope's window, so do not
+  recommend that rule. To make tearing work here, all four points above need an answer first.
 - `Why:` before this, every nested frame — real and frame-generated alike — waited for the
   host's next refresh to be shown, up to one refresh of extra delay, with no way for the
   user's tearing setting to change that. The protocol is the host-side contract for exactly
@@ -315,14 +321,13 @@ one being drawn. With three, 34-46 paints a second found none free and shown sto
 with four, 7-14 and 261-278. Without scanout four also mostly clears the 4-53 per second the
 uncompressed images otherwise cost.
 
-**Five output images (2026-11-22).** A host that tears holds one more: the image on screen, the one
-submitted and awaiting its flip event, and the newest committed one not yet rendered, so four left
-none free while gamescope draws, and any late release dropped the paint. Found in the field with the
-host really tearing: `no free image` went from 0-1/s (host not tearing) to 6-16/s and later 31-110/s,
-`sent` fell from about 300/s to 183-232/s, felt as lag. `vulkan_output_image_count()` now returns 5
-for this backend (everything sized from the pool uses `size()`); the cost is one more output-sized
-image (and its partial-overlay twin where that exists). Fixed at 5: a start-up knob would need new
-plumbing. **Not yet confirmed on the user's screen**; headless sway does not tear and never ran out.
+**Five output images (2026-11-22).** Added for a host that really tears, on the reading that it
+holds one more image (on screen, awaiting its flip event, newest committed). `vulkan_output_image_count()`
+returns 5 for this backend (everything sized from the pool uses `size()`); the cost is one more
+output-sized image (and its partial-overlay twin where that exists). **It did not help in the field:**
+with the host tearing, `no free image` stayed at 170-180/s (see [Tearing](#tearing)), because the host
+keeps the images far longer than one flip. Without host tearing four were enough (0-1/s), so the
+fifth is a candidate for removal.
 
 The picture was checked with `grim`, which makes the host composite for that frame, so it shows
 gamescope's buffer and not the plane's read. 720p game, 1080p output, scanout on, frame generation
