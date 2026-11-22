@@ -289,6 +289,7 @@ namespace gamescope
 		if ( !LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ) )
 			cv_tearing_enabled = s_CachedSettings.gamescope.tearing_enabled;
 		gamescope::vblank_measured_lead = s_CachedSettings.gamescope.low_latency_wakeup;
+		cv_ritz_auto_vsync = s_CachedSettings.gamescope.auto_vsync;
 		// force_grab_cursor's own push moved with its row to PanelInput.cpp
 		// (2026-09-27, input.general) -- that file's own EnsureConfigLoaded()
 		// re-pushes it now (and gates it the same way), and main.cpp's
@@ -647,11 +648,13 @@ namespace gamescope
 	{
 		ui::Area &a = reg.Add( "display.general", "General", ui::Section::Display );
 		a.Keywords( "general quick toggle vrr adaptive sync freesync gsync tearing "
-		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead" );
+		            "maximize fullscreen nested window low latency wake-up wakeup vblank lead auto vsync v-sync" );
 		a.Summary( []{
 			std::string s = cv_adaptive_sync.Get() ? "VRR on" : "VRR off";
 			s += cv_tearing_enabled.Get() ? " · tearing on" : " · tearing off";
 			s += steamcompmgr_get_force_windows_fullscreen() ? " · nested windows maximized" : "";
+			if ( const int nAuto = steamcompmgr_auto_vsync_fps() )
+				s += " · auto v-sync " + std::to_string( nAuto );
 			return s;
 		} );
 
@@ -688,6 +691,25 @@ namespace gamescope
 			.Keywords( "immediate flip vsync latency tear seam" )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::ImmediateFlips ); },
 				LaunchLockReason( LaunchOptions::Opt::ImmediateFlips ).c_str() );
+
+		// Auto V-Sync (2026-11-22): a plain ConVar mirror of gamescope.auto_vsync, like the
+		// rows around it; the limit itself is AutoVsync.h, applied in steamcompmgr.cpp. See
+		// superdoc/features/display-general.md's "Auto V-Sync".
+		a.Switch( "display.auto_vsync", "Auto V-Sync",
+			ui::AnyBind::Of<bool>(
+				[]{ return cv_ritz_auto_vsync.Get(); },
+				[]( bool b ) {
+					ApplyEdit(
+						[ b ]( config::Settings &cfg ) { cfg.gamescope.auto_vsync = b; },
+						[ b ] { cv_ritz_auto_vsync = b; } );
+				} ) )
+			.Key( "gamescope.auto_vsync" )
+			.Help( "Limits the game to the refresh rate while frames faster than that cannot be shown, "
+			       "which removes stutter from frames that would be thrown away. No limit while "
+			       "frames can really be shown faster (tearing). Only when gamescope runs in a window "
+			       "on a Wayland desktop, without VRR or frame generation." )
+			.Default( false )
+			.Keywords( "auto vsync v-sync frame limit refresh stutter tearing cap automatic" );
 
 		// Low-latency wake-up (2026-10-04): a plain ConVar mirror of
 		// gamescope.low_latency_wakeup, the same shape as Allow tearing above.

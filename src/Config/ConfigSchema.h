@@ -81,6 +81,10 @@ namespace gamescope::config
         // measured draw time instead of upstream's ~4 ms heuristic, for all play. Mirrors
         // into the vblank_measured_lead ConVar. Additive, no schema bump: absent = true.
         bool low_latency_wakeup = true;
+        // display.general "Auto V-Sync" (2026-11-22): on nested Wayland, limit the game to the
+        // refresh while the output cannot show frames faster (AutoVsync.h). Mirrors into the
+        // ritz_auto_vsync ConVar. Additive, no schema bump: absent = false.
+        bool auto_vsync = false;
         bool force_windows_fullscreen = false; // mirrors --force-windows-fullscreen; per-Xwayland-ctx, genuinely live via steamcompmgr_set_force_windows_fullscreen()
         // input.general's other row (2026-09-27): mirrors -g/--grab's effect
         // on main.hpp's g_bGrabbed. Live on the SDL backend (PanelInput.cpp's
@@ -571,13 +575,14 @@ namespace gamescope::config
         bool v3_colour_window = false;   // Motion version 3 only: matching weighted by colour similarity
         bool v3_detail_split = false;    // Motion version 3 only: fine detail taken from one frame
         // Motion guard (2026-11-20; Settings::v3Guard): "off" | "guard" | "v2_motion". Motion version 3 only. An absent,
-        // wrong-typed or unknown value loads "off". ADDITIVE. Applies live.
-        std::string v3_guard = "off";
+        // wrong-typed or unknown value loads the default "guard" (2026-11-22, was "off"); a stored "off" stays "off".
+        // ADDITIVE. Applies live.
+        std::string v3_guard = "guard";
         // Expert settings (2026-11-20): the switch for the 15 tuning values above (learned_*, v3_*, search_radius,
         // search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
         // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.
-        // ADDITIVE: absent loads false, except for a profile saved before the switch existed that holds a changed
-        // value, which loads true (ConfigManager.cpp), so it keeps sounding the way it did.
+        // ADDITIVE: absent loads false, also for a profile saved before the switch existed that holds changed
+        // tuning values (ConfigManager.cpp; tests/test_config.cpp pins it): those then act only once it is on.
         bool expert = false;
     };
 

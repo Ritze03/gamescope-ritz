@@ -142,6 +142,7 @@ namespace gamescope::config
                 s.gamescope.fps_limit = JGetInt( *pGamescope, "fps_limit", s.gamescope.fps_limit );
                 s.gamescope.force_grab_cursor = JGetBool( *pGamescope, "force_grab_cursor", s.gamescope.force_grab_cursor );
                 s.gamescope.low_latency_wakeup = JGetBool( *pGamescope, "low_latency_wakeup", s.gamescope.low_latency_wakeup );
+                s.gamescope.auto_vsync = JGetBool( *pGamescope, "auto_vsync", s.gamescope.auto_vsync );
                 s.gamescope.force_windows_fullscreen = JGetBool( *pGamescope, "force_windows_fullscreen", s.gamescope.force_windows_fullscreen );
                 s.gamescope.force_grab_keyboard = JGetBool( *pGamescope, "force_grab_keyboard", s.gamescope.force_grab_keyboard );
                 s.gamescope.sdr_gamut_wideness = JGetFloat( *pGamescope, "sdr_gamut_wideness", s.gamescope.sdr_gamut_wideness );
@@ -399,8 +400,8 @@ namespace gamescope::config
                         f.v3_scene_cut = 0.0f;
                     f.v3_colour_window = JGetBool( *pFrameGen, "v3_colour_window", f.v3_colour_window );
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
-                    const std::string sGuard = JGetString( *pFrameGen, "v3_guard", f.v3_guard );
-                    f.v3_guard = ( sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : "off";
+                    const std::string sGuard = JGetString( *pFrameGen, "v3_guard", "" );
+                    f.v3_guard = ( sGuard == "off" || sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : FrameGenSettings{}.v3_guard;
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
             }
@@ -775,6 +776,7 @@ namespace gamescope::config
             jGamescope[ "fps_limit" ] = s.gamescope.fps_limit;
             jGamescope[ "force_grab_cursor" ] = s.gamescope.force_grab_cursor;
             jGamescope[ "low_latency_wakeup" ] = s.gamescope.low_latency_wakeup;
+            jGamescope[ "auto_vsync" ] = s.gamescope.auto_vsync;
             jGamescope[ "force_windows_fullscreen" ] = s.gamescope.force_windows_fullscreen;
             jGamescope[ "force_grab_keyboard" ] = s.gamescope.force_grab_keyboard;
             jGamescope[ "sdr_gamut_wideness" ] = s.gamescope.sdr_gamut_wideness;

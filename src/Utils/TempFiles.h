@@ -10,6 +10,6 @@ namespace gamescope
     static constexpr const char k_szGamescopeTempMangoappTemplate[] = "gamescope-mangoapp-XXXXXXXX";
     static constexpr const char k_szGamescopeTempLimiterTemplate[] = "gamescope-limiter-XXXXXXXX";
 
-    int MakeTempFile( char ( &pszOutPath )[ PATH_MAX ], const char *pszTemplate, bool bDeferUnlink = false );
+    int MakeTempFile( char ( &pszOutPath )[ PATH_MAX ], const char *pszTemplate, bool bDeferUnlink = false, const char *pszDir = nullptr );
     FILE *MakeTempFile( char ( &pszOutPath )[ PATH_MAX ], const char *pszTemplate, const char *pszMode, bool bDeferUnlink = false );
 }

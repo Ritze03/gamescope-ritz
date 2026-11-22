@@ -4294,11 +4294,11 @@ TEST_CASE( "framegen: V3 keys of the wrong type keep the default", "[config]" )
 
 // The Motion guard (2026-11-20): "off" | "guard" | "v2_motion", string enum. Each "file X loads as Y" check has its own
 // TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
-TEST_CASE( "framegen: the V3 guard defaults to off and round-trips its three values", "[config]" )
+TEST_CASE( "framegen: the V3 guard defaults to guard and round-trips its three values", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    REQUIRE( Settings{}.framegen.v3_guard == "off" );
+    REQUIRE( Settings{}.framegen.v3_guard == "guard" );
     for ( const char *psz : { "guard", "v2_motion", "off" } )
     {
         Settings s{};
@@ -4309,7 +4309,7 @@ TEST_CASE( "framegen: the V3 guard defaults to off and round-trips its three val
     }
 }
 
-TEST_CASE( "framegen: an absent V3 guard key loads off", "[config]" )
+TEST_CASE( "framegen: an absent V3 guard key loads guard", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4317,10 +4317,10 @@ TEST_CASE( "framegen: an absent V3 guard key loads off", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "quality": "performance" }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
 }
 
-TEST_CASE( "framegen: an unknown V3 guard string loads off", "[config]" )
+TEST_CASE( "framegen: an unknown V3 guard string loads guard", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4328,10 +4328,10 @@ TEST_CASE( "framegen: an unknown V3 guard string loads off", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "v3_guard": "strong" }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
 }
 
-TEST_CASE( "framegen: a wrong-typed V3 guard loads off", "[config]" )
+TEST_CASE( "framegen: a wrong-typed V3 guard loads guard", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4339,7 +4339,25 @@ TEST_CASE( "framegen: a wrong-typed V3 guard loads off", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "v3_guard": 2 }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "off" );
+    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
+}
+
+// A stored "off" (every profile saved 2026-11-20..21 holds one: the save writes the key always) stays "off", and with
+// Expert settings off the default Guard is what acts; with Expert on the stored Off does.
+TEST_CASE( "framegen: a stored V3 guard off loads off; Guard acts while expert is off", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3", "v3_guard": "off" }
+    })";
+    FrameGenSettings f = LoadSections().framegen;
+    REQUIRE( f.v3_guard == "off" );
+    REQUIRE( !f.expert );
+    REQUIRE( FrameGenEffective( f ).v3_guard == "guard" );
+    f.expert = true;
+    REQUIRE( FrameGenEffective( f ).v3_guard == "off" );
 }
 
 TEST_CASE( "framegen: the V3 guard is a settings key", "[config]" )
@@ -4402,7 +4420,7 @@ TEST_CASE( "framegen: a wrong-typed expert loads false", "[config]" )
 TEST_CASE( "framegen: an absent expert key with all defaults loads false", "[config]" )
 {
     TempConfigHome home;
-    REQUIRE( !LoadFrameGenFrom( R"({ "quality": "performance", "v3_smear": 0.35, "search_radius": 2, "v3_guard": "off" })" ).expert );
+    REQUIRE( !LoadFrameGenFrom( R"({ "quality": "performance", "v3_smear": 0.35, "search_radius": 2, "v3_guard": "guard" })" ).expert );
 }
 
 TEST_CASE( "framegen: an absent expert key with a changed float loads false and keeps the value", "[config]" )
@@ -4515,7 +4533,7 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     in.expert = true;
     in.v3_smear = 0.9f;
     in.learned_net = "m2v3";
-    in.v3_guard = "guard";
+    in.v3_guard = "off";
     in.search_radius = 9;
     in.search_penalty = 2.0f;
     in.motion_version = "v3";
@@ -4523,7 +4541,7 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     REQUIRE( out.expert );
     REQUIRE( out.v3_smear == 0.9f );
     REQUIRE( out.learned_net == "m2v3" );
-    REQUIRE( out.v3_guard == "guard" );
+    REQUIRE( out.v3_guard == "off" );
     REQUIRE( out.search_radius == 9 );
     REQUIRE( out.search_penalty == 2.0f );
     REQUIRE( out.motion_version == "v3" );

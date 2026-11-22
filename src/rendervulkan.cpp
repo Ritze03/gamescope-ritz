@@ -3592,6 +3592,8 @@ bool vulkan_remake_swapchain( void )
 
 // A host scanning an image out holds it until the next page flip, and the one committed
 // behind it until that flip too, which left too few images to keep drawing at 280 Hz.
+// Five were tried on 2026-11-22 for a host that tears and removed the same day: it did not
+// help there, and four are enough without host tearing (superdoc/features/backend-wayland.md).
 static uint32_t vulkan_output_image_count()
 {
 	return GetBackend()->HostMayScanOutOutputImages() ? 4u : 3u;

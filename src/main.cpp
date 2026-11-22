@@ -673,6 +673,7 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// Low-latency wake-up: a plain ConVar mirror like the three above, so it is in
 	// force from the first vblank (the vblank timer reads it on its own thread).
 	gamescope::vblank_measured_lead = config.gamescope.low_latency_wakeup;
+	cv_ritz_auto_vsync = config.gamescope.auto_vsync;   // Auto V-Sync: the same plain mirror
 
 	if ( bStartup )
 		return;
@@ -1096,7 +1097,11 @@ static void UpdateCompatEnvVars()
 	if ( !pszLimiterFile || !*pszLimiterFile )
 	{
 		char szLimiterPath[ PATH_MAX ];
-		int nLimiterFd = gamescope::MakeTempFile( szLimiterPath, gamescope::k_szGamescopeTempLimiterTemplate, true );
+		// /dev/shm, not $XDG_RUNTIME_DIR: a Steam Linux Runtime container has a private runtime dir
+		// but shares /dev/shm, so the layer in a containerised game can still open this file.
+		int nLimiterFd = gamescope::MakeTempFile( szLimiterPath, gamescope::k_szGamescopeTempLimiterTemplate, true, "/dev/shm" );
+		if ( nLimiterFd < 0 )
+			nLimiterFd = gamescope::MakeTempFile( szLimiterPath, gamescope::k_szGamescopeTempLimiterTemplate, true );
 		if ( nLimiterFd >= 0 )
 		{
 			setenv( "GAMESCOPE_LIMITER_FILE", szLimiterPath, 1 );

@@ -40,9 +40,9 @@ namespace gamescope
     };
     static CDeferUnlinks s_DeferredUnlinks;
 
-    int MakeTempFile( char ( &pszOutPath )[ PATH_MAX ], const char *pszTemplate, bool bDeferUnlink )
+    int MakeTempFile( char ( &pszOutPath )[ PATH_MAX ], const char *pszTemplate, bool bDeferUnlink, const char *pszDir )
     {
-        const char *pXDGPath = getenv( "XDG_RUNTIME_DIR" );
+        const char *pXDGPath = pszDir ? pszDir : getenv( "XDG_RUNTIME_DIR" );
         if ( !pXDGPath || !*pXDGPath )
             return -1;
 
