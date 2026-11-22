@@ -144,6 +144,39 @@ cannot cut a command buffer without wrapping every `vkCmd*` and re-binding state
 contained on gamescope's side shortens the game's job. `Why:` the fix has to take the
 host's draw out of the path.
 
+#### Open: the refresh timer outrunning the host (field, 2026-11-22)
+
+A second way the host loses frames, **not understood yet**. Seen on a 280 Hz Hyprland output
+(direct scanout, the output in VRR mode for the fullscreen window, `host-vrr 0` on our side
+because the feedback still carries a refresh period):
+
+- Healthy: `sent` 280/s, `shown` 277-279/s, `discarded` 1-5/s, `presented` (our paints) 280/s.
+- Degraded: gamescope's vblank timer ticks 290-330/s (about 470/s at light load, which is
+  `1 / (refresh period - wake-up lead + draw time)`), `presented` 300-470/s although the host
+  verdict is "vsync" and the refresh cap is on, `sent` 250-320/s, `no free image` 30-55/s,
+  `shown` about 172/s, `discarded` about 105/s. The `shown` figure is what randomly timed
+  commits give on a fixed refresh (`refresh x (1 - e^(-sent/refresh))`), so the host is not
+  capped: our commits are no longer locked to its refresh.
+- The same binary and the same profile were healthy for 25 minutes and degraded for the rest
+  of the night, across restarts of the game. Rebuilding the code from before that day's
+  changes reproduced the degraded state, so none of those changes causes it. It began with
+  the session in which the host really tore (see [backend-wayland.md](backend-wayland.md),
+  Tearing) and did not end when tearing was taken out again.
+- Did not cure it: reloading the host's config, moving the pointer and the focus to another
+  output, a DPMS cycle of the output, switching the other outputs off, leaving fullscreen
+  (then composited by the host, no VRR: `sent` 224/s, `shown` 150/s, `no free image` 55/s),
+  switching the tearing request off live, input reaching the game.
+- Not checked: a restart of the host; the raw `presented` timestamps (are they on the host's
+  refresh grid? under host VRR there is no grid, and `MarkVBlank()` takes each one as a
+  vblank); whether a feedback that arrives after the pre-armed tick fires a second tick in
+  the same refresh when the wake-up lead is close to the whole period (the measured lead
+  sat at 3.0-3.57 ms of 3.57 in the degraded state, 2.2-2.9 ms in the healthy one).
+
+The same timer runs fast whenever the nested refresh is set below the output's (180 on a
+280 Hz output: 188-225 ticks/s), with or without frame generation, because every host
+`presented` re-anchors it. A limit on the vblank grid follows the timer, so there it is off
+by the same factor (limit 90 held 113 fps; Auto V-Sync's 180 held 206).
+
 #### GPU clock at light load (2026-11-07)
 
 Measured with the kernel's `gpu_scheduler` trace events (`drm_sched_job_queue/run/done`,

@@ -128,6 +128,15 @@ compositor releases one held commit per vblank; the vblank timer is re-anchored 
 Xwayland) gets nothing from divisor 1 (frame callbacks are sent every vblank anyway), so Auto V-Sync
 does not limit it; not tested.
 
+Field, 2026-11-22 (a DirectX 12 game through Proton in the Steam runtime container): the limit
+reached the game only after two fixes of the same day, the layer's activation inside the container
+([vk-wsi-layer.md](vk-wsi-layer.md)) and the limiter file's location
+([frame-limiter.md](frame-limiter.md)); before them no limit of any kind did. With both, a
+layer-paced limit of 100 held 100.0 fps. The grid limit follows the vblank timer, which ran fast in
+that session, so Auto V-Sync's 180 held 206 fps: open, see "the refresh timer outrunning the host"
+in [frame-generation-host-scanout.md](frame-generation-host-scanout.md). Auto V-Sync with the
+nested refresh equal to the output's was not measured on a healthy host.
+
 `Why:` the user's request (2026-11-22): on a desktop that does not tear for gamescope's window
 (some desktops tear only a fullscreen window), native game frames above the refresh beat against the host
 and stutter; frame generation's own cap does not cover them. It must be automatic because other
