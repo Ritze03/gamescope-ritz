@@ -25,6 +25,16 @@ included, so a switch to a profile with no limit uncaps). It uses the stepper's 
 `update_runtime_info()` puts the rate in the limiter file, which the layer reads per present, so
 the game may start before or after.
 
+The limiter file lives in `/dev/shm` (`gamescope-limiter-XXXXXXXX`, mode 0600, `main.cpp` via
+`MakeTempFile`'s directory parameter), falling back to `$XDG_RUNTIME_DIR` if `/dev/shm` cannot be
+used; a preset `GAMESCOPE_LIMITER_FILE` is respected. It is unlinked at a clean exit; after a crash
+the 8-byte file stays behind in `/dev/shm` (nothing reads it).
+
+- `Why` `/dev/shm` and not the runtime dir (found 2026-11-22): inside the Steam Linux Runtime
+  container the runtime dir is private (only a few sockets are bound in), so the file was invisible
+  to the layer and no limit, Auto V-Sync included, reached a containerised Vulkan game. `/dev/shm`
+  is shared between host and container.
+
 - `Why` only a change of the configured value is pushed (`fpslimit::NeedsPush()`,
   `src/FpsLimitApply.h`): the hook fires on every config change, and a limit set live meanwhile
   (the `gamescope_control` protocol, `debug_set_fps_limit`, the stepper) must survive an unrelated

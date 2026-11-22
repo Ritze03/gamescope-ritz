@@ -59,7 +59,7 @@ Nothing to configure from a user's perspective under Steam/gamescope's normal la
 | `ENABLE_GAMESCOPE_RITZ_WSI=1` | Required for the implicit layer to activate at all (manifest `enable_environment`, set by `layer/meson.build:layer_enable`). |
 | `DISABLE_GAMESCOPE_RITZ_WSI=1` | Forces the layer off even if enabled (manifest `disable_environment`, `layer/meson.build:layer_disable`). |
 | `GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` | Read by the compositor, not the layer: skip this fork's layer and enable the distro's instead (see below). |
-| `GAMESCOPE_LIMITER_FILE` | Path of the compositor's limiter file, read per present by the layer (`gamescopeLimiterInfo`); see the pacing section below. |
+| `GAMESCOPE_LIMITER_FILE` | Path of the compositor's limiter file, read per present by the layer (`gamescopeLimiterInfo`); see the pacing section below. The compositor creates it in `/dev/shm`, not the runtime dir: the Steam Linux Runtime container's runtime dir is private, `/dev/shm` is shared (see [frame-limiter.md](frame-limiter.md)). |
 | `GAMESCOPE_WAYLAND_DISPLAY` | gamescope's own Wayland socket (name or absolute path); also gates `isRunningUnderGamescope()` by socket identity against `WAYLAND_DISPLAY`. |
 | `GAMESCOPE_LAYER_CLIENT_FLAGS` (X11 window property, uint32) | Per-client override of `GamescopeLayerClient::Flag` bits (`DisableHDR`, `ForceBypass`, `FrameLimiterAware`, `NoSuboptimal`, `ForceSwapchainExtent`) — `src/layer_defines.h`. |
 | `SteamAppId` | Read by `clientAppId()` (`layer/VkLayer_FROG_gamescope_wsi.cpp:clientAppId`) to identify the app for default flag heuristics and stats. |
