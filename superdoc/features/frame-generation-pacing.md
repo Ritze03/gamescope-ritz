@@ -520,6 +520,13 @@ with the verdict forced on (a temporary build), headless sway at 120 Hz went fro
 125 shown / 9 discarded a second to 122 / 122 / 0. **Confirmed on the user's screen
 (2026-11-22):** the generated frames no longer pass the refresh and the stutter is gone;
 `ritz_fg_host_vsync 0` removes the cap and brings it back.
+**Why that host did not tear (found 2026-11-22):** gamescope created its tearing-control object
+before its window's `xdg_toplevel`, and Hyprland binds the object to a window only when it is
+created, so the async hint never reached the window (details in
+[backend-wayland.md](backend-wayland.md#tearing)). Fixed the same day: the host is now expected
+to tear for a fullscreen gamescope window while its `allow_tearing` is on, so the vsync verdict
+(and Auto V-Sync) stays inactive there and acts only when the window is not fullscreen or the
+host's tearing is off. **Not yet confirmed on the user's screen.**
 
 **Where it can present faster than the refresh** (`FrameGen_CanExceedRefresh()`; no backend-type
 accessor exists and `Backends/` is not ours to extend, so the Wayland backend is recognised by its
