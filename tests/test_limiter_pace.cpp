@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <string>
 
 #include "LimiterPace.h"
 #include "FpsLimitApply.h"
@@ -75,4 +76,21 @@ TEST_CASE( "auto v-sync: the effective limit", "[limiter]" )
 	CHECK( EffectiveLimit( true, true, false, false, false, false, 0, 0 ) == 0 );
 	// The auto limit is the refresh, so the existing limiter keeps it on the vblank grid (divisor 1).
 	CHECK_FALSE( limiterpace::LayerPaces( false, false, 280, EffectiveLimit( true, true, false, false, true, true, 0, 280 ) ) );
+}
+
+// Reason(): the first blocking condition, as the `status:` line names it.
+TEST_CASE( "auto v-sync: the reason it limits or not", "[limiter]" )
+{
+	using autovsync::Reason;
+	using autovsync::Why;
+	CHECK( Reason( true, true, false, false, false, false, 0, 280 ) == Why::Limits );
+	CHECK( Reason( false, false, true, true, true, false, 0, 280 ) == Why::Off );        // the first one wins
+	CHECK( Reason( true, false, true, false, false, false, 0, 280 ) == Why::NotNested );
+	CHECK( Reason( true, true, true, true, false, false, 0, 280 ) == Why::Vrr );
+	CHECK( Reason( true, true, false, true, false, false, 0, 280 ) == Why::FrameGen );
+	CHECK( Reason( true, true, false, false, false, false, 0, 0 ) == Why::NoRefresh );
+	CHECK( Reason( true, true, false, false, true, false, 0, 280 ) == Why::HostTears );
+	CHECK( Reason( true, true, false, false, true, false, 60, 280 ) == Why::HostTears );
+	CHECK( Reason( true, true, false, false, false, false, 60, 280 ) == Why::UserLimit );
+	CHECK( std::string( autovsync::Text( Why::HostTears ) ) == "the host tears (verdict)" );
 }

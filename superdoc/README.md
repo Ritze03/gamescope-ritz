@@ -55,6 +55,8 @@ indented under it.
   limit, and the layer's pacing of Vulkan games.
 - [Display > General](features/display-general.md) — Adaptive sync, Allow tearing,
   Low-latency wake-up, Force maximize nested window.
+- [Status line](features/status-line.md) — the `ritz_status` diagnostic log line (pacing,
+  tearing, VRR, limiter, Auto V-Sync's reason) and the judder measure.
 - [Reshade effects](features/reshade-effects.md) — the ReShade-compatible post-process
   pipeline, for users' own `.fx` files.
 - [Shader effects (Shaders area)](features/shader-effects.md) — hub: the native build-time

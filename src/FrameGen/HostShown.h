@@ -12,6 +12,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+
+#include "Judder.h"
 
 namespace fghostshown
 {
@@ -25,7 +28,31 @@ namespace fghostshown
 		std::atomic<uint64_t> ulNoFreeImage{ 0 };
 		// The host showed our async-hinted commits on its vblank (VsyncVerdict below).
 		std::atomic<bool> bHostVsync{ false };
+		// For the `status:` line (ritz_status): presented feedbacks fed to the verdict (or
+		// forced by the test hook), the hint the toplevel carries now, and the refresh period
+		// the last `presented` reported (0 = none: the host is variable, VRR).
+		std::atomic<uint64_t> ulVerdictSamples{ 0 };
+		std::atomic<bool> bAsyncHint{ false };
+		std::atomic<uint32_t> uFeedbackRefreshNs{ 0 };
+		std::atomic<int> nVsyncTestHook{ -1 };   // ritz_host_vsync_test, mirrored at each commit
+		std::atomic<bool> bHostVrr{ false };     // the Wayland connector's HostCompositorIsCurrentlyVRR()
+		// Content time of the paint being presented (steamcompmgr thread only: set right
+		// before the connector's Present(), read inside it). 0 = unknown.
+		uint64_t ulPaintContentNs = 0;
 	};
+
+	// The judder meter (Judder.h), fed from the presented feedback, read by the status line.
+	struct JudderShared
+	{
+		std::mutex mutex;
+		fgjudder::Meter meter;
+	};
+
+	inline JudderShared &Judder()
+	{
+		static JudderShared s_Judder;
+		return s_Judder;
+	}
 
 	// Does the host tear for us, or show at most one buffer per refresh? Fed with the
 	// `presented` feedback of commits sent with the async tearing hint only: a host that

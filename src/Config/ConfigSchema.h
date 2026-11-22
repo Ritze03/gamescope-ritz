@@ -581,8 +581,8 @@ namespace gamescope::config
         // Expert settings (2026-11-20): the switch for the 15 tuning values above (learned_*, v3_*, search_radius,
         // search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
         // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.
-        // ADDITIVE: absent loads false, except for a profile saved before the switch existed that holds a changed
-        // value, which loads true (ConfigManager.cpp), so it keeps sounding the way it did.
+        // ADDITIVE: absent loads false, also for a profile saved before the switch existed that holds changed
+        // tuning values (ConfigManager.cpp; tests/test_config.cpp pins it): those then act only once it is on.
         bool expert = false;
     };
 

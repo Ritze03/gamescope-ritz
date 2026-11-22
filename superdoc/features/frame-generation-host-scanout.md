@@ -30,6 +30,10 @@ screen, which the raw verdict alone cannot explain). `Why:` the "presented 311 f
 what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and
 nothing in the log said so.
 
+The same counters, with frame generation off too, plus the judder measure (how evenly the shown
+frames' content advances): the `status:` line, ConVar `ritz_status` (2026-11-22), see
+[status-line.md](status-line.md).
+
 **Cause of the "only ~170-240 of 311 shown" report: the host cannot draw while the game's
 GPU job runs** (mechanism below, in [why the host loses frames](#why-the-host-loses-frames)).
 First step of that finding, that it is not gamescope's commits: setup: Minecraft, Default profile (Target = refresh, Smoothness, Learned motion),
