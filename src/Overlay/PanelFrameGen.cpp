@@ -235,7 +235,7 @@ namespace gamescope
 			c.v3SceneCut = f.v3_scene_cut;
 			c.v3ColourWindow = f.v3_colour_window;   // ... and its two switches
 			c.v3DetailSplit = f.v3_detail_split;
-			c.v3Guard = IndexOf( f.v3_guard, kGuardKeys, 3, 1 );   // ... and the motion guard (fallback: the default Guard)
+			c.v3Guard = IndexOf( f.v3_guard, kGuardKeys, 3, 0 );   // ... and the motion guard
 			return c;
 		}
 
@@ -902,10 +902,10 @@ namespace gamescope
 
 		a.Choice( "framegen.v3_guard", "Motion guard",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 1 ); },
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 0 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kGuardOptions, std::size( kGuardOptions ) )
-			.Help( "Experiment. Off: Motion version 3 alone. Guard (default): V2's motion search also runs "
+			.Help( "Experiment. Off: Motion version 3 alone (default). Guard: V2's motion search also runs "
 			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
 			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
 			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
@@ -914,7 +914,7 @@ namespace gamescope
 			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
 			       "Only used while Motion version is V3." )
 			.Segmented()
-			.Default( 1 )
+			.Default( 0 )
 			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
 			.ShownWhen( ShowV3Rows )
 			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );

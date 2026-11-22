@@ -208,9 +208,6 @@ MouseCursor *steamcompmgr_get_current_cursor();
 MouseCursor *steamcompmgr_get_server_cursor(uint32_t serverId);
 
 extern gamescope::ConVar<bool> cv_tearing_enabled;
-// Auto V-Sync (Display > General): the switch, and the limit it holds the game to now (0 = none).
-extern gamescope::ConVar<bool> cv_ritz_auto_vsync;
-extern int steamcompmgr_auto_vsync_fps();
 
 extern void steamcompmgr_set_app_refresh_cycle_override( gamescope::GamescopeScreenType type, int override_fps, bool change_refresh, bool change_fps_cap );
 
