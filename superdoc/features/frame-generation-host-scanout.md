@@ -172,6 +172,17 @@ because the feedback still carries a refresh period):
   the same refresh when the wake-up lead is close to the whole period (the measured lead
   sat at 3.0-3.57 ms of 3.57 in the degraded state, 2.2-2.9 ms in the healthy one).
 
+**Lead (field, 2026-11-22, after a restart of the host): `--expose-wayland`.** The degraded
+sessions all ran with `--expose-wayland`. The same build started without it was healthy
+(`sent` 277/s, `shown` 276/s, `discarded` 1/s), and with the refresh cap switched off
+(`ritz_fg_host_vsync 0`: `sent` about 950/s, `shown` 280/s) the user still saw no lag. The
+layer was active in both cases, so it is not the layer. What differs in the log: with
+`--expose-wayland` the game's surface gets commits without a new buffer by the hundreds per
+second (the `xwm: a commit without a new buffer re-committed ...` line; over a million in
+one session), without it none. Who sends them and how they reach the pacing is not
+established. The healthy 25 minutes of the night also ran with the flag, so the flag is
+necessary for the degraded state, not sufficient.
+
 The same timer runs fast whenever the nested refresh is set below the output's (180 on a
 280 Hz output: 188-225 ticks/s), with or without frame generation, because every host
 `presented` re-anchors it. A limit on the vblank grid follows the timer, so there it is off
