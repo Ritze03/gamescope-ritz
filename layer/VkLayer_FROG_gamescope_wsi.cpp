@@ -10,8 +10,6 @@
 #include "../src/LimiterPace.h"
 
 #include <charconv>
-#include <string>
-#include <sys/stat.h>
 #include <cstdio>
 #include <vector>
 #include <algorithm>
@@ -111,27 +109,12 @@ namespace GamescopeWSILayer {
       if (!gamescopeSocketName || !*gamescopeSocketName)
         return false;
 
-      // Gamescope always sets or unsets WAYLAND_DISPLAY.
-      // So if that names a different socket, we know we cannot be running
+      // Gamescope always sets or unsets WAYLAND_SOCKET.
+      // So if that is set to something else, we know we cannot be running
       // under Gamescope and must be in a nested Wayland session inside of gamescope.
-      // Compare socket identity, not strings: a container (Steam Linux Runtime) may
-      // rename both variables while they still name one socket.
       const char *waylandSocketName = std::getenv("WAYLAND_DISPLAY");
-      if (waylandSocketName && *waylandSocketName && strcmp(gamescopeSocketName, waylandSocketName) != 0) {
-        auto resolve = [](const char *name) -> std::string {
-          if (*name == '/')
-            return name;
-          const char *runtimeDir = std::getenv("XDG_RUNTIME_DIR");
-          if (!runtimeDir || !*runtimeDir)
-            return {};
-          return std::string(runtimeDir) + "/" + name;
-        };
-        std::string a = resolve(gamescopeSocketName), b = resolve(waylandSocketName);
-        struct stat sa, sb;
-        if (a.empty() || b.empty() || stat(a.c_str(), &sa) != 0 || stat(b.c_str(), &sb) != 0 ||
-            sa.st_dev != sb.st_dev || sa.st_ino != sb.st_ino)
-          return false;
-      }
+      if (waylandSocketName && *waylandSocketName && strcmp(gamescopeSocketName, waylandSocketName) != 0)
+        return false;
 
       return true;
     }();
