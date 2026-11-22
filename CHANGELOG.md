@@ -7,6 +7,11 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-22
+
+### Info
+- **Motion guard**: Motion version 3 now uses the Guard setting by default.
+
 ## 2026-11-21
 
 ### Added

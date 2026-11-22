@@ -399,8 +399,8 @@ namespace gamescope::config
                         f.v3_scene_cut = 0.0f;
                     f.v3_colour_window = JGetBool( *pFrameGen, "v3_colour_window", f.v3_colour_window );
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
-                    const std::string sGuard = JGetString( *pFrameGen, "v3_guard", f.v3_guard );
-                    f.v3_guard = ( sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : "off";
+                    const std::string sGuard = JGetString( *pFrameGen, "v3_guard", "" );
+                    f.v3_guard = ( sGuard == "off" || sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : FrameGenSettings{}.v3_guard;
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
             }

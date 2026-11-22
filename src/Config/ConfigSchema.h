@@ -571,8 +571,9 @@ namespace gamescope::config
         bool v3_colour_window = false;   // Motion version 3 only: matching weighted by colour similarity
         bool v3_detail_split = false;    // Motion version 3 only: fine detail taken from one frame
         // Motion guard (2026-11-20; Settings::v3Guard): "off" | "guard" | "v2_motion". Motion version 3 only. An absent,
-        // wrong-typed or unknown value loads "off". ADDITIVE. Applies live.
-        std::string v3_guard = "off";
+        // wrong-typed or unknown value loads the default "guard" (2026-11-22, was "off"); a stored "off" stays "off".
+        // ADDITIVE. Applies live.
+        std::string v3_guard = "guard";
         // Expert settings (2026-11-20): the switch for the 15 tuning values above (learned_*, v3_*, search_radius,
         // search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
         // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.
