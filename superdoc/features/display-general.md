@@ -50,6 +50,18 @@ frame generation the host tearing hint has its own rules, in
 
 ## Auto V-Sync (`display.auto_vsync`)
 
+**Also gates frame generation's refresh cap (2026-11-22).** `FrameGen_HostVsync()` =
+`autovsync::FrameGenCap( ritz_auto_vsync, ritz_fg_host_vsync, verdict "host vsync" )`: on a nested
+Wayland host found not to tear, frame generation's output is held at the refresh only while Auto
+V-Sync is on (and the test ConVar `ritz_fg_host_vsync`, default 1, is not 0). With the switch off
+(the default) frame generation runs to its target as before the 2026-11-21 cap. `Why:` the user's
+request: one switch for "do not send more than the refresh while the host cannot show more", and
+off by default because on their desktop the uncapped output was fine. When the tearing hint is not
+requested nothing changes (`FrameGen_CanExceedRefresh()` is untouched). The `status:` line's
+auto-vsync part, while frame generation is active, reads `frame generation: capped at the refresh`,
+`... no cap (the host tears)` or `... no cap (test switch off)` (`autovsync::FrameGenText()`); the
+limiter itself still applies no limit then.
+
 Added 2026-11-22, directly after Allow tearing. **Default Off**, config key `gamescope.auto_vsync`
 (per profile, additive, absent = false, in the `display.general` export group), mirrored into the
 ConVar `ritz_auto_vsync` the same plain way as Low-latency wake-up (`main.cpp` at start-up,
@@ -62,15 +74,14 @@ refresh**, and the limit lifts as soon as it can. The rule is the pure
 - Only on the nested Wayland backend (`FrameGen_IsNestedWayland()`), not under VRR, and not while
   frame generation or motion blur is on (`fghost::Active()`). `Why` not with frame generation: it
   makes the limiter pace on the layer's timer (not locked to the host's refreshes, so it would beat
-  anyway) and caps its own output on such a host; leaving it out also guarantees Auto V-Sync never
-  changes frame generation. Other backends: no effect (a `ponytail:` note names DRM without tearing
+  anyway); the same switch instead gates frame generation's own refresh cap (below). Other backends: no effect (a `ponytail:` note names DRM without tearing
   and SDL as the upgrade path).
 - "Cannot show faster", any one of (the first that holds is the cause, `autovsync::LimitCause()`):
   1. Allow tearing is off (or the backend cannot tear);
   2. the host was found to show our tearing-hinted commits on its vblank anyway (the raw verdict
      `fghostshown::Get().bHostVsync`, see [frame-generation-pacing.md](frame-generation-pacing.md),
      "A host that does not tear"; deliberately not `FrameGen_HostVsync()`, whose
-     `ritz_fg_host_vsync` is frame generation's own switch);
+     `ritz_fg_host_vsync` is frame generation's test switch);
   3. **gamescope composites its paints** (2026-11-22): `autovsync::CompositeGate`, fed after every
      paint with "this paint can never flip async, whatever the game asks": the backend composited
      it (`GetVBlankTimer().WasCompositing()`, set from `bNeedsFullComposite` after each Present) or

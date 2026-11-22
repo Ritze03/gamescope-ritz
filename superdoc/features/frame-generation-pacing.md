@@ -480,7 +480,7 @@ machine, runs discarded) and a heavy GPU-saturated case. Also seen: the host sho
 "Frames the host shows" under Logging).
 `Why:` do not lower the value on this evidence; revisit with a late-paint workload.
 
-**A host that does not tear (2026-11-21, ConVar `ritz_fg_host_vsync`, default 1).** A user's
+**A host that does not tear (2026-11-21, ConVar `ritz_fg_host_vsync`, default 1; since 2026-11-22 the cap is in force only while Display > General > Auto V-Sync is on, `autovsync::FrameGenCap()`, so it is off by default).** A user's
 report (nested Wayland, 280 Hz, not VRR, tearing hint `async`, Target = display refresh, Low
 latency): *"stutter in motion"*, *"no matter if frames are native or framegen, if FPS >
 refreshrate set in gamescope, then it starts stuttering"*; a target of 250 on the same screen

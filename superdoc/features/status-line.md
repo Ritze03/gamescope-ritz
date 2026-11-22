@@ -54,7 +54,7 @@ host-vsync 0 samples 0 (total 0) test -1 fg_host_vsync 1 fg-cap 0 | limiter user
 - `tearing`: `tearing_enabled`, `SupportsTearing()`, and the hint the toplevel carries now.
 - `verdict`: the raw `bHostVsync`, `samples` = `presented` feedbacks of async-hinted commits fed to
   the verdict this interval (`total` since start): 0 means the verdict cannot move. `test` =
-  `ritz_host_vsync_test`, then `ritz_fg_host_vsync` and `FrameGen_HostVsync()` (`fg-cap`).
+  `ritz_host_vsync_test`, then `ritz_fg_host_vsync` and `FrameGen_HostVsync()` (`fg-cap`; 1 needs Auto V-Sync on, the test ConVar and the verdict). While frame generation is active the auto-vsync part reads `frame generation: capped at the refresh` / `no cap (...)`.
 - `limiter`: the user's own limit (as Auto V-Sync last saw it), the effective
   `g_nSteamCompMgrTargetFPS`, the two limiter-file words (on, pace fps) and the mode: `off`,
   `grid` (compositor holds FIFO commits to the vblank grid) or `layer` (the WSI layer paces).

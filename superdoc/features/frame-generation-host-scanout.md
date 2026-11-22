@@ -24,7 +24,7 @@ without the `VSYNC` kind flag, i.e. presented without waiting for a refresh, cou
 nothing; since 2026-11-21 it ends with `host vsync yes|no`, the raw verdict whether the host shows
 our async-hinted commits on its vblank, see [frame-generation-pacing.md](frame-generation-pacing.md),
 "A host that does not tear"; since 2026-11-22 followed by `refresh cap on|off`, what actually caps
-frame generation's output (`FrameGen_HostVsync()`: the verdict AND `ritz_fg_host_vsync`). `Why`
+frame generation's output (`FrameGen_HostVsync()`: the verdict AND `ritz_fg_host_vsync` AND Auto V-Sync). `Why`
 both: a field log showed `host vsync yes` while 294-307 frames a second were sent to a 280 Hz
 screen, which the raw verdict alone cannot explain). `Why:` the "presented 311 fps" figure counts
 what gamescope *sent*, and it misled us: the screen showed far fewer of those frames, and

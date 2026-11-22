@@ -198,3 +198,16 @@ TEST_CASE( "auto v-sync: the compositing debounce", "[limiter]" )
 		CHECK( g.Composites( t0 + 600 * ms ) );
 	}
 }
+
+// Frame generation's refresh cap follows Auto V-Sync (2026-11-22); the test switch is ANDed in.
+TEST_CASE( "auto v-sync: frame generation's refresh cap", "[limiter]" )
+{
+	using autovsync::FrameGenCap;
+	CHECK( FrameGenCap( true, true, true ) );
+	CHECK( !FrameGenCap( false, true, true ) );    // Auto V-Sync off (the default): no cap
+	CHECK( !FrameGenCap( true, false, true ) );    // the test switch
+	CHECK( !FrameGenCap( true, true, false ) );    // the host tears
+	CHECK( std::string( autovsync::FrameGenText( true, true ) ) == "frame generation: capped at the refresh" );
+	CHECK( std::string( autovsync::FrameGenText( true, false ) ) == "frame generation: no cap (the host tears)" );
+	CHECK( std::string( autovsync::FrameGenText( false, false ) ) == "frame generation: no cap (test switch off)" );
+}
