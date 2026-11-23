@@ -178,7 +178,7 @@ TEST_CASE( "framegen v3: the guard takes bits 50 and 51 (0, 1, 2) and leaves bit
 			REQUIRE( ( r.v3Smear == 0.80f && r.v3OcclSoft == 2.55f && r.v3Unsure == 0.25f && r.v3SceneCut == 3.95f ) );
 		}
 	}
-	// Off is the raw host struct's default and changes nothing (the setting's default Guard reaches the host through
+	// Off is the raw host struct's default and changes nothing (the setting's default Off reaches the host through
 	// PanelFrameGen's ToHostConfig(), its only producer); the guard changes the word (so it reaches setSettings()); a value outside 0..2
 	// packs as 0, and the unused value 3 unpacks as 0.
 	REQUIRE( Config{}.v3Guard == 0 );

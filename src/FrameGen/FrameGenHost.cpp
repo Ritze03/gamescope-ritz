@@ -609,8 +609,8 @@ namespace fghost
 				// V3 honours flowScale (1, 2, 4), so it is checked with the Quality row's own value, which
 				// EnsureReady() leaves alone for V3.
 				pszWhy = H.interp.settingsError( sCheck );
-				// The Motion guard (V3's default since 2026-11-22) needs what V2 needs. A device that runs V3 but not
-				// V2 keeps V3 with the guard Off, logged only: a default must not cost V3 or leave a lasting Status note.
+				// The Motion guard (a chosen Guard) needs what V2 needs. A device that runs V3 but not
+				// V2 keeps V3 with the guard Off, logged only: the optional guard must not cost V3 or leave a lasting Status note.
 				if ( pszWhy && bV3 && s.v3Guard != framegen::V3Guard::Off )
 				{
 					sCheck.v3Guard = framegen::V3Guard::Off;

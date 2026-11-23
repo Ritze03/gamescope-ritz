@@ -2715,7 +2715,6 @@ namespace gamescope::config
         e.v3_scene_cut = d.v3_scene_cut;
         e.v3_colour_window = d.v3_colour_window;
         e.v3_detail_split = d.v3_detail_split;
-        e.v3_guard = d.v3_guard;
         e.search_radius = d.search_radius;
         e.search_radius_top = d.search_radius_top;
         e.pyramid_min_side = d.pyramid_min_side;

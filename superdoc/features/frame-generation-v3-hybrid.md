@@ -62,7 +62,7 @@ generation's rows, as for every V3 value).
   It is greyed while frame generation is off. `Why:` the user wants to compare three variants live
   (2026-11-23), so it is not a tuning row; once one net wins the row goes away.
 - Every V3 row acts under V3 Hybrid exactly as under V3, including the Expert rule (tuning rows
-  only with Expert on; defaults act with it off). The variant is not one of the 15 tuning values,
+  only with Expert on; defaults act with it off; the Motion guard is no Expert row). The variant is not one of the 14 tuning values,
   so `config::FrameGenEffective()` never resets it.
 
 From the command line (the same binding a click writes through; the value is the option's id, as

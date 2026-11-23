@@ -34,7 +34,8 @@
 // looked at. The one exception (2026-11-19) is the "Motion search" group at the end
 // of the area (search radius, coarsest-level radius, pyramid smallest level, search
 // penalty): the user asked to watch what more reach does while a game runs.
-// EXPERT SETTINGS (2026-11-20). The Learned, V3 and Motion search rows (15 in all) are hidden
+// EXPERT SETTINGS (2026-11-20). The Learned, V3 and Motion search rows (14 in all; the Motion guard is no
+// Expert row since 2026-11-23, it sits above Artifact safety while V3 is selected) are hidden
 // (ShownWhen) unless the "Expert settings" switch (`framegen.expert`) is on AND the row acts on the
 // effective motion version; while it is off the renderer gets their DEFAULTS
 // (config::FrameGenEffective(), applied in PushToRenderer()), the stored values stay.
@@ -245,7 +246,7 @@ namespace gamescope
 			c.v3SceneCut = f.v3_scene_cut;
 			c.v3ColourWindow = f.v3_colour_window;   // ... and its two switches
 			c.v3DetailSplit = f.v3_detail_split;
-			c.v3Guard = IndexOf( f.v3_guard, kGuardKeys, 3, 1 );   // ... and the motion guard (fallback: the default Guard)
+			c.v3Guard = IndexOf( f.v3_guard, kGuardKeys, 3, 0 );   // ... and the motion guard (fallback: the default Off)
 			return c;
 		}
 
@@ -254,7 +255,7 @@ namespace gamescope
 		// PanelFrameGen_ApplyStartupConfig().
 		void PushToRenderer( const config::FrameGenSettings &f )
 		{
-			// The effective values: with Expert settings off the 15 tuning values are the defaults (no "ghost settings").
+			// The effective values: with Expert settings off the 14 tuning values are the defaults (no "ghost settings").
 			fghost::SetConfig( ToHostConfig( config::FrameGenEffective( f ) ) );
 		}
 
@@ -318,6 +319,13 @@ namespace gamescope
 
 		// V3 Hybrid is the SELECTED Motion version (Frame generation's own row, whatever Motion blur runs): the variant
 		// row's visibility. Not an Expert row: the user compares the variants live.
+		// The Motion guard row: shown whenever V3 (Hybrid included) is the version in force, Expert settings on or off.
+		bool ShowGuardRow()
+		{
+			EnsureConfigLoaded();
+			return EffectiveMotionIsV3();
+		}
+
 		bool HybridSelected()
 		{
 			EnsureConfigLoaded();
@@ -343,7 +351,7 @@ namespace gamescope
 		// the rows are usable under V3 while the guard is not Off and greyed while it is Off.
 		bool V3GuardOn()
 		{
-			// The EFFECTIVE guard: with Expert settings off the stored one is not in force.
+			// The stored guard always acts (no Expert row since 2026-11-23); FrameGenEffective() leaves it alone.
 			return EffectiveMotionIsV3() && config::FrameGenEffective( s_Settings.framegen ).v3_guard != "off";
 		}
 
@@ -370,7 +378,7 @@ namespace gamescope
 			return ReachRowsUsable() && PenaltyVersionApplies();
 		}
 
-		// Expert settings (2026-11-20): the 15 tuning rows are SHOWN (Entry::ShownWhen, so also absent from keyboard
+		// Expert settings (2026-11-20): the 14 tuning rows are SHOWN (Entry::ShownWhen, so also absent from keyboard
 		// navigation and the command palette) only while the switch is on and the row acts on the effective motion
 		// version. Not whether frame generation is on: a shown row is greyed by its DisabledUnless() instead.
 		bool ExpertOn()
@@ -630,6 +638,29 @@ namespace gamescope
 
 		a.Group( "Artifact protection" );
 		a.GroupColumn( 0 );
+
+		// Motion guard (2026-11-20; moved here, out of Expert settings, and back to Off by default 2026-11-23): shown
+		// while V3 is selected, directly above Artifact safety. `Why:` the user: "Also show the V3 motion guard not
+		// under the expert settings. Make it off by default and show it above the artifact safety, while V3 is
+		// selected (otherwise, hide it)".
+		a.Choice( "framegen.v3_guard", "Motion guard",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+			kGuardOptions, std::size( kGuardOptions ) )
+			.Help( "Experiment. Off (default): Motion version 3 alone. Guard: V2's motion search also runs "
+			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
+			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
+			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
+			       "everywhere, V3's picture generation on top. Removes more of V3's large artifacts but "
+			       "loses V3's advantage on fast motion (looks like V2 there). About +0.31 ms per real "
+			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
+			       "Only used while Motion version is V3." )
+			.Segmented()
+			.Default( 0 )
+			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
+			.ShownWhen( ShowGuardRow )
+			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
 
 		a.Choice( "framegen.safety", "Artifact safety",
 			ui::AnyBind::Of<int>(
@@ -929,25 +960,6 @@ namespace gamescope
 			       "Slightly crisper texture and text. +0.06 ms per generated frame." )
 			.Default( false )
 			.Keywords( "frame generation v3 detail split one frame texture text sharp crisp experiment" )
-			.ShownWhen( ShowV3Rows )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
-
-		a.Choice( "framegen.v3_guard", "Motion guard",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_guard, kGuardKeys, 3, 1 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_guard = kGuardKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
-			kGuardOptions, std::size( kGuardOptions ) )
-			.Help( "Experiment. Off: Motion version 3 alone. Guard (default): V2's motion search also runs "
-			       "and corrects V3 where V2 matches the two frames clearly better. Reduces some large "
-			       "artifacts (objects held in front of a moving background, frame edges); does not fix a "
-			       "radar or minimap. About +0.34 ms per real frame and 14 MiB. V2 motion: V2's motion "
-			       "everywhere, V3's picture generation on top. Removes more of V3's large artifacts but "
-			       "loses V3's advantage on fast motion (looks like V2 there). About +0.31 ms per real "
-			       "frame. While it is not Off, the Motion search rows and Search penalty act on it. "
-			       "Only used while Motion version is V3." )
-			.Segmented()
-			.Default( 1 )
-			.Keywords( "frame generation v3 motion guard v2 motion artifacts experiment large artifacts" )
 			.ShownWhen( ShowV3Rows )
 			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
 
