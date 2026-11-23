@@ -44,6 +44,7 @@
 // See superdoc/features/frame-generation-settings.md.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
 // momentary action; the Frame generation switch is the on/off.
+#include "FgStats.h"
 #include "PanelFrameGen.h"
 
 #include <algorithm>
@@ -269,6 +270,7 @@ namespace gamescope
 			d.onlyGenerated = e.debug_only_generated;
 			d.stats = e.debug_stats;
 			fghost::SetDebugConfig( d );
+			fgstats::SetEnabled( d.stats );   // the stats overlay (src/Overlay/FgStats.cpp); false while Debug options is off
 		}
 
 		void EnsureConfigLoaded()
