@@ -172,6 +172,31 @@ because the feedback still carries a refresh period):
   the same refresh when the wake-up lead is close to the whole period (the measured lead
   sat at 3.0-3.57 ms of 3.57 in the degraded state, 2.2-2.9 ms in the healthy one).
 
+**Correction (field, 2026-11-23): `--expose-wayland` is cleared.** The lead below was a
+confound: the first session without the flag was also the first session after the host's
+restart, and no session with the flag ran between the restart and this test. Same build, flag
+on, game in its level at 205-230 fps, refresh cap in force: `sent` 279-280/s, `shown`
+278-279/s, `discarded` 0-2/s, refresh timer 279.4-280.9/s (healthy; the measured lead sat at
+the whole period, 3.57 ms, in most samples and it was healthy anyway). No re-commit line was
+logged in any session since the restart, with or without the flag. So the degraded state was
+a state of the host that began with the session in which the host really tore and lasted
+until the host was restarted.
+
+What the same night measured instead, flag or not:
+
+| Situation | Refresh timer | Paints / sent | Shown |
+|---|---|---|---|
+| Game in a menu at 60 fps, frame generation passing through | 293-298/s | 73-76/s | all |
+| Same menu, frame generation generating, refresh cap in force | 267/s | 255/s | 251/s |
+| Level, refresh cap in force | 279.4-280.9/s | 279-280/s | 278-279/s |
+| Level or menu, no cap (target "display refresh") | 185-258/s | 308-311/s | 279-280/s, 29-31/s discarded |
+
+Working theory: the timer keeps the refresh rate only while a host feedback anchors every
+refresh; with fewer feedbacks (76/s in the menu) it free-runs about 5 % fast, which is the
+290-330/s of the degraded night. Not yet confirmed in the code.
+
+The two paragraphs below are kept as written on 2026-11-22; read them with this correction.
+
 **Lead (field, 2026-11-22, after a restart of the host): `--expose-wayland`.** The degraded
 sessions all ran with `--expose-wayland`. The same build started without it was healthy
 (`sent` 277/s, `shown` 276/s, `discarded` 1/s), and with the refresh cap switched off

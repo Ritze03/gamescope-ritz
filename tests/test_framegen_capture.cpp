@@ -192,7 +192,7 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 {
 	const framegen::Settings s;
 	const auto v = FormatSettingLines( s );
-	REQUIRE( v.size() == 44 );   // every field (the static_assert in FrameGenCapture.cpp guards the struct's size)
+	REQUIRE( v.size() == 45 );   // every field (the static_assert in FrameGenCapture.cpp guards the struct's size)
 	std::set<std::string> names;
 	for ( const std::string &l : v )
 	{
@@ -203,15 +203,16 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 		REQUIRE( nEq != std::string::npos );
 		names.insert( t[ 1 ].substr( 0, nEq ) );
 	}
-	REQUIRE( names.size() == 44 );   // all distinct
+	REQUIRE( names.size() == 45 );   // all distinct
 	for ( const char *pszName : { "trustLow", "searchPenalty", "uiProtection", "blurWeights", "motionVersion", "v2Mode", "v2StaticMask",
-		"v3Smear", "v3Guard", "learnedNet", "learnedStaticGuard", "flowScale", "pyramidMinSide", "uiBoxOffsetX" } )
+		"v3Smear", "v3Guard", "v3Blend", "learnedNet", "learnedStaticGuard", "flowScale", "pyramidMinSide", "uiBoxOffsetX" } )
 		REQUIRE( names.count( pszName ) == 1 );
 
 	// Values and enum texts.
 	framegen::Settings m;
 	m.motionVersion = framegen::MotionVersion::V3;
 	m.v3Guard = framegen::V3Guard::V2Motion;
+	m.v3Blend = 3;
 	m.uiBoxOffsetX = -5;
 	m.v3Smear = 0.4f;
 	m.subpixel = false;
@@ -219,6 +220,7 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 	auto Has = [ & ]( const char *pszLine ) { return std::find( w.begin(), w.end(), std::string( pszLine ) ) != w.end(); };
 	REQUIRE( Has( "setting motionVersion=3 text=V3" ) );
 	REQUIRE( Has( "setting v3Guard=2 text=V2Motion" ) );
+	REQUIRE( Has( "setting v3Blend=3" ) );
 	REQUIRE( Has( "setting uiBoxOffsetX=-5" ) );
 	REQUIRE( Has( "setting subpixel=0" ) );
 	REQUIRE( Has( "setting v3Smear=0.400000006" ) );   // %.9g of the float: exact round trip
@@ -829,4 +831,26 @@ TEST_CASE( "capture watch: the text formats", "[framegen_capture]" )
 	t = Tokens( FormatFrameLine( f ) );
 	REQUIRE( std::find( t.begin(), t.end(), std::string( "near=1" ) ) != t.end() );
 	REQUIRE( WatchRequiredBytes( 100, 100, 4, 60 ) >= 3 * RequiredBytes( 100, 100, 4, kFrames ) );
+}
+
+// V3 Hybrid (2026-11-23): the header (and the watch header) names the blend variant; plain V3 says nothing extra.
+TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", "[framegen_capture]" )
+{
+	HeaderInfo h;
+	h.sMotionWanted = "V3";
+	h.sMotionEffective = "V3";
+	h.uFlowScale = 2;
+	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=" ) == std::string::npos );
+	const char *const kName[] = { "A", "B", "C" };
+	for ( int i = 0; i < 3; i++ )
+	{
+		h.nBlend = i + 1;
+		const std::string sKey = std::string( "fallback_v1=0 blend=" ) + kName[ i ] + " flowScale=2";
+		REQUIRE( FormatHeaderLine( h ).find( sKey ) != std::string::npos );
+		REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( sKey ) != std::string::npos );
+		const auto t = Tokens( FormatHeaderLine( h ) );
+		for ( size_t k = 1; k < t.size(); k++ )
+			REQUIRE( t[ k ].find( '=' ) != std::string::npos );
+	}
 }

@@ -21,7 +21,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.safety` | `off` / `very_low` / `low` / `default` (default since 2026-10-28) / `high` | trust ramp (40,68) / (16,56) / (12,40) / (8,28) in 8-bit levels on the 7x7-averaged mismatch of the two warped frames (below `trustLow` interpolated, above `trustHigh` the nearer real frame, blended between); the help states each level's range plus the 15% whole-frame and scene-cut fallbacks. `off` disables every fallback: trust (254,255), `globalFallback` 1.0, `sceneCutSad` 255 -- never the real frame, not on fast flicks or scene cuts (smoothest, visible smearing and blended cuts). The others keep the library's 0.15 / 30. `very_low` (2026-10-28, packed as safety value 4 with its third bit in bit 30 of the main config word) `Why:` ml-fg measured the ramp with Learned e2v5 + zero test at x2: (12,40) gave 0.16% ghost pixels and 1.3% whole-frame fallbacks; (40,68) gave +0.28 dB on game clips and +0.30 dB on video clips, 0.28% ghost pixels and ~0 fallbacks. A later ramp is smoother and holds the real frame far less often, but ghosts more where the motion is wrong |
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5 (honoured by V1 and, since 2026-11-19, V3; V2 and Learned ignore it): a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` | the library's [UI protection](frame-generation-ui-protection.md#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
-| `framegen.motion_version` | `v1` (default) / `v2` / `learned` / `v3` | the row "Motion version": the library's [Motion version 2](frame-generation-motion-v2.md#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](frame-generation-learned.md#learned-motion) (2026-10-26); `v3` = [Motion version 3](frame-generation-motion-v3.md) (2026-11-19), the most fluid and about three times V1's cost |
+| `framegen.motion_version` | `v1` (default) / `v2` / `learned` / `v3` / `v3_hybrid` | the row "Motion version": the library's [Motion version 2](frame-generation-motion-v2.md#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](frame-generation-learned.md#learned-motion) (2026-10-26); `v3` = [Motion version 3](frame-generation-motion-v3.md) (2026-11-19), the most fluid and about three times V1's cost; `v3_hybrid` = [V3 Hybrid](frame-generation-v3-hybrid.md) (2026-11-23), V3 with a learned blend (counts as V3 everywhere) |
 | `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` / `g2v2` / `g2v3` / `m2v2` / `m2v3` (round 4b) | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
 | `framegen.learned_half` | `false` (default) / `true` | the row "Learned precision" (Full / Half), used only while Learned runs; additive (2026-10-26) |
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
@@ -37,11 +37,12 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.v3_unsure` | float 0.25-4 (default 1.0), clamped on load | the row "Unsure sensitivity" (slider, step 0.05), V3 only. Runtime. Additive (2026-11-19) |
 | `framegen.v3_scene_cut` | float 0-4 (default 0 = Never since 2026-11-19), clamped on load; a stored 0.45 (the old default) loads as 0, see [motion-v3](frame-generation-motion-v3.md#scene-cut-default-never) | the row "Scene cut threshold" (slider, step 0.05, 0 shown as "Never"), V3 only. Runtime, read by the estimate (applies from the next real pair). Additive (2026-11-19) |
 | `framegen.v3_colour_window` | bool (default false; absent or wrong type: false) | the row "Colour-weighted matching" (switch), V3 only. Runtime, applies from the next real pair. Experiment: motion search weighted by colour similarity. Additive (2026-11-19) |
-| `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"guard"` since 2026-11-22, was `"off"`; absent, wrong type or unknown: `"guard"`; a stored `"off"` stays `"off"`) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Motion version 3"), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
+| `framegen.v3_guard` | string `"off"` / `"guard"` / `"v2_motion"` (default `"off"` again since 2026-11-23, it was `"guard"` for one day; absent, wrong type or unknown: `"off"`; the stored value always acts, also with Expert settings off) | the row "Motion guard" (segmented Choice Off / Guard / V2 motion, group "Artifact protection", directly above Artifact safety; shown while V3 or V3 Hybrid is selected, no Expert row since 2026-11-23), V3 only. Runtime, applies from the next real pair. Experiment: V2's motion search corrects (Guard) or replaces (V2 motion) V3's motion. While it is not Off the search rows act on it. Additive (2026-11-20). See [motion-v3](frame-generation-motion-v3.md#motion-guard) |
+| `framegen.v3_hybrid_variant` | string `"a"` / `"b"` / `"c"` (default `"a"`; absent, wrong type or unknown: `"a"`) | the row "Hybrid variant" (segmented A / B / C, directly under Motion version), shown while V3 Hybrid is selected, also with Expert settings off (not one of the 15 tuning values, never reset by `FrameGenEffective()`). Runtime, applies at the next synthesis. Additive (2026-11-23). See [V3 Hybrid](frame-generation-v3-hybrid.md) |
 | `framegen.expert` | bool (default false; wrong type: false; absent: false, also for an old profile with changed tuning values, see "Expert settings") | the row "Expert settings" (switch, last row of group "Frame generation"): shows the 15 tuning rows of the selected Motion version and puts their stored values in force; off hides them and the defaults act. Additive (2026-11-20), schema stays 5 |
 | `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
-**Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches form the group "Motion version 3" (column 1,
+**Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches (the Motion guard is in "Artifact protection" since 2026-11-23) form the group "Motion version 3" (column 1,
 after "Learned motion" until 2026-11-20), shown only with Expert settings on and V3 the version the interpolator runs
 (see "Expert settings" below). Under V3 the
 Search radius, Search radius (coarsest level), Pyramid smallest level and Search penalty rows are hidden
@@ -91,7 +92,7 @@ between two real frames needs a longer search, and only trying it shows what it 
 ## Expert settings
 
 *2026-11-20.* The row **Expert settings** (`framegen.expert`, a switch, default off, the last row
-of group "Frame generation", never greyed) hides the 15 tuning rows and decides whether their
+of group "Frame generation", never greyed) hides the 14 tuning rows and decides whether their
 stored values act. Help: *Shows the tuning settings of the selected Motion version. While it is
 off they are hidden and their defaults are used; your own values are kept and apply again when you
 turn it back on.* Keywords make the palette find it under "expert", "advanced" and "tuning".
@@ -105,7 +106,7 @@ The version rule only: whether frame generation is on is not asked, a shown row 
 | Rows | Shown under the effective version |
 | --- | --- |
 | Learned net, Learned precision, Zero-motion test, Static guard | Learned |
-| Smear, Occlusion softness, Unsure sensitivity, Scene cut threshold, Colour-weighted matching, Detail from one frame, Motion guard | V3 |
+| Smear, Occlusion softness, Unsure sensitivity, Scene cut threshold, Colour-weighted matching, Detail from one frame | V3 |
 | Search radius, Search radius (coarsest level) | V1, V2, and V3 while Motion guard is not Off |
 | Pyramid smallest level, Search penalty | V1, V2, Learned, and V3 while Motion guard is not Off |
 
@@ -118,17 +119,17 @@ Overview, as for every other `ShownWhen` row; "differs N" and the changed-value 
 the shown rows only, so hidden rows are not counted.
 
 **Defaults in effect while off.** `config::FrameGenEffective( f )` (`Config/ConfigManager.cpp`)
-returns `f` unchanged when `f.expert`, else a copy whose 15 values (`learned_net`, `learned_half`,
+returns `f` unchanged when `f.expert`, else a copy whose 14 values (`learned_net`, `learned_half`,
 `learned_zero_test`, `learned_static_guard`, `v3_smear`, `v3_occl_soft`, `v3_unsure`,
-`v3_scene_cut`, `v3_colour_window`, `v3_detail_split`, `v3_guard`, `search_radius`,
+`v3_scene_cut`, `v3_colour_window`, `v3_detail_split`, `search_radius`,
 `search_radius_top`, `pyramid_min_side`, `search_penalty`) are those of a default-constructed
 `FrameGenSettings` (no default is written twice). It is applied at the one place the stored
 settings become the host config, `PushToRenderer()` -> `ToHostConfig()` in `PanelFrameGen.cpp`;
 everything downstream (`fghost::GetConfig()`, which `steamcompmgr.cpp` and the Motion blur panel
 read, and the library's `setSettings()` / `reconfigure()`) therefore sees effective values. The
-panel's own `V3GuardOn()` uses it too (since 2026-11-22 the guard is effectively **Guard** with Expert off,
-its default, so under V3 the search rows act and are usable then; a profile saved with `"v3_guard": "off"`
-runs Guard while Expert is off and Off again when Expert is on). The rows' getters and
+panel's own `V3GuardOn()` uses it too. The Motion guard is **not** among the 14 values since 2026-11-23 (it was the
+15th; it was effectively Guard with Expert off for one day, 2026-11-22): its stored value always acts, so the search rows
+under V3 follow the stored guard. The rows' getters and
 setters keep reading and writing the **stored** values, and the switch never touches them: turning
 Expert on again applies the user's own values again, at once (a switch is an ordinary
 "setting changed" push). `Why:` the user: *"When expert settings is turned off, it should always
@@ -195,11 +196,11 @@ No migration.
 
 **Layout** (2026-11-07): two columns (`a.Columns( 2 )`, every group pinned with `GroupColumn()`).
 Column 0: group "Frame generation" (Frame generation, Multiplier, Target fps, Priority, Motion
-version, Quality, Expert settings), then "Artifact protection" (Artifact safety, Static HUD
+version, Quality, Expert settings), then "Artifact protection" (Motion guard, shown only while V3 is selected, 2026-11-23; Artifact safety, Static HUD
 protection, UI protection, Crosshair box size). Column 1 (reordered 2026-11-20, see "Expert
 settings" below): "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
 GPU speed), "Status", then the three groups that only show with Expert settings on: "Learned
-motion" (Learned net, Learned precision, Zero-motion test, Static guard), "Motion version 3" and
+motion" (Learned net, Learned precision, Zero-motion test, Static guard), "Motion version 3" (six rows; the Motion guard moved out 2026-11-23) and
 "Motion search" (Search radius, Search radius (coarsest level), Pyramid smallest level, Search
 penalty; 2026-11-19). Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
 against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
@@ -213,7 +214,7 @@ frames. Adds delay, so it is not suited to twitch shooters.*), **Multiplier** (2
 shown as "Display refresh", disabled unless Multiplier is Target fps; a drag into 1..29 snaps to 0
 or 30), **Priority** (Low latency / Smoothness), **Motion version** (V1 / V2 / V3 / Learned; displayed in that order, the option values stay the
 enum and `kMotionKeys` indices 0 / 1 / 3 / 2, so `overlay_e2_set` still means 2 = Learned, 3 = V3), **Quality**.
-**Artifact protection** group: **Artifact safety** (Off / Very low / Low / Default / High),
+**Artifact protection** group: **Motion guard** (while V3 / V3 Hybrid is selected; Off / Guard / V2 motion, default Off), **Artifact safety** (Off / Very low / Low / Default / High),
 **Static HUD protection**, **UI protection** (Off / Crosshair / Crosshair V2 / Whole screen),
 **Crosshair box size** (a slider, `2.5% · 24 px`, disabled while UI protection is Off). Column 1,
 **Pausing and limits** group: **Pause at refresh rate** (a switch; help: stops at the

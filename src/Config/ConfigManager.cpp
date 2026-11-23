@@ -355,7 +355,7 @@ namespace gamescope::config
                     f.ui_protection = sUi;
                 f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 20.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" || sMotion == "v3_hybrid" )
                     f.motion_version = sMotion;
                 std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
                 // Round 4's test stand-ins became the real nets (round 4b); a saved choice follows.
@@ -402,6 +402,9 @@ namespace gamescope::config
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
                     const std::string sGuard = JGetString( *pFrameGen, "v3_guard", "" );
                     f.v3_guard = ( sGuard == "off" || sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : FrameGenSettings{}.v3_guard;
+                    // V3 Hybrid's variant: not a tuning value (no Expert gate), unknown or wrong-typed loads the default "a".
+                    const std::string sVariant = JGetString( *pFrameGen, "v3_hybrid_variant", "" );
+                    f.v3_hybrid_variant = ( sVariant == "a" || sVariant == "b" || sVariant == "c" ) ? sVariant : FrameGenSettings{}.v3_hybrid_variant;
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
             }
@@ -908,6 +911,7 @@ namespace gamescope::config
             jFrameGen[ "v3_colour_window" ] = fg.v3_colour_window;
             jFrameGen[ "v3_detail_split" ] = fg.v3_detail_split;
             jFrameGen[ "v3_guard" ] = fg.v3_guard;
+            jFrameGen[ "v3_hybrid_variant" ] = fg.v3_hybrid_variant;
             jFrameGen[ "expert" ] = fg.expert;
 
             const auto &mb = s.motion_blur;
@@ -2711,7 +2715,6 @@ namespace gamescope::config
         e.v3_scene_cut = d.v3_scene_cut;
         e.v3_colour_window = d.v3_colour_window;
         e.v3_detail_split = d.v3_detail_split;
-        e.v3_guard = d.v3_guard;
         e.search_radius = d.search_radius;
         e.search_radius_top = d.search_radius_top;
         e.pyramid_min_side = d.pyramid_min_side;

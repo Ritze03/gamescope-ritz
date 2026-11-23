@@ -838,6 +838,7 @@ namespace fghost::capture
 		h.bRitzDirty = gamescope::k_bRitzDirty;
 		h.sMotionWanted = env.pszMotionWanted;
 		h.sMotionEffective = env.pszMotionEffective;
+		h.nBlend = env.nBlend;
 		h.uFlowScale = env.pSettings->flowScale;
 		h.nFrames = kFrames;
 		h.flPrepareMs = s.flPrepareMs;
