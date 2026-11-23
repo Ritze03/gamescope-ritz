@@ -753,7 +753,9 @@ namespace gamescope
 			       "opaque, unchanging crosshair only). Crosshair is the older method, kept to compare. Whole screen does the "
 			       "older method for every solid still HUD element too (minimap, ammo, text), at "
 			       "a small extra cost. Whole screen V2 uses Crosshair V2's method on the whole "
-			       "picture; it costs more GPU time than the other modes. None can protect see-through or changing UI. Off for "
+			       "picture; it costs more GPU time than the other modes. The V2 modes protect thin elements "
+			       "(crosshairs, text, lines) but not wide solid panels; Whole screen protects solid "
+			       "panels but can miss thin lines over a moving picture. None can protect see-through or changing UI. Off for "
 			       "racing games or anything without a fixed HUD. Select this row or the box size "
 			       "to see what lies under the box." )
 			.Default( 1 )
