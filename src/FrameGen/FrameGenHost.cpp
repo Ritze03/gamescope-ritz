@@ -440,7 +440,7 @@ namespace fghost
 			int nLastGenSlot = -1;
 			uint64_t ulLastGenOutId = 0;
 			uint64_t ulLastGenNs = 0;
-			uint64_t ulDebugHeld = 0;   // real ticks replaced by the held generated image (log only)
+			uint64_t ulDebugHeld = 0, ulDebugReal = 0, ulDebugGen = 0;   // real ticks replaced by the held image / real ticks seen / generated ticks seen (log only)
 
 			// What the library is currently configured with.
 			uint64_t uAppliedConfig = 0;
@@ -2646,6 +2646,7 @@ namespace fghost
 		{
 			const bool bRealTick = IsRealTick( req.prevId, req.t1 );
 			const uint64_t ulNowNs = get_time_in_nanos();
+			( bRealTick ? H.ulDebugReal : H.ulDebugGen )++;
 			if ( !bRealTick )
 			{
 				// Remember which pool slot the generated image is in, and keep it the most recently used so the next synth
@@ -2669,8 +2670,9 @@ namespace fghost
 				{
 					pHold->ulUse = ++H.ulUseClock;   // stays the most recently used
 					pResult = pHold->pTex;
-					if ( ++H.ulDebugHeld == 1 || H.ulDebugHeld % 300 == 0 )
-						fg_log.debugf( "debug: only generated frames: real tick %llu shown as the last generated image", (unsigned long long)H.ulDebugHeld );
+					if ( ++H.ulDebugHeld == 1 || H.ulDebugHeld % 100 == 0 )
+						fg_log.debugf( "debug: only generated frames: %llu real ticks shown as the last generated image (of %llu real, %llu generated ticks)",
+							(unsigned long long)H.ulDebugHeld, (unsigned long long)H.ulDebugReal, (unsigned long long)H.ulDebugGen );
 				}
 			}
 		}
