@@ -6,11 +6,10 @@ unchanged, but the hand-written rule that mixes V3's colour samples per pixel re
 learned blend (a tiny per-pixel network). Three variants, **A / B / C**, exist so the user can
 compare them with each other and with plain V3 while a game runs.
 
-> **Library status at this commit: the library field is not wired yet, so every variant still
-> shows plain V3.** The pinned library has no `Settings::v3Blend`; the host carries the value up
-> to where `framegen::Settings` is filled (`ToLibrarySettings()` in `src/FrameGen/FrameGenHost.cpp`,
-> a one-line comment marks the spot) and stops there. The follow-up that bumps the pin removes
-> this note.
+> **Weights at this pin are zero.** Library `c62376c` ships the three nets with all-zero weights:
+> variants A and B equal V3's rule to within one level (a switch shows no visible change), variant C
+> differs slightly (up to 3-4 levels on a few pixels). Trained weights follow with a later pin that
+> changes only the generated `v3_blend_weights.glsl`.
 
 ## Config and mapping
 
@@ -77,15 +76,32 @@ The frame generation status log line (`steamcompmgr.cpp`, `FrameGen_LogStatus()`
 in the mode text (`target 240 fps, blend=B`) and a variant change prints a new line; plain V3 says
 nothing extra. The `ritz_fg_capture` header and watch header carry ` blend=A|B|C` after
 `fallback_v1=` (only for a variant). The setting dump of a capture lists the library's fields and
-gains `v3Blend` with the follow-up.
+carries `v3Blend` (`FormatSettingLines()`, `setting v3Blend=N`).
 
-## Library contract (as announced, not yet in the pin)
+## Library contract (pin `c62376c`)
 
-`framegen::Settings::v3Blend`, 0..3: 0 is byte-identical to today's rule; 1 / 2 / 3 are nets A / B / C;
-only with `motionVersion = V3`. Rgba8 / Bgra8 only for now: other formats and `v3DetailSplit` on
-fall back to the rule inside the library, without an error. It takes effect at the next synthesis.
-The follow-up adds the one assignment into `framegen::Settings`, the `static_assert` on the
-struct's size and the setting dump.
+`framegen::Settings::v3Blend`: `uint8_t`, directly after `v3DetailSplit` at offset 142 (existing
+padding, so `sizeof(Settings)` stays 164 and the `static_assert` in `FrameGenCapture.cpp` is
+unchanged). Values 0..3: 0 is the rule (byte-identical to the pin before, as are V1, V2 and Learned);
+1 / 2 / 3 are nets A / B / C. The library refuses a value above 3 in `settingsError`.
+
+The library runs its blend synthesis pipeline (`P_V3_SYNTH_B`) when `v3Blend != 0`, the format is
+Rgba8 / Bgra8 and `v3DetailSplit` is off; otherwise V3's rule runs, without an error. It takes effect
+at the next synthesis, with no new estimate. Cost at 1080p per real pair: 0.895 ms with the rule,
+0.901 ms with A / B, 0.905 ms with C.
+
+The host sets it in `ToLibrarySettings()` (`s.v3Blend = uint8_t(c.v3Blend)`, clamped 0..3). It is part
+of the V3 word of the applied-config key, so a change goes through `setSettings()` (runtime), never
+`reconfigure()`: no rebuild, no "frame generation ready" again.
+
+**Build**: `src/meson.build` compiles `v3_synth.comp` with `-DV3B=1` into `v3_synth_b_spv.h` (variable
+`v3_synth_b_spv`, mandatory: `framegen.cpp` includes it unconditionally; no per-format variants). It
+includes `shaders/v3_blend.glsl` and `shaders/v3_blend_weights.glsl`; both are listed by the compiler's
+depfile like every other include, so a changed weights file rebuilds the header. A weights-only pin
+needs nothing but the new gitlink.
+
+**Detail split**: while "Detail from one frame" is on, the Hybrid variant has no effect (library
+fallback); the row's help says so ("Has no effect while Detail from one frame is on.").
 
 ## Tests
 

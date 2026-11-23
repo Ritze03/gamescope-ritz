@@ -200,9 +200,11 @@ endforeach
 # Motion version 3's two hook switches (2026-11-19; library gpu/meson.build v3j_gen / v3l_gen): second compiles of
 # existing V3 sources. -DV3J=1 (colour-weighted matching) into <name>_j_spv for the three search passes; -DV3L=1
 # (detail from one frame) into v3_synth_l_spv and, per format below, v3_synth_l_<fmt>_spv. Mandatory: framegen.cpp
-# includes the plain ones unconditionally. The plain builds stay as they were (both switches off cost nothing).
+# includes the plain ones unconditionally. -DV3B=1 (V3 Hybrid's learned blend, Settings::v3Blend) into v3_synth_b_spv (no per-format
+# variants; includes shaders/v3_blend.glsl and v3_blend_weights.glsl, tracked through the depfile). The plain builds stay as they were (both switches off cost nothing).
 foreach h : [['-DV3J=1', 'v3_search', 'v3_search_j'], ['-DV3J=1', 'v3_search_top', 'v3_search_top_j'],
-             ['-DV3J=1', 'v3_dense', 'v3_dense_j'], ['-DV3L=1', 'v3_synth', 'v3_synth_l']]
+             ['-DV3J=1', 'v3_dense', 'v3_dense_j'], ['-DV3L=1', 'v3_synth', 'v3_synth_l'],
+             ['-DV3B=1', 'v3_synth', 'v3_synth_b']]
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', h[0], '--vn', h[2] + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (h[1] + '.comp')]
   if framegen_has_depfile

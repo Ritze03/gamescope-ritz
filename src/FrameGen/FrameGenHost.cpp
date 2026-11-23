@@ -583,8 +583,9 @@ namespace fghost
 			s.v3DetailSplit = c.v3DetailSplit;
 			s.v3Guard = c.v3Guard == 1 ? framegen::V3Guard::Guard
 				: c.v3Guard == 2 ? framegen::V3Guard::V2Motion : framegen::V3Guard::Off;
-			// V3 Hybrid: c.v3Blend (int, 0 = off, 1..3 = A..C; the V3 word already limits it) is available here; the
-			// follow-up that bumps the library sets framegen::Settings::v3Blend from it.
+			// V3 Hybrid: 0 = off (V3's own rule), 1..3 = variants A..C (the V3 word already limits it). Runtime; the library
+			// falls back to the rule for formats other than Rgba8/Bgra8 and while v3DetailSplit is on.
+			s.v3Blend = uint8_t( std::clamp( c.v3Blend, 0, 3 ) );
 			return s;
 		}
 
