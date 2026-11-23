@@ -451,6 +451,7 @@ src = [
   'Overlay/PanelKeybinds.cpp',
   'Overlay/FpsDisplay.cpp',
   'Overlay/Crosshair.cpp',
+  'Overlay/FgStats.cpp',
   'Overlay/Zoom.cpp',
   'Overlay/Autoclicker.cpp',
   'Overlay/NullBinds.cpp',
