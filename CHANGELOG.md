@@ -7,6 +7,16 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-23
+
+### Added
+- **V3 Hybrid**: a new experimental Motion version, Motion version 3 with a learned
+  blend, in three variants to compare.
+
+### Info
+- **Motion guard**: the setting now shows whenever Motion version 3 is selected, above
+  Artifact safety, and is off by default.
+
 ## 2026-11-22
 
 ### Added

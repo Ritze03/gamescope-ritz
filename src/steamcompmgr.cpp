@@ -113,6 +113,7 @@
 #include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenCapture.h"
 #include "FrameGen/FrameGenHost.h"
+#include "FrameGen/FrameGenV3.h"
 #include "FrameGen/HostShown.h"
 #include "FrameGen/PairSpanGuard.h"
 #include "FrameGen/StaleFrame.h"
@@ -8033,6 +8034,7 @@ namespace
 		int nLagOutliers = -1;
 		int nLagHistory = -1;      // real frames kept (HistoryDepth())
 		bool bLagSettled = false;  // the live buffer has reached its target (within 1 ms)
+		int nBlend = 0;            // V3 Hybrid's variant in force (0 = none)
 	};
 	FrameGenLog_t s_FrameGenLog;
 
@@ -8253,6 +8255,8 @@ namespace
 		const fghost::BlurConfig blur = fghost::GetBlurConfig();
 		const bool bGenerating = status.fgActive;
 		const bool bExtra = FrameGen_ExtraPaced();
+		// V3 Hybrid: the learned blend's variant (0 = plain V3 or another version), named in the mode text below.
+		const int nBlend = cfg.motion == fghost::Motion::V3 ? cfg.v3Blend : 0;
 		const int nBlurKey = blur.samples | ( blur.amountPercent << 4 ) | ( int( blur.relative ) << 11 ) | ( int( blur.weights ) << 12 );
 		const fghost::LagBufferConfig lag = fghost::GetLagBufferConfig();
 		const int nLagKey = lag.lookbackMin | ( lag.maxBufferMs << 4 ) | ( int( lag.testMode ) << 12 );
@@ -8267,7 +8271,7 @@ namespace
 			status.reason != L.ePass || eUnavailable != L.eUnavailable ||
 			cfg.enabled != L.bFg || blur.enabled != L.bBlur || status.blurActive != L.bBlurActive || nBlurKey != L.nBlurKey ||
 			lag.enabled != L.bLag || nLagKey != L.nLagKey || nLagTarget != L.nLagTarget || nLagSpike != L.nLagSpike ||
-			nLagOutliers != L.nLagOutliers || nLagHistory != L.nLagHistory || bLagSettled != L.bLagSettled;
+			nLagOutliers != L.nLagOutliers || nLagHistory != L.nLagHistory || bLagSettled != L.bLagSettled || nBlend != L.nBlend;
 		constexpr uint64_t kPeriodNs = 5ull * 1000ull * 1000ull * 1000ull;
 		const bool bPeriodic = !bChanged && ulNow - L.ulLastLine >= kPeriodNs;
 		if ( !bChanged && !bPeriodic )
@@ -8275,10 +8279,12 @@ namespace
 
 		L = { true, int( cfg.mode ), cfg.multiplier, cfg.targetFps, int( cfg.priority ), cfg.pauseAtRefresh, bExtra, bGenerating, status.reason, eUnavailable, ulNow,
 			cfg.enabled, blur.enabled, status.blurActive, nBlurKey,
-			lag.enabled, nLagKey, nLagTarget, nLagSpike, nLagOutliers, nLagHistory, bLagSettled };
+			lag.enabled, nLagKey, nLagTarget, nLagSpike, nLagOutliers, nLagHistory, bLagSettled, nBlend };
 
 		char szMode[ 48 ];
 		FrameGen_ModeText( cfg, szMode, sizeof( szMode ) );
+		if ( nBlend )
+			snprintf( szMode + strlen( szMode ), sizeof( szMode ) - strlen( szMode ), ", blend=%s", fghost::BlendText( nBlend ) );
 		const char *pszPriority = cfg.priority == fghost::Priority::Smoothness ? "smoothness" : "low latency";
 
 		// "motion blur off" / "motion blur 4 samples, 50% shown frame, gaussian, window 8.3 ms"

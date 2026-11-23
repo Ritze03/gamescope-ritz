@@ -583,6 +583,8 @@ namespace fghost
 			s.v3DetailSplit = c.v3DetailSplit;
 			s.v3Guard = c.v3Guard == 1 ? framegen::V3Guard::Guard
 				: c.v3Guard == 2 ? framegen::V3Guard::V2Motion : framegen::V3Guard::Off;
+			// V3 Hybrid: c.v3Blend (int, 0 = off, 1..3 = A..C; the V3 word already limits it) is available here; the
+			// follow-up that bumps the library sets framegen::Settings::v3Blend from it.
 			return s;
 		}
 
@@ -607,8 +609,8 @@ namespace fghost
 				// V3 honours flowScale (1, 2, 4), so it is checked with the Quality row's own value, which
 				// EnsureReady() leaves alone for V3.
 				pszWhy = H.interp.settingsError( sCheck );
-				// The Motion guard (V3's default since 2026-11-22) needs what V2 needs. A device that runs V3 but not
-				// V2 keeps V3 with the guard Off, logged only: a default must not cost V3 or leave a lasting Status note.
+				// The Motion guard (a chosen Guard) needs what V2 needs. A device that runs V3 but not
+				// V2 keeps V3 with the guard Off, logged only: the optional guard must not cost V3 or leave a lasting Status note.
 				if ( pszWhy && bV3 && s.v3Guard != framegen::V3Guard::Off )
 				{
 					sCheck.v3Guard = framegen::V3Guard::Off;
@@ -988,6 +990,10 @@ namespace fghost
 				// showing real frames, flagged as a failed step, for the rest of the pair.
 				else if ( H.interp.settings().uiProtection != eUiWas || H.interp.settings().uiBoxHeightFrac != flUiBoxWas )
 					H.bEstimateValid = false;
+				// A V3 Hybrid variant switch (or V3 <-> V3 Hybrid) is only a runtime setting: the same library motion
+				// version, no estimate dropped, no GPU wait. Logged so a run says which variant was in force.
+				if ( want.motionVersion == framegen::MotionVersion::V3 && ( ( ulV3 ^ H.ulAppliedV3 ) >> 52 ) != 0 )
+					fg_log.infof( "frame generation: Motion version 3 learned blend %s", c.v3Blend ? BlendText( c.v3Blend ) : "off" );
 				H.uAppliedConfig = uLibraryConfig;
 				H.uAppliedReach = uReach;
 				H.ulAppliedV3 = ulV3;
@@ -2054,7 +2060,11 @@ namespace fghost
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
 			uPackedConfig = ( uPackedConfig & ~( 0x3u << 4 | 0x3u << 28 ) ) | ( uint32_t( blurCfg.quality ) << 4 ) | ( uint32_t( blurCfg.motion ) << 28 );
 		const uint32_t uPackedLearned = g_uLearned.load( std::memory_order_relaxed );
-		const Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned, g_uReach.load( std::memory_order_relaxed ), g_ulV3.load( std::memory_order_relaxed ) );
+		Config cfg = Unpack( uPackedConfig, g_uUiBox.load( std::memory_order_relaxed ), uPackedLearned, g_uReach.load( std::memory_order_relaxed ), g_ulV3.load( std::memory_order_relaxed ) );
+		// Motion blur's own Motion version has no V3 Hybrid entry: its V3 is plain V3, whatever Frame generation's row says
+		// (the other V3 settings are shared; the blend is Frame generation's choice only).
+		if ( blurCfg.enabled && blurCfg.useOwnInterp )
+			cfg.v3Blend = 0;
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// ritz_fg_capture (FrameGenCapture.h): idle = this one relaxed load. Otherwise it times out, ends on a
@@ -2118,6 +2128,7 @@ namespace fghost
 				env.pSettings = &sInEffect;
 				env.pszMotionWanted = cfg.motion == Motion::V2 ? "V2" : cfg.motion == Motion::Learned ? "Learned" : cfg.motion == Motion::V3 ? "V3" : "V1";
 				env.pszMotionEffective = MotionText( sInEffect.motionVersion );
+				env.nBlend = cfg.motion == Motion::V3 ? cfg.v3Blend : 0;
 				capture::Start( env, ulNowNs, ulCaptureKey );
 			}
 		}

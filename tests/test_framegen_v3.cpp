@@ -178,7 +178,7 @@ TEST_CASE( "framegen v3: the guard takes bits 50 and 51 (0, 1, 2) and leaves bit
 			REQUIRE( ( r.v3Smear == 0.80f && r.v3OcclSoft == 2.55f && r.v3Unsure == 0.25f && r.v3SceneCut == 3.95f ) );
 		}
 	}
-	// Off is the raw host struct's default and changes nothing (the setting's default Guard reaches the host through
+	// Off is the raw host struct's default and changes nothing (the setting's default Off reaches the host through
 	// PanelFrameGen's ToHostConfig(), its only producer); the guard changes the word (so it reaches setSettings()); a value outside 0..2
 	// packs as 0, and the unused value 3 unpacks as 0.
 	REQUIRE( Config{}.v3Guard == 0 );
@@ -191,4 +191,59 @@ TEST_CASE( "framegen v3: the guard takes bits 50 and 51 (0, 1, 2) and leaves bit
 	REQUIRE( r.v3Guard == 0 );
 	UnpackV3( PackV3( Config{} ), &r );
 	REQUIRE( r.v3Guard == 0 );
+}
+
+// V3 Hybrid (2026-11-23): the blend takes bits 52 and 53 (0 = off, 1..3 = A..C) and leaves bits 0-51 alone.
+TEST_CASE( "framegen v3: the blend takes bits 52 and 53 and leaves bits 0-51 alone", "[framegen_v3]" )
+{
+	Config c; c.v3Smear = 0.80f; c.v3OcclSoft = 2.55f; c.v3Unsure = 0.25f; c.v3SceneCut = 3.95f;
+	c.v3ColourWindow = true; c.v3Guard = 2;
+	const uint64_t uOff = PackV3( c );
+	REQUIRE( ( uOff >> 52 ) == 0 );
+	for ( int b = 1; b <= 3; b++ )
+	{
+		c.v3Blend = b;
+		const uint64_t u = PackV3( c );
+		REQUIRE( ( u >> 52 ) == uint64_t( b ) );
+		REQUIRE( ( u & ( ( 1ull << 52 ) - 1 ) ) == uOff );
+		Config r;
+		UnpackV3( u, &r );
+		REQUIRE( r.v3Blend == b );
+		REQUIRE( r.v3Guard == 2 );
+	}
+	// The default is off; a value outside 0..3 packs as 0; a blend change changes the word (so it reaches setSettings()).
+	REQUIRE( Config{}.v3Blend == 0 );
+	Config d; d.v3Blend = 1; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
+	d.v3Blend = 2; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
+	d.v3Blend = 4; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
+	d.v3Blend = -1; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
+	Config r; r.v3Blend = 3;
+	UnpackV3( PackV3( Config{} ), &r );
+	REQUIRE( r.v3Blend == 0 );
+}
+
+TEST_CASE( "framegen v3: config strings map to Motion plus blend", "[framegen_v3]" )
+{
+	const auto Is = []( const char *pszMotion, const char *pszVariant, Motion m, int nBlend )
+	{
+		const MotionChoice c = MotionFromKeys( pszMotion, pszVariant );
+		return c.motion == m && c.blend == nBlend;
+	};
+	// Plain V3 is blend 0 whatever the variant key says.
+	REQUIRE( Is( "v3", "a", Motion::V3, 0 ) );
+	REQUIRE( Is( "v3", "c", Motion::V3, 0 ) );
+	// V3 Hybrid is Motion::V3 with blend 1 / 2 / 3; an unknown variant is A.
+	REQUIRE( Is( "v3_hybrid", "a", Motion::V3, 1 ) );
+	REQUIRE( Is( "v3_hybrid", "b", Motion::V3, 2 ) );
+	REQUIRE( Is( "v3_hybrid", "c", Motion::V3, 3 ) );
+	REQUIRE( Is( "v3_hybrid", "", Motion::V3, 1 ) );
+	REQUIRE( Is( "v3_hybrid", "x", Motion::V3, 1 ) );
+	// Every other version has blend 0.
+	REQUIRE( Is( "v1", "b", Motion::V1, 0 ) );
+	REQUIRE( Is( "v2", "b", Motion::V2, 0 ) );
+	REQUIRE( Is( "learned", "c", Motion::Learned, 0 ) );
+	REQUIRE( Is( "nonsense", "c", Motion::V1, 0 ) );
+	REQUIRE( std::string( BlendText( 0 ) ).empty() );
+	REQUIRE( std::string( BlendText( 1 ) ) == "A" );
+	REQUIRE( std::string( BlendText( 3 ) ) == "C" );
 }

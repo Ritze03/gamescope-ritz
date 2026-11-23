@@ -4294,11 +4294,11 @@ TEST_CASE( "framegen: V3 keys of the wrong type keep the default", "[config]" )
 
 // The Motion guard (2026-11-20): "off" | "guard" | "v2_motion", string enum. Each "file X loads as Y" check has its own
 // TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
-TEST_CASE( "framegen: the V3 guard defaults to guard and round-trips its three values", "[config]" )
+TEST_CASE( "framegen: the V3 guard defaults to off and round-trips its three values", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    REQUIRE( Settings{}.framegen.v3_guard == "guard" );
+    REQUIRE( Settings{}.framegen.v3_guard == "off" );
     for ( const char *psz : { "guard", "v2_motion", "off" } )
     {
         Settings s{};
@@ -4309,7 +4309,7 @@ TEST_CASE( "framegen: the V3 guard defaults to guard and round-trips its three v
     }
 }
 
-TEST_CASE( "framegen: an absent V3 guard key loads guard", "[config]" )
+TEST_CASE( "framegen: an absent V3 guard key loads off", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4317,10 +4317,10 @@ TEST_CASE( "framegen: an absent V3 guard key loads guard", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "quality": "performance" }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
 }
 
-TEST_CASE( "framegen: an unknown V3 guard string loads guard", "[config]" )
+TEST_CASE( "framegen: an unknown V3 guard string loads off", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4328,10 +4328,10 @@ TEST_CASE( "framegen: an unknown V3 guard string loads guard", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "v3_guard": "strong" }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
 }
 
-TEST_CASE( "framegen: a wrong-typed V3 guard loads guard", "[config]" )
+TEST_CASE( "framegen: a wrong-typed V3 guard loads off", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4339,12 +4339,12 @@ TEST_CASE( "framegen: a wrong-typed V3 guard loads guard", "[config]" )
         "schema_version": 5, "name": "T", "kind": "general",
         "framegen": { "v3_guard": 2 }
     })";
-    REQUIRE( LoadSections().framegen.v3_guard == "guard" );
+    REQUIRE( LoadSections().framegen.v3_guard == "off" );
 }
 
-// A stored "off" (every profile saved 2026-11-20..21 holds one: the save writes the key always) stays "off", and with
-// Expert settings off the default Guard is what acts; with Expert on the stored Off does.
-TEST_CASE( "framegen: a stored V3 guard off loads off; Guard acts while expert is off", "[config]" )
+// The guard is no Expert row (2026-11-23): its STORED value acts with Expert settings off and on. A stored "off" (every save
+// since 2026-11-20 wrote one) stays off; a stored "guard" / "v2_motion" is neither reset nor changed by FrameGenEffective().
+TEST_CASE( "framegen: the stored V3 guard acts with expert settings off", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4355,9 +4355,15 @@ TEST_CASE( "framegen: a stored V3 guard off loads off; Guard acts while expert i
     FrameGenSettings f = LoadSections().framegen;
     REQUIRE( f.v3_guard == "off" );
     REQUIRE( !f.expert );
-    REQUIRE( FrameGenEffective( f ).v3_guard == "guard" );
-    f.expert = true;
     REQUIRE( FrameGenEffective( f ).v3_guard == "off" );
+    for ( const char *psz : { "guard", "v2_motion", "off" } )
+    {
+        f.v3_guard = psz;
+        f.expert = false;
+        REQUIRE( FrameGenEffective( f ).v3_guard == psz );
+        f.expert = true;
+        REQUIRE( FrameGenEffective( f ).v3_guard == psz );
+    }
 }
 
 TEST_CASE( "framegen: the V3 guard is a settings key", "[config]" )
@@ -4379,7 +4385,7 @@ TEST_CASE( "framegen: V3 switches of the wrong type keep the default", "[config]
     REQUIRE( !l.framegen.v3_detail_split );
 }
 
-// Expert settings (2026-11-20): `framegen.expert` is the switch over the 15 tuning values. Each "file X loads as Y" check has
+// Expert settings (2026-11-20): `framegen.expert` is the switch over the 14 tuning values. Each "file X loads as Y" check has
 // its own TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
 namespace
 {
@@ -4466,7 +4472,7 @@ TEST_CASE( "framegen: an absent expert key with the legacy scene cut 0.45 loads 
     REQUIRE( !f.expert );
 }
 
-TEST_CASE( "framegen: FrameGenEffective with expert off puts the 15 tuning values at their defaults", "[config]" )
+TEST_CASE( "framegen: FrameGenEffective with expert off puts the 14 tuning values at their defaults", "[config]" )
 {
     FrameGenSettings in;
     in.expert = false;
@@ -4480,7 +4486,7 @@ TEST_CASE( "framegen: FrameGenEffective with expert off puts the 15 tuning value
     in.v3_scene_cut = 1.5f;
     in.v3_colour_window = true;
     in.v3_detail_split = true;
-    in.v3_guard = "v2_motion";
+    in.v3_guard = "v2_motion";   // not a tuning value since 2026-11-23: it passes through untouched
     in.search_radius = 9;
     in.search_radius_top = 11;
     in.pyramid_min_side = 16;
@@ -4506,7 +4512,7 @@ TEST_CASE( "framegen: FrameGenEffective with expert off puts the 15 tuning value
     REQUIRE( out.v3_scene_cut == d.v3_scene_cut );
     REQUIRE( out.v3_colour_window == d.v3_colour_window );
     REQUIRE( out.v3_detail_split == d.v3_detail_split );
-    REQUIRE( out.v3_guard == d.v3_guard );
+    REQUIRE( out.v3_guard == "v2_motion" );
     REQUIRE( out.search_radius == d.search_radius );
     REQUIRE( out.search_radius_top == d.search_radius_top );
     REQUIRE( out.pyramid_min_side == d.pyramid_min_side );
@@ -4546,4 +4552,83 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     REQUIRE( out.search_penalty == 2.0f );
     REQUIRE( out.motion_version == "v3" );
     REQUIRE( in.v3_smear == 0.9f );
+}
+
+// V3 Hybrid (2026-11-23): "v3_hybrid" is a fifth framegen.motion_version and framegen.v3_hybrid_variant ("a" | "b" | "c")
+// picks the learned blend. Motion blur's own list is unchanged: it rejects "v3_hybrid" like any unknown string.
+TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant defaults to a", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( Settings{}.framegen.v3_hybrid_variant == "a" );
+    for ( const char *psz : { "b", "c", "a" } )
+    {
+        Settings s{};
+        s.framegen.motion_version = "v3_hybrid";
+        s.framegen.v3_hybrid_variant = psz;
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.motion_version == "v3_hybrid" );
+        REQUIRE( l.framegen.v3_hybrid_variant == psz );
+    }
+    REQUIRE( IsSettingsKey( "framegen.v3_hybrid_variant" ) );
+}
+
+TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and variant a", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3", "v3_guard": "guard" }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v3" );
+    REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+}
+
+TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << R"({
+            "schema_version": 5, "name": "T", "kind": "general",
+            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "d" }
+        })";
+        REQUIRE( LoadSections().framegen.v3_hybrid_variant == "a" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << R"({
+            "schema_version": 5, "name": "T", "kind": "general",
+            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": 2 }
+        })";
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.motion_version == "v3_hybrid" );
+        REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+    }
+}
+
+TEST_CASE( "motion_blur: motion_version v3_hybrid is rejected like any unknown string", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "motion_blur": { "motion_version": "v3_hybrid" }
+    })";
+    REQUIRE( LoadSections().motion_blur.motion_version == "v1" );
+}
+
+// The variant is not a tuning value: Expert settings off does not reset it, and V3 Hybrid is not reset either.
+TEST_CASE( "framegen: the hybrid variant is in force with expert settings off", "[config]" )
+{
+    FrameGenSettings f;
+    f.motion_version = "v3_hybrid";
+    f.v3_hybrid_variant = "c";
+    f.expert = false;
+    REQUIRE( FrameGenEffective( f ).motion_version == "v3_hybrid" );
+    REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "c" );
 }

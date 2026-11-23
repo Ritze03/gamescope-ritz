@@ -1,6 +1,8 @@
 # Frame generation: Motion version 3
 
 Part of [Frame generation](frame-generation.md). The library's third motion algorithm, the one built for the best picture.
+Since 2026-11-23 an experimental variant with a learned colour blend, [V3 Hybrid](frame-generation-v3-hybrid.md), runs
+as `Motion::V3` plus a blend value, so every rule on this page applies to it.
 
 ## Motion version 3
 
@@ -84,7 +86,7 @@ Under V3 (the effective version: Motion blur's own one when it is on with its ow
 rows that drive nothing V3 uses are left out, per the library's table of ignored settings. Since
 2026-11-20 the four search rows are not shown (they are Expert settings rows, hidden unless that
 switch is on) while the Motion guard is Off: with the guard on they drive its V2 estimate
-(`V3GuardOn()` in `PanelFrameGen.cpp`, effective guard). The table's "hidden" is the shown rule
+(`V3GuardOn()` in `PanelFrameGen.cpp`, the stored guard). The table's "hidden" is the shown rule
 (`ShowRadiusRows()` / `ShowPenaltyRows()`, Expert on); a shown row is still greyed while Frame
 generation and Motion blur are off:
 
@@ -108,8 +110,8 @@ ranges there; only Off matters).
 ## Motion guard
 
 (2026-11-20, library `f301d7d`.) One more V3 setting, `v3_guard` (`framegen::Settings::v3Guard`): a Choice
-row **Motion guard** in the group "Motion version 3", after the two switches, segmented, Off / Guard / V2 motion,
-default **Guard** (Off until 2026-11-22), usable while V3 runs (`V3RowsUsable()`), changeable while a game runs. With **Off** nothing changes
+row **Motion guard**, segmented, Off / Guard / V2 motion, default **Off** (Guard for one day, 2026-11-22; since
+2026-11-23 the row is in the group "Artifact protection", directly above Artifact safety, no Expert row), usable while V3 runs (`V3RowsUsable()`), changeable while a game runs. With **Off** nothing changes
 (the library's output is byte-identical to V3 without it; no pass, no memory).
 
 - **Guard**: V2's motion search also runs on every real pair and replaces V3's vector (both directions) where V2's
@@ -137,8 +139,8 @@ two buffers (14.06 MiB at 1080p `flowScale` 2). This host never calls `releaseUn
 `EnsureReady()`), so they stay until a resize or teardown. A device that cannot run V2 is refused by
 `settingsError()` with V2's reason: `ResolveMotion()` then checks V3 with the guard Off and, when that passes, runs
 V3 without the guard, with an info line in the log and no Status note (only if V3 itself is refused does it run V1
-with the reason in the Status line, like any refused version). `Why:` Guard is the default, so a device without
-V2's subgroup operations would otherwise lose V3 and show a lasting note to everyone on it; a later allocation failure inside `setSettings()` keeps the previous settings and sets
+with the reason in the Status line, like any refused version). `Why:` a chosen Guard must not cost a device without
+V2's subgroup operations its V3 (and a lasting note); a later allocation failure inside `setSettings()` keeps the previous settings and sets
 the note "the library could not create the Motion guard (V2's pipelines or buffers)". The host records one estimate
 per `beginFrame()`, so the guard's two descriptor sets per estimate (at most 16 estimates per `beginFrame()`) are
 never near the limit. The guard's value is part of the V3 word's comparison, so a change reaches `setSettings()`
@@ -148,13 +150,17 @@ once.
 generation. The library implements exactly that as a setting; it is an experiment with three values to compare by eye,
 so the default stayed Off at first.
 
-**Default Guard (2026-11-22).** `v3_guard` defaults to `"guard"`; the row is an Expert row, so with Expert settings
-off every V3 user runs Guard (`FrameGenEffective()` hands the interpolator the default). An absent, wrong-typed or
-unknown value loads Guard; an explicitly stored `"off"` stays Off and is honoured while Expert is on. No migration:
-profiles saved since 2026-11-20 hold `"v3_guard": "off"` (the save writes the key always) and run Guard with Expert
-off, Off with Expert on. The host's raw `fghost::Config::v3Guard` stays 0: its only producer is `ToHostConfig()`,
-which always maps the effective setting. `Why:` the user asked for Guard as V3's default, hidden in the expert
-settings (2026-11-22).
+**Visibility, position and default (2026-11-23).** The row is no Expert row any more: it shows whenever V3 (V3 Hybrid
+included) is the version in force (`ShowGuardRow()`, the same "is V3" rule as the other V3 rows), Expert settings on or
+off, and is hidden under every other Motion version. It sits in the group "Artifact protection" directly above
+**Artifact safety**; hidden, the group looks as before. Its **stored value always acts**: `FrameGenEffective()` no longer
+resets it and `V3GuardOn()` reads the stored value. `v3_guard` defaults to `"off"` again; an absent, wrong-typed or
+unknown value loads Off. No migration: a profile holding `"off"` (every save since 2026-11-20 wrote one) stays Off,
+which is now what runs; a profile holding `"guard"` or `"v2_motion"` keeps it, and it now acts with Expert off too
+(a profile that was left on the 2026-11-22 default, i.e. one that stored `"off"` and ran Guard through Expert-off, now
+runs Off). `Why:` the user (2026-11-23): "Also show the V3 motion guard not under the expert settings. Make it off by
+default and show it above the artifact safety, while V3 is selected (otherwise, hide it)". Guard was the default
+for one day (2026-11-22, hidden in the expert settings, at the user's request then).
 
 ## Static HUD protection under V3
 

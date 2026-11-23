@@ -93,7 +93,9 @@ namespace fghost
 	// learnedHalf / learnedZeroTest / learnedStaticGuard (Motion blur's own Motion version
 	// borrows them).
 	// V3 (2026-11-19): the library's MotionVersion::V3, a fourth value of the same two bits (its settings:
-	// Config::v3*; see superdoc/features/frame-generation-motion-v3.md).
+	// Config::v3*; see superdoc/features/frame-generation-motion-v3.md). The two bits are full, so V3 Hybrid
+	// (2026-11-23) is NOT a fifth value: it is Motion::V3 plus Config::v3Blend (superdoc/features/
+	// frame-generation-v3-hybrid.md), and every Motion::V3 check applies to it.
 	enum class Motion : uint8_t { V1, V2, Learned, V3 };
 
 	// Learned's weights, with the values of framegen::LearnedNet (round 3 of Learned, 2026-10-27):
@@ -299,6 +301,9 @@ namespace fghost
 		// motion search corrects V3 where it matches the frames clearly better), 2 V2 motion (V2's motion everywhere).
 		// Any other value is treated as 0.
 		int v3Guard = 0;
+		// Motion::V3 only, runtime (V3 Hybrid, 2026-11-23): the learned blend that replaces V3's colour-mixing rule.
+		// 0 = off (plain V3), 1 / 2 / 3 = variant A / B / C. Any other value is treated as 0. Packed with the V3 word.
+		int v3Blend = 0;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time
