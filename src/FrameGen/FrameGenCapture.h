@@ -324,7 +324,7 @@ namespace fghost::capture
 		bool bRitzDirty = false;
 		std::string sMotionWanted;   // what the user chose
 		std::string sMotionEffective;   // what the library runs (V1 when it refused the wish)
-		int nBlend = 0;              // V3 Hybrid's variant (1..3 = A..C), 0 = none: no `blend=` token
+		int nBlend = 0;              // V3 Hybrid's variant (1..6 = A, B, C, A-A, A-B, A-C), 0 = none: no `blend=` token
 		bool bBlendOff = false;      // the variant is selected but the library runs V3's rule: the token reads `blend=A(off)`
 		uint32_t uFlowScale = 0;
 		int nFrames = kFrames;

@@ -12,6 +12,7 @@ All notable user-facing changes, newest first. Categories:
 ### Added
 - **V3 Hybrid**: a new experimental Motion version, Motion version 3 with a learned
   blend, in three variants to compare.
+- **V3 Hybrid**: three more variants to compare, A-A, A-B and A-C.
 
 ### Fixed
 - **Frame pacing**: the frame timer no longer runs ahead of the display, so fewer frames

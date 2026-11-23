@@ -3,8 +3,12 @@
 Part of [Frame generation](frame-generation.md). An experimental entry in the **Motion version**
 list (2026-11-23): [Motion version 3](frame-generation-motion-v3.md) with its motion search
 unchanged, but the hand-written rule that mixes V3's colour samples per pixel replaced by a small
-learned blend (a tiny per-pixel network). Three variants, **A / B / C**, exist so the user can
-compare them with each other and with plain V3 while a game runs.
+learned blend (a tiny per-pixel network). Six variants exist so the user can compare them with
+each other and with plain V3 while a game runs: **A / B / C**, and **A-A / A-B / A-C**, a second set
+of weights for the same three nets, fine-tuned by a contributor on other footage (2026-11-23).
+`Why:` the user asked for the second set as "A-<Model>" (A-A, A-B, A-C) next to A / B / C so the two
+sets can be compared directly (2026-11-23). The second set needs a library pin that accepts `v3Blend` 4..6;
+until the pin carries it, the library refuses those values.
 
 > **The weights are trained (first round, 2026-11-23).** Library `19b15ef` carries the trained weights of
 > the three nets, in `v3_blend_weights.glsl` only (no header, struct, build entry or API changed against
@@ -32,7 +36,7 @@ candidate motions) and arrive as a new `v3Blend` variant, not as a change to A /
 | Key | Values | Meaning |
 |---|---|---|
 | `framegen.motion_version` | `v1` / `v2` / `learned` / `v3` / **`v3_hybrid`** | `v3_hybrid` is the fifth value, after `v3` |
-| `framegen.v3_hybrid_variant` | `"a"` (default) / `"b"` / `"c"`; absent, wrong type or unknown loads `"a"` | which variant, read only while `motion_version` is `v3_hybrid` |
+| `framegen.v3_hybrid_variant` | `"a"` (default) / `"b"` / `"c"` / `"a_a"` / `"a_b"` / `"a_c"`; absent, wrong type or unknown loads `"a"` | which variant (order A, B, C, A-A, A-B, A-C = index 0..5), read only while `motion_version` is `v3_hybrid` |
 
 An old file without the new key and with `"v3"` loads as before (V3 stays V3, no blend).
 `motion_blur.motion_version` does **not** get the value: Motion blur's own list is unchanged and
@@ -43,13 +47,14 @@ Config to host (`fghost::MotionFromKeys()` in `FrameGenV3.h`, pinned by `tests/t
 | `motion_version` | variant | `fghost::Motion` | `Config::v3Blend` |
 |---|---|---|---|
 | `v3` | any | `V3` | 0 |
-| `v3_hybrid` | `a` / `b` / `c` (other: A) | `V3` | 1 / 2 / 3 |
+| `v3_hybrid` | `a` / `b` / `c` / `a_a` / `a_b` / `a_c` (other: A) | `V3` | 1 / 2 / 3 / 4 / 5 / 6 |
 | `v1` / `v2` / `learned` | any | `V1` / `V2` / `Learned` | 0 |
 
 `Why the host enum is unchanged:` `fghost::Motion` is packed into two bits of the main config word
 (bits 28-29) and two of the blur word, so a fifth value does not fit. Instead V3 Hybrid is
-`Motion::V3` plus a small separate value `Config::v3Blend` (0 = off, 1..3 = A..C), packed into
-bits 52-53 of the V3 word (`PackV3()`). Every existing `Motion::V3` check (rows shown, fallbacks,
+`Motion::V3` plus a small separate value `Config::v3Blend` (0 = off, 1..3 = A..C, 4..6 = A-A..A-C), packed into
+bits 52-54 of the V3 word (`PackV3()`; two bits until 2026-11-23, widened to three because 4..6 do not
+fit two, bit 54 was unused so no other field moved; unpacking a 7 gives 0). Every existing `Motion::V3` check (rows shown, fallbacks,
 scene-cut default, HUD protection, cost) therefore applies to V3 Hybrid without touching it. The
 config-string checks in the overlay panel (`EffectiveMotionIsV3()`, which feeds the Expert rule,
 `V3GuardOn()` and the V3 rows) count `"v3_hybrid"` as V3 too. Settings export / import work on the
@@ -72,7 +77,7 @@ generation's rows, as for every V3 value).
 ## Overlay
 
 - **Motion version** gets a fifth option **V3 Hybrid**, listed right after V3.
-- **Hybrid variant** (`image.framegen.v3_hybrid_variant`, a segmented A / B / C Choice) sits directly
+- **Hybrid variant** (`image.framegen.v3_hybrid_variant`, a six-option Choice A / B / C / A-A / A-B / A-C, drawn as a dropdown: the styling guide's 5-option cap on segmented groups applies) sits directly
   under it, shown only while V3 Hybrid is the selected version, and **without** Expert settings.
   It is greyed while frame generation is off. `Why:` the user wants to compare three variants live
   (2026-11-23), so it is not a tuning row; once one net wins the row goes away.
@@ -82,7 +87,7 @@ generation's rows, as for every V3 value).
 
 From the command line (the same binding a click writes through; the value is the option's id, as
 for every Choice): `gamescopectl overlay_e2_set "framegen.motion_version 3"` (V3),
-`"framegen.motion_version 4"` (V3 Hybrid), `"framegen.v3_hybrid_variant 0"` / `1` / `2` (A / B / C).
+`"framegen.motion_version 4"` (V3 Hybrid), `"framegen.v3_hybrid_variant 0"` .. `5` (A, B, C, A-A, A-B, A-C).
 The variant row is addressable only while V3 Hybrid is selected (hidden rows do not exist for this
 command).
 
@@ -93,8 +98,8 @@ The status shows what really runs, not just what is selected (2026-11-23):
 | State | Status line mode text | Capture / watch header | One-time log line |
 |---|---|---|---|
 | Plain V3 (or another version) | nothing extra | no token | `learned blend off` (only on a change from a variant) |
-| Variant selected, blend in use | `blend=A` | ` blend=A` | `learned blend A` |
-| Variant selected, library runs V3's rule | `blend=A(off)` | ` blend=A(off)` | `learned blend A not active: format` / `: detail split` / (no reason when not known cheaply, e.g. V3 itself fell back) |
+| Variant selected, blend in use | `blend=A` (or `A-A` .. `A-C`) | ` blend=A` | `learned blend A` |
+| Variant selected, library runs V3's rule | `blend=A(off)` (likewise `A-A(off)`) | ` blend=A(off)` | `learned blend A not active: format` / `: detail split` / (no reason when not known cheaply, e.g. V3 itself fell back) |
 
 The status line (`steamcompmgr.cpp`, `FrameGen_LogStatus()`) prints a new line when the variant or its
 active state changes. The header token follows `fallback_v1=` (only for a variant), formatted by
@@ -114,7 +119,7 @@ carries `v3Blend` (`FormatSettingLines()`, `setting v3Blend=N`).
 
 `framegen::Settings::v3Blend`: `uint8_t`, directly after `v3DetailSplit` at offset 142 (existing
 padding, so `sizeof(Settings)` stays 164 and the `static_assert` in `FrameGenCapture.cpp` is
-unchanged). Values 0..3: 0 is the rule (byte-identical to the pin before, as are V1, V2 and Learned);
+unchanged). Values 0..3 at this pin (0..6 from the next pin: 4 / 5 / 6 = the second weight set's A / B / C; same structure, cost and fallbacks): 0 is the rule (byte-identical to the pin before, as are V1, V2 and Learned);
 1 / 2 / 3 are nets A / B / C. The library refuses a value above 3 in `settingsError`.
 
 The library runs its blend synthesis pipeline (`P_V3_SYNTH_B`) when `v3Blend != 0`, the format is
@@ -133,7 +138,7 @@ build. Cost at 1080p per real pair (the library's measurement, one high-end desk
 `Why the 10-bit build exists:` a 10-bit SDR output makes the game's frames 10-bit (found in the field
 2026-11-23: frame generation ran in the 10-bit format, and the 8-bit-only blend silently ran V3's rule).
 
-The host sets it in `ToLibrarySettings()` (`s.v3Blend = uint8_t(c.v3Blend)`, clamped 0..3). It is part
+The host sets it in `ToLibrarySettings()` (`s.v3Blend = uint8_t(c.v3Blend)`, clamped 0..6 since 2026-11-23; the pin `19b15ef` refuses 4..6). It is part
 of the V3 word of the applied-config key, so a change goes through `setSettings()` (runtime), never
 `reconfigure()`: no rebuild, no "frame generation ready" again.
 

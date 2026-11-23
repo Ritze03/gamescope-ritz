@@ -10,8 +10,9 @@
 //   bit  48     v3ColourWindow (motion search weighted by colour similarity)
 //   bit  49     v3DetailSplit  (fine detail taken from one frame)
 //   bits 50-51  v3Guard        0 Off, 1 Guard, 2 V2 motion (3 unpacks as 0)
-//   bits 52-53  v3Blend        0 off (V3's own rule), 1..3 = V3 Hybrid variants A..C
-//   bits 54-63  unused, written as 0 and ignored on unpack
+//   bits 52-54  v3Blend        0 off (V3's own rule), 1..3 = V3 Hybrid variants A..C, 4..6 = A-A..A-C (second weight set;
+//                              widened from two bits 2026-11-23, bit 54 was unused)
+//   bits 55-63  unused, written as 0 and ignored on unpack
 // The whole word is the applied key's comparison in EnsureReady(), so a change to either switch is noticed.
 // `Why a sixth word:` the five existing words (config, UI box, Learned, reach, blur) and the 64-bit applied key in
 // EnsureReady() have no free bit left, and four values at twelve bits need 48.
@@ -54,7 +55,7 @@ namespace fghost
 			| ( uint64_t( c.v3ColourWindow ) << 48 )
 			| ( uint64_t( c.v3DetailSplit ) << 49 )
 			| ( uint64_t( c.v3Guard >= 1 && c.v3Guard <= 2 ? c.v3Guard : 0 ) << 50 )
-			| ( uint64_t( c.v3Blend >= 1 && c.v3Blend <= 3 ? c.v3Blend : 0 ) << 52 );
+			| ( uint64_t( c.v3Blend >= 1 && c.v3Blend <= 6 ? c.v3Blend : 0 ) << 52 );
 	}
 
 	inline void UnpackV3( uint64_t u, Config *c )
@@ -70,11 +71,14 @@ namespace fghost
 			const uint64_t uGuard = ( u >> 50 ) & 3u;
 			c->v3Guard = uGuard <= 2 ? int( uGuard ) : 0;
 		}
-		c->v3Blend = int( ( u >> 52 ) & 3u );
+		{
+			const uint64_t uBlend = ( u >> 52 ) & 7u;
+			c->v3Blend = uBlend <= 6 ? int( uBlend ) : 0;
+		}
 	}
 
 	// V3 Hybrid (2026-11-23): the config's motion_version string plus the variant key become the host's Motion and
-	// blend. "v3_hybrid" is Motion::V3 with a blend of 1 / 2 / 3 (variant "a" / "b" / "c"; anything else is A), so every
+	// blend. "v3_hybrid" is Motion::V3 with a blend of 1..6 (variant "a" / "b" / "c" / "a_a" / "a_b" / "a_c"; anything else is A), so every
 	// Motion::V3 check applies to it unchanged. Every other version has blend 0, whatever the variant says; an unknown
 	// motion string is V1 (the schema has already filtered it). Pure, so tests/test_framegen_v3.cpp pins the mapping.
 	struct MotionChoice
@@ -92,16 +96,17 @@ namespace fghost
 		if ( svMotion == "v3" )
 			return { Motion::V3, 0 };
 		if ( svMotion == "v3_hybrid" )
-			return { Motion::V3, svVariant == "b" ? 2 : svVariant == "c" ? 3 : 1 };
+			return { Motion::V3, svVariant == "b" ? 2 : svVariant == "c" ? 3 : svVariant == "a_a" ? 4 : svVariant == "a_b" ? 5 : svVariant == "a_c" ? 6 : 1 };
 		return { Motion::V1, 0 };
 	}
 
-	// "" for blend 0 (plain V3, nothing to say), else "A" / "B" / "C" (logs and the capture header's `blend=`).
+	// "" for blend 0 (plain V3, nothing to say), else "A" / "B" / "C" / "A-A" / "A-B" / "A-C" (logs and the capture header's `blend=`).
 	// BlendLabel() adds the honest state: "A" while the learned blend runs, "A(off)" when the variant is selected but
 	// the library runs V3's rule (a format without a blend build, the detail split, a V3 fallback).
 	inline const char *BlendText( int nBlend )
 	{
-		return nBlend == 1 ? "A" : nBlend == 2 ? "B" : nBlend == 3 ? "C" : "";
+		static const char *const kName[] = { "", "A", "B", "C", "A-A", "A-B", "A-C" };
+		return nBlend >= 1 && nBlend <= 6 ? kName[ nBlend ] : "";
 	}
 
 	inline std::string BlendLabel( int nBlend, bool bActive )

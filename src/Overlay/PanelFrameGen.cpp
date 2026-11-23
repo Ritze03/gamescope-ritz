@@ -84,7 +84,7 @@ namespace gamescope
 		// Option::nValue, not to the array position).
 		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 4, "V3 Hybrid" }, { 2, "Learned" } };
 		// V3 Hybrid's variant (2026-11-23): the ids are the index into kVariantKeys (blend = id + 1).
-		constexpr ui::Option kVariantOptions[] = { { 0, "A" }, { 1, "B" }, { 2, "C" } };
+		constexpr ui::Option kVariantOptions[] = { { 0, "A" }, { 1, "B" }, { 2, "C" }, { 3, "A-A" }, { 4, "A-B" }, { 5, "A-C" } };
 		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
 		constexpr ui::Option kLearnedNetOptions[] = {
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
@@ -121,7 +121,7 @@ namespace gamescope
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		// Index 0-3 = fghost::Motion's values; 4 = "v3_hybrid", which is Motion::V3 plus a blend (no fifth enum value).
 		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3", "v3_hybrid" };
-		constexpr const char *kVariantKeys[] = { "a", "b", "c" };
+		constexpr const char *kVariantKeys[] = { "a", "b", "c", "a_a", "a_b", "a_c" };
 		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" };
 		constexpr fghost::LearnedNet kLearnedNets[] = {
 			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
@@ -227,7 +227,7 @@ namespace gamescope
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			{
-				// "v3_hybrid" = Motion::V3 plus the blend (1..3 = variant A..C); every other version has blend 0.
+				// "v3_hybrid" = Motion::V3 plus the blend (1..6 = variant A, B, C, A-A, A-B, A-C); every other version has blend 0.
 				const fghost::MotionChoice m = fghost::MotionFromKeys( f.motion_version, f.v3_hybrid_variant );
 				c.motion = m.motion;
 				c.v3Blend = m.blend;
@@ -597,12 +597,12 @@ namespace gamescope
 
 		a.Choice( "framegen.v3_hybrid_variant", "Hybrid variant",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_hybrid_variant, kVariantKeys, 3, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = kVariantKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_hybrid_variant, kVariantKeys, 6, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = kVariantKeys[ ClampIdx( n, 5 ) ]; PersistAndPush(); } ),
 			kVariantOptions, std::size( kVariantOptions ) )
-			.Help( "Three experimental versions of the learned blend, to compare. Takes effect at once. "
+			.Help( "Experimental versions of the learned blend, to compare: A, B and C, and a second set of "
+			       "weights for the same three, A-A, A-B and A-C. Takes effect at once. "
 			       "Has no effect while Detail from one frame is on." )
-			.Segmented()
 			.Default( 0 )
 			.Keywords( "frame generation v3 hybrid variant learned blend a b c experiment compare" )
 			.ShownWhen( HybridSelected )

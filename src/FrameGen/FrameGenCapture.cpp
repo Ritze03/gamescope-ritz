@@ -279,11 +279,12 @@ namespace fghost::capture
 			return s;
 		}
 
-		// " blend=A" for V3 Hybrid's variants (1..3), "" otherwise (plain V3 and every other version say nothing).
+		// " blend=A" for V3 Hybrid's variants (1..6), "" otherwise (plain V3 and every other version say nothing).
 		// " blend=A(off)" when the variant is selected but the library runs V3's rule (HeaderInfo::bBlendOff).
 		std::string BlendToken( int nBlend, bool bOff )
 		{
-			return nBlend >= 1 && nBlend <= 3 ? std::string( " blend=" ) + char( 'A' + nBlend - 1 ) + ( bOff ? "(off)" : "" ) : std::string();
+			static const char *const kName[] = { "A", "B", "C", "A-A", "A-B", "A-C" };
+			return nBlend >= 1 && nBlend <= 6 ? std::string( " blend=" ) + kName[ nBlend - 1 ] + ( bOff ? "(off)" : "" ) : std::string();
 		}
 
 		const char *LearnedNetText( uint32_t u )

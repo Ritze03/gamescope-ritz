@@ -4561,7 +4561,7 @@ TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant default
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
     REQUIRE( Settings{}.framegen.v3_hybrid_variant == "a" );
-    for ( const char *psz : { "b", "c", "a" } )
+    for ( const char *psz : { "b", "c", "a_a", "a_b", "a_c", "a" } )
     {
         Settings s{};
         s.framegen.motion_version = "v3_hybrid";
@@ -4572,6 +4572,22 @@ TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant default
         REQUIRE( l.framegen.v3_hybrid_variant == psz );
     }
     REQUIRE( IsSettingsKey( "framegen.v3_hybrid_variant" ) );
+}
+
+TEST_CASE( "framegen: an old file with variant c still loads c; a_b loads from a file", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "c" }
+    })";
+    REQUIRE( LoadSections().framegen.v3_hybrid_variant == "c" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "a_b" }
+    })";
+    REQUIRE( LoadSections().framegen.v3_hybrid_variant == "a_b" );
 }
 
 TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and variant a", "[config]" )
