@@ -202,9 +202,12 @@ show the same detail at the same place, so slow motion never freezes at any leve
 - **The motion guard's two shaders** (library `f301d7d`): plain compiles in the same list, no define, no
   per-format variants (they work on the motion field): `v3_anchor`, `v3_guard` -> `v3_anchor_spv.h`,
   `v3_guard_spv.h`. Mandatory (the library includes them unconditionally).
-- **V3 Hybrid's blend synthesis** (library `c62376c`): `v3_synth` with `-DV3B=1` -> `v3_synth_b_spv.h`
-  (same list as the `V3J` / `V3L` builds, depfile, no per-format variants; mandatory). Its includes
-  `v3_blend.glsl` and `v3_blend_weights.glsl` are depfile-tracked. See [V3 Hybrid](frame-generation-v3-hybrid.md).
+- **V3 Hybrid's blend synthesis** (library `c62376c`, 10-bit since `34d8bc1`): `v3_synth` with `-DV3B=1` ->
+  `v3_synth_b_spv.h` (same list as the `V3J` / `V3L` builds, depfile; mandatory), and `-DFG_FORMAT_RGB10=1
+  -DV3B=1` -> `v3_synth_b_rgb10_spv.h` (its own entry after the per-format `v3_synth_l_<fmt>` loop; rgb10 only,
+  not f16, and **not mandatory for the build to compile**: see the `__has_include` trap in the V3 Hybrid page).
+  Their includes `v3_blend.glsl` and `v3_blend_weights.glsl` are depfile-tracked. See
+  [V3 Hybrid](frame-generation-v3-hybrid.md).
 - **Includes, no compile of their own** (resolved relative to each `.comp`, listed by the
   depfile): `v3_common.glsl`, `v3_format.glsl`, `v3_weights.glsl`, `v3_maps.glsl`, `v3_est.glsl`,
   `v3_search.glsl`, `v3_static.glsl`.

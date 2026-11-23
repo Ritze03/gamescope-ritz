@@ -280,9 +280,10 @@ namespace fghost::capture
 		}
 
 		// " blend=A" for V3 Hybrid's variants (1..3), "" otherwise (plain V3 and every other version say nothing).
-		std::string BlendToken( int nBlend )
+		// " blend=A(off)" when the variant is selected but the library runs V3's rule (HeaderInfo::bBlendOff).
+		std::string BlendToken( int nBlend, bool bOff )
 		{
-			return nBlend >= 1 && nBlend <= 3 ? std::string( " blend=" ) + char( 'A' + nBlend - 1 ) : std::string();
+			return nBlend >= 1 && nBlend <= 3 ? std::string( " blend=" ) + char( 'A' + nBlend - 1 ) + ( bOff ? "(off)" : "" ) : std::string();
 		}
 
 		const char *LearnedNetText( uint32_t u )
@@ -300,7 +301,7 @@ namespace fghost::capture
 			kVersion, Token( h.sWallStart ).c_str(), (unsigned long long)h.ulStartNs, h.uWidth, h.uHeight, h.nVkFormat,
 			VkFormatName( h.nVkFormat ), h.uBytesPerPixel, Token( h.sLibraryCommit ).c_str(), Token( h.sRitzVersion ).c_str(),
 			Token( h.sRitzCommit ).c_str(), h.bRitzDirty ? 1 : 0, Token( h.sMotionWanted ).c_str(), Token( h.sMotionEffective ).c_str(),
-			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend ).c_str(), h.uFlowScale, h.nFrames, double( h.flPrepareMs ), h.bPreparedEarly ? 1 : 0 );
+			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), h.uFlowScale, h.nFrames, double( h.flPrepareMs ), h.bPreparedEarly ? 1 : 0 );
 	}
 
 	uint64_t MaxDecisionGapNs( const std::vector<DecisionRec> &v, uint64_t *pulAfterCounter )
@@ -632,7 +633,7 @@ namespace fghost::capture
 			kVersion, Token( h.sWallStart ).c_str(), (unsigned long long)h.ulStartNs, h.uWidth, h.uHeight, h.nVkFormat,
 			VkFormatName( h.nVkFormat ), h.uBytesPerPixel, Token( h.sLibraryCommit ).c_str(), Token( h.sRitzVersion ).c_str(),
 			Token( h.sRitzCommit ).c_str(), h.bRitzDirty ? 1 : 0, Token( h.sMotionWanted ).c_str(), Token( h.sMotionEffective ).c_str(),
-			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend ).c_str(), h.uFlowScale, nSeconds, double( flSensitivity ), double( kMetricBase ),
+			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), h.uFlowScale, nSeconds, double( flSensitivity ), double( kMetricBase ),
 			double( kMetricPairGain ), kMetricBlock, kMetricStep, kWatchMaxDumps, kFrames, kWatchAfterTrigger );
 	}
 
