@@ -732,9 +732,9 @@ namespace gamescope::config
         bool enabled = false;
         // 0.0..3.0, 0.0 neutral (exact identity). Exponent k = 1 + strength of
         // the inverted gamma curve on the gamut fraction t (effects_common.h's
-        // grade(), EFFECT_COLOR_BOOST block): t' = 1 - (1 - t)^k. The 1.0
-        // default is what a freshly switched-on effect shows (k = 2).
-        float strength = 1.0f;
+        // grade(), EFFECT_COLOR_BOOST block): t' = 1 - (1 - t)^k. The 0.5
+        // default is what a freshly switched-on effect shows (k = 1.5).
+        float strength = 0.5f;
     };
 
     // NEW 2026-09-08 (the user: "Add a bloom shader for more casual games").

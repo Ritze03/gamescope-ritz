@@ -559,7 +559,7 @@ namespace gamescope
 				.Help( "How strongly dull colours are boosted. 0 is unchanged." )
 				.Range( 0.0f, 3.0f )
 				.Step( 0.05f )
-				.Default( 1.0f );
+				.Default( 0.5f );
 
 		a.GroupCount( "Post-processing" );
 		a.Switch( "image.shaders.presharpen", "Pre-Sharpen",

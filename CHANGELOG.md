@@ -20,6 +20,7 @@ All notable user-facing changes, newest first. Categories:
 ### Info
 - **Motion guard**: the setting now shows whenever Motion version 3 is selected, above
   Artifact safety, and is off by default.
+- **Color Boost**: the default strength is now 0.5.
 
 ## 2026-11-22
 
