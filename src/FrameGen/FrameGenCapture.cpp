@@ -4,6 +4,7 @@
 // Everything here is plain C++ so the unit tests can run it without a GPU.
 
 #include "FrameGenCapture.h"
+#include "FrameGenDebug.h"
 
 #include <algorithm>
 #include <cmath>
@@ -352,7 +353,9 @@ namespace fghost::capture
 		{
 			const uint32_t u = uint32_t( s.uiProtection );
 			static const char *const k[] = { "Off", "Crosshair", "WholeScreen", "CrosshairV2" };
-			E( "uiProtection", u, u < 4 ? k[ u ] : "Unknown" );
+			// Whole screen V2 = Crosshair V2 with the explicit full-frame box (FrameGenDebug.h): named as such, not as plain CrosshairV2.
+			const bool bWhole = s.uiProtection == framegen::UiProtection::CrosshairV2 && s.uiBoxWidth == fghost::kWholeFrameBoxPx && s.uiBoxHeight == fghost::kWholeFrameBoxPx;
+			E( "uiProtection", u, bWhole ? "CrosshairV2(whole)" : u < 4 ? k[ u ] : "Unknown" );
 		}
 		U( "uiHistory", s.uiHistory );
 		F( "uiBoxHeightFrac", s.uiBoxHeightFrac );

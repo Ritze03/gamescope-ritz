@@ -19,8 +19,10 @@
 namespace fghost
 {
 	// Longest a generated frame stays on screen in place of a real one. At fixed 2x the hold lasts one tick; with a Target
-	// above what the game delivers, several. A bound so a stalled generator can never freeze the picture.
-	constexpr uint64_t kHoldMaxNs = 250ull * 1000ull * 1000ull;
+	// above what the game delivers, several. A bound so a stalled generator can never freeze the picture, and short enough
+	// (100 ms = a 10 fps game's frame) that when the pacer starts passing real frames through (a scene cut) the held image
+	// is not shown for long; the pacer's own `generating` flag covers the rest (the host passes it as bGenerating).
+	constexpr uint64_t kHoldMaxNs = 100ull * 1000ull * 1000ull;
 
 	// "Only generated frames": on a REAL tick (the request shows a real frame), show the last generated image again instead of
 	// the real one. Never while nothing is generated (bGenerating false: pass-through, inert, failed synth), when no valid
@@ -63,6 +65,20 @@ namespace fghost
 	{
 		*pnTenths = std::min( std::max( int( u & 0xFFu ), kUiBoxMinTenths ), kUiBoxMaxTenths );
 		*pbWholeFrame = ( u & kUiWholeFrameBit ) != 0;
+	}
+
+	// The one name of the UI-protection mode (stats overlay, capture header, logs): Whole screen V2 is Crosshair V2 plus the
+	// whole-frame flag and must not read as plain "Crosshair V2".
+	inline const char *UiModeName( UiProt eUi, bool bWholeFrame )
+	{
+		switch ( eUi )
+		{
+			case UiProt::Off:         return "Off";
+			case UiProt::Crosshair:   return "Crosshair";
+			case UiProt::WholeScreen: return "Whole screen";
+			case UiProt::CrosshairV2: return bWholeFrame ? "Whole screen V2" : "Crosshair V2";
+		}
+		return "";
 	}
 
 	// The library's box settings for a mode: the fraction of the height, plus explicit pixel sides (0 = take it from the fraction).

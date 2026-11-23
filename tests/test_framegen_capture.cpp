@@ -224,6 +224,15 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 	REQUIRE( Has( "setting uiBoxOffsetX=-5" ) );
 	REQUIRE( Has( "setting subpixel=0" ) );
 	REQUIRE( Has( "setting v3Smear=0.400000006" ) );   // %.9g of the float: exact round trip
+
+	// Whole screen V2 (Crosshair V2 with the explicit full-frame box) is named as such; plain Crosshair V2 stays.
+	framegen::Settings v2;
+	v2.uiProtection = framegen::UiProtection::CrosshairV2;
+	const auto p = FormatSettingLines( v2 );
+	REQUIRE( std::find( p.begin(), p.end(), std::string( "setting uiProtection=3 text=CrosshairV2" ) ) != p.end() );
+	v2.uiBoxWidth = v2.uiBoxHeight = 16384;
+	const auto q = FormatSettingLines( v2 );
+	REQUIRE( std::find( q.begin(), q.end(), std::string( "setting uiProtection=3 text=CrosshairV2(whole)" ) ) != q.end() );
 }
 
 TEST_CASE( "capture: the decision line carries every field the pacer gives", "[framegen_capture]" )

@@ -2,6 +2,7 @@
 // "Only generated frames" hold decision, the DebugConfig word, and the UI-box word / library box of Whole screen V2.
 // No GPU, no compositor.
 #include <catch2/catch_test_macros.hpp>
+#include <string>
 
 #include "FrameGen/FrameGenDebug.h"
 
@@ -77,6 +78,15 @@ TEST_CASE( "framegen debug: the UI-box word carries Whole screen V2 beside the t
     REQUIRE( ( n == kUiBoxDefaultTenths && !b ) );
     REQUIRE( PackUiBox( 9999, false ) == uint32_t( kUiBoxMaxTenths ) );
     static_assert( kUiBoxMaxTenths < 256, "the tenths stay below the whole-frame bit" );
+}
+
+TEST_CASE( "framegen debug: the UI mode name", "[framegen_debug]" )
+{
+    REQUIRE( std::string( UiModeName( UiProt::CrosshairV2, false ) ) == "Crosshair V2" );
+    REQUIRE( std::string( UiModeName( UiProt::CrosshairV2, true ) ) == "Whole screen V2" );
+    REQUIRE( std::string( UiModeName( UiProt::WholeScreen, true ) ) == "Whole screen" );   // the flag counts only with Crosshair V2
+    REQUIRE( std::string( UiModeName( UiProt::Off, false ) ) == "Off" );
+    REQUIRE( std::string( UiModeName( UiProt::Crosshair, false ) ) == "Crosshair" );
 }
 
 TEST_CASE( "framegen debug: Whole screen V2 maps to Crosshair V2 with a full-frame box, nothing else does", "[framegen_debug]" )

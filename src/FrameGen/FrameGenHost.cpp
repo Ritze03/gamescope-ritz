@@ -2666,7 +2666,16 @@ namespace fghost
 			{
 				OutSlot_t *pHold = ( H.nLastGenSlot >= 0 && H.out[ H.nLastGenSlot ].bValid && H.out[ H.nLastGenSlot ].ulOutId == H.ulLastGenOutId
 					&& H.out[ H.nLastGenSlot ].pTex ) ? &H.out[ H.nLastGenSlot ] : nullptr;
-				if ( ShouldHoldGenerated( true, true, H.bLive, pHold != nullptr, pHold ? ulNowNs - H.ulLastGenNs : 0 ) )
+				// "Generating" = the interpolator is live AND the pacer's own steady flag says it is generating (a fresh status; it
+				// is republished about every 250 ms, an older one counts as not generating). A pass-through or a scene cut
+				// therefore ends the hold; the 100 ms cap bounds the lag of that flag.
+				bool bGenerating = false;
+				if ( H.bLive && pHold )
+				{
+					const PacingStatus ps = GetPacingStatus();
+					bGenerating = ps.valid && ps.generating && ulNowNs - ps.publishedNs <= 500ull * 1000ull * 1000ull;
+				}
+				if ( ShouldHoldGenerated( true, true, bGenerating, pHold != nullptr, pHold ? ulNowNs - H.ulLastGenNs : 0 ) )
 				{
 					pHold->ulUse = ++H.ulUseClock;   // stays the most recently used
 					pResult = pHold->pTex;
