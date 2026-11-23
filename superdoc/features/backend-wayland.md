@@ -166,8 +166,10 @@ if the host offers it.
     present event, so the scanned-out buffer is released only at the host's next ordinary frame.
   - Every `presented` feedback still carried the VSYNC flag (`torn 0/s`), so the vsync verdict
     said "does not tear" while the host tore.
-  - The presented time of a torn flip is the flip time, not a vblank, and `MarkVBlank()` takes
+  - The presented time of a torn flip is the flip time, not a vblank, and `MarkVBlank()` took
     it as one: where images were free the paint loop ran at about 470/s on the 280 Hz screen.
+    Since 2026-11-23 such a stamp no longer anchors the timer (see "Presentation feedback and
+    the refresh timer" below).
   - Switching the hint back to `vsync` while the host was tearing left it in a state where
     every feedback came back `discarded` (0 shown/s) until the hint went back to `async`. The
     hint also turns `vsync` whenever the overlay is open.
@@ -179,6 +181,25 @@ if the host offers it.
   host's next refresh to be shown, up to one refresh of extra delay, with no way for the
   user's tearing setting to change that. The protocol is the host-side contract for exactly
   this ("show this buffer as soon as possible, tearing allowed").
+
+## Presentation feedback and the refresh timer
+
+Every commit of the toplevel asks for a `wp_presentation_feedback`
+(`CWaylandPlane::Present()`); `Wayland_PresentationFeedback_Presented()` feeds the shown /
+discarded statistics, the host-vsync verdict and the judder measure, and hands the presented time
+to the vblank timer as `MarkVBlank( t, true, VBlankSource::HostFeedback )`. Since 2026-11-23 the
+timer takes it as its anchor only when it is plausible as a vblank of its grid
+(`ritz_timer_feedback_anchor 1`, default): within 1 % of the grid and at least half a refresh after
+the anchor, never while the nested refresh is not the host's, and its re-arm never replaces a
+wake-up already due. `Why:` a host that shows a frame at once (VRR below its maximum, a host that
+tears, headless sway) stamps it right after our commit, before the vblank we aimed at; taking
+each such stamp moved the grid earlier and the timer ran up to 11 % fast. Details, numbers and
+the switches: "The refresh timer and the host's feedback" in
+[frame-generation-host-scanout.md](frame-generation-host-scanout.md). The `status: timer` line
+([status-line.md](status-line.md)) also reports each feedback's latency from its commit (the
+commit time is kept per feedback beside the judder content time) and how many commits attached
+no new buffer (an unchanged buffer is not re-attached, so a black backing plane counts every
+time).
 
 ## Using it
 

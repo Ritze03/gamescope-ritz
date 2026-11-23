@@ -472,7 +472,7 @@ namespace gamescope
                 static constexpr uint64_t k_ulSchedulingFudge = 100'000; // 0.1ms
                 uint64_t ulNow = get_time_in_nanos() - k_ulSchedulingFudge;
 
-                GetVBlankTimer().MarkVBlank( ulNow, true );
+                GetVBlankTimer().MarkVBlank( ulNow, true, gamescope::VBlankSource::OpenVR );
 
                 // Flush out any pending commits -> visible
                 // and any visible commits -> release.
@@ -992,7 +992,7 @@ namespace gamescope
         void OnEndFrame() override
         {
             GetVBlankTimer().UpdateWasCompositing( true );
-            GetVBlankTimer().UpdateLastDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
+            GetVBlankTimer().ReportDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
 
             int32_t nNewRefreshRate = (int32_t) ConvertHztomHz( roundf( vr::VRSystem()->GetFloatTrackedDeviceProperty( vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float ) ) );
             if ( g_nOutputRefresh != nNewRefreshRate )

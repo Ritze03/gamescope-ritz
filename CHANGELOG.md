@@ -13,6 +13,10 @@ All notable user-facing changes, newest first. Categories:
 - **V3 Hybrid**: a new experimental Motion version, Motion version 3 with a learned
   blend, in three variants to compare.
 
+### Fixed
+- **Frame pacing**: the frame timer no longer runs ahead of the display, so fewer frames
+  are shown late or dropped.
+
 ### Info
 - **Motion guard**: the setting now shows whenever Motion version 3 is selected, above
   Artifact safety, and is off by default.

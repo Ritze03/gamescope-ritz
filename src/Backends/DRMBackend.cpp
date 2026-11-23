@@ -772,7 +772,7 @@ static void page_flip_handler(int fd, unsigned int frame, unsigned int sec, unsi
 
 	// This is the last vblank time
 	uint64_t vblanktime = sec * 1'000'000'000lu + usec * 1'000lu;
-	GetVBlankTimer().MarkVBlank( vblanktime, true );
+	GetVBlankTimer().MarkVBlank( vblanktime, true, gamescope::VBlankSource::Drm );
 
 	// TODO: get the fbids_queued instance from data if we ever have more than one in flight
 
@@ -4214,7 +4214,7 @@ namespace gamescope
 			// is queued and would end up being the new page flip, rather than here.
 			// However, the page flip handler is called when the page flip occurs,
 			// not when it is successfully queued.
-			GetVBlankTimer().UpdateLastDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
+			GetVBlankTimer().ReportDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
 
 			if ( isPageFlip )
 			{

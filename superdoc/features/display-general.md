@@ -134,8 +134,10 @@ refresh**, and the limit lifts as soon as it can. The rule is the pure
 
 The limit equals the refresh, so the existing limiter keeps it **on the vblank grid** with divisor 1
 (see [frame-limiter.md](frame-limiter.md)): a Vulkan game through our layer is told FIFO and the
-compositor releases one held commit per vblank; the vblank timer is re-anchored to the host's
-`presented` times, so it stays phase-locked to the host. A game without our layer (OpenGL through
+compositor releases one held commit per vblank; the vblank timer takes the host's `presented`
+times as its anchor when they lie on its grid, so it stays phase-locked to a fixed-refresh host
+(and free-runs on its own grid where the host has none; see "The refresh timer and the host's
+feedback" in [frame-generation-host-scanout.md](frame-generation-host-scanout.md)). A game without our layer (OpenGL through
 Xwayland) gets nothing from divisor 1 (frame callbacks are sent every vblank anyway), so Auto V-Sync
 does not limit it; not tested.
 
@@ -144,9 +146,10 @@ reached the game only after two fixes of the same day, the layer's activation in
 ([vk-wsi-layer.md](vk-wsi-layer.md)) and the limiter file's location
 ([frame-limiter.md](frame-limiter.md)); before them no limit of any kind did. With both, a
 layer-paced limit of 100 held 100.0 fps. The grid limit follows the vblank timer, which ran fast in
-that session, so Auto V-Sync's 180 held 206 fps: open, see "the refresh timer outrunning the host"
-in [frame-generation-host-scanout.md](frame-generation-host-scanout.md). Auto V-Sync with the
-nested refresh equal to the output's was not measured on a healthy host.
+that session (nested 180 on a 280 Hz host), so Auto V-Sync's 180 held 206 fps. Fixed 2026-11-23:
+the host's feedback no longer re-anchors a grid whose refresh is not the host's ("The refresh
+timer and the host's feedback" in [frame-generation-host-scanout.md](frame-generation-host-scanout.md);
+headless, nested 90 on 120 Hz: 90.0 ticks/s). Not yet re-measured in the field.
 
 `Why:` the user's request (2026-11-22): on a desktop that does not tear for gamescope's window
 (some desktops tear only a fullscreen window), native game frames above the refresh beat against the host
@@ -286,6 +289,20 @@ late (see [frame-generation.md](frame-generation.md)'s Latency section for the h
 numbers: 4.05 -> about 1.9 ms). A read-only **Wake-up lead** Facts row under the switch shows the
 current lead and the recent max draw; the frame-generation debug status line carries the same
 text.
+
+**The lead and the timer's grid (2026-11-23).** The lead only places the wake-up *before* a grid
+point (anchor + whole periods); it does not set the tick rate. Because the measured lead changes
+from one draw to the next, a lead that shrinks after a paint by more than that paint took would
+put the next wake-up before the *same* vblank again (the tick's paint reports its draw time before
+the tick's own re-arm): a second tick for one refresh. `ritz_timer_one_per_vblank` (default on)
+makes every schedule aim at least half a period after the vblank the last wake-up served. `Why:`
+on a 280 Hz host this gave 2-65 double ticks/s, more the more the lead moved (field, 2026-11-23).
+Which host feedback may anchor the grid is in "The refresh timer and the host's feedback",
+[frame-generation-host-scanout.md](frame-generation-host-scanout.md). `ritz_timer_draw_per_tick`
+(default off) lets only the first paint after a wake-up feed the draw window: an async paint
+without frame generation otherwise measures "time since the last wake-up", up to a whole period,
+which pins the lead at the cap (seen headless, 8.35 ms samples at 120 Hz; not seen on a real host,
+whose async paints were all wake-up paints).
 
 ## Related
 

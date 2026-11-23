@@ -10,8 +10,8 @@ did not limit. On a real desktop nobody watches the screen, so smoothness has to
 ## Switching it on
 
 ConVar `ritz_status` (int seconds, default 0 = off), live:
-`gamescopectl ritz_status 5` logs two lines every 5 s through the `framegen_pacing` log scope,
-both starting with `status:` (grep for it). The first interval after switching it on is only a
+`gamescopectl ritz_status 5` logs three lines every 5 s through the `framegen_pacing` log scope,
+all starting with `status:` (grep for it). The first interval after switching it on is only a
 baseline and prints nothing. `StatusLine_Tick()` in `src/steamcompmgr.cpp`, called once per
 main-loop iteration; read-only, it changes no pacing or presentation.
 
@@ -103,3 +103,68 @@ headless sway answered every toplevel commit with `discarded` (cause not establi
 holds the black backing or the game's buffer, the game on a subsurface), so the judder line and the
 verdict get nothing there; whether a real host does the same is untested. On headless sway async
 commits are all `discarded` too. Measured on headless sway with `composite_force 1`; a real host was not tested.
+
+## Line 3: timer (2026-11-23)
+
+The vblank timer against the host's feedback: what decides the tick rate. Added for the field
+test of "The refresh timer and the host's feedback"
+([frame-generation-host-scanout.md](frame-generation-host-scanout.md)), kept as the timer's
+diagnostics. Counters: `CVBlankTimer::TakeStats()` (`src/vblankmanager.cpp`, relaxed atomics),
+the paint and commit counts in `StatusCounters_t` (`steamcompmgr.cpp`). Rates per second.
+
+```
+status: timer ticks 120.0 wakeups 120.0 short-gap 0.0 min-gap 8.16 ms target-short 0.0 missed 0.0
+| paints tick 69.0 extra 1874.8 other 0.0 | lead measured 1.50 ms ring-max 0.68 max-draw 1.03 ms,
+draws 1943.8 non-tick 0.0 (max 0.00 ms) skipped 0.0 | feedback 125.0 close 0.0 off-grid 123.0
+phase mean +0.112 abs 2.062 ms rearm 2.0 ignored 123.0 | rearms 2.0 shift mean +0.066 ms earlier
+0.0 later 0.0 overdue 0.0 kept 0.0 | retarget 2.0 | refresh 0.000 Hz | latency min 0.03 mean 0.31
+max 0.78 ms early 125.0 same-buffer 0.0 | mark host 125.0 present-wait 0.0 drm 0.0 openvr 0.0 |
+host commits 1943.8 no-new-buffer 0.0 | game commits new 2865.7 same-buffer 0.0 recommit 0.0
+dropped 0.0 | arrivals new 2864.7 recommit 0.0 same-as-last 0.0 | switches draw_per_tick 0
+feedback_anchor 1 grid_tolerance 1% one_per_vblank 1
+```
+
+(headless sway, nested 120 on a 120 Hz output, frame generation on; one line in the log.)
+
+- `ticks`: refresh-timer ticks the main loop processed (the same count as line 1's `refresh
+  timer`); `wakeups`: timerfd wake-ups.
+- `short-gap` / `min-gap`: wake-ups less than 0.9 refresh after the previous one, and the
+  smallest such gap (a lead that grew also shortens one gap, harmlessly).
+- `target-short`: wake-ups aimed at a vblank less than 0.9 refresh after the previous one's (a
+  real extra tick); `missed`: refreshes between two aimed vblanks that no wake-up served (a paint
+  longer than a refresh, a postponed tick).
+- `paints tick / extra / other`: paints started by a refresh tick, by frame generation's extra
+  timer, or by anything else (async, forced, arrival).
+- `lead`: the current wake-up lead and its kind; `ring-max`: the 60-draw maximum it is sized
+  from; `max-draw`: the largest draw time reported in the interval.
+- `draws`: draw times reported by the backends; `non-tick (max)`: those from a paint that was
+  not the first after a wake-up, and their maximum; `skipped`: of those, dropped
+  (`ritz_timer_draw_per_tick 1`).
+- `feedback`: host `presented` events; `close`: less than half a refresh after the previous one;
+  `off-grid`: further than `grid_tolerance` from the timer's grid; `phase mean / abs`: their
+  signed (negative = early) and absolute distance from it.
+- `rearm`: forced re-arms by an accepted feedback; `ignored`: feedbacks not taken as the anchor.
+- `rearms`: forced re-arms of an armed timer (any source); `shift mean`: how far they moved its
+  wake-up (+ = later); `earlier / later`: by more than 1 % of a refresh; `overdue`: the replaced
+  wake-up was already due (a lost tick); `kept`: re-arms skipped because the wake-up was due.
+- `retarget`: schedules that aimed at the vblank the last wake-up served (moved on when
+  `one_per_vblank` is 1).
+- `refresh`: the refresh the host's feedback reports (0 = none, read as host VRR).
+- `latency min / mean / max`: presented time minus our commit time; a fixed-refresh host spreads
+  it over a refresh, a host that shows frames at once gives small tight values. `early`: under a
+  quarter refresh; `same-buffer`: feedbacks of commits that attached no new buffer.
+- `mark`: `MarkVBlank()` calls by source (`present-wait` is the default source; its only caller is
+  the Vulkan swapchain output's present-wait thread).
+- `host commits`: toplevel commits that asked for feedback; `no-new-buffer`: of those, without an
+  attach (plane 0 only, so a black backing plane counts every time).
+- `game commits`: the focused game's commits: a new buffer, a buffer already queued
+  (`same-buffer`), a re-commit (`commit_t::bRecommit`), or `dropped` (duplicate without feedback).
+- `arrivals`: base-plane arrivals of the focused window by the same split (counted with frame
+  generation off too); `same-as-last`: the same buffer as the previous arrival.
+- `switches`: `ritz_timer_draw_per_tick`, `ritz_timer_feedback_anchor`,
+  `ritz_timer_grid_tolerance`, `ritz_timer_one_per_vblank` (help strings in `vblankmanager.cpp`;
+  the defaults are the fix, `0`/`0` for anchor and one-per-vblank restores the old behaviour).
+
+Reading it: `ticks` should equal the refresh (the nested one when set) with `target-short` 0;
+`feedback` mostly on the grid on a fixed-refresh host (`phase abs` microseconds), mostly off it
+and `ignored` where the host shows frames at once or the nested refresh is not the host's.
