@@ -332,6 +332,11 @@ namespace gamescope
         std::mutex m_FeedbackContentMutex;
         std::deque<std::pair<struct wp_presentation_feedback *, uint64_t>> m_FeedbackContent;
         uint64_t TakeFeedbackContent( struct wp_presentation_feedback *pFeedback );
+        // The same commits' send time and whether they attached no new buffer (the
+        // `status: timer` line's latency and same-buffer counts), under the same mutex.
+        struct FeedbackCommit_t { struct wp_presentation_feedback *pFeedback; uint64_t ulCommitNs; bool bNoNewBuffer; };
+        std::deque<FeedbackCommit_t> m_FeedbackCommit;
+        std::optional<FeedbackCommit_t> TakeFeedbackCommit( struct wp_presentation_feedback *pFeedback );
         wl_subsurface *m_pSubsurface = nullptr;
         libdecor_frame *m_pFrame = nullptr;
         libdecor_window_state m_eWindowState = LIBDECOR_WINDOW_STATE_NONE;
@@ -1514,7 +1519,7 @@ namespace gamescope
         wl_display_flush( m_pBackend->GetDisplay() );
 
         GetVBlankTimer().UpdateWasCompositing( bNeedsFullComposite );
-        GetVBlankTimer().UpdateLastDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
+        GetVBlankTimer().ReportDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
 
         m_pBackend->PollState();
 
@@ -1997,6 +2002,12 @@ namespace gamescope
                     if ( m_FeedbackContent.size() >= 64 )
                         m_FeedbackContent.pop_front();
                     m_FeedbackContent.emplace_back( pFeedback, fghostshown::Get().ulPaintContentNs );
+                    // No new buffer: the attach further down is skipped (same buffer as held).
+                    const bool bNoNewBuffer = oState->pBuffer == pPreviousBuffer;
+                    if ( m_FeedbackCommit.size() >= 64 )
+                        m_FeedbackCommit.pop_front();
+                    m_FeedbackCommit.push_back( FeedbackCommit_t{ pFeedback, get_time_in_nanos(), bNoNewBuffer } );
+                    GetVBlankTimer().NoteHostCommit( bNoNewBuffer );
                 }
                 // Test hook (ritz_host_vsync_test): forces the verdict per commit sent while the hint is
                 // async, so a forced value also stops being applied when the hint goes vsync.
@@ -2354,6 +2365,20 @@ namespace gamescope
         }
         return 0;
     }
+    std::optional<CWaylandPlane::FeedbackCommit_t> CWaylandPlane::TakeFeedbackCommit( struct wp_presentation_feedback *pFeedback )
+    {
+        std::scoped_lock lock( m_FeedbackContentMutex );
+        for ( auto it = m_FeedbackCommit.begin(); it != m_FeedbackCommit.end(); ++it )
+        {
+            if ( it->pFeedback == pFeedback )
+            {
+                const FeedbackCommit_t entry = *it;
+                m_FeedbackCommit.erase( it );
+                return entry;
+            }
+        }
+        return std::nullopt;
+    }
     void CWaylandPlane::Wayland_PresentationFeedback_Presented( struct wp_presentation_feedback *pFeedback, uint32_t uTVSecHi, uint32_t uTVSecLo, uint32_t uTVNSec, uint32_t uRefreshCycle, uint32_t uSeqHi, uint32_t uSeqLo, uint32_t uFlags )
     {
         uint64_t ulTime = ( ( ( uint64_t( uTVSecHi ) << 32ul ) | uTVSecLo ) * 1'000'000'000lu ) +
@@ -2399,7 +2424,10 @@ namespace gamescope
             std::scoped_lock lock( J.mutex );
             J.meter.Note( ulTime, ulContent, ulRefreshNs );
         }
-        GetVBlankTimer().MarkVBlank( ulTime, true );
+        const std::optional<FeedbackCommit_t> oCommit = TakeFeedbackCommit( pFeedback );
+        if ( oCommit )
+            GetVBlankTimer().NoteHostLatency( int64_t( ulTime - oCommit->ulCommitNs ), oCommit->bNoNewBuffer );
+        GetVBlankTimer().MarkVBlank( ulTime, true, gamescope::VBlankSource::HostFeedback, oCommit && oCommit->bNoNewBuffer );
         wp_presentation_feedback_destroy( pFeedback );
 
         // Nudge so that steamcompmgr releases commits.
@@ -2409,6 +2437,7 @@ namespace gamescope
     {
         fghostshown::Get().ulDiscarded.fetch_add( 1, std::memory_order_relaxed );
         TakeFeedbackContent( pFeedback );
+        TakeFeedbackCommit( pFeedback );
         wp_presentation_feedback_destroy( pFeedback );
 
         // Nudge so that steamcompmgr releases commits.

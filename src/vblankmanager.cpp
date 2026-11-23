@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -89,8 +90,10 @@ namespace gamescope
 
 		uint64_t ulTargetPoint = GetLastVBlank() + ulIntervalNSecs - ulOffset;
 
-		while ( ulTargetPoint < ulNow )
-			ulTargetPoint += ulIntervalNSecs;
+		// Same result as stepping one refresh at a time, without a loop that grows with the
+		// anchor's age (ritz_timer_feedback_anchor 4 never moves the anchor).
+		if ( ulTargetPoint < ulNow && ulIntervalNSecs )
+			ulTargetPoint += ( ( ulNow - ulTargetPoint + ulIntervalNSecs - 1 ) / ulIntervalNSecs ) * ulIntervalNSecs;
 
 		return ulTargetPoint;
 	}
@@ -219,8 +222,23 @@ namespace gamescope
 		m_ulLastLead.store( ulOffset, std::memory_order_relaxed );
 		m_eLastLeadKind.store( eKind, std::memory_order_relaxed );
 
-		const uint64_t ulScheduledWakeupPoint = GetNextVBlank( ulOffset );
-		const uint64_t ulTargetVBlank = ulScheduledWakeupPoint + ulOffset;
+		uint64_t ulScheduledWakeupPoint = GetNextVBlank( ulOffset );
+		uint64_t ulTargetVBlank = ulScheduledWakeupPoint + ulOffset;
+
+		// The wake-up only has to lie in the future, so a lead that shrank since the last
+		// wake-up (or a grid a feedback moved) can aim at the vblank that wake-up already
+		// served: a second tick for one refresh. Counted always; ritz_timer_one_per_vblank
+		// moves it to the next refresh.
+		if ( ulRefreshInterval && m_ulLastFiredTarget && ulTargetVBlank < m_ulLastFiredTarget + ulRefreshInterval / 2 )
+		{
+			m_Stats.ulRetarget.fetch_add( 1, std::memory_order_relaxed );
+			if ( cv_ritz_timer_one_per_vblank )
+			{
+				const uint64_t ulSteps = ( m_ulLastFiredTarget + ulRefreshInterval / 2 - ulTargetVBlank ) / ulRefreshInterval + 1;
+				ulScheduledWakeupPoint += ulSteps * ulRefreshInterval;
+				ulTargetVBlank += ulSteps * ulRefreshInterval;
+			}
+		}
 
 		VBlankScheduleTime schedule =
 		{
@@ -235,14 +253,188 @@ namespace gamescope
 		return std::exchange( m_PendingVBlank, std::nullopt );
 	}
 
-	void CVBlankTimer::MarkVBlank( uint64_t ulNanos, bool bReArmTimer )
+	// Field test (2026-11-23): the refresh timer ticking faster than the refresh on a
+	// nested Wayland host. Defaults = the behaviour before these switches.
+	ConVar<bool> cv_ritz_timer_draw_per_tick( "ritz_timer_draw_per_tick", false,
+		"Field test: 1 = only the first paint after a timer wake-up (vblank or frame generation's extra timer) feeds the "
+		"wake-up lead's draw time; other paints (async, forced, arrival) record nothing. 0 = every paint records one (before)." );
+	ConVar<int> cv_ritz_timer_feedback_anchor( "ritz_timer_feedback_anchor", 0,
+		"Field test, nested Wayland: how a host `presented` feedback steers the vblank timer. 0 = every one anchors the "
+		"grid and re-arms the timer at once (before). 1 = only a plausible vblank anchors and re-arms (at least half a "
+		"refresh after the anchor and within ritz_timer_grid_tolerance of its grid; every 30th rejected one in a row is taken anyway to follow "
+		"a real phase change). 2 = the same filter, but the anchor is never forced: the next tick's own re-arm picks it "
+		"up. 3 = as 0, but feedbacks of commits that attached no new buffer are ignored. 4 = host feedback never touches "
+		"the timer: it free-runs on its last grid at the refresh period (a control; drifts against the host's real vblank)." );
+	ConVar<int> cv_ritz_timer_grid_tolerance( "ritz_timer_grid_tolerance", 5,
+		"Field test: how far (percent of a refresh, 1-50) a host `presented` time may sit from the timer's grid and still "
+		"count as on it: the `status: timer` off-grid count and ritz_timer_feedback_anchor 1/2 use it." );
+	ConVar<bool> cv_ritz_timer_one_per_vblank( "ritz_timer_one_per_vblank", false,
+		"Field test: 1 = a timer schedule never aims at the vblank the last wake-up already served (a lead that shrank, or "
+		"a grid a feedback moved earlier, would otherwise give that refresh a second tick); it takes the next one. 0 = before." );
+
+	void CVBlankTimer::MarkVBlank( uint64_t ulNanos, bool bReArmTimer, VBlankSource eSource, bool bNoNewBuffer )
 	{
+		m_Stats.ulMark[ size_t( eSource ) & 3 ].fetch_add( 1, std::memory_order_relaxed );
+
+		if ( eSource == VBlankSource::HostFeedback )
+		{
+			const int nRefresh = GetRefresh();
+			const uint64_t ulPeriod = nRefresh > 0 ? mHzToRefreshCycle( nRefresh ) : 0;
+			const uint64_t ulPrevFb = m_ulLastHostFeedback.exchange( ulNanos, std::memory_order_relaxed );
+			if ( ulPeriod && ulPrevFb && ( ulNanos <= ulPrevFb || ulNanos - ulPrevFb < ulPeriod / 2 ) )
+				m_Stats.ulFbClose.fetch_add( 1, std::memory_order_relaxed );
+
+			// Distance from the grid the current anchor defines (signed: + = later than
+			// the nearest grid point).
+			const uint64_t ulAnchor = m_ulLastVBlank.load();
+			bool bOnGrid = true;
+			if ( ulPeriod && ulAnchor )
+			{
+				const int64_t lDiff = int64_t( ulNanos - ulAnchor );
+				const int64_t lPeriod = int64_t( ulPeriod );
+				const int64_t lPhase = ( ( lDiff % lPeriod ) + lPeriod ) % lPeriod;
+				const int64_t lSigned = lPhase > lPeriod / 2 ? lPhase - lPeriod : lPhase;
+				const int nTol = std::clamp( int( cv_ritz_timer_grid_tolerance ), 1, 50 );
+				bOnGrid = std::abs( lSigned ) * 100 <= lPeriod * nTol;
+				m_Stats.ulPhaseN.fetch_add( 1, std::memory_order_relaxed );
+				m_Stats.lPhaseSum.fetch_add( lSigned, std::memory_order_relaxed );
+				m_Stats.ulPhaseAbsSum.fetch_add( uint64_t( std::abs( lSigned ) ), std::memory_order_relaxed );
+			}
+			if ( !bOnGrid )
+				m_Stats.ulFbOffGrid.fetch_add( 1, std::memory_order_relaxed );
+
+			const int nMode = cv_ritz_timer_feedback_anchor;
+			bool bTake = true;
+			if ( nMode == 4 )
+				bTake = false;   // free-run: the timer keeps the grid it has
+			else if ( nMode == 3 )
+				bTake = !bNoNewBuffer;
+			else if ( ( nMode == 1 || nMode == 2 ) && ulPeriod && ulAnchor )
+			{
+				const bool bPlausible = bOnGrid && ulNanos > ulAnchor && ulNanos - ulAnchor >= ulPeriod / 2;
+				if ( bPlausible )
+					m_nFbRejectRun.store( 0, std::memory_order_relaxed );
+				else if ( m_nFbRejectRun.fetch_add( 1, std::memory_order_relaxed ) + 1 >= 30 )
+					m_nFbRejectRun.store( 0, std::memory_order_relaxed );   // a real phase change: follow it
+				else
+					bTake = false;
+			}
+			if ( !bTake )
+			{
+				m_Stats.ulFbIgnored.fetch_add( 1, std::memory_order_relaxed );
+				return;
+			}
+
+			m_ulLastVBlank = ulNanos;
+			if ( bReArmTimer && nMode != 2 )
+			{
+				m_Stats.ulFbRearm.fetch_add( 1, std::memory_order_relaxed );
+				ArmNextVBlank( false );
+			}
+			return;
+		}
+
 		m_ulLastVBlank = ulNanos;
 		if ( bReArmTimer )
 		{
 			// Force timer re-arm with the new vblank timings.
 			ArmNextVBlank( false );
 		}
+	}
+
+	template <typename T>
+	static void AtomicMax( std::atomic<T> &a, T v )
+	{
+		T cur = a.load( std::memory_order_relaxed );
+		while ( v > cur && !a.compare_exchange_weak( cur, v, std::memory_order_relaxed ) ) {}
+	}
+	template <typename T>
+	static void AtomicMin( std::atomic<T> &a, T v )
+	{
+		T cur = a.load( std::memory_order_relaxed );
+		while ( v < cur && !a.compare_exchange_weak( cur, v, std::memory_order_relaxed ) ) {}
+	}
+
+	void CVBlankTimer::ReportDrawTime( uint64_t ulNanos )
+	{
+		const bool bFromWake = m_bDrawSamplePending.exchange( false, std::memory_order_relaxed );
+		m_Stats.ulDrawSamples.fetch_add( 1, std::memory_order_relaxed );
+		AtomicMax( m_Stats.ulMaxDraw, ulNanos );
+		if ( !bFromWake )
+		{
+			m_Stats.ulDrawNonWake.fetch_add( 1, std::memory_order_relaxed );
+			AtomicMax( m_Stats.ulMaxDrawNonWake, ulNanos );
+			if ( cv_ritz_timer_draw_per_tick )
+			{
+				m_Stats.ulDrawSkipped.fetch_add( 1, std::memory_order_relaxed );
+				return;
+			}
+		}
+		UpdateLastDrawTime( ulNanos );
+	}
+
+	void CVBlankTimer::NoteHostCommit( bool bNoNewBuffer )
+	{
+		m_Stats.ulHostCommits.fetch_add( 1, std::memory_order_relaxed );
+		if ( bNoNewBuffer )
+			m_Stats.ulHostSameBuffer.fetch_add( 1, std::memory_order_relaxed );
+	}
+
+	void CVBlankTimer::NoteHostLatency( int64_t lLatency, bool bNoNewBuffer )
+	{
+		const int nRefresh = GetRefresh();
+		const int64_t lPeriod = nRefresh > 0 ? int64_t( mHzToRefreshCycle( nRefresh ) ) : 0;
+		m_Stats.ulLatN.fetch_add( 1, std::memory_order_relaxed );
+		m_Stats.lLatSum.fetch_add( lLatency, std::memory_order_relaxed );
+		AtomicMin( m_Stats.lLatMin, lLatency );
+		AtomicMax( m_Stats.lLatMax, lLatency );
+		if ( lPeriod && lLatency < lPeriod / 4 )
+			m_Stats.ulLatEarly.fetch_add( 1, std::memory_order_relaxed );
+		if ( bNoNewBuffer )
+			m_Stats.ulFbSameBuffer.fetch_add( 1, std::memory_order_relaxed );
+	}
+
+	VBlankTimerStats CVBlankTimer::TakeStats()
+	{
+		auto X = []( auto &a, auto v ) { return a.exchange( v, std::memory_order_relaxed ); };
+		Counters_t &C = m_Stats;
+		VBlankTimerStats S;
+		S.ulDrawSamples = X( C.ulDrawSamples, 0ul );
+		S.ulDrawNonWake = X( C.ulDrawNonWake, 0ul );
+		S.ulDrawSkipped = X( C.ulDrawSkipped, 0ul );
+		S.ulMaxDraw = X( C.ulMaxDraw, 0ul );
+		S.ulMaxDrawNonWake = X( C.ulMaxDrawNonWake, 0ul );
+		S.ulWakeups = X( C.ulWakeups, 0ul );
+		S.ulShortGaps = X( C.ulShortGaps, 0ul );
+		S.ulMinGap = X( C.ulMinGap, UINT64_MAX );
+		if ( S.ulMinGap == UINT64_MAX )
+			S.ulMinGap = 0;
+		for ( size_t i = 0; i < 4; i++ )
+			S.ulMark[ i ] = X( C.ulMark[ i ], 0ul );
+		S.ulFbClose = X( C.ulFbClose, 0ul );
+		S.ulFbOffGrid = X( C.ulFbOffGrid, 0ul );
+		S.ulRearmN = X( C.ulRearmN, 0ul );
+		S.ulRearmOverdue = X( C.ulRearmOverdue, 0ul );
+		S.ulRetarget = X( C.ulRetarget, 0ul );
+		S.lRearmShiftSum = X( C.lRearmShiftSum, int64_t( 0 ) );
+		S.ulPhaseN = X( C.ulPhaseN, 0ul );
+		S.ulPhaseAbsSum = X( C.ulPhaseAbsSum, 0ul );
+		S.lPhaseSum = X( C.lPhaseSum, int64_t( 0 ) );
+		S.ulFbRearm = X( C.ulFbRearm, 0ul );
+		S.ulFbIgnored = X( C.ulFbIgnored, 0ul );
+		S.ulRearmEarlier = X( C.ulRearmEarlier, 0ul );
+		S.ulRearmLater = X( C.ulRearmLater, 0ul );
+		S.ulHostCommits = X( C.ulHostCommits, 0ul );
+		S.ulHostSameBuffer = X( C.ulHostSameBuffer, 0ul );
+		S.ulLatN = X( C.ulLatN, 0ul );
+		S.ulLatEarly = X( C.ulLatEarly, 0ul );
+		S.ulFbSameBuffer = X( C.ulFbSameBuffer, 0ul );
+		S.lLatSum = X( C.lLatSum, int64_t( 0 ) );
+		S.lLatMin = X( C.lLatMin, INT64_MAX );
+		S.lLatMax = X( C.lLatMax, INT64_MIN );
+		if ( !S.ulLatN )
+			S.lLatMin = S.lLatMax = 0;
+		return S;
 	}
 
 	bool CVBlankTimer::WasCompositing() const
@@ -326,12 +518,32 @@ namespace gamescope
 		if ( bPreemptive && m_bArmed )
 			return;
 
+		const bool bWasArmed = m_bArmed;
 		m_bArmed = true;
 		m_bArmed.notify_all();
 
 		if ( UsingTimerFD() )
 		{
+			const uint64_t ulOldWakeup = m_TimerFDSchedule.ulScheduledWakeupPoint;
 			m_TimerFDSchedule = CalcNextWakeupTime( bPreemptive );
+
+			// `status: timer`: how far a forced re-arm moved a wake-up already armed.
+			if ( !bPreemptive && bWasArmed )
+			{
+				const int nRefresh = GetRefresh();
+				const int64_t lTenth = nRefresh > 0 ? int64_t( mHzToRefreshCycle( nRefresh ) / 100 ) : 0;   // 1%
+				const int64_t lShift = int64_t( m_TimerFDSchedule.ulScheduledWakeupPoint - ulOldWakeup );
+				m_Stats.ulRearmN.fetch_add( 1, std::memory_order_relaxed );
+				// The armed wake-up was already due (its timerfd expiry not yet read): re-arming
+				// replaces it, so that tick is lost or postponed.
+				if ( ulOldWakeup && ulOldWakeup <= get_time_in_nanos() )
+					m_Stats.ulRearmOverdue.fetch_add( 1, std::memory_order_relaxed );
+				m_Stats.lRearmShiftSum.fetch_add( lShift, std::memory_order_relaxed );
+				if ( lTenth && lShift < -lTenth )
+					m_Stats.ulRearmEarlier.fetch_add( 1, std::memory_order_relaxed );
+				else if ( lTenth && lShift > lTenth )
+					m_Stats.ulRearmLater.fetch_add( 1, std::memory_order_relaxed );
+			}
 
 			ITimerWaitable::ArmTimer( m_TimerFDSchedule.ulScheduledWakeupPoint );
 		}
@@ -370,6 +582,22 @@ namespace gamescope
 				// Doing this aims to include that, like we were before, but with timerfd.
 				.ulWakeupTime = m_TimerFDSchedule.ulScheduledWakeupPoint,
 			};
+
+			// `status: timer`: the gap from the previous wake-up.
+			{
+				const uint64_t ulWake = m_TimerFDSchedule.ulScheduledWakeupPoint;
+				m_Stats.ulWakeups.fetch_add( 1, std::memory_order_relaxed );
+				if ( m_ulLastWakeupPoint && ulWake > m_ulLastWakeupPoint )
+				{
+					const uint64_t ulGap = ulWake - m_ulLastWakeupPoint;
+					AtomicMin( m_Stats.ulMinGap, ulGap );
+					const int nRefresh = GetRefresh();
+					if ( nRefresh > 0 && ulGap * 10 < mHzToRefreshCycle( nRefresh ) * 9 )
+						m_Stats.ulShortGaps.fetch_add( 1, std::memory_order_relaxed );
+				}
+				m_ulLastWakeupPoint = ulWake;
+				m_ulLastFiredTarget = m_TimerFDSchedule.ulTargetVBlank;
+			}
 
 			gpuvis_trace_printf( "vblank timerfd wakeup" );
 

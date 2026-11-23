@@ -427,7 +427,7 @@ namespace gamescope
 		vulkan_wait( *oCompositeResult, true );
 
 		GetVBlankTimer().UpdateWasCompositing( true );
-		GetVBlankTimer().UpdateLastDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
+		GetVBlankTimer().ReportDrawTime( get_time_in_nanos() - g_SteamCompMgrVBlankTime.ulWakeupTime );
 
 		return 0;
 	}
