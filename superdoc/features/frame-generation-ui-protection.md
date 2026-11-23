@@ -124,6 +124,16 @@ very frame last tracked observes it again (one still-step of over-count, harmles
 The debug log (`framegen` scope) counts tracked frames ("UI protection: tracking while
 passing through") and notes the resume ("observing again after N tracked real frames").
 
+## Whole screen V2
+
+*2026-11-23.* The fifth option of the row (`framegen.ui_protection` = `whole_screen_v2`, shown last: Off / Crosshair / Crosshair V2 / Whole screen / Whole screen V2): **Crosshair V2's method on the whole picture**. `Why:` the user asked for it on 2026-11-23, to use Crosshair V2 for the whole screen.
+
+No library change: it maps to `UiProtection::CrosshairV2` with the explicit box `uiBoxWidth = uiBoxHeight = 16384`, which the library's `boxSize()` clamps to the frame (the box is then the whole frame, non-square). The host has no spare bit in the packed config, so `Config::uiWholeFrame` rides at bit 8 of the UI-box word (`g_uUiBox`, `FrameGenDebug.h` `PackUiBox()`), `UiProt` stays `CrosshairV2`, and the library-config key in `EnsureReady()` has it at bit 63. The estimate-drop check there also compares the explicit box, so switching between Crosshair V2 and Whole screen V2 drops the host's estimate like the library drops its own. `UiBoxSettings()` (pure, `tests/test_framegen_debug.cpp`) is the one place the mapping lives, and `UiModeName()` (`FrameGenDebug.h`) the one place the host names the mode: the stats overlay prints "Whole screen V2", and the capture header prints `text=CrosshairV2(whole)` for the library settings it records (Crosshair V2 with the explicit 16384 box).
+
+The **Crosshair box size** row is greyed in this mode ("Whole screen V2 covers the whole picture") and the host records no box preview (a full-frame crop shows nothing; the Inspector then reads "Waiting for a game frame." after two seconds).
+
+**Cost (an estimate, not measured):** about +0.3-0.8 ms per real frame at 1080p and 16 bytes of library state per pixel (about 33 MB at 1080p). **Caution (the library's own):** a bigger box raises false "still" detections (a still background counted as UI); unvalidated at the full frame.
+
 **Timing.** The library adds `ui_detect` and `ui_inpaint` (per observe) and `ui_patch`
 (per synth) to its profile, and an observe opens a profile that the next estimate
 continues. `HarvestProfile()` therefore classifies stamps by name: the observe's two

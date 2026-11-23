@@ -11,6 +11,7 @@
 #include "FrameGenV3.h"
 #include "FrameGenCapture.h"
 #include "StaleFrame.h"
+#include "FrameGenDebug.h"
 
 #include <algorithm>
 #include <atomic>
@@ -101,7 +102,7 @@ namespace fghost
 		// percent of the game's height.
 		uint32_t PackBox( const Config &c )
 		{
-			return uint32_t( std::min( std::max( c.uiBoxTenths, kUiBoxMinTenths ), kUiBoxMaxTenths ) );
+			return PackUiBox( c.uiBoxTenths, c.uiWholeFrame );   // bits 0-7 tenths, bit 8 Whole screen V2
 		}
 
 		static_assert( kUiBoxMaxTenths <= 255, "the box size has 8 bits (48-55) in the library-config key" );
@@ -132,7 +133,7 @@ namespace fghost
 			Config c;
 			UnpackReach( uReach, &c );
 			UnpackV3( ulV3, &c );
-			c.uiBoxTenths = std::min( std::max( int( uBox ), kUiBoxMinTenths ), kUiBoxMaxTenths );
+			UnpackUiBox( uBox, &c.uiBoxTenths, &c.uiWholeFrame );
 			c.multiplier = int( u & 0xFu );
 			c.quality = Quality( ( u >> 4 ) & 0x3u );
 			c.safety = Safety( ( ( u >> 6 ) & 0x3u ) | ( ( ( u >> 30 ) & 1u ) << 2 ) );
@@ -208,6 +209,9 @@ namespace fghost
 		}
 
 		std::atomic<uint32_t> g_uBlur{ PackBlur( BlurConfig{} ) };
+
+		// Debug options (FrameGenDebug.h): its own word, the Config word is full.
+		std::atomic<uint32_t> g_uDebug{ PackDebug( DebugConfig{} ) };
 
 		// The lag spike buffer's config, its own word (a third switch next to
 		// frame generation and blur, independent of both): bit 0 enabled, bits 1-2
@@ -431,6 +435,12 @@ namespace fghost
 			int nPairSynths = 0;
 			OutSlot_t out[ kOutPool ];
 			uint64_t ulUseClock = 0;
+			// Debug options, "Only generated frames": the last GENERATED output shown on a non-real tick (slot index, its outId so a
+			// reused slot is noticed, and when), the image a real tick shows again.
+			int nLastGenSlot = -1;
+			uint64_t ulLastGenOutId = 0;
+			uint64_t ulLastGenNs = 0;
+			uint64_t ulDebugHeld = 0, ulDebugReal = 0, ulDebugGen = 0;   // real ticks replaced by the held image / real ticks seen / generated ticks seen (log only)
 
 			// What the library is currently configured with.
 			uint64_t uAppliedConfig = 0;
@@ -528,7 +538,7 @@ namespace fghost
 			// of the frame height); everything else (still frames, threshold, V2's
 			// contrast / leave / re-entry, uiEstimateFill = false) stays at the
 			// library's defaults.
-			s.uiBoxHeightFrac = float( c.uiBoxTenths ) / 1000.0f;
+			UiBoxSettings( c.ui == UiProt::CrosshairV2, c.uiWholeFrame, c.uiBoxTenths, &s.uiBoxHeightFrac, &s.uiBoxWidth, &s.uiBoxHeight );
 			switch ( c.ui )
 			{
 				case UiProt::Off:         s.uiProtection = framegen::UiProtection::Off; break;
@@ -866,7 +876,8 @@ namespace fghost
 			// 0 while the blur is off, so its enabled bit is part of the key.
 			const uint32_t uBlurLib = uPackedBlur & ( 0xFu | ( 1u << 12 ) | kBlurEnabledBit );
 			const uint64_t uLibraryConfig = uint64_t( uPackedConfig & ( 0x3F0u | ( 0x3u << 24 ) | ( 0x3u << 28 ) | ( 0x1u << 30 ) ) ) | ( uint64_t( uBlurLib ) << 32 )
-				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x7Fu ) << 56 );
+				| ( uint64_t( c.uiBoxTenths ) << 48 ) | ( uint64_t( uPackedLearned & 0x7Fu ) << 56 )
+				| ( uint64_t( c.ui == UiProt::CrosshairV2 && c.uiWholeFrame ? 1 : 0 ) << 63 );   // Whole screen V2's explicit full-frame box
 
 			const uint32_t uReach = PackReach( c );
 			const uint64_t ulV3 = PackV3( c );
@@ -980,6 +991,7 @@ namespace fghost
 				const framegen::MotionVersion eMotionWas = H.interp.settings().motionVersion;
 				const framegen::UiProtection eUiWas = H.interp.settings().uiProtection;
 				const float flUiBoxWas = H.interp.settings().uiBoxHeightFrac;
+				const uint32_t uUiBoxWWas = H.interp.settings().uiBoxWidth, uUiBoxHWas = H.interp.settings().uiBoxHeight;
 				const bool bFlowChange = want.flowScale != H.interp.settings().flowScale;
 				const bool bPyramidChange = want.pyramidMinSide != H.interp.settings().pyramidMinSide;
 				if ( bFlowChange || bPyramidChange )
@@ -1036,7 +1048,8 @@ namespace fghost
 				// A change of the UI-protection mode or its box drops the library's estimate too (its synths refuse
 				// until the next recordEstimate): forget ours so the pair is re-estimated at the next paint instead of
 				// showing real frames, flagged as a failed step, for the rest of the pair.
-				else if ( H.interp.settings().uiProtection != eUiWas || H.interp.settings().uiBoxHeightFrac != flUiBoxWas )
+				else if ( H.interp.settings().uiProtection != eUiWas || H.interp.settings().uiBoxHeightFrac != flUiBoxWas
+					|| H.interp.settings().uiBoxWidth != uUiBoxWWas || H.interp.settings().uiBoxHeight != uUiBoxHWas )
 					H.bEstimateValid = false;
 				// A V3 Hybrid variant switch (or V3 <-> V3 Hybrid) is only a runtime setting: the same library motion
 				// version, no estimate dropped, no GPU wait. PublishBlend() below logs it.
@@ -1233,10 +1246,10 @@ namespace fghost
 		// sets no offset) and the work rectangle it protects (workRect: the box grown
 		// by the mode's margin, 2 px for V1, 1 px for V2). Asked of the library itself,
 		// with the live Config's mode, so the preview can never disagree with it.
-		void BoxRects( uint32_t w, uint32_t h, int nTenths, UiProt eUi, int32_t box[ 4 ], int32_t work[ 4 ] )
+		void BoxRects( uint32_t w, uint32_t h, int nTenths, UiProt eUi, bool bWholeFrame, int32_t box[ 4 ], int32_t work[ 4 ] )
 		{
 			framegen::Settings st;
-			st.uiBoxHeightFrac = float( nTenths ) / 1000.0f;
+			UiBoxSettings( eUi == UiProt::CrosshairV2, bWholeFrame, nTenths, &st.uiBoxHeightFrac, &st.uiBoxWidth, &st.uiBoxHeight );
 			switch ( eUi )
 			{
 				case UiProt::Off:         st.uiProtection = framegen::UiProtection::Off; break;
@@ -1253,6 +1266,9 @@ namespace fghost
 		// recorded: the caller submits pCb and then calls BoxPreviewSubmitted(seq).
 		bool BoxPreviewRecord( CVulkanCmdBuffer *pCb, const gamescope::Rc<CVulkanTexture> &pLayer0, const FormatPlan &plan, const Config &cfg )
 		{
+			// Whole screen V2: the box is the whole frame, a crop of it shows nothing (the overlay hides the preview).
+			if ( cfg.ui == UiProt::CrosshairV2 && cfg.uiWholeFrame )
+				return false;
 			const uint64_t ulNow = get_time_in_nanos();
 			const uint64_t ulWanted = g_ulBoxPreviewWantedNs.load( std::memory_order_relaxed );
 			if ( !ulWanted || ulNow - ulWanted > kBoxPreviewLapseNs )
@@ -1266,7 +1282,7 @@ namespace fghost
 
 			const uint32_t w = pLayer0->width(), h = pLayer0->height();
 			int32_t box[ 4 ], work[ 4 ];
-			BoxRects( w, h, cfg.uiBoxTenths, cfg.ui, box, work );
+			BoxRects( w, h, cfg.uiBoxTenths, cfg.ui, cfg.uiWholeFrame, box, work );
 			const int bx = box[ 0 ], by = box[ 1 ];
 			const uint32_t bw = uint32_t( box[ 2 ] ), bh = uint32_t( box[ 3 ] );
 
@@ -1987,6 +2003,16 @@ namespace fghost
 		return UnpackBlur( g_uBlur.load( std::memory_order_relaxed ) );
 	}
 
+	void SetDebugConfig( const DebugConfig &cfg )
+	{
+		g_uDebug.store( PackDebug( cfg ), std::memory_order_relaxed );
+	}
+
+	DebugConfig GetDebugConfig()
+	{
+		return UnpackDebug( g_uDebug.load( std::memory_order_relaxed ) );
+	}
+
 	void SetLagBufferConfig( const LagBufferConfig &cfg )
 	{
 		g_uLag.store( PackLag( cfg ), std::memory_order_relaxed );
@@ -2124,7 +2150,7 @@ namespace fghost
 		{
 			ulCaptureKey = 1469598103934665603ull;
 			for ( const uint64_t ul : { uint64_t( uPackedConfig ), uint64_t( uPackedBlur ), uint64_t( uPackedLearned ),
-				uint64_t( g_uUiBox.load( std::memory_order_relaxed ) ), uint64_t( g_uReach.load( std::memory_order_relaxed ) ),
+				uint64_t( g_uUiBox.load( std::memory_order_relaxed ) ), uint64_t( g_uReach.load( std::memory_order_relaxed ) ), uint64_t( g_uDebug.load( std::memory_order_relaxed ) ),
 				g_ulV3.load( std::memory_order_relaxed ), uint64_t( g_uLag.load( std::memory_order_relaxed ) ) } )
 				ulCaptureKey = ( ulCaptureKey ^ ul ) * 1099511628211ull;
 			capture::Poll( get_time_in_nanos(), ulCaptureKey );
@@ -2612,6 +2638,54 @@ namespace fghost
 			pResult = H.pRing[ H.nCurSlot ];
 			g_ulHeldPaints.fetch_add( 1, std::memory_order_relaxed );
 		}
+		// Debug options, "Only generated frames" (FrameGenDebug.h; superdoc/features/frame-generation-debug.md). Done last, on the
+		// finished decision, so the ring copy, observe and pairs above ran exactly as without it.
+		// `Why here and not in the pacer:` the real tick's paint is what feeds the ring and the UI-protection history; only the
+		// image shown is replaced.
+		if ( g_uDebug.load( std::memory_order_relaxed ) & 1u )
+		{
+			const bool bRealTick = IsRealTick( req.prevId, req.t1 );
+			const uint64_t ulNowNs = get_time_in_nanos();
+			( bRealTick ? H.ulDebugReal : H.ulDebugGen )++;
+			if ( !bRealTick )
+			{
+				// Remember which pool slot the generated image is in, and keep it the most recently used so the next synth
+				// (LRU) does not overwrite an image a composite still reads while it is held.
+				for ( OutSlot_t &o : H.out )
+				{
+					if ( o.bValid && pResult && o.pTex == pResult )
+					{
+						o.ulUse = ++H.ulUseClock;
+						H.nLastGenSlot = int( &o - H.out );
+						H.ulLastGenOutId = o.ulOutId;
+						H.ulLastGenNs = ulNowNs;
+					}
+				}
+			}
+			else
+			{
+				OutSlot_t *pHold = ( H.nLastGenSlot >= 0 && H.out[ H.nLastGenSlot ].bValid && H.out[ H.nLastGenSlot ].ulOutId == H.ulLastGenOutId
+					&& H.out[ H.nLastGenSlot ].pTex ) ? &H.out[ H.nLastGenSlot ] : nullptr;
+				// "Generating" = the interpolator is live AND the pacer's own steady flag says it is generating (a fresh status; it
+				// is republished about every 250 ms, an older one counts as not generating). A pass-through or a scene cut
+				// therefore ends the hold; the 100 ms cap bounds the lag of that flag.
+				bool bGenerating = false;
+				if ( H.bLive && pHold )
+				{
+					const PacingStatus ps = GetPacingStatus();
+					bGenerating = ps.valid && ps.generating && ulNowNs - ps.publishedNs <= 500ull * 1000ull * 1000ull;
+				}
+				if ( ShouldHoldGenerated( true, true, bGenerating, pHold != nullptr, pHold ? ulNowNs - H.ulLastGenNs : 0 ) )
+				{
+					pHold->ulUse = ++H.ulUseClock;   // stays the most recently used
+					pResult = pHold->pTex;
+					if ( ++H.ulDebugHeld == 1 || H.ulDebugHeld % 100 == 0 )
+						fg_log.debugf( "debug: only generated frames: %llu real ticks shown as the last generated image (of %llu real, %llu generated ticks)",
+							(unsigned long long)H.ulDebugHeld, (unsigned long long)H.ulDebugReal, (unsigned long long)H.ulDebugGen );
+				}
+			}
+		}
+
 		// The stale guard's diagnostic second look: only in a command buffer this paint records anyway (the one
 		// that copied the frame), as its last dispatch.
 		const bool bDiagRecorded = StaleDiagRecord( H, pCmd.get(), pLayer0, req.newestId );

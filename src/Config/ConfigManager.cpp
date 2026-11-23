@@ -351,7 +351,7 @@ namespace gamescope::config
                 if ( sHud == "off" || sHud == "normal" || sHud == "strong" )
                     f.hud_protection = sHud;
                 const std::string sUi = JGetString( *pFrameGen, "ui_protection", f.ui_protection );
-                if ( sUi == "off" || sUi == "crosshair" || sUi == "crosshair_v2" || sUi == "whole_screen" )
+                if ( sUi == "off" || sUi == "crosshair" || sUi == "crosshair_v2" || sUi == "whole_screen" || sUi == "whole_screen_v2" )
                     f.ui_protection = sUi;
                 f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 20.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
@@ -407,6 +407,9 @@ namespace gamescope::config
                     f.v3_hybrid_variant = ( sVariant == "a" || sVariant == "b" || sVariant == "c" || sVariant == "a_a" || sVariant == "a_b" || sVariant == "a_c" ) ? sVariant : FrameGenSettings{}.v3_hybrid_variant;
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
+                f.debug = JGetBool( *pFrameGen, "debug", f.debug );
+                f.debug_only_generated = JGetBool( *pFrameGen, "debug_only_generated", f.debug_only_generated );
+                f.debug_stats = JGetBool( *pFrameGen, "debug_stats", f.debug_stats );
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -913,6 +916,9 @@ namespace gamescope::config
             jFrameGen[ "v3_guard" ] = fg.v3_guard;
             jFrameGen[ "v3_hybrid_variant" ] = fg.v3_hybrid_variant;
             jFrameGen[ "expert" ] = fg.expert;
+            jFrameGen[ "debug" ] = fg.debug;
+            jFrameGen[ "debug_only_generated" ] = fg.debug_only_generated;
+            jFrameGen[ "debug_stats" ] = fg.debug_stats;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
@@ -2701,10 +2707,16 @@ namespace gamescope::config
 
     FrameGenSettings FrameGenEffective( const FrameGenSettings &f )
     {
-        if ( f.expert )
-            return f;
         const FrameGenSettings d;
         FrameGenSettings e = f;
+        // Debug options: the master switch gates both children (stored values are kept).
+        if ( !f.debug )
+        {
+            e.debug_only_generated = false;
+            e.debug_stats = false;
+        }
+        if ( f.expert )
+            return e;
         e.learned_net = d.learned_net;
         e.learned_half = d.learned_half;
         e.learned_zero_test = d.learned_zero_test;

@@ -197,6 +197,20 @@ namespace fghost
 	void       SetBlurConfig( const BlurConfig &cfg );
 	BlurConfig GetBlurConfig();
 
+	// Debug options (2026-11-23; superdoc/features/frame-generation-debug.md): its own word, because the packed Config is
+	// full. Pushed with the EFFECTIVE values (the master switch already applied: both children false while it is off).
+	struct DebugConfig
+	{
+		// "Only generated frames": a real tick shows the last generated image again instead of the game's frame.
+		bool onlyGenerated = false;
+		// "Stats overlay": read by the overlay's stats drawing (src/Overlay/FgStats), not by the renderer.
+		bool stats = false;
+		// Reserved for the later library debug views (0 = off); unused for now, kept so the word needs no change then.
+		int view = 0;
+	};
+	void        SetDebugConfig( const DebugConfig &cfg );
+	DebugConfig GetDebugConfig();
+
 	// ------------------------------------------------------------------
 	//  Lag spike buffer (the Lag spike buffer settings area; the library does the work)
 	// ------------------------------------------------------------------
@@ -267,6 +281,10 @@ namespace fghost
 		// The crosshair box (Crosshair / CrosshairV2), tenths of a percent of the
 		// game's height; clamped to [kUiBoxMinTenths, kUiBoxMaxTenths] by SetConfig().
 		int uiBoxTenths = kUiBoxDefaultTenths;
+		// Whole screen V2 (2026-11-23): with ui == CrosshairV2 the protected box is the whole frame. The host's own mode
+		// name for the status; the library sees CrosshairV2 plus an explicit full-frame box (FrameGenDebug.h UiBoxSettings()).
+		// Packed at bit 8 of the UI-box word.
+		bool uiWholeFrame = false;
 		Motion motion = Motion::V1;
 		// Motion::Learned only (every other version ignores all four): which net, whether its
 		// activations are stored as half (cheaper, tiny quality cost) instead of float32, ml-fg's

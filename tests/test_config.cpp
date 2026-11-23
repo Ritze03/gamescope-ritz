@@ -4417,6 +4417,73 @@ TEST_CASE( "framegen: expert defaults to false and round-trips both ways", "[con
     REQUIRE( IsSettingsKey( "framegen.expert" ) );
 }
 
+// Debug options (2026-11-23): `framegen.debug` is the master switch over the two test views.
+TEST_CASE( "framegen: debug options default to false and round-trip", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    const FrameGenSettings d;
+    REQUIRE( ( !d.debug && !d.debug_only_generated && !d.debug_stats ) );
+    for ( const bool b : { true, false } )
+    {
+        Settings s{};
+        s.framegen.debug = b;
+        s.framegen.debug_only_generated = b;
+        s.framegen.debug_stats = !b;
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.debug == b );
+        REQUIRE( l.framegen.debug_only_generated == b );
+        REQUIRE( l.framegen.debug_stats == !b );
+    }
+    REQUIRE( IsSettingsKey( "framegen.debug" ) );
+    REQUIRE( IsSettingsKey( "framegen.debug_only_generated" ) );
+    REQUIRE( IsSettingsKey( "framegen.debug_stats" ) );
+}
+
+TEST_CASE( "framegen: wrong-typed debug keys load false", "[config]" )
+{
+    TempConfigHome home;
+    const FrameGenSettings f = LoadFrameGenFrom( R"({ "debug": "yes", "debug_only_generated": 1, "debug_stats": "on" })" );
+    REQUIRE( ( !f.debug && !f.debug_only_generated && !f.debug_stats ) );
+}
+
+TEST_CASE( "framegen: the effective settings read the debug children as off while the master switch is off", "[config]" )
+{
+    FrameGenSettings f;
+    f.debug = false;
+    f.debug_only_generated = true;
+    f.debug_stats = true;
+    FrameGenSettings e = FrameGenEffective( f );
+    REQUIRE( ( !e.debug_only_generated && !e.debug_stats ) );
+    REQUIRE( ( f.debug_only_generated && f.debug_stats ) );   // stored values untouched
+    f.debug = true;
+    e = FrameGenEffective( f );
+    REQUIRE( ( e.debug_only_generated && e.debug_stats ) );
+    // Expert settings do not interfere either way.
+    f.expert = true;
+    f.v3_smear = 0.6f;
+    e = FrameGenEffective( f );
+    REQUIRE( ( e.debug_only_generated && e.debug_stats && e.v3_smear == 0.6f ) );
+    f.debug = false;
+    e = FrameGenEffective( f );
+    REQUIRE( ( !e.debug_only_generated && !e.debug_stats && e.v3_smear == 0.6f ) );
+}
+
+TEST_CASE( "framegen: ui_protection whole_screen_v2 round-trips and an unknown value keeps the default", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        Settings s{};
+        s.framegen.ui_protection = "whole_screen_v2";
+        REQUIRE( SaveSections( s ) );
+        REQUIRE( LoadSections().framegen.ui_protection == "whole_screen_v2" );
+    }
+    TempConfigHome home2;
+    REQUIRE( LoadFrameGenFrom( R"({ "ui_protection": "whole_screen_v3" })" ).ui_protection == FrameGenSettings{}.ui_protection );
+}
+
 TEST_CASE( "framegen: a wrong-typed expert loads false", "[config]" )
 {
     TempConfigHome home;

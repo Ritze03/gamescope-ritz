@@ -10,6 +10,10 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-23
 
 ### Added
+- **Debug options**: a new switch in Frame generation with test views, starting with
+  Only generated frames and a stats overlay.
+- **Whole screen V2**: a new UI protection mode that uses Crosshair V2's method on the
+  whole picture.
 - **V3 Hybrid**: a new experimental Motion version, Motion version 3 with a learned
   blend, in three variants to compare.
 - **V3 Hybrid**: three more variants to compare, A-A, A-B and A-C.

@@ -31,7 +31,7 @@ namespace fgstats
 		float       flSynthMs = -1.0f;
 		float       flPairMs = -1.0f;
 		float       flUiMs = -1.0f;
-		std::string sUiProtection;         // "Off" / "Crosshair" / "Crosshair V2" / "Whole screen"
+		std::string sUiProtection;         // "Off" / "Crosshair" / "Crosshair V2" / "Whole screen" / "Whole screen V2"
 		std::string sReason;               // why it is not generating ("" = none)
 	};
 

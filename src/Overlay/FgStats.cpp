@@ -14,6 +14,7 @@
 #include "log.hpp"
 #include "steamcompmgr.hpp"
 #include "Fonts.h"
+#include "FrameGen/FrameGenDebug.h"
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/FrameGenV3.h"
 #include "FrameGen/HostShown.h"
@@ -51,18 +52,6 @@ namespace fgstats
 				case fghost::Motion::V2:      return "V2";
 				case fghost::Motion::Learned: return "Learned";
 				case fghost::Motion::V3:      return "V3";
-			}
-			return "";
-		}
-
-		const char *UiName( fghost::UiProt u )
-		{
-			switch ( u )
-			{
-				case fghost::UiProt::Off:         return "Off";
-				case fghost::UiProt::Crosshair:   return "Crosshair";
-				case fghost::UiProt::WholeScreen: return "Whole screen";
-				case fghost::UiProt::CrosshairV2: return "Crosshair V2";
 			}
 			return "";
 		}
@@ -132,7 +121,7 @@ namespace fgstats
 			in.flSynthMs = rs.lastSynthMs;
 			in.flPairMs = rs.lastPairGpuMs;
 			in.flUiMs = rs.lastUiMs;
-			in.sUiProtection = UiName( cfg.ui );
+			in.sUiProtection = fghost::UiModeName( cfg.ui, cfg.uiWholeFrame );
 			std::string sReason = st.valid ? fghost::PassReasonText( st.reason ) : "";
 			if ( sReason.empty() && rs.reason != fghost::Unavailable::Ok )
 				sReason = fghost::UnavailableText( rs.reason );

@@ -147,7 +147,7 @@ the HUD: no HUD setting, no HUD config field, and the HUD stays a plain FPS inte
 draw list only so that it costs no extra layer (layers are limited to 6, another one forces a full composite):
 `FpsDisplay_AddLayer()` lets the layer exist when `fgstats::Wanted()` and calls `fgstats::Draw()` after the readout,
 starting below a top-left readout's bottom edge. Code: `src/Overlay/FgStats.{h,cpp}`; fields, switch and rationale:
-frame-generation-debug.md.
+[frame-generation-debug.md](frame-generation-debug.md#stats-overlay).
 
 ## Pages
 

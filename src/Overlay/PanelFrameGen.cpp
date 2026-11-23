@@ -44,6 +44,7 @@
 // See superdoc/features/frame-generation-settings.md.
 // `Why no keybind:` frame generation is a standing mode of the picture, not a
 // momentary action; the Frame generation switch is the on/off.
+#include "FgStats.h"
 #include "PanelFrameGen.h"
 
 #include <algorithm>
@@ -98,7 +99,8 @@ namespace gamescope
 		constexpr ui::Option kGuardOptions[]   = { { 0, "Off" }, { 1, "Guard" }, { 2, "V2 motion" } };
 		// The ids are the fghost::UiProt values (= framegen::UiProtection's); the order
 		// here is the GUI's: V2 sits next to V1 so the two can be compared at a glance.
-		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" } };
+		// Id 4 = Whole screen V2 (2026-11-23): not a library value; the host runs Crosshair V2 with a full-frame box (ToHostConfig()).
+		constexpr ui::Option kUiOptions[]      = { { 0, "Off" }, { 1, "Crosshair" }, { 3, "Crosshair V2" }, { 2, "Whole screen" }, { 4, "Whole screen V2" } };
 
 		// Motion search reach (2026-11-19). The Choice ids ARE the pyramid's smallest-level sides (flow pixels):
 		// each change re-creates the library's buffers and waits for the GPU, so a short list, not a free slider.
@@ -131,8 +133,9 @@ namespace gamescope
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		constexpr const char *kGuardKeys[]   = { "off", "guard", "v2_motion" };
-		// Indexed by fghost::UiProt, so the index IS the option id above.
-		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen", "crosshair_v2" };
+		// Indexed by fghost::UiProt, so the index IS the option id above; the fifth, "whole_screen_v2", has no UiProt value of its own.
+		constexpr const char *kUiKeys[]      = { "off", "crosshair", "whole_screen", "crosshair_v2", "whole_screen_v2" };
+		constexpr int kUiWholeScreenV2 = 4;
 
 		int IndexOf( const std::string &s, const char *const *ppszKeys, int n, int nFallback )
 		{
@@ -224,7 +227,11 @@ namespace gamescope
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 5, 1 );
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
-			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
+			{
+				const int nUi = IndexOf( f.ui_protection, kUiKeys, 5, 1 );
+				c.uiWholeFrame = nUi == kUiWholeScreenV2;
+				c.ui = c.uiWholeFrame ? fghost::UiProt::CrosshairV2 : (fghost::UiProt)nUi;
+			}
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			{
 				// "v3_hybrid" = Motion::V3 plus the blend (1..6 = variant A, B, C, A-A, A-B, A-C); every other version has blend 0.
@@ -256,7 +263,14 @@ namespace gamescope
 		void PushToRenderer( const config::FrameGenSettings &f )
 		{
 			// The effective values: with Expert settings off the 14 tuning values are the defaults (no "ghost settings").
-			fghost::SetConfig( ToHostConfig( config::FrameGenEffective( f ) ) );
+			const config::FrameGenSettings e = config::FrameGenEffective( f );
+			fghost::SetConfig( ToHostConfig( e ) );
+			// Debug options: the children are already false while the master switch is off.
+			fghost::DebugConfig d;
+			d.onlyGenerated = e.debug_only_generated;
+			d.stats = e.debug_stats;
+			fghost::SetDebugConfig( d );
+			fgstats::SetEnabled( d.stats );   // the stats overlay (src/Overlay/FgStats.cpp); false while Debug options is off
 		}
 
 		void EnsureConfigLoaded()
@@ -392,10 +406,24 @@ namespace gamescope
 		bool ShowRadiusRows()  { return ExpertOn() && RadiusVersionApplies(); }
 		bool ShowPenaltyRows() { return ExpertOn() && PenaltyVersionApplies(); }
 
+		// Debug options (2026-11-23): the rows of the "Debug" group are shown only while the switch is on (like ExpertOn()).
+		bool DebugOn()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.debug;
+		}
+
 		bool UiOn()
 		{
 			EnsureConfigLoaded();
 			return s_Settings.framegen.enabled && s_Settings.framegen.ui_protection != "off";
+		}
+
+		// The box size row: it means nothing in Whole screen V2, whose box is the whole picture.
+		bool BoxRowUsable()
+		{
+			EnsureConfigLoaded();
+			return UiOn() && s_Settings.framegen.ui_protection != "whole_screen_v2";
 		}
 
 		// Pause at refresh rate: a Target already caps the output at the target
@@ -637,6 +665,16 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "frame generation expert advanced tuning settings options experimental hidden show" );
 
+		a.Switch( "framegen.debug", "Debug options",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.debug; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.debug = b; PersistAndPush(); } ) )
+			.Help( "Shows test views and readouts for judging frame generation, in the Debug group "
+			       "at the bottom. Everything in that group is off while this is off; your own "
+			       "choices there are kept and apply again when you turn it back on." )
+			.Default( false )
+			.Keywords( "frame generation debug options test views readouts stats only generated hidden show" );
+
 		a.Group( "Artifact protection" );
 		a.GroupColumn( 0 );
 
@@ -700,8 +738,8 @@ namespace gamescope
 
 		a.Choice( "framegen.ui_protection", "UI protection",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.ui_protection, kUiKeys, 4, 1 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.ui_protection = kUiKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.ui_protection, kUiKeys, 5, 1 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.ui_protection = kUiKeys[ ClampIdx( n, 4 ) ]; PersistAndPush(); } ),
 			kUiOptions, std::size( kUiOptions ) )
 			.Help( "Keeps a still crosshair in the middle of the screen pixel-exact. Crosshair V2 "
 			       "only protects pixels that stay still and stand out from what is behind them, "
@@ -710,7 +748,8 @@ namespace gamescope
 			       "longer drags a copy of it along, so no second crosshair while panning (an "
 			       "opaque, unchanging crosshair only). Crosshair is the older method, kept to compare. Whole screen does the "
 			       "older method for every solid still HUD element too (minimap, ammo, text), at "
-			       "a small extra cost. None can protect see-through or changing UI. Off for "
+			       "a small extra cost. Whole screen V2 uses Crosshair V2's method on the whole "
+			       "picture; it costs more GPU time than the other modes. None can protect see-through or changing UI. Off for "
 			       "racing games or anything without a fixed HUD. Select this row or the box size "
 			       "to see what lies under the box." )
 			.Default( 1 )
@@ -743,7 +782,7 @@ namespace gamescope
 			} )
 			.Preview( ui::Entry::PreviewKind::UiBox )
 			.Keywords( "frame generation ui protection crosshair box size area percent height pixels specks" )
-			.DisabledUnless( UiOn, "UI protection or frame generation is off" );
+			.DisabledUnless( BoxRowUsable, "UI protection or frame generation is off, or Whole screen V2 covers the whole picture" );
 
 		a.Group( "Pausing and limits" );
 		a.GroupColumn( 1 );
@@ -1033,5 +1072,33 @@ namespace gamescope
 			.Keywords( "frame generation expert motion search penalty lambda steady flat repetitive detail v1 v2" )
 			.ShownWhen( ShowPenaltyRows )
 			.DisabledUnless( PenaltyRowsUsable, "frame generation and motion blur are off (or Motion version is V3 with Motion guard off)" );
+
+		// Debug options (2026-11-23; superdoc/features/frame-generation-debug.md): last group, shown only while the switch is on.
+		a.Group( "Debug" );
+		a.GroupColumn( 1 );
+
+		a.Switch( "framegen.debug_only_generated", "Only generated frames",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.debug_only_generated; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.debug_only_generated = b; PersistAndPush(); } ) )
+			.Help( "Shows only the generated frames and skips the game's own, to judge the generated "
+			       "picture. With Priority Low latency at 2x the picture then updates at half the rate. "
+			       "With Priority Smoothness every shown frame is already a generated one, so this "
+			       "changes nothing. Shows the game's frames while nothing is being generated." )
+			.Default( false )
+			.Keywords( "frame generation debug only generated frames skip real game frames judge interpolated" )
+			.ShownWhen( DebugOn )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Switch( "framegen.debug_stats", "Stats overlay",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.debug_stats; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.debug_stats = b; PersistAndPush(); } ) )
+			.Help( "Shows frame generation's numbers in the top left corner: motion version, frame "
+			       "rates, multiplier, delay and GPU time." )
+			.Default( false )
+			.Keywords( "frame generation debug stats statistics overlay readout numbers multiplier delay gpu time" )
+			.ShownWhen( DebugOn )
+			.DisabledUnless( On, "frame generation is off" );
 	}
 }
