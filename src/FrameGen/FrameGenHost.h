@@ -205,7 +205,8 @@ namespace fghost
 		bool onlyGenerated = false;
 		// "Stats overlay": read by the overlay's stats drawing (src/Overlay/FgStats), not by the renderer.
 		bool stats = false;
-		// Reserved for the later library debug views (0 = off); unused for now, kept so the word needs no change then.
+		// "Debug view" (superdoc/features/frame-generation-debug.md): the row's index, 0 Off, 1 UI highlighted, 2 UI removed,
+		// 3 Motion map (FrameGenDebug.h kDebugViewKeys). The library draws it onto the generated frames.
 		int view = 0;
 	};
 	void        SetDebugConfig( const DebugConfig &cfg );
@@ -515,6 +516,11 @@ namespace fghost
 	// is selected but is not in use ("format", "detail split", or "" when not known cheaply). Thread-safe.
 	bool BlendActive();
 	const char *BlendWhy();
+
+	// Debug view: the view the library is really drawing (0 = none; the row's index), and whether a wanted view was
+	// refused (the library cannot draw it: shader variants missing, pipeline creation failed). Thread-safe.
+	int  DebugViewActive();
+	bool DebugViewRefused();
 
 	// ------------------------------------------------------------------
 	//  Pacing status (published by steamcompmgr's pacing, read by the panel)

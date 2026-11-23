@@ -10,6 +10,8 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-23
 
 ### Added
+- **Debug view**: a new row under Debug options marks what UI protection treats as UI,
+  shows the picture with it removed, or maps the detected motion.
 - **Debug options**: a new switch in Frame generation with test views, starting with
   Only generated frames and a stats overlay.
 - **Whole screen V2**: a new UI protection mode that uses Crosshair V2's method on the

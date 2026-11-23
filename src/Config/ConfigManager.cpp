@@ -410,6 +410,10 @@ namespace gamescope::config
                 f.debug = JGetBool( *pFrameGen, "debug", f.debug );
                 f.debug_only_generated = JGetBool( *pFrameGen, "debug_only_generated", f.debug_only_generated );
                 f.debug_stats = JGetBool( *pFrameGen, "debug_stats", f.debug_stats );
+                {
+                    const std::string sView = JGetString( *pFrameGen, "debug_view", "" );
+                    f.debug_view = ( sView == "off" || sView == "ui_highlight" || sView == "ui_removed" || sView == "motion" ) ? sView : FrameGenSettings{}.debug_view;
+                }
             }
 
             // Motion blur (2026-10-04). Additive, like framegen above: samples and
@@ -919,6 +923,7 @@ namespace gamescope::config
             jFrameGen[ "debug" ] = fg.debug;
             jFrameGen[ "debug_only_generated" ] = fg.debug_only_generated;
             jFrameGen[ "debug_stats" ] = fg.debug_stats;
+            jFrameGen[ "debug_view" ] = fg.debug_view;
 
             const auto &mb = s.motion_blur;
             nlohmann::json jMotionBlur = nlohmann::json::object();
@@ -2714,6 +2719,7 @@ namespace gamescope::config
         {
             e.debug_only_generated = false;
             e.debug_stats = false;
+            e.debug_view = "off";
         }
         if ( f.expert )
             return e;

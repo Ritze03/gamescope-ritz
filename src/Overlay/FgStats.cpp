@@ -122,6 +122,15 @@ namespace fgstats
 			in.flPairMs = rs.lastPairGpuMs;
 			in.flUiMs = rs.lastUiMs;
 			in.sUiProtection = fghost::UiModeName( cfg.ui, cfg.uiWholeFrame );
+			{
+				// What the user wants (the effective Debug view), and "(not available)" when the library refused it.
+				const int nView = fghost::GetDebugConfig().view;
+				if ( nView > 0 )
+				{
+					in.sView = fghost::DebugViewName( nView );
+					in.bViewRefused = fghost::DebugViewRefused();
+				}
+			}
 			std::string sReason = st.valid ? fghost::PassReasonText( st.reason ) : "";
 			if ( sReason.empty() && rs.reason != fghost::Unavailable::Ok )
 				sReason = fghost::UnavailableText( rs.reason );

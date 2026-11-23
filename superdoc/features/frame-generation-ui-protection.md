@@ -330,6 +330,10 @@ row whose number alone says too little (used by the box-size row for `2.5% · 24
 `FormatDeclValue()`'s "value + unit" in every host that draws the value (sheet row, Inspector row),
 so they cannot disagree.
 
+## Debug views
+
+*2026-11-23.* The Debug options group has a **Debug view** row that marks what each mode treats as UI (magenta pasted, cyan confirmed-but-changed, yellow box outline) or shows the clean copy the estimate works on; see [frame-generation-debug.md](frame-generation-debug.md).
+
 ## History
 
 - **Crosshair V2** (glossary detail): **Crosshair V2** / **Crosshair box** — Frame generation's UI protection has a **box**: the centred square it watches and pastes back exactly (`framegen.ui_box_height`, the *Crosshair box size* slider, 0.5-20% of the game's *height*, default 2.5%, shown as `2.5% · 24 px`; the Inspector previews the game pixels under it, `src/Overlay/UiBoxPreview.cpp`). **Crosshair** is the original (V1) detector, which inpaints the crosshair out of the estimate; **Crosshair V2** (2026-10-05, the library's `UiProtection::CrosshairV2`) only protects pixels that stay still and stand out, never pastes over moving content and has no fill-in step, so the specks and moving patterns V1 leaves are gone. See `superdoc/features/frame-generation.md`'s "Crosshair V2 and the box size".

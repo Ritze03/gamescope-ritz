@@ -100,3 +100,40 @@ TEST_CASE( "framegen debug: Whole screen V2 maps to Crosshair V2 with a full-fra
     UiBoxSettings( false, true, 25, &flFrac, &w, &h );
     REQUIRE( ( w == 0u && h == 0u ) );           // the flag counts only with Crosshair V2
 }
+
+// Debug view (2026-11-23): the row's order (off, UI highlighted, UI removed, Motion map) differs from the library's
+// framegen::DebugView (Off 0, Motion 1, UiMask 2, UiClean 3); the host static_asserts the enum, this pins the mapping.
+TEST_CASE( "framegen debug: a stored debug_view string maps to the library's DebugView value", "[framegen_debug]" )
+{
+    REQUIRE( DebugViewFromKey( "off" ) == 0 );
+    REQUIRE( DebugViewFromKey( "ui_highlight" ) == 1 );
+    REQUIRE( DebugViewFromKey( "ui_removed" ) == 2 );
+    REQUIRE( DebugViewFromKey( "motion" ) == 3 );
+    REQUIRE( DebugViewFromKey( "nonsense" ) == 0 );
+    REQUIRE( DebugViewFromKey( "" ) == 0 );
+    REQUIRE( LibraryDebugView( DebugViewFromKey( "off" ) ) == 0 );
+    REQUIRE( LibraryDebugView( DebugViewFromKey( "motion" ) ) == 1 );         // DebugView::Motion
+    REQUIRE( LibraryDebugView( DebugViewFromKey( "ui_highlight" ) ) == 2 );   // DebugView::UiMask
+    REQUIRE( LibraryDebugView( DebugViewFromKey( "ui_removed" ) ) == 3 );     // DebugView::UiClean
+    REQUIRE( LibraryDebugView( 4 ) == 0 );
+    REQUIRE( LibraryDebugView( -1 ) == 0 );
+    REQUIRE( std::string( DebugViewName( 3 ) ) == "Motion map" );
+    REQUIRE( std::string( DebugViewName( 1 ) ) == "UI highlighted" );
+}
+
+TEST_CASE( "framegen debug: the view survives the DebugConfig word for all four values and clamps", "[framegen_debug]" )
+{
+    for ( int n = 0; n < kDebugViewCount; ++n )
+    {
+        DebugConfig d;
+        d.view = n;
+        d.stats = true;
+        const DebugConfig r = UnpackDebug( PackDebug( d ) );
+        REQUIRE( r.view == n );
+        REQUIRE( r.stats );
+        REQUIRE( !r.onlyGenerated );
+    }
+    DebugConfig big;
+    big.view = 9;
+    REQUIRE( UnpackDebug( PackDebug( big ) ).view == kDebugViewCount - 1 );
+}

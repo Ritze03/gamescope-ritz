@@ -55,6 +55,7 @@
 #include <string>
 
 #include "Config/ConfigManager.h"
+#include "FrameGen/FrameGenDebug.h"   // kDebugViewKeys, DebugViewFromKey()
 #include "FrameGen/FrameGenHost.h"
 #include "FrameGen/FrameGenV3.h"   // MotionFromKeys(): motion_version + variant -> Motion + blend
 #include "main.hpp"   // g_nNestedWidth / g_nNestedHeight, the game-size fallback
@@ -94,6 +95,8 @@ namespace gamescope
 			{ 8, "m2v2 Colour (allround)" }, { 9, "m2v3 Features (allround)" } };
 		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 4, "Very low" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
+		// Debug view: ids = fghost::kDebugViewKeys indices (FrameGenDebug.h), the row's order.
+		constexpr ui::Option kDebugViewOptions[] = { { 0, "Off" }, { 1, "UI highlighted" }, { 2, "UI removed" }, { 3, "Motion map" } };
 		constexpr ui::Option kHudOptions[]     = { { 0, "Off" }, { 1, "Normal" }, { 2, "Strong" } };
 		// Motion guard (Motion version 3; 2026-11-20): the ids are fghost::Config::v3Guard's values, the index into kGuardKeys.
 		constexpr ui::Option kGuardOptions[]   = { { 0, "Off" }, { 1, "Guard" }, { 2, "V2 motion" } };
@@ -269,6 +272,7 @@ namespace gamescope
 			fghost::DebugConfig d;
 			d.onlyGenerated = e.debug_only_generated;
 			d.stats = e.debug_stats;
+			d.view = fghost::DebugViewFromKey( e.debug_view );
 			fghost::SetDebugConfig( d );
 			fgstats::SetEnabled( d.stats );   // the stats overlay (src/Overlay/FgStats.cpp); false while Debug options is off
 		}
@@ -1076,6 +1080,24 @@ namespace gamescope
 		// Debug options (2026-11-23; superdoc/features/frame-generation-debug.md): last group, shown only while the switch is on.
 		a.Group( "Debug" );
 		a.GroupColumn( 1 );
+
+		// The first row of the group. One Choice, not three switches: the library draws one view at a time. Ids = kDebugViewKeys'
+		// order (FrameGenDebug.h), not the library enum's. Labels are longer than 8 characters, so it measures into a dropdown.
+		a.Choice( "framegen.debug_view", "Debug view",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return fghost::DebugViewFromKey( s_Settings.framegen.debug_view ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.debug_view = fghost::kDebugViewKeys[ ClampIdx( n, fghost::kDebugViewCount - 1 ) ]; PersistAndPush(); } ),
+			kDebugViewOptions, std::size( kDebugViewOptions ) )
+			.Help( "Draws a test view onto the generated frames. UI highlighted marks what UI protection "
+			       "treats as UI: magenta is pasted back, cyan is recognised but changed in this frame, the "
+			       "yellow line is the box. UI removed shows the picture with that UI removed, as frame "
+			       "generation uses it; Crosshair V2 and Whole screen V2 remove nothing, so they show the "
+			       "highlight instead. The UI views need UI protection. Motion map tints moving areas: the "
+			       "colour is the direction, the strength the speed. The game's own frames are not marked." )
+			.Default( 0 )
+			.Keywords( "frame generation debug view ui protection highlighted removed filtered motion map vectors direction test" )
+			.ShownWhen( DebugOn )
+			.DisabledUnless( On, "frame generation is off" );
 
 		a.Switch( "framegen.debug_only_generated", "Only generated frames",
 			ui::AnyBind::Of<bool>(

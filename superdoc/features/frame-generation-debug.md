@@ -14,7 +14,7 @@ The row **Debug options** (`framegen.debug`, a switch, default off, never greyed
 
 Additive (2026-11-23), schema stays 5; absent or wrong-typed loads false.
 
-**The path to the renderer.** The packed host `Config` word is full, so the debug values travel in their own atomic, `fghost::DebugConfig` (`FrameGenHost.h`; `SetDebugConfig()` / `GetDebugConfig()`), packed by `PackDebug()` in `src/FrameGen/FrameGenDebug.h` (bit 0 only generated, bit 1 stats, bits 2-5 `view`, reserved for the later debug views, 0 = off, unused so far). `PanelFrameGen.cpp`'s `PushToRenderer()` pushes the EFFECTIVE values, on every edit, load and profile switch.
+**The path to the renderer.** The packed host `Config` word is full, so the debug values travel in their own atomic, `fghost::DebugConfig` (`FrameGenHost.h`; `SetDebugConfig()` / `GetDebugConfig()`), packed by `PackDebug()` in `src/FrameGen/FrameGenDebug.h` (bit 0 only generated, bit 1 stats, bits 2-5 `view`, the Debug view row's index, see "Debug view"). `PanelFrameGen.cpp`'s `PushToRenderer()` pushes the EFFECTIVE values, on every edit, load and profile switch.
 
 ## Only generated frames
 
@@ -41,6 +41,33 @@ Rows of text in the top left of the picture: line 1 the motion version (V3 Hybri
 
 Test aids: the ConVar `ritz_fg_stats 1` shows it whatever the switch says; `gamescopectl log_fgstats debug` logs the text when it changes. Not covered so far: the HUD's Inverted colour mode together with the block, and repaint while the game is idle with only the overlay on.
 
-## Planned
+## Debug view
 
-A **Debug view** Choice (UI highlighted / UI removed / Motion map) needs a library debug view and comes with a later library pin. `DebugConfig::view` is reserved for it; no rows or keys exist for it yet.
+*2026-11-23, library `ce8b383`.* The first row of the group **Debug** (`framegen.debug_view`, a Choice, default Off): the library draws one test picture onto the **generated** frames, as its last pass (after the synthesis and the UI patch; with Motion blur once, after the average). The game's own frames are never marked, and frames that are passed through (inert, cost guard, scene stretches, frame generation off) show nothing, so a view that seems to flicker is the real frames between the generated ones (use **Only generated frames** with Priority Low latency to see only marked frames). The Choice's labels are longer than 8 characters, so it measures into a dropdown (`superdoc/ui/STYLING-GUIDE.md`).
+
+| Value (stored string, row index) | Library `DebugView` | Crosshair / Whole screen | Crosshair V2 / Whole screen V2 |
+|---|---|---|---|
+| Off (`off`, 0) | `Off` (0) | nothing, byte-identical, nothing created | same |
+| UI highlighted (`ui_highlight`, 1) | `UiMask` (2) | pasted pixels magenta, the feathered ring weaker magenta, a 1 px yellow outline of the box | pasted pixels magenta, pixels confirmed as UI but changed in this pair (not pasted) cyan, yellow box outline (the whole frame's edge for Whole screen V2) |
+| UI removed (`ui_removed`, 2) | `UiClean` (3) | the library's clean copy of the current frame (UI inpainted out, what the estimate works on) replaces the generated picture over the work rectangle (Crosshair) or the whole frame (Whole screen) | no clean copy exists: draws the UI highlighted view |
+| Motion map (`motion`, 3) | `Motion` (1) | tint by motion | same |
+
+The row's order differs from the library enum's on purpose (the UI views first); `LibraryDebugView()` in `FrameGenDebug.h` is the one mapping, pinned by a unit test, and `FrameGenHost.cpp` static-asserts the enum values and `sizeof( framegen::Settings ) == 164`. UI protection Off, or a pair that was not observed under the active mode, draws nothing for the two UI views. Nv12 / P010 accept the value and draw nothing (the host runs Rgba8 / Bgra8, 10-bit and fp16).
+
+**Motion map.** Tint by the prev -> curr displacement in **full-resolution pixels**, the same unit in every motion version: none up to `flowScale` pixels (2 px at the default), rising smoothly to about 60 % tint at 16 px; hue = direction (HSV wheel, red = +x, y down). Untinted pixels are bit-exact the Off picture. It shows the motion FIELD, not the synthesis' own corrections. Nothing is drawn on a V3 scene cut; there is no fallback marker in any version. In HDR formats the tint colours are scaled down so a view does not flash at full brightness.
+
+**Cost** (the library's measurement, 1080p, 2x): Off unchanged; Motion about +0.012 to +0.025 ms per real pair; the UI views within noise.
+
+**Where it enters the library** (`ApplyDebugView()`, `FrameGenHost.cpp`, called at the end of `EnsureReady()` and in its first-init early return): a separate `setSettings()` on top of the library's CURRENT settings, keyed by `Host_t::nDebugViewHandled` (the row's index last handled). A view change is a runtime change: no `reconfigure()`, no estimate dropped, so pacing and the output ring are not touched. The effective view is read from `fghost::DebugConfig::view` (`FrameGenEffective()` already turned it off while Debug options is off), which `PushToRenderer()` fills with `DebugViewFromKey()`.
+
+**Refused view.** The first time a view is on, the library creates its pipeline inside `setSettings()` and returns false, settings unchanged, if that fails or the debug shader variants of this format are not built in. The host then logs once per change `frame generation: debug view <name> not available: <settingsError()>`, publishes `DebugViewRefused()`, sets the view to Off, and does not retry until the row changes (or after a restart of the interpolator, e.g. a game format change). The other settings are unaffected because the view never travels with them. The stats overlay then says `view: <name> (not available)`; a successful change logs `frame generation: debug view <name>`.
+
+**Where it shows.** Stats overlay: a line `view: Motion map` after the UI-protection line. Capture / watch headers (`ritz_fg_capture`): a token ` view=motion` / `view=ui_highlight` / `view=ui_removed` after the blend token (only while a view is drawn), so a capture is not mistaken for the normal picture. `gamescopectl screenshot` leaves out the HUD layer but contains the generated frame with the view.
+
+**Build trap.** `framegen.cpp` includes a debug shader set only when all four of its headers exist (`__has_include`: `FG_HAVE_DBG`, `FG_HAVE_DBG_RGB10`, `FG_HAVE_DBG_F16`). A partial or missing list still BUILDS; the view is then refused at runtime with the message above. `src/meson.build` therefore lists, from `gpu/shaders/`: `debug_motion`, `debug_ui`, `debug_motion_v2` (`-DDBG_V2=1`), `debug_motion_v3` (`-DDBG_V3=1`) plain, and the same four with `-DFG_FORMAT_RGB10=1` / `-DFG_FORMAT_F16=1` as `<name>_<fmt>_spv.h` (12 headers; none for nv12 / p010). Proof they are in the build: the view is accepted in an 8-bit and a 10-bit run (no "not available" line). No existing shader's SPIR-V changed with the pin (md5 of every generated `*_spv.h` before and after: only new headers).
+
+**Descriptor ring.** A UI view takes up to 2 more sets of the library's UI ring (`kUiSets` = 64) per synth, 4 per synth with the patch; the library refuses a synth that does not fit. The host records at most one synth per command buffer (one composite = one request = one output, `beginFrame()` once per command buffer) next to at most two observes (an observe and the estimate's implicit one, 2 sets each in Whole screen), so at most about 8 sets per `beginFrame()`: the ring cannot overflow in any multiplier, Target or Motion blur configuration (Motion blur's `recordSynthBlur` is one call per output, the patch once). Should the ring ever refuse, the existing "recordSynth refused" path shows the real frame.
+
+**Motion blur.** There is one interpolator for Frame generation and Motion blur (the blur's own Motion version / Quality only change settings), so the view acts on blurred outputs too, whatever the blur's own configuration; the Motion map then shows the motion of the average's interior samples.
+
+`Why` one Choice and not three switches: the library draws one view at a time. `Why` the library draws the views: the UI masks, the clean copies and the per-frame motion field are inside the library and not reachable from the host. `Why` a separate `setSettings()` and not the packed-config key: the key is full, and a view change must never take the reconfigure path or drop the estimate.

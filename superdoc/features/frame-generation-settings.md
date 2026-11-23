@@ -43,6 +43,7 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.debug` | bool (default false; absent or wrong type: false) | the row "Debug options" (switch, group "Frame generation", beside Expert settings): shows the group "Debug"; while off its children read false. Additive (2026-11-23). See [debug](frame-generation-debug.md) |
 | `framegen.debug_only_generated` | bool (default false) | the row "Only generated frames" (group "Debug", shown while Debug options is on). Additive (2026-11-23) |
 | `framegen.debug_stats` | bool (default false) | the row "Stats overlay" (group "Debug"). Additive (2026-11-23) |
+| `framegen.debug_view` | string (default `off`; `ui_highlight`, `ui_removed`, `motion`) | the row "Debug view" (group "Debug", its first row); unknown or wrong-typed loads `off`; reads `off` through `FrameGenEffective()` while `framegen.debug` is off, stored value kept. Additive (2026-11-23) |
 | `framegen.v3_detail_split` | bool (default false; absent or wrong type: false) | the row "Detail from one frame" (switch), V3 only. Runtime, applies from the next generated frame. Experiment: fine detail from one frame. Additive (2026-11-19) |
 
 **Motion version 3 (2026-11-19).** The four `v3_*` rows and the two switches (the Motion guard is in "Artifact protection" since 2026-11-23) form the group "Motion version 3" (column 1,

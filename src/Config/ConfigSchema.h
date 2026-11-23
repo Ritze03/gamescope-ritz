@@ -595,6 +595,9 @@ namespace gamescope::config
         bool debug = false;
         bool debug_only_generated = false;   // show only generated frames; real ones are skipped on screen
         bool debug_stats = false;            // stats overlay in the top left corner
+        // Debug view (2026-11-23; library Settings::debugView): "off" | "ui_highlight" | "ui_removed" | "motion". An absent,
+        // wrong-typed or unknown value loads "off". Read as "off" through FrameGenEffective() while `debug` is off (stored value kept).
+        std::string debug_view = "off";
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

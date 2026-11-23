@@ -887,3 +887,27 @@ TEST_CASE( "capture: the header says A(off) when the selected variant is not run
 	h.nBlend = 0;   // plain V3: nothing, whatever the flag says
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 }
+
+// A capture taken while a library Debug view marks the generated frames says so (2026-11-23).
+TEST_CASE( "capture: the header carries a view= token only while a Debug view is drawn", "[framegen_capture]" )
+{
+	HeaderInfo h;
+	h.sMotionWanted = "V3";
+	h.sMotionEffective = "V3";
+	h.uFlowScale = 2;
+	REQUIRE( FormatHeaderLine( h ).find( "view=" ) == std::string::npos );
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "view=" ) == std::string::npos );
+	const char *const kName[] = { "ui_highlight", "ui_removed", "motion" };
+	for ( int n = 1; n <= 3; n++ )
+	{
+		h.nView = n;
+		const std::string sKey = std::string( "fallback_v1=0 view=" ) + kName[ n - 1 ] + " flowScale=2";
+		REQUIRE( FormatHeaderLine( h ).find( sKey ) != std::string::npos );
+		REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( sKey ) != std::string::npos );
+	}
+	h.nBlend = 2;   // beside the blend token
+	h.nView = 3;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=B view=motion flowScale=2" ) != std::string::npos );
+	h.nView = 4;    // out of range: nothing
+	REQUIRE( FormatHeaderLine( h ).find( "view=" ) == std::string::npos );
+}

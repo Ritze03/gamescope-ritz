@@ -288,6 +288,14 @@ namespace fghost::capture
 			return nBlend >= 1 && nBlend <= 6 ? std::string( " blend=" ) + kName[ nBlend - 1 ] + ( bOff ? "(off)" : "" ) : std::string();
 		}
 
+		// " view=motion" while a library Debug view marks the generated frames (1 ui_highlight, 2 ui_removed, 3 motion; the Debug
+		// view row's index), "" otherwise. `Why:` a capture taken with a view on must not be mistaken for the normal picture.
+		std::string ViewToken( int nView )
+		{
+			static const char *const kName[] = { "ui_highlight", "ui_removed", "motion" };
+			return nView >= 1 && nView <= 3 ? std::string( " view=" ) + kName[ nView - 1 ] : std::string();
+		}
+
 		const char *LearnedNetText( uint32_t u )
 		{
 			static const char *const k[] = { "E2v3", "E1v3", "E2v4", "E1v4", "E2v5", "E1v5", "G2v2", "G2v3", "M2v2", "M2v3" };
@@ -299,11 +307,11 @@ namespace fghost::capture
 	{
 		return Fmt( "capture v=%d start_wall=%s start_mono_ns=%llu width=%u height=%u vk_format=%d format_name=%s bytes_per_pixel=%u "
 			"pitch=tight library_commit=%s ritz_version=%s ritz_commit=%s ritz_dirty=%d motion_wanted=%s motion_effective=%s "
-			"fallback_v1=%d%s flowScale=%u n=%d prepare_ms=%.3f prepared_early=%d",
+			"fallback_v1=%d%s%s flowScale=%u n=%d prepare_ms=%.3f prepared_early=%d",
 			kVersion, Token( h.sWallStart ).c_str(), (unsigned long long)h.ulStartNs, h.uWidth, h.uHeight, h.nVkFormat,
 			VkFormatName( h.nVkFormat ), h.uBytesPerPixel, Token( h.sLibraryCommit ).c_str(), Token( h.sRitzVersion ).c_str(),
 			Token( h.sRitzCommit ).c_str(), h.bRitzDirty ? 1 : 0, Token( h.sMotionWanted ).c_str(), Token( h.sMotionEffective ).c_str(),
-			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), h.uFlowScale, h.nFrames, double( h.flPrepareMs ), h.bPreparedEarly ? 1 : 0 );
+			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), ViewToken( h.nView ).c_str(), h.uFlowScale, h.nFrames, double( h.flPrepareMs ), h.bPreparedEarly ? 1 : 0 );
 	}
 
 	uint64_t MaxDecisionGapNs( const std::vector<DecisionRec> &v, uint64_t *pulAfterCounter )
@@ -631,13 +639,13 @@ namespace fghost::capture
 	std::string FormatWatchHeader( const HeaderInfo &h, int nSeconds, float flSensitivity )
 	{
 		return Fmt( "watch v=%d start_wall=%s start_mono_ns=%llu width=%u height=%u vk_format=%d format_name=%s bytes_per_pixel=%u "
-			"library_commit=%s ritz_version=%s ritz_commit=%s ritz_dirty=%d motion_wanted=%s motion_effective=%s fallback_v1=%d%s "
+			"library_commit=%s ritz_version=%s ritz_commit=%s ritz_dirty=%d motion_wanted=%s motion_effective=%s fallback_v1=%d%s%s "
 			"flowScale=%u seconds=%d sensitivity=%.6g threshold=(%g+%g*pair)/sensitivity block=%u sample_step=%u max_dumps=%d "
 			"window=%d after_trigger=%d",
 			kVersion, Token( h.sWallStart ).c_str(), (unsigned long long)h.ulStartNs, h.uWidth, h.uHeight, h.nVkFormat,
 			VkFormatName( h.nVkFormat ), h.uBytesPerPixel, Token( h.sLibraryCommit ).c_str(), Token( h.sRitzVersion ).c_str(),
 			Token( h.sRitzCommit ).c_str(), h.bRitzDirty ? 1 : 0, Token( h.sMotionWanted ).c_str(), Token( h.sMotionEffective ).c_str(),
-			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), h.uFlowScale, nSeconds, double( flSensitivity ), double( kMetricBase ),
+			h.sMotionWanted != h.sMotionEffective ? 1 : 0, BlendToken( h.nBlend, h.bBlendOff ).c_str(), ViewToken( h.nView ).c_str(), h.uFlowScale, nSeconds, double( flSensitivity ), double( kMetricBase ),
 			double( kMetricPairGain ), kMetricBlock, kMetricStep, kWatchMaxDumps, kFrames, kWatchAfterTrigger );
 	}
 

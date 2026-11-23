@@ -4715,3 +4715,39 @@ TEST_CASE( "framegen: the hybrid variant is in force with expert settings off", 
     REQUIRE( FrameGenEffective( f ).motion_version == "v3_hybrid" );
     REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "c" );
 }
+
+// Debug view (2026-11-23): the four stored strings, an unknown one loads "off", and the master switch gates it.
+TEST_CASE( "framegen: debug_view defaults to off and round-trips its four values", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( FrameGenSettings{}.debug_view == "off" );
+    for ( const char *psz : { "off", "ui_highlight", "ui_removed", "motion" } )
+    {
+        Settings s{};
+        s.framegen.debug_view = psz;
+        REQUIRE( SaveSections( s ) );
+        REQUIRE( LoadSections().framegen.debug_view == psz );
+    }
+    REQUIRE( IsSettingsKey( "framegen.debug_view" ) );
+}
+
+TEST_CASE( "framegen: an unknown or wrong-typed debug_view loads off", "[config]" )
+{
+    TempConfigHome home;
+    REQUIRE( LoadFrameGenFrom( R"({ "debug_view": "sparkles" })" ).debug_view == "off" );
+    REQUIRE( LoadFrameGenFrom( R"({ "debug_view": 2 })" ).debug_view == "off" );
+    REQUIRE( LoadFrameGenFrom( R"({ })" ).debug_view == "off" );
+    REQUIRE( LoadFrameGenFrom( R"({ "debug_view": "motion" })" ).debug_view == "motion" );
+}
+
+TEST_CASE( "framegen: the effective debug_view is off while the master switch is off", "[config]" )
+{
+    FrameGenSettings f;
+    f.debug_view = "ui_removed";
+    f.debug = false;
+    REQUIRE( FrameGenEffective( f ).debug_view == "off" );
+    REQUIRE( f.debug_view == "ui_removed" );   // the stored value is kept
+    f.debug = true;
+    REQUIRE( FrameGenEffective( f ).debug_view == "ui_removed" );
+}
