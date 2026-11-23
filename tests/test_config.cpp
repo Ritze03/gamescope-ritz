@@ -3315,7 +3315,7 @@ TEST_CASE( "migration: a fresh install and a schema-3 config are left alone", "[
 //  Session resolution, routing and the CRUD the list needs
 // =============================================================================
 
-TEST_CASE( "SessionProfile: override, then this game's selection, then last_general, then a created Default", "[config]" )
+TEST_CASE( "SessionProfile: override, then this game's selection, then Default (last_general only without an app id)", "[config]" )
 {
     TempConfigHome home;
     ScopedSessionAppId scopedAppId( "252490" );
@@ -3325,12 +3325,13 @@ TEST_CASE( "SessionProfile: override, then this game's selection, then last_gene
     REQUIRE( ProfileExists( "Default" ) );
     REQUIRE( ResolvedSettings().gamescope.filter == Settings{}.gamescope.filter );
 
-    // last_general: a general profile selected anywhere.
+    // last_general (a general profile selected anywhere) is NOT used for a game
+    // that remembered nothing: it starts on Default.
     REQUIRE( SaveProfile( General( "Comp" ), Settings{} ) );
     REQUIRE( SelectProfile( "Comp" ) );
     ResetSessionRoutingForTests();
     setenv( "RITZ_GS_APPID", "570", 1 ); // a game never seen before
-    REQUIRE( SessionProfile() == "Comp" );
+    REQUIRE( SessionProfile() == "Default" );
 
     // This game's own selection wins over last_general.
     REQUIRE( SaveProfile( Game( "Dota", "570", "Comp" ), Settings{} ) );
@@ -3339,10 +3340,10 @@ TEST_CASE( "SessionProfile: override, then this game's selection, then last_gene
     setenv( "RITZ_GS_APPID", "570", 1 );
     REQUIRE( SessionProfile() == "Dota" );
     REQUIRE( SessionProfileParent() == std::optional<std::string>( "Comp" ) );
-    // ... and did not move last_general.
+    // ... and did not change what another game starts on.
     ResetSessionRoutingForTests();
     setenv( "RITZ_GS_APPID", "999", 1 );
-    REQUIRE( SessionProfile() == "Comp" );
+    REQUIRE( SessionProfile() == "Default" );
 
     // The override beats everything and persists nothing.
     ResetSessionRoutingForTests();
@@ -3356,6 +3357,37 @@ TEST_CASE( "SessionProfile: override, then this game's selection, then last_gene
     ResetSessionRoutingForTests();
     setenv( "RITZ_GS_APPID", "570", 1 );
     REQUIRE( SessionProfile() == "Dota" );
+}
+
+TEST_CASE( "SessionProfile: a new game ignores last_general and creates Default when missing", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( "252490" );
+    REQUIRE( SaveProfile( General( "Other" ), Settings{} ) );
+    REQUIRE( SelectProfile( "Other" ) ); // last_general = Other
+    ResetSessionRoutingForTests();
+    setenv( "RITZ_GS_APPID", "570", 1 ); // never seen; no Default file exists yet
+    REQUIRE_FALSE( ProfileExists( "Default" ) );
+    REQUIRE( SessionProfile() == "Default" );
+    REQUIRE( ProfileExists( "Default" ) );
+
+    // A remembered selection that was deleted falls back to Default, not last_general.
+    REQUIRE( SaveProfile( General( "Gone" ), Settings{} ) );
+    REQUIRE( SelectProfile( "Gone" ) ); // game 570 remembers Gone
+    REQUIRE( DeleteProfile( "Gone" ).ok );
+    ResetSessionRoutingForTests();
+    setenv( "RITZ_GS_APPID", "570", 1 );
+    REQUIRE( SessionProfile() == "Default" );
+}
+
+TEST_CASE( "SessionProfile: with no app id last_general still wins", "[config]" )
+{
+    TempConfigHome home;
+    ScopedSessionAppId scopedAppId( nullptr );
+    REQUIRE( SaveProfile( General( "Comp" ), Settings{} ) );
+    REQUIRE( SelectProfile( "Comp" ) );
+    ResetSessionRoutingForTests();
+    REQUIRE( SessionProfile() == "Comp" );
 }
 
 TEST_CASE( "SelectProfile persists the assignment, clears the override and bumps the generation", "[config]" )
@@ -4006,6 +4038,7 @@ TEST_CASE( "a routed write from a caller that never resolved settings first clob
 
     // Start CS2 over as a clean diff-free child for the fixed half below.
     REQUIRE( DeleteProfile( "CS2" ) );
+    REQUIRE( SelectProfile( "A" ) ); // the deleted game profile no longer is the game's selection; Default would win now
     REQUIRE( CreateProfile( Game( "CS2", "730", "A" ) ) );
     REQUIRE( SelectProfile( "CS2" ) );
 

@@ -1513,7 +1513,7 @@ namespace gamescope::config
     struct GameAssignment
     {
         // The profile this game last selected in the list; "" means "never
-        // chose" and the game uses `last_general` (ProfileAssignments below).
+        // chose" and the game uses `Default` (`last_general` only serves sessions without an app id).
         std::string selected;
         // Was AudioSettings::manual_node_binary (M5, DECISIONS.md #22/#23):
         // the PipeWire stream's application.process.binary this game's

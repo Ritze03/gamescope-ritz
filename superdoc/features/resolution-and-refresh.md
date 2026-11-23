@@ -101,9 +101,8 @@ classifies as Native. It persists as `0`, which startup resolves to the screen a
 round trip agrees. Before this, Native meant the window's size.
 
 *New games and profiles.* `nested_width/height` are per-profile keys. A never-seen game starts
-on `last_general` and inherits whatever it saved, so a general profile that once had a
-non-Native size picked will still give that size to a new game; only a profile on Native (0)
-gets the screen default. Not changed here.
+on `Default` (until 2026-11-23: `last_general`), so it gets that profile's size; only a
+profile on Native (0) gets the screen default. Not changed here.
 
 ### Window size — removed from the UI (2026-09-06)
 

@@ -25,6 +25,8 @@ All notable user-facing changes, newest first. Categories:
   are shown late or dropped.
 
 ### Info
+- **Profiles**: a game started for the first time now uses the `Default` profile instead
+  of the general profile selected last.
 - **Motion guard**: the setting now shows whenever Motion version 3 is selected, above
   Artifact safety, and is off by default.
 - **Color Boost**: the default strength is now 0.5.

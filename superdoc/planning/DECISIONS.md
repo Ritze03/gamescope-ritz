@@ -987,6 +987,21 @@ select-is-assign, `--profile` session-only, create-if-missing);
 `requests-2026-09-05-round2.md` item 4; `src/Config/ConfigManager.{h,cpp}`;
 `tests/test_config.cpp`.
 
+### 29. A new game starts on `Default`, not on `last_general` (supersedes the `last_general` part of #28)
+**Status:** DECIDED, by the user (2026-11-23); the no-app-id exception is the lead's call.
+
+**What:** a session with an app id resolves override, then `games.<AppId>.selected`,
+then `Default` (created from the built-in defaults if missing); `last_general` is not
+consulted. With no app id, `last_general` still comes before `Default`.
+
+**Why:** a new game should not silently follow whatever general profile was selected
+last in another game. With no app id nothing else can remember a selection, so
+cutting `last_general` there would put every such session back on `Default` at each
+start. `last_general` is still stored and updated; no schema change.
+
+**Source:** `ResolveAssignedProfile()` in `src/Config/ConfigManager.cpp`;
+`superdoc/features/profiles.md`; `tests/test_config.cpp`.
+
 ---
 
 ## Still open
