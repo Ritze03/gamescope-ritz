@@ -92,7 +92,7 @@ namespace gamescope::config
     // The profile this session is editing:
     //   1. the session override (`--profile` / GS_RITZ_PROFILE / ritz_profile),
     //   2. games[<app id>].selected,
-    //   3. last_general,
+    //   3. last_general -- only when no app id is known,
     //   4. "Default" -- created from the struct defaults if nothing exists.
     // Cached; every function below that can change the answer refreshes it.
     const std::string &SessionProfile();

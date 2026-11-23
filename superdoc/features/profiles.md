@@ -25,9 +25,9 @@ dropdown, a "Filter game profiles" switch and one Status row -- see
   profile. Two levels, no chains -- a game profile can never be a parent.
 - **Selecting a profile in the list loads it and is the assignment**: the current
   game remembers the selection (`games.<AppId>.selected`). A game seen for the first
-  time uses the general profile last selected anywhere (`last_general`). There is
-  no "default" row; a fresh install gets `Default`, created from the built-in
-  defaults the first time anything asks.
+  time uses `Default` (since 2026-11-23; `last_general` only serves sessions with
+  no app id). There is no "default" row; a fresh install gets `Default`, created
+  from the built-in defaults the first time anything asks.
 - **Inheritance is live.** A game profile stores only the values that differ from
   its parent; everything else follows the parent as it changes. The UI will mark
   each value *inherited* or *overridden* and offer *Reset to inherited*.
@@ -154,8 +154,18 @@ for the full precedence order.
    console command;
 2. `games.<AppId>.selected`, when a game is identified (`SessionAppId()`, DECISIONS
    #21) and that profile exists;
-3. `last_general`, if it exists;
-4. `Default`, created from the struct defaults if there is nothing at all.
+3. `last_general`, if it exists -- **only when no app id is known**;
+4. `Default`, created from the struct defaults if it does not exist.
+
+So a session with an app id goes override, the game's selection, `Default` (also when
+the remembered profile was deleted); `last_general` is not consulted.
+
+*Why (2026-11-23):* the user asked for a new game to start on `Default` instead of
+following whatever general profile was selected last in another game. The no-app-id
+exception is the lead's decision: with no app id nothing else can remember a
+selection, so dropping rule 3 there would put every such session back on `Default`
+at each start. `--ritz-dump-config` reports the source as "last general profile (no
+app id)" in that case.
 
 `SelectProfile(name)` persists the choice -- `games.<AppId>.selected` when a game is
 identified, and `last_general` whenever the profile is general -- clears any session

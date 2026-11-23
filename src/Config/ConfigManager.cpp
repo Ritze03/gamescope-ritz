@@ -2637,7 +2637,8 @@ namespace gamescope::config
 
     namespace
     {
-        // The flagless rule: assignment, then last_general, then Default.
+        // The flagless rule: this game's assignment, then Default. last_general is
+        // consulted only when no app id is known (nothing else can remember a choice).
         // `pszSource` names the rule that won, for --ritz-dump-config.
         std::string ResolveAssignedProfile( const char **ppszSource )
         {
@@ -2652,9 +2653,9 @@ namespace gamescope::config
                     return it->second.selected;
                 }
             }
-            if ( ProfileExists( s_Assignments.last_general ) )
+            if ( !oAppId && ProfileExists( s_Assignments.last_general ) )
             {
-                *ppszSource = "last general profile";
+                *ppszSource = "last general profile (no app id)";
                 return s_Assignments.last_general;
             }
             *ppszSource = "default";
