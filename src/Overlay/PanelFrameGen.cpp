@@ -600,7 +600,8 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_hybrid_variant, kVariantKeys, 3, 0 ); },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = kVariantKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
 			kVariantOptions, std::size( kVariantOptions ) )
-			.Help( "Three experimental versions of the learned blend, to compare. Takes effect at once." )
+			.Help( "Three experimental versions of the learned blend, to compare. Takes effect at once. "
+			       "Has no effect while Detail from one frame is on." )
 			.Segmented()
 			.Default( 0 )
 			.Keywords( "frame generation v3 hybrid variant learned blend a b c experiment compare" )

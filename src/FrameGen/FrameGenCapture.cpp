@@ -388,6 +388,7 @@ namespace fghost::capture
 		F( "v3SceneCut", s.v3SceneCut );
 		B( "v3ColourWindow", s.v3ColourWindow );
 		B( "v3DetailSplit", s.v3DetailSplit );
+		U( "v3Blend", uint32_t( s.v3Blend ) );
 		{
 			const uint32_t u = uint32_t( s.v3Guard );
 			E( "v3Guard", u, u == 0 ? "Off" : u == 1 ? "Guard" : u == 2 ? "V2Motion" : "Unknown" );
