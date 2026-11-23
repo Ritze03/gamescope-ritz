@@ -22,6 +22,11 @@ reference to 1.1e-6 in 8-bit and 10-bit.
 plain V3 should expect small differences: A and B look almost like V3, C is the most likely to differ.
 That is the training result, not a wiring fault (`blend=A` in the status shows the blend really runs).
 
+Final result of the round (library, 2026-11-23): on whole pictures against real frames A and B score
++0.0 to +0.2 dB over the rule, C is ahead on six of seven clips by up to 0.3 dB. The library's diagnosis:
+the per-pixel inputs are used up. A next step would change what the net sees (neighbourhood, extra
+candidate motions) and arrive as a new `v3Blend` variant, not as a change to A / B / C.
+
 ## Config and mapping
 
 | Key | Values | Meaning |
