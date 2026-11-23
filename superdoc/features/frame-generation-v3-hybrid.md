@@ -6,10 +6,21 @@ unchanged, but the hand-written rule that mixes V3's colour samples per pixel re
 learned blend (a tiny per-pixel network). Three variants, **A / B / C**, exist so the user can
 compare them with each other and with plain V3 while a game runs.
 
-> **Weights at this pin are zero.** Library `34d8bc1` (like `c62376c` before it) ships the three nets with all-zero weights:
-> variants A and B equal V3's rule to within one level (a switch shows no visible change), variant C
-> differs slightly (up to 3-4 levels on a few pixels). Trained weights follow with a later pin that
-> changes only the generated `v3_blend_weights.glsl`.
+> **The weights are trained (first round, 2026-11-23).** Library `19b15ef` carries the trained weights of
+> the three nets, in `v3_blend_weights.glsl` only (no header, struct, build entry or API changed against
+> `34d8bc1`; before that the weights were zero).
+
+### What to expect
+
+The library's own measurement, not ours: on sampled pixels of a racing-game recording the nets gain
+0.03-0.05 dB over V3's rule. Against the rule's picture, A and B change about 1 % of the pixels by more
+than 2 levels on an easy frame pair and about 6-8 % on a hard one (mean change 0.2-1.0 levels). C changes
+a little more (it also mixes in the two unwarped frames). The shader weights equal the library's
+reference to 1.1e-6 in 8-bit and 10-bit.
+
+`Why it matters:` this first round came out close to V3's rule, so a user comparing A / B / C against
+plain V3 should expect small differences: A and B look almost like V3, C is the most likely to differ.
+That is the training result, not a wiring fault (`blend=A` in the status shows the blend really runs).
 
 ## Config and mapping
 
@@ -94,7 +105,7 @@ change, a rebuild for a changed game format) and stores it in `g_bBlendActive` /
 format, detail split on, V3 itself fell back), so the selection alone said nothing about what ran. The setting dump of a capture lists the library's fields and
 carries `v3Blend` (`FormatSettingLines()`, `setting v3Blend=N`).
 
-## Library contract (pin `34d8bc1`)
+## Library contract (pin `19b15ef`)
 
 `framegen::Settings::v3Blend`: `uint8_t`, directly after `v3DetailSplit` at offset 142 (existing
 padding, so `sizeof(Settings)` stays 164 and the `static_assert` in `FrameGenCapture.cpp` is
@@ -106,9 +117,13 @@ Rgba8 / Bgra8 or Rgb10 and `v3DetailSplit` is off; otherwise V3's rule runs, wit
 and P010 have no blend build). It takes effect at the next synthesis, with no new estimate.
 `bool Interpolator::v3BlendActive() const` says whether it runs: true exactly when the object is
 initialised, the motion version is V3, `v3Blend != 0`, the detail split is off and the format has a blend
-build. Cost at 1080p per real pair with trained weights (the library's measurement, Rgb10): about +0.055 ms
-at 2x (0.895 to 0.950 ms), at 4x 1.30 to 1.47 ms. (The 0.901 / 0.905 ms written here at `c62376c` were
-measured with zero weights and are too low.)
+build. Cost at 1080p per real pair (the library's measurement, one high-end desktop GPU, blend off / A / B / C):
+
+| Case | off | A | B | C |
+|---|---|---|---|---|
+| 2x, 8-bit | 0.881 ms | 0.941 | 0.942 | 0.952 |
+| 2x, 10-bit | 0.901 ms | 0.954 | 0.956 | 0.969 |
+| 4x, 8-bit | 1.302 ms | 1.457 | 1.458 | 1.506 |
 
 `Why the 10-bit build exists:` a 10-bit SDR output makes the game's frames 10-bit (found in the field
 2026-11-23: frame generation ran in the 10-bit format, and the 8-bit-only blend silently ran V3's rule).
@@ -122,7 +137,8 @@ of the V3 word of the applied-config key, so a change goes through `setSettings(
 `-DFG_FORMAT_RGB10=1 -DV3B=1` into `v3_synth_b_rgb10_spv.h` (variable `v3_synth_b_rgb10_spv`; rgb10 only).
 Both include `shaders/v3_blend.glsl` and `shaders/v3_blend_weights.glsl`; both are listed by the compiler's
 depfile like every other include, so a changed weights file rebuilds the headers. A weights-only pin
-needs nothing but the new gitlink.
+needs nothing but the new gitlink (checked at `19b15ef`: an incremental build regenerated exactly these two
+headers).
 
 `The __has_include trap:` the library's `framegen.cpp` includes `v3_synth_b_rgb10_spv.h` only behind
 `__has_include` and then defines `FG_HAVE_V3B_RGB10`. A build without our meson entry still compiles, and
