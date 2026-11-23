@@ -534,7 +534,8 @@ namespace gamescope::config
         // percent of the game's HEIGHT, 0.5..10 (clamped on load). ADDITIVE: absent
         // loads 2.5. The old fixed box was 3% of the frame's AREA (192 px at 1280x960).
         float ui_box_height = 2.5f;
-        // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2" | "learned" (2026-10-26).
+        // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2" | "learned" (2026-10-26) | "v3"
+        // (2026-11-19) | "v3_hybrid" (2026-11-23: V3 with a learned blend; the variant is v3_hybrid_variant below).
         // ADDITIVE: absent loads "v1"; an unknown string keeps it. V2 is Rgba8-only:
         // other content stays on V1. Shared by Frame generation and Motion blur (one
         // interpolator), as is `quality` above, which on V2 picks its mode.
@@ -578,6 +579,10 @@ namespace gamescope::config
         // wrong-typed or unknown value loads the default "guard" (2026-11-22, was "off"); a stored "off" stays "off".
         // ADDITIVE. Applies live.
         std::string v3_guard = "guard";
+        // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1 / 2 / 3): "a" | "b" | "c". Read only while motion_version
+        // is "v3_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or unknown value loads "a".
+        // ADDITIVE. Not an Expert tuning value: always in force, never reset by FrameGenEffective(). Applies live.
+        std::string v3_hybrid_variant = "a";
         // Expert settings (2026-11-20): the switch for the 15 tuning values above (learned_*, v3_*, search_radius,
         // search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
         // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.

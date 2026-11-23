@@ -1,6 +1,8 @@
 # Frame generation: Motion version 3
 
 Part of [Frame generation](frame-generation.md). The library's third motion algorithm, the one built for the best picture.
+Since 2026-11-23 an experimental variant with a learned colour blend, [V3 Hybrid](frame-generation-v3-hybrid.md), runs
+as `Motion::V3` plus a blend value, so every rule on this page applies to it.
 
 ## Motion version 3
 

@@ -54,6 +54,7 @@
 
 #include "Config/ConfigManager.h"
 #include "FrameGen/FrameGenHost.h"
+#include "FrameGen/FrameGenV3.h"   // MotionFromKeys(): motion_version + variant -> Motion + blend
 #include "main.hpp"   // g_nNestedWidth / g_nNestedHeight, the game-size fallback
 
 namespace gamescope
@@ -78,9 +79,11 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		// Display order V1, V2, V3, Learned; the values stay the enum / kMotionKeys indices (a Choice maps a click to
+		// Display order V1, V2, V3, V3 Hybrid, Learned; the values stay the kMotionKeys indices (a Choice maps a click to
 		// Option::nValue, not to the array position).
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 2, "Learned" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 4, "V3 Hybrid" }, { 2, "Learned" } };
+		// V3 Hybrid's variant (2026-11-23): the ids are the index into kVariantKeys (blend = id + 1).
+		constexpr ui::Option kVariantOptions[] = { { 0, "A" }, { 1, "B" }, { 2, "C" } };
 		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
 		constexpr ui::Option kLearnedNetOptions[] = {
 			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
@@ -115,7 +118,9 @@ namespace gamescope
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3" };
+		// Index 0-3 = fghost::Motion's values; 4 = "v3_hybrid", which is Motion::V3 plus a blend (no fifth enum value).
+		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3", "v3_hybrid" };
+		constexpr const char *kVariantKeys[] = { "a", "b", "c" };
 		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" };
 		constexpr fghost::LearnedNet kLearnedNets[] = {
 			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
@@ -220,7 +225,12 @@ namespace gamescope
 			c.hud = (fghost::HudProtect)IndexOf( f.hud_protection, kHudKeys, 3, 2 );
 			c.ui = (fghost::UiProt)IndexOf( f.ui_protection, kUiKeys, 4, 1 );
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
-			c.motion = (fghost::Motion)IndexOf( f.motion_version, kMotionKeys, 4, 0 );   // the index IS the enum value
+			{
+				// "v3_hybrid" = Motion::V3 plus the blend (1..3 = variant A..C); every other version has blend 0.
+				const fghost::MotionChoice m = fghost::MotionFromKeys( f.motion_version, f.v3_hybrid_variant );
+				c.motion = m.motion;
+				c.v3Blend = m.blend;
+			}
 			c.learnedNet = kLearnedNets[ IndexOf( f.learned_net, kLearnedNetKeys, 10, 0 ) ];
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
@@ -302,7 +312,16 @@ namespace gamescope
 		{
 			const config::Settings &st = s_Settings;
 			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
-			return ( bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version ) == "v3";
+			const std::string &s = bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version;
+			return s == "v3" || s == "v3_hybrid";   // V3 Hybrid is V3 for every row rule
+		}
+
+		// V3 Hybrid is the SELECTED Motion version (Frame generation's own row, whatever Motion blur runs): the variant
+		// row's visibility. Not an Expert row: the user compares the variants live.
+		bool HybridSelected()
+		{
+			EnsureConfigLoaded();
+			return s_Settings.framegen.motion_version == "v3_hybrid";
 		}
 
 		bool V3RowsUsable()
@@ -543,8 +562,8 @@ namespace gamescope
 
 		a.Choice( "framegen.motion_version", "Motion version",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 4, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 3 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 5, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 4 ) ]; PersistAndPush(); } ),
 			kMotionOptions, std::size( kMotionOptions ) )
 			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
 			       "the picture along the motion and stretches it over gaps instead of falling "
@@ -555,6 +574,7 @@ namespace gamescope
 			       "this and Quality unless you turn off its \"Use Frame generation's settings\" "
 			       "switch; then, while Motion blur is on, its own two settings are used instead. "
 			       "V3: most fluid; smears where it is unsure; costs about three times V1. "
+			       "V3 Hybrid: Motion version 3 with a learned blend (experimental). "
 			       "Learned is an experimental, opt-in estimator: a small neural network finds the "
 			       "motion instead of V1's search, then V1 makes the picture. It costs several "
 			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms with e2v5, 0.6 ms "
@@ -564,7 +584,19 @@ namespace gamescope
 			       "identical frames are left alone. If it cannot run the Status line says why and "
 			       "V1 runs." )
 			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 v3 learned neural network ml net morph interpolation algorithm experimental fluid smear" )
+			.Keywords( "frame generation motion version v1 v2 v3 hybrid learned neural network ml net morph interpolation algorithm experimental fluid smear" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Choice( "framegen.v3_hybrid_variant", "Hybrid variant",
+			ui::AnyBind::Of<int>(
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.v3_hybrid_variant, kVariantKeys, 3, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = kVariantKeys[ ClampIdx( n, 2 ) ]; PersistAndPush(); } ),
+			kVariantOptions, std::size( kVariantOptions ) )
+			.Help( "Three experimental versions of the learned blend, to compare. Takes effect at once." )
+			.Segmented()
+			.Default( 0 )
+			.Keywords( "frame generation v3 hybrid variant learned blend a b c experiment compare" )
+			.ShownWhen( HybridSelected )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.quality", "Quality",

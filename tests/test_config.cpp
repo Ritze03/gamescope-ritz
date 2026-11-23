@@ -4547,3 +4547,82 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     REQUIRE( out.motion_version == "v3" );
     REQUIRE( in.v3_smear == 0.9f );
 }
+
+// V3 Hybrid (2026-11-23): "v3_hybrid" is a fifth framegen.motion_version and framegen.v3_hybrid_variant ("a" | "b" | "c")
+// picks the learned blend. Motion blur's own list is unchanged: it rejects "v3_hybrid" like any unknown string.
+TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant defaults to a", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    REQUIRE( Settings{}.framegen.v3_hybrid_variant == "a" );
+    for ( const char *psz : { "b", "c", "a" } )
+    {
+        Settings s{};
+        s.framegen.motion_version = "v3_hybrid";
+        s.framegen.v3_hybrid_variant = psz;
+        REQUIRE( SaveSections( s ) );
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.motion_version == "v3_hybrid" );
+        REQUIRE( l.framegen.v3_hybrid_variant == psz );
+    }
+    REQUIRE( IsSettingsKey( "framegen.v3_hybrid_variant" ) );
+}
+
+TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and variant a", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3", "v3_guard": "guard" }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v3" );
+    REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+}
+
+TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << R"({
+            "schema_version": 5, "name": "T", "kind": "general",
+            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "d" }
+        })";
+        REQUIRE( LoadSections().framegen.v3_hybrid_variant == "a" );
+    }
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << R"({
+            "schema_version": 5, "name": "T", "kind": "general",
+            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": 2 }
+        })";
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.motion_version == "v3_hybrid" );
+        REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+    }
+}
+
+TEST_CASE( "motion_blur: motion_version v3_hybrid is rejected like any unknown string", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "motion_blur": { "motion_version": "v3_hybrid" }
+    })";
+    REQUIRE( LoadSections().motion_blur.motion_version == "v1" );
+}
+
+// The variant is not a tuning value: Expert settings off does not reset it, and V3 Hybrid is not reset either.
+TEST_CASE( "framegen: the hybrid variant is in force with expert settings off", "[config]" )
+{
+    FrameGenSettings f;
+    f.motion_version = "v3_hybrid";
+    f.v3_hybrid_variant = "c";
+    f.expert = false;
+    REQUIRE( FrameGenEffective( f ).motion_version == "v3_hybrid" );
+    REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "c" );
+}

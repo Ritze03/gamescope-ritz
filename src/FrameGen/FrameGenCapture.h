@@ -324,6 +324,7 @@ namespace fghost::capture
 		bool bRitzDirty = false;
 		std::string sMotionWanted;   // what the user chose
 		std::string sMotionEffective;   // what the library runs (V1 when it refused the wish)
+		int nBlend = 0;              // V3 Hybrid's variant (1..3 = A..C), 0 = none: no `blend=` token
 		uint32_t uFlowScale = 0;
 		int nFrames = kFrames;
 		float flPrepareMs = 0.0f;      // how long the space check + staging allocation + directory took
@@ -386,6 +387,7 @@ namespace fghost::capture
 		const framegen::Settings *pSettings = nullptr;   // the library's settings in effect
 		const char *pszMotionWanted = "";
 		const char *pszMotionEffective = "";
+		int nBlend = 0;                            // V3 Hybrid's variant in force (0 = none), see HeaderInfo::nBlend
 	};
 
 	// Paint thread, once per RecordBaseLayer() call, first. Times out an armed capture that could not
