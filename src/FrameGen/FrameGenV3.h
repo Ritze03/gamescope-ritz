@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "FrameGenHost.h"
@@ -96,8 +97,16 @@ namespace fghost
 	}
 
 	// "" for blend 0 (plain V3, nothing to say), else "A" / "B" / "C" (logs and the capture header's `blend=`).
+	// BlendLabel() adds the honest state: "A" while the learned blend runs, "A(off)" when the variant is selected but
+	// the library runs V3's rule (a format without a blend build, the detail split, a V3 fallback).
 	inline const char *BlendText( int nBlend )
 	{
 		return nBlend == 1 ? "A" : nBlend == 2 ? "B" : nBlend == 3 ? "C" : "";
+	}
+
+	inline std::string BlendLabel( int nBlend, bool bActive )
+	{
+		const std::string s = BlendText( nBlend );
+		return s.empty() || bActive ? s : s + "(off)";
 	}
 }

@@ -854,3 +854,23 @@ TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", 
 			REQUIRE( t[ k ].find( '=' ) != std::string::npos );
 	}
 }
+
+// V3 Hybrid is honest about the blend (2026-11-23): `blend=A` while the learned blend runs, `blend=A(off)` when the variant is
+// selected but the library runs V3's rule (a format without a blend build, the detail split).
+TEST_CASE( "capture: the header says A(off) when the selected variant is not running", "[framegen_capture]" )
+{
+	HeaderInfo h;
+	h.sMotionWanted = "V3";
+	h.sMotionEffective = "V3";
+	h.uFlowScale = 2;
+	h.nBlend = 3;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=C flowScale=2" ) != std::string::npos );
+	h.bBlendOff = true;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=C(off) flowScale=2" ) != std::string::npos );
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=C(off) flowScale=2" ) != std::string::npos );
+	for ( const std::string &t : Tokens( FormatHeaderLine( h ) ) )
+		if ( t.find( "blend=" ) == 0 )
+			REQUIRE( t == "blend=C(off)" );
+	h.nBlend = 0;   // plain V3: nothing, whatever the flag says
+	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
+}

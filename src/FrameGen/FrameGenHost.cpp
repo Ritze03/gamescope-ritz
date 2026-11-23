@@ -270,6 +270,11 @@ namespace fghost
 
 		std::atomic<uint8_t> g_eReason{ uint8_t( Unavailable::Ok ) };
 		std::atomic<const char *> g_pszFormatTag{ "" };   // string literals only (PlanTag)
+		// V3 Hybrid: whether the library's learned blend is really in use (Interpolator::v3BlendActive(), refreshed by the
+		// render thread at the end of every EnsureReady()), and why not when a variant is selected but is not (string
+		// literal, "" = no cheap reason). Read by the compositor thread's status line through BlendActive() / BlendWhy().
+		std::atomic<bool> g_bBlendActive{ false };
+		std::atomic<const char *> g_pszBlendWhy{ "" };
 		std::atomic<const char *> g_pszMotionNote{ "" };  // the library's reason V2 is refused (string literals), else ""
 		std::atomic<float> g_flLastPairGpuMs{ -1.0f };
 		std::atomic<float> g_flLastEstimateMs{ -1.0f };
@@ -435,6 +440,7 @@ namespace fghost
 			// The V3 word (PackV3) last applied, for the same reason. 0 = none applied (a real V3 word is never 0:
 			// the occlusion softness and unsure sensitivity start at 25 hundredths).
 			uint64_t ulAppliedV3 = 0;
+			int nBlendLogged = 0;   // the blend state last logged (variant * 4 + state), see PublishBlend()
 			// A failed init/reconfigure is not retried until the size or the
 			// structural setting changes (or FG is switched off and on): init
 			// builds pipelines, so retrying per frame would be a stutter machine.
@@ -715,6 +721,9 @@ namespace fghost
 			H.uAppliedConfig = 0;
 			H.uAppliedReach = 0;
 			H.ulAppliedV3 = 0;
+			H.nBlendLogged = 0;
+			g_bBlendActive.store( false, std::memory_order_relaxed );
+			g_pszBlendWhy.store( "", std::memory_order_relaxed );
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
 			g_flLastPairGpuMs.store( -1.0f, std::memory_order_relaxed );
 			g_flLastEstimateMs.store( -1.0f, std::memory_order_relaxed );
@@ -793,6 +802,41 @@ namespace fghost
 				^ ( uint64_t( plan.eFormat ) << 50 ) ^ ( uint64_t( plan.eTransfer ) << 53 ) ^ 0x8000000000000000ull
 				// pyramidMinSide is structural and can make reconfigure() fail: a changed value must retry.
 				^ ( uint64_t( c.pyramidMinSide ) * 0x9E3779B97F4A7C15ull );
+		}
+
+		// V3 Hybrid's honest state: asks the live interpolator (render thread only, the one that owns it) whether the
+		// learned blend runs, publishes that for the status line (BlendActive() / BlendWhy()) and logs a change once.
+		// Called at the end of every EnsureReady(), so it follows a rebuild (the format changes at runtime: the launcher
+		// window is 8-bit, a game may be 10-bit) and every settings change. The query is a few compares.
+		// `Why a reason here:` the library falls back to V3's rule without an error for a format without a blend build,
+		// with the detail split on, or when V3 itself fell back; the status must not claim a variant that is not running.
+		void PublishBlend( Host_t &H, const Config &c )
+		{
+			const int nSel = c.motion == Motion::V3 ? c.v3Blend : 0;
+			const bool bActive = nSel != 0 && H.interp.v3BlendActive();
+			const char *pszWhy = "";
+			if ( nSel != 0 && !bActive )
+			{
+				const framegen::Format eFmt = H.plan.eFormat;
+				if ( eFmt != framegen::Format::Rgba8 && eFmt != framegen::Format::Rgb10 )
+					pszWhy = "format";
+				else if ( H.interp.settings().v3DetailSplit )
+					pszWhy = "detail split";
+			}
+			g_bBlendActive.store( bActive, std::memory_order_relaxed );
+			g_pszBlendWhy.store( pszWhy, std::memory_order_relaxed );
+			const int nKey = nSel * 4 + ( nSel == 0 ? 0 : bActive ? 1 : 2 );
+			if ( nKey != H.nBlendLogged )
+			{
+				H.nBlendLogged = nKey;
+				if ( nSel == 0 )
+					fg_log.infof( "frame generation: Motion version 3 learned blend off" );
+				else if ( bActive )
+					fg_log.infof( "frame generation: Motion version 3 learned blend %s", BlendText( nSel ) );
+				else
+					fg_log.infof( "frame generation: Motion version 3 learned blend %s not active%s%s", BlendText( nSel ),
+						pszWhy[ 0 ] ? ": " : "", pszWhy );
+			}
 		}
 
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
@@ -881,7 +925,10 @@ namespace fghost
 							? ( plan.eTransfer == framegen::Transfer::Linear ? "fp16 linear (scRGB)" : "fp16 encoded" ) : "8-bit",
 					ColorspaceIsHDR( H.eColorspace ) ? ", HDR layer" : "" );
 				if ( !bWantV2 )
+				{
+					PublishBlend( H, c );
 					return true;
+				}
 			}
 
 			if ( w != H.uWidth || h != H.uHeight )
@@ -992,13 +1039,12 @@ namespace fghost
 				else if ( H.interp.settings().uiProtection != eUiWas || H.interp.settings().uiBoxHeightFrac != flUiBoxWas )
 					H.bEstimateValid = false;
 				// A V3 Hybrid variant switch (or V3 <-> V3 Hybrid) is only a runtime setting: the same library motion
-				// version, no estimate dropped, no GPU wait. Logged so a run says which variant was in force.
-				if ( want.motionVersion == framegen::MotionVersion::V3 && ( ( ulV3 ^ H.ulAppliedV3 ) >> 52 ) != 0 )
-					fg_log.infof( "frame generation: Motion version 3 learned blend %s", c.v3Blend ? BlendText( c.v3Blend ) : "off" );
+				// version, no estimate dropped, no GPU wait. PublishBlend() below logs it.
 				H.uAppliedConfig = uLibraryConfig;
 				H.uAppliedReach = uReach;
 				H.ulAppliedV3 = ulV3;
 			}
+			PublishBlend( H, c );
 			return true;
 		}
 
@@ -2015,6 +2061,9 @@ namespace fghost
 		return "";
 	}
 
+	bool BlendActive() { return g_bBlendActive.load( std::memory_order_relaxed ); }
+	const char *BlendWhy() { return g_pszBlendWhy.load( std::memory_order_relaxed ); }
+
 	RenderStatus GetRenderStatus()
 	{
 		RenderStatus s;
@@ -2130,6 +2179,7 @@ namespace fghost
 				env.pszMotionWanted = cfg.motion == Motion::V2 ? "V2" : cfg.motion == Motion::Learned ? "Learned" : cfg.motion == Motion::V3 ? "V3" : "V1";
 				env.pszMotionEffective = MotionText( sInEffect.motionVersion );
 				env.nBlend = cfg.motion == Motion::V3 ? cfg.v3Blend : 0;
+				env.bBlendActive = g_pHost->interp.v3BlendActive();
 				capture::Start( env, ulNowNs, ulCaptureKey );
 			}
 		}

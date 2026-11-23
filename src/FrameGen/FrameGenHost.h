@@ -492,6 +492,12 @@ namespace fghost
 
 	RenderStatus GetRenderStatus();
 
+	// V3 Hybrid: whether the library's learned blend is really in use right now (the live interpolator's
+	// v3BlendActive(), published by the render thread; false while it is not live), and a short reason when a variant
+	// is selected but is not in use ("format", "detail split", or "" when not known cheaply). Thread-safe.
+	bool BlendActive();
+	const char *BlendWhy();
+
 	// ------------------------------------------------------------------
 	//  Pacing status (published by steamcompmgr's pacing, read by the panel)
 	// ------------------------------------------------------------------

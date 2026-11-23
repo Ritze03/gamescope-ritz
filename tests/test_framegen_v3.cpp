@@ -247,3 +247,16 @@ TEST_CASE( "framegen v3: config strings map to Motion plus blend", "[framegen_v3
 	REQUIRE( std::string( BlendText( 1 ) ) == "A" );
 	REQUIRE( std::string( BlendText( 3 ) ) == "C" );
 }
+
+TEST_CASE( "framegen v3: the status label names the blend honestly", "[framegen_v3]" )
+{
+	REQUIRE( BlendLabel( 1, true ) == "A" );
+	REQUIRE( BlendLabel( 2, true ) == "B" );
+	REQUIRE( BlendLabel( 3, true ) == "C" );
+	REQUIRE( BlendLabel( 1, false ) == "A(off)" );
+	REQUIRE( BlendLabel( 3, false ) == "C(off)" );
+	// Plain V3 (and anything out of range) says nothing, active or not.
+	REQUIRE( BlendLabel( 0, true ).empty() );
+	REQUIRE( BlendLabel( 0, false ).empty() );
+	REQUIRE( BlendLabel( 4, false ).empty() );
+}

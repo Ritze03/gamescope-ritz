@@ -200,8 +200,7 @@ endforeach
 # Motion version 3's two hook switches (2026-11-19; library gpu/meson.build v3j_gen / v3l_gen): second compiles of
 # existing V3 sources. -DV3J=1 (colour-weighted matching) into <name>_j_spv for the three search passes; -DV3L=1
 # (detail from one frame) into v3_synth_l_spv and, per format below, v3_synth_l_<fmt>_spv. Mandatory: framegen.cpp
-# includes the plain ones unconditionally. -DV3B=1 (V3 Hybrid's learned blend, Settings::v3Blend) into v3_synth_b_spv (no per-format
-# variants; includes shaders/v3_blend.glsl and v3_blend_weights.glsl, tracked through the depfile). The plain builds stay as they were (both switches off cost nothing).
+# includes the plain ones unconditionally. -DV3B=1 (V3 Hybrid's learned blend, Settings::v3Blend) into v3_synth_b_spv (rgb10 gets its own entry below; includes shaders/v3_blend.glsl and v3_blend_weights.glsl, tracked through the depfile). The plain builds stay as they were (both switches off cost nothing).
 foreach h : [['-DV3J=1', 'v3_search', 'v3_search_j'], ['-DV3J=1', 'v3_search_top', 'v3_search_top_j'],
              ['-DV3J=1', 'v3_dense', 'v3_dense_j'], ['-DV3L=1', 'v3_synth', 'v3_synth_l'],
              ['-DV3B=1', 'v3_synth', 'v3_synth_b']]
@@ -302,6 +301,26 @@ foreach fmt : ['rgb10', 'f16']
     )
   endif
 endforeach
+# ... and V3 Hybrid's learned blend (-DV3B=1) in rgb10 only (the library builds no other format of it): a 10-bit SDR
+# output makes the game's frames 10-bit. framegen.cpp includes it behind __has_include("v3_synth_b_rgb10_spv.h") and
+# defines FG_HAVE_V3B_RGB10; without this entry the build still compiles and 10-bit silently runs V3's rule
+# (Interpolator::v3BlendActive() tells). Includes v3_blend.glsl / v3_blend_weights.glsl, tracked through the depfile.
+fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '-DFG_FORMAT_RGB10=1', '-DV3B=1',
+           '--vn', 'v3_synth_b_rgb10_spv', '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / 'v3_synth.comp']
+if framegen_has_depfile
+  framegen_shaders += custom_target(
+    'framegen_v3_synth_b_rgb10_spv',
+    output  : 'v3_synth_b_rgb10_spv.h',
+    command : [glsl_compiler, fg_args, '--depfile', '@DEPFILE@'],
+    depfile : 'v3_synth_b_rgb10_spv.h.d',
+  )
+else
+  framegen_shaders += custom_target(
+    'framegen_v3_synth_b_rgb10_spv',
+    output  : 'v3_synth_b_rgb10_spv.h',
+    command : [glsl_compiler, fg_args],
+  )
+endif
 
 # cs_fg_copy.comp again, with a `dst` in the game's own bit depth (see the shader's
 # header and descriptor_set.h's DST_FORMAT): the ring copy of a 10-bit / fp16 game.
