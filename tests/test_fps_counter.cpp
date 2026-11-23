@@ -450,3 +450,88 @@ TEST_CASE( "PlanShown: the output number is the pacer's only while generating", 
     REQUIRE_FALSE( PlanShown( false, false ).bOutputFromPacer );
     REQUIRE_FALSE( PlanShown( false, true ).bOutputFromPacer );
 }
+
+// ---- the frame generation stats overlay's text (Overlay/FgStats.h, not part of the HUD) -------
+
+#include "Overlay/FgStats.h"
+
+namespace
+{
+    fgstats::Input GeneratingInput()
+    {
+        fgstats::Input in;
+        in.bFrameGen = true;
+        in.sMotion = "V3";
+        in.sBlend = "A-A";
+        in.sQuality = "Quality";
+        in.sFormat = "10-bit";
+        in.sModeText = "target 280 fps";
+        in.bGenerating = true;
+        in.flGameFps = 140.0f;
+        in.flShownFps = 280.0f;
+        in.flMultiplier = 2.0f;
+        in.flDelayMs = 8.2f;
+        in.flDiscardedPerSec = 0.0f;
+        in.flEstimateMs = 0.31f;
+        in.flSynthMs = 0.12f;
+        in.flPairMs = 0.55f;
+        in.flUiMs = 0.02f;
+        in.sUiProtection = "Crosshair V2";
+        return in;
+    }
+}
+
+TEST_CASE( "fgstats: a generating state shows every field", "[fps_counter]" )
+{
+    const auto v = fgstats::FormatLines( GeneratingInput() );
+    REQUIRE( v.size() == 5 );
+    REQUIRE( v[0] == "V3 Hybrid A-A   Quality   10-bit" );
+    REQUIRE( v[1] == "game 140 -> shown 280 fps   2.0x   target 280 fps" );
+    REQUIRE( v[2] == "delay 8.2 ms   discarded 0.0/s" );
+    REQUIRE( v[3] == "FG GPU: estimate 0.31  synth 0.12  pair 0.55  UI 0.02 ms" );
+    REQUIRE( v[4] == "UI protection: Crosshair V2" );
+}
+
+TEST_CASE( "fgstats: a blend that is selected but not running reads (off)", "[fps_counter]" )
+{
+    fgstats::Input in = GeneratingInput();
+    in.sBlend = "A-A(off)";
+    REQUIRE( fgstats::FormatLines( in )[0] == "V3 Hybrid A-A(off)   Quality   10-bit" );
+    in.sBlend.clear();
+    REQUIRE( fgstats::FormatLines( in )[0] == "V3   Quality   10-bit" );
+}
+
+TEST_CASE( "fgstats: not generating names the reason", "[fps_counter]" )
+{
+    fgstats::Input in = GeneratingInput();
+    in.bGenerating = false;
+    in.sReason = "Waiting for a second frame";
+    const auto v = fgstats::FormatLines( in );
+    REQUIRE( v.size() == 6 );
+    REQUIRE( v[1].find( "passing through" ) != std::string::npos );
+    REQUIRE( v[5] == "not generating: Waiting for a second frame" );
+    // A reason while generating is not shown.
+    in.bGenerating = true;
+    REQUIRE( fgstats::FormatLines( in ).size() == 5 );
+}
+
+TEST_CASE( "fgstats: frame generation off is one line", "[fps_counter]" )
+{
+    fgstats::Input in = GeneratingInput();
+    in.bFrameGen = false;
+    const auto v = fgstats::FormatLines( in );
+    REQUIRE( v.size() == 1 );
+    REQUIRE( v[0] == "frame generation off" );
+}
+
+TEST_CASE( "fgstats: missing numbers print as a dash, not 0", "[fps_counter]" )
+{
+    fgstats::Input in;
+    in.bFrameGen = true;
+    in.sMotion = "V1";
+    const auto v = fgstats::FormatLines( in );
+    REQUIRE( v[1] == "game - -> shown - fps   passing through" );
+    REQUIRE( v[2] == "delay - ms   discarded -/s" );
+    REQUIRE( v[3] == "FG GPU: estimate -  synth -  pair -  UI - ms" );
+    REQUIRE( v[0] == "V1" );
+}

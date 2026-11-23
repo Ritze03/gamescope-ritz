@@ -140,6 +140,15 @@ the same thing MangoHud shows when loaded after the layer — so the
 pre-frame-gen rate is not observable from here.
 
 
+## The frame generation stats overlay (not the HUD)
+
+A separate, off-by-default debug readout of frame generation (a small text block in the top left corner), NOT part of
+the HUD: no HUD setting, no HUD config field, and the HUD stays a plain FPS integer. It shares this layer and its ImGui
+draw list only so that it costs no extra layer (layers are limited to 6, another one forces a full composite):
+`FpsDisplay_AddLayer()` lets the layer exist when `fgstats::Wanted()` and calls `fgstats::Draw()` after the readout,
+starting below a top-left readout's bottom edge. Code: `src/Overlay/FgStats.{h,cpp}`; fields, switch and rationale:
+frame-generation-debug.md.
+
 ## Pages
 
 This page is the hub; the detail lives in these sub-pages (sections moved verbatim, 2026-11-07 superdoc repair).

@@ -58,6 +58,7 @@
 #include "Palette.h"
 #include "UI/Registry.h"
 #include "Crosshair.h"
+#include "FgStats.h"
 #include "FrameGen/FrameGenHost.h"
 
 #include "imgui.h"
@@ -1878,7 +1879,8 @@ namespace gamescope
 		// "nothing enabled -> no layer" guarantee this file always gave).
 		const bool bReadout = s_Settings.fps_display.enabled;
 		const bool bCrosshair = Crosshair_IsEnabled();
-		if ( !bReadout && !bCrosshair )
+		const bool bFgStats = fgstats::Wanted();   // the frame generation stats block (FgStats.cpp), not part of the HUD
+		if ( !bReadout && !bCrosshair && !bFgStats )
 			return;
 
 		// Idle-client keepalive lives entirely in the background repaint-
@@ -1964,6 +1966,17 @@ namespace gamescope
 		ImVec2 vReadoutCenter( -1.0f, -1.0f );
 		if ( bReadout )
 			vReadoutCenter = DrawReadout( ImVec2( (float)g_nOutputWidth, (float)g_nOutputHeight ) );
+		if ( bFgStats )
+		{
+			// Below a top-left readout, never over it: a top-anchored, left-anchored readout's bottom edge is
+			// 2 * centre.y - margin_y (its top edge is the margin).
+			float flYOffset = 0.0f;
+			int nVert = 0, nHoriz = 2;
+			ParsePlacement( s_Settings.fps_display.anchor, nVert, nHoriz );
+			if ( bReadout && vReadoutCenter.y >= 0.0f && nVert == 0 && nHoriz == 0 )
+				flYOffset = std::max( 0.0f, 2.0f * vReadoutCenter.y - (float)s_Settings.fps_display.margin_y );
+			fgstats::Draw( ImGui::GetBackgroundDrawList(), (float)g_nOutputWidth, (float)g_nOutputHeight, flYOffset );
+		}
 
 		ImGui::Render();
 
