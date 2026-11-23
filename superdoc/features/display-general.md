@@ -149,7 +149,9 @@ layer-paced limit of 100 held 100.0 fps. The grid limit follows the vblank timer
 that session (nested 180 on a 280 Hz host), so Auto V-Sync's 180 held 206 fps. Fixed 2026-11-23:
 the host's feedback no longer re-anchors a grid whose refresh is not the host's ("The refresh
 timer and the host's feedback" in [frame-generation-host-scanout.md](frame-generation-host-scanout.md);
-headless, nested 90 on 120 Hz: 90.0 ticks/s). Not yet re-measured in the field.
+headless, nested 90 on 120 Hz: 90.0 ticks/s). Re-measured in the field the same day (nested 180 on the 280 Hz host, grid limit 90): 179.9-180.0
+ticks/s and the game at 90.0 fps; with the old behaviour switched back live, 216.6 ticks/s and
+108.3 fps. Auto V-Sync's own 180 was not re-measured.
 
 `Why:` the user's request (2026-11-22): on a desktop that does not tear for gamescope's window
 (some desktops tear only a fullscreen window), native game frames above the refresh beat against the host
