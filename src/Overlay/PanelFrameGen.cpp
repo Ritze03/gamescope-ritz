@@ -1090,9 +1090,11 @@ namespace gamescope
 			kDebugViewOptions, std::size( kDebugViewOptions ) )
 			.Help( "Draws a test view onto the generated frames. UI highlighted marks what UI protection "
 			       "treats as UI: magenta is pasted back, cyan is recognised but changed in this frame, the "
-			       "yellow line is the box. UI removed shows the picture with that UI removed, as frame "
-			       "generation uses it; Crosshair V2 and Whole screen V2 remove nothing, so they show the "
-			       "highlight instead. The UI views need UI protection. Motion map tints moving areas: the "
+			       "yellow line is the box. UI removed shows the picture with that UI filled in from nearby "
+			       "pixels, without any marking. With Crosshair and Whole screen this is the game's frame as "
+			       "frame generation uses it. Crosshair V2 and Whole screen V2 keep the UI in the picture for "
+			       "frame generation, so there the fill is made only for this view. A large UI area keeps its "
+			       "middle. The UI views need UI protection. Motion map tints moving areas: the "
 			       "colour is the direction, the strength the speed. The game's own frames are not marked." )
 			.Default( 0 )
 			.Keywords( "frame generation debug view ui protection highlighted removed filtered motion map vectors direction test" )

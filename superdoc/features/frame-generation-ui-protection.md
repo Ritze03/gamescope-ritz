@@ -332,7 +332,7 @@ so they cannot disagree.
 
 ## Debug views
 
-*2026-11-23.* The Debug options group has a **Debug view** row that marks what each mode treats as UI (magenta pasted, cyan confirmed-but-changed, yellow box outline) or shows the clean copy the estimate works on; see [frame-generation-debug.md](frame-generation-debug.md).
+*2026-11-23.* The Debug options group has a **Debug view** row that marks what each mode treats as UI (magenta pasted, cyan confirmed-but-changed, yellow box outline) or shows the picture with the UI filled in from nearby pixels, never with a colour (a real frame's clean copy in Crosshair / Whole screen, a fill made only for the view in the V2 modes); see [frame-generation-debug.md](frame-generation-debug.md).
 
 ## History
 
