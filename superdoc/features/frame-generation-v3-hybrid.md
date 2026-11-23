@@ -147,6 +147,11 @@ miss: a 10-bit game with the variant selected would read `blend=A(off)`. Check a
 10-bit client under a nested instance (`format 10-bit` in the `frame generation ready` line) and
 reading `blend=A` (not `A(off)`).
 
+Field check (2026-11-23, pin `19b15ef`, a 10-bit SDR game at 1440x1080 generating to a 280 Hz
+refresh): switching V3 -> Hybrid A -> B -> C -> V3 live, the status read `blend=A`, `blend=B`,
+`blend=C` (all active), presented stayed at the refresh (273-280 fps), no error lines. The cost was
+not measurable there: another job loaded the machine during the run. The picture was not judged.
+
 **Detail split**: while "Detail from one frame" is on, the Hybrid variant has no effect (library
 fallback); the row's help says so ("Has no effect while Detail from one frame is on.").
 
