@@ -526,7 +526,7 @@ namespace gamescope::config
         // Static HUD protection: "off" | "normal" | "strong"
         std::string hud_protection = "strong";
         // UI protection (the FrameGen library's static-UI protection, 2026-10-04):
-        // "off" | "crosshair" | "crosshair_v2" | "whole_screen". Independent of
+        // "off" | "crosshair" | "crosshair_v2" | "whole_screen" | "whole_screen_v2" (2026-11-23). Independent of
         // hud_protection. ADDITIVE: an older config has none and resolves to
         // "crosshair" ("crosshair_v2" added 2026-10-05).
         std::string ui_protection = "crosshair";
@@ -589,6 +589,12 @@ namespace gamescope::config
         // ADDITIVE: absent loads false, also for a profile saved before the switch existed that holds changed
         // tuning values (ConfigManager.cpp; tests/test_config.cpp pins it): those then act only once it is on.
         bool expert = false;
+        // Debug options (2026-11-23): the master switch of the test views below. While it is false the two children read
+        // as false through config::FrameGenEffective() (stored values kept). ADDITIVE: absent loads false. Per profile.
+        // superdoc/features/frame-generation-debug.md.
+        bool debug = false;
+        bool debug_only_generated = false;   // show only generated frames; real ones are skipped on screen
+        bool debug_stats = false;            // stats overlay in the top left corner
     };
 
     // Motion blur (2026-10-04, this fork's own addition -- see

@@ -108,7 +108,7 @@ namespace gamescope::config
 
     // The framegen settings the interpolator is handed: `f` itself while `f.expert` is on, else a copy whose 15 expert
     // values (learned_*, v3_*, search_*, pyramid_min_side) are the defaults. The one place that rule lives; stored values
-    // are never changed. superdoc/features/frame-generation-settings.md, "Expert settings".
+    // are never changed. Also: while `f.debug` is off, debug_only_generated and debug_stats read false. superdoc/features/frame-generation-settings.md.
     FrameGenSettings FrameGenEffective( const FrameGenSettings &f );
 
     // Selecting a profile in the list: loads it AND remembers the choice --
