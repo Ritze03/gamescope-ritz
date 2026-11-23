@@ -842,8 +842,8 @@ TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", 
 	h.uFlowScale = 2;
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=" ) == std::string::npos );
-	const char *const kName[] = { "A", "B", "C" };
-	for ( int i = 0; i < 3; i++ )
+	const char *const kName[] = { "A", "B", "C", "A-A", "A-B", "A-C" };
+	for ( int i = 0; i < 6; i++ )
 	{
 		h.nBlend = i + 1;
 		const std::string sKey = std::string( "fallback_v1=0 blend=" ) + kName[ i ] + " flowScale=2";
@@ -871,6 +871,10 @@ TEST_CASE( "capture: the header says A(off) when the selected variant is not run
 	for ( const std::string &t : Tokens( FormatHeaderLine( h ) ) )
 		if ( t.find( "blend=" ) == 0 )
 			REQUIRE( t == "blend=C(off)" );
+	h.nBlend = 4;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=A-A(off) flowScale=2" ) != std::string::npos );
+	h.bBlendOff = false;
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=A-A flowScale=2" ) != std::string::npos );
 	h.nBlend = 0;   // plain V3: nothing, whatever the flag says
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 }

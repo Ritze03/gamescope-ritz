@@ -404,7 +404,7 @@ namespace gamescope::config
                     f.v3_guard = ( sGuard == "off" || sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : FrameGenSettings{}.v3_guard;
                     // V3 Hybrid's variant: not a tuning value (no Expert gate), unknown or wrong-typed loads the default "a".
                     const std::string sVariant = JGetString( *pFrameGen, "v3_hybrid_variant", "" );
-                    f.v3_hybrid_variant = ( sVariant == "a" || sVariant == "b" || sVariant == "c" ) ? sVariant : FrameGenSettings{}.v3_hybrid_variant;
+                    f.v3_hybrid_variant = ( sVariant == "a" || sVariant == "b" || sVariant == "c" || sVariant == "a_a" || sVariant == "a_b" || sVariant == "a_c" ) ? sVariant : FrameGenSettings{}.v3_hybrid_variant;
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
             }
