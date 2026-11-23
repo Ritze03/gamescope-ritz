@@ -144,93 +144,88 @@ cannot cut a command buffer without wrapping every `vkCmd*` and re-binding state
 contained on gamescope's side shortens the game's job. `Why:` the fix has to take the
 host's draw out of the path.
 
-#### Open: the refresh timer outrunning the host (field, 2026-11-22)
+#### The refresh timer and the host's feedback (resolved 2026-11-23)
 
-A second way the host loses frames, **not understood yet**. Seen on a 280 Hz Hyprland output
-(direct scanout, the output in VRR mode for the fullscreen window, `host-vrr 0` on our side
-because the feedback still carries a refresh period):
+A second way the host lost frames: gamescope's vblank timer (`src/vblankmanager.cpp`) ticked
+faster than the host's refresh, and frame generation's output with it. Seen on a 280 Hz
+Hyprland output in VRR mode for the fullscreen window (`host-vrr 0` on our side: the feedback
+still carries a refresh period). Worst case, one night: timer 290-330/s (about 470/s at light
+load), `sent` 250-320/s, `shown` about 172/s of 280 (what randomly timed commits give on a
+fixed refresh), `discarded` about 105/s. That state began with a session in which the host
+really tore and ended with a restart of the host; it was **not reproduced afterwards**, so the
+explanation below is the most likely one, not a measured one. `--expose-wayland` and the
+game's commits without a new buffer were suspects for a day and are cleared.
 
-- Healthy: `sent` 280/s, `shown` 277-279/s, `discarded` 1-5/s, `presented` (our paints) 280/s.
-- Degraded: gamescope's vblank timer ticks 290-330/s (about 470/s at light load, which is
-  `1 / (refresh period - wake-up lead + draw time)`), `presented` 300-470/s although the host
-  verdict is "vsync" and the refresh cap is on, `sent` 250-320/s, `no free image` 30-55/s,
-  `shown` about 172/s, `discarded` about 105/s. The `shown` figure is what randomly timed
-  commits give on a fixed refresh (`refresh x (1 - e^(-sent/refresh))`), so the host is not
-  capped: our commits are no longer locked to its refresh.
-- The same binary and the same profile were healthy for 25 minutes and degraded for the rest
-  of the night, across restarts of the game. Rebuilding the code from before that day's
-  changes reproduced the degraded state, so none of those changes causes it. It began with
-  the session in which the host really tore (see [backend-wayland.md](backend-wayland.md),
-  Tearing) and did not end when tearing was taken out again.
-- Did not cure it: reloading the host's config, moving the pointer and the focus to another
-  output, a DPMS cycle of the output, switching the other outputs off, leaving fullscreen
-  (then composited by the host, no VRR: `sent` 224/s, `shown` 150/s, `no free image` 55/s),
-  switching the tearing request off live, input reaching the game.
-- Not checked: a restart of the host; the raw `presented` timestamps (are they on the host's
-  refresh grid? under host VRR there is no grid, and `MarkVBlank()` takes each one as a
-  vblank); whether a feedback that arrives after the pre-armed tick fires a second tick in
-  the same refresh when the wake-up lead is close to the whole period (the measured lead
-  sat at 3.0-3.57 ms of 3.57 in the degraded state, 2.2-2.9 ms in the healthy one).
+The timer keeps a grid: an anchor (the last vblank it believes in) plus whole refresh periods;
+a wake-up is the next grid point minus the wake-up lead
+([display-general.md](display-general.md), Low-latency wake-up). Free-running, that is exact.
+Two things broke it:
 
-**Correction (field, 2026-11-23): `--expose-wayland` is cleared.** The lead below was a
-confound: the first session without the flag was also the first session after the host's
-restart, and no session with the flag ran between the restart and this test. Same build, flag
-on, game in its level at 205-230 fps, refresh cap in force: `sent` 279-280/s, `shown`
-278-279/s, `discarded` 0-2/s, refresh timer 279.4-280.9/s (healthy; the measured lead sat at
-the whole period, 3.57 ms, in most samples and it was healthy anyway). No re-commit line was
-logged in any session since the restart, with or without the flag. So the degraded state was
-a state of the host that began with the session in which the host really tore and lasted
-until the host was restarted.
+1. **Early re-anchors.** Every host `presented` became the new anchor and forced a re-arm
+   (`MarkVBlank()`). A host that shows a frame at once (VRR below its maximum, a host that
+   tears, headless sway) stamps it shortly after gamescope's commit, i.e. `lead - draw -
+   host latency` *before* the vblank gamescope aimed at. Each such feedback moved the grid
+   that much earlier, so ticks per second rose by `feedbacks x error / period`: a 60 fps menu
+   with 74-78 feedbacks/s, 0.6 ms early, gave 293-311 ticks/s on 280 Hz. With a feedback on
+   every refresh the VRR display runs at its fixed maximum, the stamps land on the grid, and
+   the timer held 280. The night's 290-330/s matches a host stamping every frame at once.
+   `Why` it hit the nested refresh too: with 180 Hz nested on a 280 Hz host every host
+   vblank re-anchored a 180 Hz grid (188-225 ticks/s; a grid limit of 90 held 113 fps).
+2. **A second tick for one vblank.** A schedule only had to lie in the future. The tick's
+   paint reports its draw time before the tick's own re-arm; when that shrinks the lead
+   (an old maximum leaves the 60-sample window) by more than the paint took, the same vblank
+   is still ahead and gets a second wake-up a fraction of a millisecond later. A feedback
+   that moves the grid later can do the same.
 
-What the same night measured instead, flag or not:
+**The fix** (`ritz_timer_feedback_anchor 1`, `ritz_timer_one_per_vblank 1`, both default;
+the decisions are pure functions in `vblankmanager.hpp`, `gamescope::vblanksched`, tested in
+`tests/test_vblank_schedule.cpp`):
 
-| Situation | Refresh timer | Paints / sent | Shown |
-|---|---|---|---|
-| Game in a menu at 60 fps, frame generation passing through | 293-298/s | 73-76/s | all |
-| Same menu, frame generation generating, refresh cap in force | 267/s | 255/s | 251/s |
-| Level, refresh cap in force | 279.4-280.9/s | 279-280/s | 278-279/s |
-| Level or menu, no cap (target "display refresh") | 185-258/s | 308-311/s | 279-280/s, 29-31/s discarded |
+- A host feedback anchors the grid only when it is plausible as a vblank of that grid:
+  within `ritz_timer_grid_tolerance` (default 1 %) of it and at least half a period after the
+  anchor. `Why` 1 %: a real vblank stamp of a fixed-refresh host lands within microseconds
+  (field: 0.003 ms mean); a commit-following stamp lands 0.3-0.7 ms early, and every stamp
+  taken moves the grid by its error, so the window bounds the creep. Headless sway stamps
+  0.33 ms early at 120 Hz (3.9 %): at the field test's 5 % it still crept to 125 ticks/s.
+- Off-grid feedbacks leave the anchor alone, unless 30 rejected ones in a row agree on one
+  grid of their own (the host really moved its phase: a restart, a mode change). `Why` not
+  a forced jump every 30th rejected one (the field-test build): a host that shows each frame
+  at once has no grid to follow, and every jump costs a fraction of a tick (it explained the
+  277-279/s instead of 280 there). Stamps that follow gamescope's commits jitter with the
+  draw and do not agree; a perfectly periodic early stamp can still move the grid once per
+  30 feedbacks (bounded, in the test).
+- None at all while the host's refresh is not the grid's (`ForeignGrid()`: the nested
+  refresh more than 0.5 % from the output's): its vblanks are no points of our grid.
+- An accepted feedback still re-arms, but never replaces a wake-up that is already due (its
+  timerfd expiry not yet read). `Why`: the new schedule could only aim at the next vblank,
+  so that tick was lost; with frame generation's extra timer pacing the output (no cap) this
+  cost 27-42 ticks/s. The refresh timer still matters there: the vblank grid limiter, the
+  commit latch and pipewire run on its ticks.
+- Every schedule aims at least half a period after the vblank the last wake-up served.
 
-Working theory: the timer keeps the refresh rate only while a host feedback anchors every
-refresh; with fewer feedbacks (76/s in the menu) it free-runs about 5 % fast, which is the
-290-330/s of the degraded night. Not yet confirmed in the code.
+`ritz_timer_feedback_anchor 0` + `ritz_timer_one_per_vblank 0` restores the old behaviour; 2
+(filter, never re-armed by force) and 4 (free-run) stay as controls. The `status: timer` line
+([status-line.md](status-line.md)) shows all of it.
 
-The two paragraphs below are kept as written on 2026-11-22; read them with this correction.
+Field test (280.003 Hz, Hyprland, field-test build with 5 % tolerance; rates per second):
 
-**Lead (field, 2026-11-22, after a restart of the host): `--expose-wayland`.** The degraded
-sessions all ran with `--expose-wayland`. The same build started without it was healthy
-(`sent` 277/s, `shown` 276/s, `discarded` 1/s), and with the refresh cap switched off
-(`ritz_fg_host_vsync 0`: `sent` about 950/s, `shown` 280/s) the user still saw no lag. The
-layer was active in both cases, so it is not the layer. What differs in the log: with
-`--expose-wayland` the game's surface gets commits without a new buffer by the hundreds per
-second (the `xwm: a commit without a new buffer re-committed ...` line; over a million in
-one session), without it none. The healthy 25 minutes of the night also ran with the flag,
-so the flag is necessary for the degraded state, not sufficient.
+| Situation | Before (0 / 0) | Fixed (1 / 1) |
+|---|---|---|
+| FG on, cap, game 60 fps | ticks 282, discarded 2.5, commit-to-shown 5.1 ms (max 6.1) | ticks 279.7, discarded 0, 1.4 ms (max 1.9) |
+| FG on, cap, level 220 fps | ticks 279.5, judder err p99 3.3 ms, uneven 7.5 | ticks 278.3, p99 1.5 ms, uneven 0.5 |
+| FG off, menu 60 fps (74-78 feedbacks, host shows at once) | ticks 305-312, 60-65 short gaps | ticks 277.2 |
+| FG off, level 220 fps | ticks 275-277, 47-52 short gaps | ticks 278.9 |
+| No cap (extra timer paces) | ticks 253, overdue 27 | ticks 237 (field-test build, no overdue guard yet) |
 
-What a code read added the same day (nothing of it measured yet):
+`one_per_vblank` alone is not enough (265 ticks/s, 59 retargets/s with every feedback still
+re-anchoring), the anchor filter alone leaves the double ticks. Headless (sway, 120 Hz output,
+nested 120, frame generation on): before 125-131 ticks/s, fixed 119.9-120.0; nested 90 on
+120: before 64-91 ticks/s with short gaps and misses, fixed 90.0.
 
-- The flag changes only what the children are told (`main.cpp`: `XDG_SESSION_TYPE=wayland`
-  and `WAYLAND_DISPLAY`); the compositor is the same, and the layer sends no commit itself.
-  So some client in the container behaves differently; which one is not known.
-- The re-commit line does **not** separate healthy from degraded: sessions with the same
-  rate (about 490/s) were healthy once and degraded once, and several degraded sessions
-  logged none. The line needs explicit sync and the older commit still queued, so its
-  absence proves nothing.
-- A re-commit is not dropped for a surface with the layer's swapchain feedback (the
-  duplicate check in `update_wayland_res()` requires `!feedback`): it becomes a new
-  `commit_t`, counts as a game frame (`FrameGen_OnArrival()`, the status line's `game fps`)
-  and sets `hasRepaint`. With frame generation on it cannot paint outside a tick; without
-  it, an async-flipping game paints on every one.
-- Candidate for the timer: every `Present()` records `now - last timer wake-up` as the draw
-  time (`UpdateLastDrawTime()`), also for a paint that was not the first after that
-  wake-up. One such sample in the 60-sample window puts the measured lead near the whole
-  period, and a lead that long makes the next tick fire right after the host's feedback.
-  It does not explain a degraded session that ran with the fixed 2.00 ms lead.
-
-The same timer runs fast whenever the nested refresh is set below the output's (180 on a
-280 Hz output: 188-225 ticks/s), with or without frame generation, because every host
-`presented` re-anchors it. A limit on the vblank grid follows the timer, so there it is off
-by the same factor (limit 90 held 113 fps; Auto V-Sync's 180 held 206).
+Still open: a paint that takes longer than a period cannot be ticked through, so ticks stay
+slightly under the refresh where the draw maximum exceeds it (`missed` counts them; the
+field's 277-279 with the fix included such draws, ring max 4.3-4.7 ms on 3.57). The degraded
+night itself was not reproduced.
 
 #### GPU clock at light load (2026-11-07)
 

@@ -1010,19 +1010,13 @@ struct StatusCounters_t
 	// commits by kind, and frame generation's arrivals by kind.
 	uint64_t ulPaintsTick = 0, ulPaintsExtra = 0, ulPaintsOther = 0;
 	uint64_t ulGameCommitsNew = 0, ulGameCommitsSameBuf = 0, ulGameCommitsRecommit = 0, ulGameCommitsDropped = 0;
-	uint64_t ulArrivalsNew = 0, ulArrivalsRecommit = 0, ulArrivalsSkipped = 0, ulArrivalsSameBuf = 0;
+	uint64_t ulArrivalsNew = 0, ulArrivalsRecommit = 0, ulArrivalsSameBuf = 0;
 };
 static StatusCounters_t s_Status;
 static uint64_t s_ulStatusLastBaseCommitId = 0;
 // What started the paint paint_all() is doing (set right before it, main loop).
 enum class PaintCause_t { Other, Tick, Extra };
 static PaintCause_t s_ePaintCause = PaintCause_t::Other;
-// Whether the base plane's commit (g_uCurrentBasePlaneCommitID) is a re-commit (commit_t::bRecommit).
-static bool g_bCurrentBasePlaneRecommit = false;
-// Field test (2026-11-23): see handle_done_commit().
-gamescope::ConVar<bool> cv_ritz_recommit_arrival( "ritz_recommit_arrival", true,
-	"Field test: 0 = a game commit that only re-commits a buffer still queued (no new buffer) is not a new frame for "
-	"frame generation's pacer and not a game frame in the status line; it still becomes the shown commit. 1 = it is (before)." );
 
 static int g_nSteamCompMgrTargetFPS = 0;
 // The frame limiter's rate for the WSI layer to pace the game to, or 0 while the limiter
@@ -2641,7 +2635,6 @@ paint_window(steamcompmgr_win_t *w, steamcompmgr_win_t *scaleW, struct FrameInfo
 			g_CachedPlanes[ HELD_COMMIT_FADE ] = basePlane;
 
 		g_uCurrentBasePlaneCommitID = lastCommit->commitID;
-		g_bCurrentBasePlaneRecommit = lastCommit->bRecommit;
 		g_ulCurrentBasePlanePresentNs = lastCommit->present_time;
 		g_uCurrentBasePlaneAppID = lastCommit->appID;
 		g_bCurrentBasePlaneIsFifo = lastCommit->IsPerfOverlayFIFO();
@@ -3471,8 +3464,7 @@ paint_all( global_focus_t *pFocus, bool async )
 	if ( g_uCurrentBasePlaneCommitID && g_uCurrentBasePlaneCommitID != s_ulStatusLastBaseCommitId )
 	{
 		s_ulStatusLastBaseCommitId = g_uCurrentBasePlaneCommitID;
-		if ( cv_ritz_recommit_arrival || !g_bCurrentBasePlaneRecommit )
-			s_Status.ulGameFrames++;
+		s_Status.ulGameFrames++;
 	}
 	switch ( s_ePaintCause )
 	{
@@ -8642,16 +8634,18 @@ static void StatusLine_Tick()
 		fg_log.infof( "status: judder shown %llu (%.1f/s) repeat %llu unknown %llu judged %llu, step err mean %.2f p99 %.2f max %.2f ms, uneven %.1f/s, gap %.1f/s",
 			(unsigned long long)J.shown, double( J.shown ) / flSec, (unsigned long long)J.repeat, (unsigned long long)J.unknown,
 			(unsigned long long)J.judged, J.errMeanMs, J.errP99Ms, J.errMaxMs, double( J.uneven ) / flSec, double( J.gap ) / flSec );
-		// Field test (2026-11-23): the refresh timer against the host. Rates per second.
+		// The refresh timer against the host (2026-11-23; superdoc/features/status-line.md).
+		// Rates per second.
 		auto R = [&]( uint64_t x ) { return double( x ) / flSec; };
-		fg_log.infof( "status: timer ticks %.1f wakeups %.1f short-gap %.1f min-gap %.2f ms | paints tick %.1f extra %.1f other %.1f"
+		fg_log.infof( "status: timer ticks %.1f wakeups %.1f short-gap %.1f min-gap %.2f ms target-short %.1f missed %.1f"
+			" | paints tick %.1f extra %.1f other %.1f"
 			" | lead %s %.2f ms ring-max %.2f max-draw %.2f ms, draws %.1f non-tick %.1f (max %.2f ms) skipped %.1f"
 			" | feedback %.1f close %.1f off-grid %.1f phase mean %+.3f abs %.3f ms rearm %.1f ignored %.1f"
-			" | rearms %.1f shift mean %+.3f ms earlier %.1f later %.1f overdue %.1f | retarget %.1f | refresh %.3f Hz"
+			" | rearms %.1f shift mean %+.3f ms earlier %.1f later %.1f overdue %.1f kept %.1f | retarget %.1f | refresh %.3f Hz"
 			" | latency min %.2f mean %.2f max %.2f ms early %.1f same-buffer %.1f | mark host %.1f present-wait %.1f drm %.1f openvr %.1f"
 			" | host commits %.1f no-new-buffer %.1f | game commits new %.1f same-buffer %.1f recommit %.1f dropped %.1f"
-			" | arrivals new %.1f recommit %.1f skipped %.1f same-as-last %.1f | switches draw_per_tick %d feedback_anchor %d grid_tolerance %d%% one_per_vblank %d recommit_arrival %d",
-			R( C.ulTimerTicks ), R( T.ulWakeups ), R( T.ulShortGaps ), T.ulMinGap / 1e6,
+			" | arrivals new %.1f recommit %.1f same-as-last %.1f | switches draw_per_tick %d feedback_anchor %d grid_tolerance %d%% one_per_vblank %d",
+			R( C.ulTimerTicks ), R( T.ulWakeups ), R( T.ulShortGaps ), T.ulMinGap / 1e6, R( T.ulTargetShort ), R( T.ulMissed ),
 			R( C.ulPaintsTick ), R( C.ulPaintsExtra ), R( C.ulPaintsOther ),
 			pszLead, Timer.GetLastLead() / 1e6, Timer.GetRecentMaxDrawTime() / 1e6, T.ulMaxDraw / 1e6,
 			R( T.ulDrawSamples ), R( T.ulDrawNonWake ), T.ulMaxDrawNonWake / 1e6, R( T.ulDrawSkipped ),
@@ -8659,15 +8653,16 @@ static void StatusLine_Tick()
 			T.ulPhaseN ? double( T.lPhaseSum ) / double( T.ulPhaseN ) / 1e6 : 0.0, T.ulPhaseN ? double( T.ulPhaseAbsSum ) / double( T.ulPhaseN ) / 1e6 : 0.0,
 			R( T.ulFbRearm ), R( T.ulFbIgnored ),
 			R( T.ulRearmN ), T.ulRearmN ? double( T.lRearmShiftSum ) / double( T.ulRearmN ) / 1e6 : 0.0,
-			R( T.ulRearmEarlier ), R( T.ulRearmLater ), R( T.ulRearmOverdue ), R( T.ulRetarget ), uFbRefreshNs ? 1e9 / double( uFbRefreshNs ) : 0.0,
+			R( T.ulRearmEarlier ), R( T.ulRearmLater ), R( T.ulRearmOverdue ), R( T.ulRearmKept ), R( T.ulRetarget ),
+			uFbRefreshNs ? 1e9 / double( uFbRefreshNs ) : 0.0,
 			T.lLatMin / 1e6, T.ulLatN ? double( T.lLatSum ) / double( T.ulLatN ) / 1e6 : 0.0, T.lLatMax / 1e6, R( T.ulLatEarly ), R( T.ulFbSameBuffer ),
 			R( T.ulMark[ size_t( gamescope::VBlankSource::HostFeedback ) ] ), R( T.ulMark[ size_t( gamescope::VBlankSource::Other ) ] ),
 			R( T.ulMark[ size_t( gamescope::VBlankSource::Drm ) ] ), R( T.ulMark[ size_t( gamescope::VBlankSource::OpenVR ) ] ),
 			R( T.ulHostCommits ), R( T.ulHostSameBuffer ),
 			R( C.ulGameCommitsNew ), R( C.ulGameCommitsSameBuf ), R( C.ulGameCommitsRecommit ), R( C.ulGameCommitsDropped ),
-			R( C.ulArrivalsNew ), R( C.ulArrivalsRecommit ), R( C.ulArrivalsSkipped ), R( C.ulArrivalsSameBuf ),
-			int( bool( gamescope::cv_ritz_timer_draw_per_tick ) ), int( gamescope::cv_ritz_timer_feedback_anchor ), int( gamescope::cv_ritz_timer_grid_tolerance ), int( bool( gamescope::cv_ritz_timer_one_per_vblank ) ),
-			int( bool( cv_ritz_recommit_arrival ) ) );
+			R( C.ulArrivalsNew ), R( C.ulArrivalsRecommit ), R( C.ulArrivalsSameBuf ),
+			int( bool( gamescope::cv_ritz_timer_draw_per_tick ) ), int( gamescope::cv_ritz_timer_feedback_anchor ),
+			int( gamescope::cv_ritz_timer_grid_tolerance ), int( bool( gamescope::cv_ritz_timer_one_per_vblank ) ) );
 	}
 }
 
@@ -9016,20 +9011,12 @@ bool handle_done_commit( steamcompmgr_win_t *w, xwayland_ctx_t *ctx, uint64_t co
 						if ( pArrived->buf == s_pLastArrivalBuf )
 							s_Status.ulArrivalsSameBuf++;
 						s_pLastArrivalBuf = pArrived->buf;
-						// Field test (ritz_recommit_arrival 0): a re-commit (no new buffer) is not a new
-						// frame for the pacer. It stays the held base commit above, so the paint, its
-						// release point and its frame callback are unchanged.
-						if ( pArrived->bRecommit && !cv_ritz_recommit_arrival )
-							s_Status.ulArrivalsSkipped++;
+						if ( pArrived->bRecommit )
+							s_Status.ulArrivalsRecommit++;
 						else
-						{
-							if ( pArrived->bRecommit )
-								s_Status.ulArrivalsRecommit++;
-							else
-								s_Status.ulArrivalsNew++;
-							if ( s_FrameGen.bActive )
-								FrameGen_OnArrival( w, pArrived );
-						}
+							s_Status.ulArrivalsNew++;
+						if ( s_FrameGen.bActive )
+							FrameGen_OnArrival( w, pArrived );
 					}
 
 					focusWindow_engine = w->engineName;

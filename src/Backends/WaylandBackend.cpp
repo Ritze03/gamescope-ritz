@@ -2427,7 +2427,7 @@ namespace gamescope
         const std::optional<FeedbackCommit_t> oCommit = TakeFeedbackCommit( pFeedback );
         if ( oCommit )
             GetVBlankTimer().NoteHostLatency( int64_t( ulTime - oCommit->ulCommitNs ), oCommit->bNoNewBuffer );
-        GetVBlankTimer().MarkVBlank( ulTime, true, gamescope::VBlankSource::HostFeedback, oCommit && oCommit->bNoNewBuffer );
+        GetVBlankTimer().MarkVBlank( ulTime, true, gamescope::VBlankSource::HostFeedback );
         wp_presentation_feedback_destroy( pFeedback );
 
         // Nudge so that steamcompmgr releases commits.

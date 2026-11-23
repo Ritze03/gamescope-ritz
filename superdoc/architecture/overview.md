@@ -66,7 +66,10 @@ steamcompmgr loop described below.
   [reshade-effects](../features/reshade-effects.md).
 - **Vblank timing** — `gamescope::CVBlankTimer` (`src/vblankmanager.hpp`, global singleton
   via `GetVBlankTimer()`) is the pacing clock the steamcompmgr loop waits on
-  (`ProcessVBlank()` inside `steamcompmgr_main`) before deciding whether to repaint.
+  (`ProcessVBlank()` inside `steamcompmgr_main`) before deciding whether to repaint. Its
+  scheduling decisions (next wake-up, one tick per vblank, which host feedback may anchor
+  the grid) are pure functions in `gamescope::vblanksched`; see "The refresh timer and the
+  host's feedback" in [frame-generation-host-scanout](../features/frame-generation-host-scanout.md).
 - **Protocol / IPC surface** — gamescope's private Wayland protocols
   (`protocol/gamescope-*.xml`) are the primary way external tools drive a running session:
   `gamescope_control`/`gamescope_private` for `gamescopectl` (`src/Apps/gamescopectl.cpp`)

@@ -88,14 +88,9 @@ namespace gamescope
 		const uint64_t ulIntervalNSecs = mHzToRefreshCycle( GetRefresh() );
 		const uint64_t ulNow = get_time_in_nanos();
 
-		uint64_t ulTargetPoint = GetLastVBlank() + ulIntervalNSecs - ulOffset;
-
-		// Same result as stepping one refresh at a time, without a loop that grows with the
-		// anchor's age (ritz_timer_feedback_anchor 4 never moves the anchor).
-		if ( ulTargetPoint < ulNow && ulIntervalNSecs )
-			ulTargetPoint += ( ( ulNow - ulTargetPoint + ulIntervalNSecs - 1 ) / ulIntervalNSecs ) * ulIntervalNSecs;
-
-		return ulTargetPoint;
+		// Whole periods from the anchor, computed rather than stepped one refresh at a time
+		// (same result; a free-running anchor can be minutes old).
+		return vblanksched::NextWakeup( GetLastVBlank(), ulIntervalNSecs, ulOffset, ulNow );
 	}
 
 	VBlankScheduleTime CVBlankTimer::CalcNextWakeupTime( bool bPreemptive )
@@ -226,15 +221,14 @@ namespace gamescope
 		uint64_t ulTargetVBlank = ulScheduledWakeupPoint + ulOffset;
 
 		// The wake-up only has to lie in the future, so a lead that shrank since the last
-		// wake-up (or a grid a feedback moved) can aim at the vblank that wake-up already
-		// served: a second tick for one refresh. Counted always; ritz_timer_one_per_vblank
-		// moves it to the next refresh.
-		if ( ulRefreshInterval && m_ulLastFiredTarget && ulTargetVBlank < m_ulLastFiredTarget + ulRefreshInterval / 2 )
+		// wake-up (the paint reports its draw time before the tick's own re-arm) or a grid
+		// moved earlier can aim at the vblank that wake-up already served: a second tick for
+		// one refresh. Counted always; ritz_timer_one_per_vblank (default) takes the next one.
+		if ( const uint64_t ulSteps = vblanksched::OnePerVBlankSteps( ulTargetVBlank, m_ulLastFiredTarget, ulRefreshInterval ) )
 		{
 			m_Stats.ulRetarget.fetch_add( 1, std::memory_order_relaxed );
 			if ( cv_ritz_timer_one_per_vblank )
 			{
-				const uint64_t ulSteps = ( m_ulLastFiredTarget + ulRefreshInterval / 2 - ulTargetVBlank ) / ulRefreshInterval + 1;
 				ulScheduledWakeupPoint += ulSteps * ulRefreshInterval;
 				ulTargetVBlank += ulSteps * ulRefreshInterval;
 			}
@@ -253,26 +247,33 @@ namespace gamescope
 		return std::exchange( m_PendingVBlank, std::nullopt );
 	}
 
-	// Field test (2026-11-23): the refresh timer ticking faster than the refresh on a
-	// nested Wayland host. Defaults = the behaviour before these switches.
+	// The refresh timer against a nested Wayland host's feedback (2026-11-23; see
+	// superdoc/features/frame-generation-host-scanout.md). Test switches: the defaults are
+	// the fix, the value named in each help string restores the behaviour before it.
 	ConVar<bool> cv_ritz_timer_draw_per_tick( "ritz_timer_draw_per_tick", false,
-		"Field test: 1 = only the first paint after a timer wake-up (vblank or frame generation's extra timer) feeds the "
-		"wake-up lead's draw time; other paints (async, forced, arrival) record nothing. 0 = every paint records one (before)." );
-	ConVar<int> cv_ritz_timer_feedback_anchor( "ritz_timer_feedback_anchor", 0,
-		"Field test, nested Wayland: how a host `presented` feedback steers the vblank timer. 0 = every one anchors the "
-		"grid and re-arms the timer at once (before). 1 = only a plausible vblank anchors and re-arms (at least half a "
-		"refresh after the anchor and within ritz_timer_grid_tolerance of its grid; every 30th rejected one in a row is taken anyway to follow "
-		"a real phase change). 2 = the same filter, but the anchor is never forced: the next tick's own re-arm picks it "
-		"up. 3 = as 0, but feedbacks of commits that attached no new buffer are ignored. 4 = host feedback never touches "
-		"the timer: it free-runs on its last grid at the refresh period (a control; drifts against the host's real vblank)." );
-	ConVar<int> cv_ritz_timer_grid_tolerance( "ritz_timer_grid_tolerance", 5,
-		"Field test: how far (percent of a refresh, 1-50) a host `presented` time may sit from the timer's grid and still "
-		"count as on it: the `status: timer` off-grid count and ritz_timer_feedback_anchor 1/2 use it." );
-	ConVar<bool> cv_ritz_timer_one_per_vblank( "ritz_timer_one_per_vblank", false,
-		"Field test: 1 = a timer schedule never aims at the vblank the last wake-up already served (a lead that shrank, or "
-		"a grid a feedback moved earlier, would otherwise give that refresh a second tick); it takes the next one. 0 = before." );
+		"Test: 1 = only the first paint after a timer wake-up (vblank or frame generation's extra timer) feeds the "
+		"wake-up lead's draw time; other paints (async, forced, arrival) record nothing. 0 = every paint records one. "
+		"Matters for async paints without frame generation; not seen on a real host." );
+	ConVar<int> cv_ritz_timer_feedback_anchor( "ritz_timer_feedback_anchor", 1,
+		"Test, nested Wayland: how a host `presented` feedback steers the vblank timer. 1 (default) = only a plausible "
+		"vblank anchors the grid: on it within ritz_timer_grid_tolerance and at least half a refresh after the anchor, "
+		"or the 30th of a run of rejected ones that all share one grid (the host moved its phase); never while the "
+		"host's refresh is not the grid's (a nested refresh below the output's); its re-arm never replaces a wake-up "
+		"already due. 2 = the same filter, never re-armed by force (the next tick's own re-arm picks the anchor up). "
+		"4 = feedback never touches the timer (free-run control). 0 = every feedback anchors and re-arms at once (before)." );
+	// Why 1%: a real vblank stamp of a fixed-refresh host lands within microseconds of the
+	// grid (field: 0.003 ms mean); a stamp that follows gamescope's commit lands 0.3-0.7 ms
+	// early, and every one taken moves the grid by its error, so the window bounds the creep.
+	ConVar<int> cv_ritz_timer_grid_tolerance( "ritz_timer_grid_tolerance", 1,
+		"Test: how far (percent of a refresh, 1-50, default 1) a host `presented` time may sit from the timer's grid "
+		"and still count as on it: the `status: timer` off-grid count and ritz_timer_feedback_anchor 1/2 use it. "
+		"5 = the field test's value." );
+	ConVar<bool> cv_ritz_timer_one_per_vblank( "ritz_timer_one_per_vblank", true,
+		"Test: 1 (default) = a timer schedule never aims at the vblank the last wake-up already served (a lead that "
+		"shrank after a paint, or a grid moved earlier, would give that refresh a second tick); it takes the next one. "
+		"0 = before." );
 
-	void CVBlankTimer::MarkVBlank( uint64_t ulNanos, bool bReArmTimer, VBlankSource eSource, bool bNoNewBuffer )
+	void CVBlankTimer::MarkVBlank( uint64_t ulNanos, bool bReArmTimer, VBlankSource eSource )
 	{
 		m_Stats.ulMark[ size_t( eSource ) & 3 ].fetch_add( 1, std::memory_order_relaxed );
 
@@ -287,38 +288,28 @@ namespace gamescope
 			// Distance from the grid the current anchor defines (signed: + = later than
 			// the nearest grid point).
 			const uint64_t ulAnchor = m_ulLastVBlank.load();
-			bool bOnGrid = true;
+			const int nTol = std::clamp( int( cv_ritz_timer_grid_tolerance ), 1, 50 );
 			if ( ulPeriod && ulAnchor )
 			{
-				const int64_t lDiff = int64_t( ulNanos - ulAnchor );
-				const int64_t lPeriod = int64_t( ulPeriod );
-				const int64_t lPhase = ( ( lDiff % lPeriod ) + lPeriod ) % lPeriod;
-				const int64_t lSigned = lPhase > lPeriod / 2 ? lPhase - lPeriod : lPhase;
-				const int nTol = std::clamp( int( cv_ritz_timer_grid_tolerance ), 1, 50 );
-				bOnGrid = std::abs( lSigned ) * 100 <= lPeriod * nTol;
+				const int64_t lPhase = vblanksched::GridPhase( ulNanos, ulAnchor, ulPeriod );
 				m_Stats.ulPhaseN.fetch_add( 1, std::memory_order_relaxed );
-				m_Stats.lPhaseSum.fetch_add( lSigned, std::memory_order_relaxed );
-				m_Stats.ulPhaseAbsSum.fetch_add( uint64_t( std::abs( lSigned ) ), std::memory_order_relaxed );
+				m_Stats.lPhaseSum.fetch_add( lPhase, std::memory_order_relaxed );
+				m_Stats.ulPhaseAbsSum.fetch_add( uint64_t( lPhase < 0 ? -lPhase : lPhase ), std::memory_order_relaxed );
+				if ( !vblanksched::OnGrid( lPhase, ulPeriod, nTol ) )
+					m_Stats.ulFbOffGrid.fetch_add( 1, std::memory_order_relaxed );
 			}
-			if ( !bOnGrid )
-				m_Stats.ulFbOffGrid.fetch_add( 1, std::memory_order_relaxed );
 
 			const int nMode = cv_ritz_timer_feedback_anchor;
 			bool bTake = true;
-			if ( nMode == 4 )
-				bTake = false;   // free-run: the timer keeps the grid it has
-			else if ( nMode == 3 )
-				bTake = !bNoNewBuffer;
-			else if ( ( nMode == 1 || nMode == 2 ) && ulPeriod && ulAnchor )
+			if ( nMode == 1 || nMode == 2 )
 			{
-				const bool bPlausible = bOnGrid && ulNanos > ulAnchor && ulNanos - ulAnchor >= ulPeriod / 2;
-				if ( bPlausible )
-					m_nFbRejectRun.store( 0, std::memory_order_relaxed );
-				else if ( m_nFbRejectRun.fetch_add( 1, std::memory_order_relaxed ) + 1 >= 30 )
-					m_nFbRejectRun.store( 0, std::memory_order_relaxed );   // a real phase change: follow it
-				else
-					bTake = false;
+				// Only the host feedback thread gets here (Wayland event dispatch).
+				std::scoped_lock lock( m_AnchorFilterMutex );
+				bTake = !vblanksched::ForeignGrid( nRefresh, g_nOutputRefresh ) &&
+					m_AnchorFilter.Decide( ulNanos, ulAnchor, ulPeriod, nTol );
 			}
+			else if ( nMode != 0 )
+				bTake = false;   // 4: free-run, the timer keeps the grid it has
 			if ( !bTake )
 			{
 				m_Stats.ulFbIgnored.fetch_add( 1, std::memory_order_relaxed );
@@ -329,7 +320,9 @@ namespace gamescope
 			if ( bReArmTimer && nMode != 2 )
 			{
 				m_Stats.ulFbRearm.fetch_add( 1, std::memory_order_relaxed );
-				ArmNextVBlank( false );
+				// Mode 1: a wake-up already due (its expiry not yet read) is left to fire.
+				// Replacing it loses that tick: the new schedule is computed from "now".
+				ArmNextVBlankFromFeedback( nMode == 1 );
 			}
 			return;
 		}
@@ -416,6 +409,9 @@ namespace gamescope
 		S.ulRearmN = X( C.ulRearmN, 0ul );
 		S.ulRearmOverdue = X( C.ulRearmOverdue, 0ul );
 		S.ulRetarget = X( C.ulRetarget, 0ul );
+		S.ulRearmKept = X( C.ulRearmKept, 0ul );
+		S.ulTargetShort = X( C.ulTargetShort, 0ul );
+		S.ulMissed = X( C.ulMissed, 0ul );
 		S.lRearmShiftSum = X( C.lRearmShiftSum, int64_t( 0 ) );
 		S.ulPhaseN = X( C.ulPhaseN, 0ul );
 		S.ulPhaseAbsSum = X( C.ulPhaseAbsSum, 0ul );
@@ -511,12 +507,31 @@ namespace gamescope
 
 	void CVBlankTimer::ArmNextVBlank( bool bPreemptive )
 	{
+		ArmNextVBlankImpl( bPreemptive, false );
+	}
+
+	void CVBlankTimer::ArmNextVBlankFromFeedback( bool bKeepDue )
+	{
+		ArmNextVBlankImpl( false, bKeepDue );
+	}
+
+	void CVBlankTimer::ArmNextVBlankImpl( bool bPreemptive, bool bKeepDue )
+	{
 		std::unique_lock lock( m_ScheduleMutex );
 
 		// If we're pre-emptively re-arming, don't
 		// do anything if we are already armed.
 		if ( bPreemptive && m_bArmed )
 			return;
+
+		// A forced re-arm that would replace a wake-up already due: let it fire. The
+		// schedule computed now could only aim at the next vblank, so the due tick is lost.
+		if ( bKeepDue && m_bArmed && UsingTimerFD() && m_TimerFDSchedule.ulScheduledWakeupPoint &&
+			 m_TimerFDSchedule.ulScheduledWakeupPoint <= get_time_in_nanos() )
+		{
+			m_Stats.ulRearmKept.fetch_add( 1, std::memory_order_relaxed );
+			return;
+		}
 
 		const bool bWasArmed = m_bArmed;
 		m_bArmed = true;
@@ -595,8 +610,21 @@ namespace gamescope
 					if ( nRefresh > 0 && ulGap * 10 < mHzToRefreshCycle( nRefresh ) * 9 )
 						m_Stats.ulShortGaps.fetch_add( 1, std::memory_order_relaxed );
 				}
+				// The vblanks two wake-ups aimed at: a second tick for one refresh (closer than
+				// 0.9 period), or refreshes no tick served (whole periods beyond the first).
+				const uint64_t ulTarget = m_TimerFDSchedule.ulTargetVBlank;
+				const int nRefresh = GetRefresh();
+				const uint64_t ulPeriod = nRefresh > 0 ? mHzToRefreshCycle( nRefresh ) : 0;
+				if ( ulPeriod && m_ulLastFiredTarget && ulTarget > m_ulLastFiredTarget )
+				{
+					const uint64_t ulTGap = ulTarget - m_ulLastFiredTarget;
+					if ( ulTGap * 10 < ulPeriod * 9 )
+						m_Stats.ulTargetShort.fetch_add( 1, std::memory_order_relaxed );
+					else if ( ulTGap * 2 >= ulPeriod * 3 )
+						m_Stats.ulMissed.fetch_add( ( ulTGap + ulPeriod / 2 ) / ulPeriod - 1, std::memory_order_relaxed );
+				}
 				m_ulLastWakeupPoint = ulWake;
-				m_ulLastFiredTarget = m_TimerFDSchedule.ulTargetVBlank;
+				m_ulLastFiredTarget = ulTarget;
 			}
 
 			gpuvis_trace_printf( "vblank timerfd wakeup" );
