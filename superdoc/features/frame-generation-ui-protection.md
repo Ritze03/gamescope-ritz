@@ -132,7 +132,29 @@ No library change: it maps to `UiProtection::CrosshairV2` with the explicit box 
 
 The **Crosshair box size** row is greyed in this mode ("Whole screen V2 covers the whole picture") and the host records no box preview (a full-frame crop shows nothing; the Inspector then reads "Waiting for a game frame." after two seconds).
 
-**Cost (an estimate, not measured):** about +0.3-0.8 ms per real frame at 1080p and 16 bytes of library state per pixel (about 33 MB at 1080p). **Caution (the library's own):** a bigger box raises false "still" detections (a still background counted as UI); unvalidated at the full frame.
+**Cost (the library's measurement, 2026-11-23; one high-end desktop GPU, 8-bit, 2x, flowScale 2; total GPU time per
+real pair = estimate + observe + one synth):**
+
+| | Off | Crosshair V2 (default box) | Whole screen V2 |
+|---|---|---|---|
+| Motion version 3, 1080p | 1.07 ms | 1.10 ms | 1.90 ms |
+| Motion version 3, 1440p | 1.77 ms | 1.81 ms | 3.10 ms |
+| Motion version 1, 1080p | 0.35 ms | 0.36 ms | 0.96 ms |
+| Motion version 1, 1440p | 0.50 ms | 0.51 ms | 1.53 ms |
+
+So about +0.8 ms (1080p) / +1.3 ms (1440p) per real frame with V3 at 2x. Where it goes (V3): the observe's detect pass
+0.58 / 0.96 ms (0.016 / 0.017 ms with the default box) and the synth's tap rejection (synth 0.20 -> 0.46 ms and
+0.35 -> 0.82 ms), i.e. about +0.26 / +0.46 ms for every further generated frame at 3x / 4x. A paused picture is the
+worst case for the detect pass: 0.87 / 1.55 ms. The detect pass also runs for every tracked frame while frames are
+passed through. Memory (computed from the code): about 47 MiB at 1080p and 84 MiB at 1440p, against 0.02 MiB with
+the default box.
+
+**What it masks (library, game footage at 60 fps):** 0.15-0.8 % of the frame, 6.7-12 % on a paused picture; the
+contrast gate keeps sky and flat ground out, and the HUD elements of the tested clips are found (one static element
+was missed, not investigated). Static scenery taken as UI: up to 0.6 % of the frame, harmless (identical pixels).
+Slowly drifting pixels pasted instead of interpolated: 0.07-0.32 %. Against the real middle frame the mean error is
+unchanged against Off. Not covered: real 1440p content, HDR formats, a mostly static camera with a small moving
+object, long slow-drift skies.
 
 **Timing.** The library adds `ui_detect` and `ui_inpaint` (per observe) and `ui_patch`
 (per synth) to its profile, and an observe opens a profile that the next estimate
