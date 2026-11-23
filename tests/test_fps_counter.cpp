@@ -535,3 +535,22 @@ TEST_CASE( "fgstats: missing numbers print as a dash, not 0", "[fps_counter]" )
     REQUIRE( v[3] == "FG GPU: estimate -  synth -  pair -  UI - ms" );
     REQUIRE( v[0] == "V1" );
 }
+
+TEST_CASE( "fgstats: an active Debug view gets its own line, with (not available) when refused", "[fps_counter]" )
+{
+    fgstats::Input in = GeneratingInput();
+    REQUIRE( fgstats::FormatLines( in ).size() == 5 );   // Off: no line
+    in.sView = "Motion map";
+    auto v = fgstats::FormatLines( in );
+    REQUIRE( v.size() == 6 );
+    REQUIRE( v[5] == "view: Motion map" );
+    in.bViewRefused = true;
+    REQUIRE( fgstats::FormatLines( in )[5] == "view: Motion map (not available)" );
+    // It sits before the not-generating reason.
+    in.bGenerating = false;
+    in.sReason = "Waiting for a second frame";
+    v = fgstats::FormatLines( in );
+    REQUIRE( v.size() == 7 );
+    REQUIRE( v[5] == "view: Motion map (not available)" );
+    REQUIRE( v[6] == "not generating: Waiting for a second frame" );
+}

@@ -105,6 +105,10 @@ namespace fghost
 			return PackUiBox( c.uiBoxTenths, c.uiWholeFrame );   // bits 0-7 tenths, bit 8 Whole screen V2
 		}
 
+		static_assert( sizeof( framegen::Settings ) == 164, "framegen::Settings changed size: re-check ToLibrarySettings() and the library pin" );
+		static_assert( uint8_t( framegen::DebugView::Off ) == 0 && uint8_t( framegen::DebugView::Motion ) == 1
+			&& uint8_t( framegen::DebugView::UiMask ) == 2 && uint8_t( framegen::DebugView::UiClean ) == 3,
+			"LibraryDebugView() (FrameGenDebug.h) maps the row's index onto these values" );
 		static_assert( kUiBoxMaxTenths <= 255, "the box size has 8 bits (48-55) in the library-config key" );
 		std::atomic<uint32_t> g_uUiBox{ uint32_t( kUiBoxDefaultTenths ) };
 
@@ -279,6 +283,9 @@ namespace fghost
 		// literal, "" = no cheap reason). Read by the compositor thread's status line through BlendActive() / BlendWhy().
 		std::atomic<bool> g_bBlendActive{ false };
 		std::atomic<const char *> g_pszBlendWhy{ "" };
+		// Debug view: the row's index of the view the library draws now (0 = none), and whether the wanted one was refused.
+		std::atomic<int> g_nDebugViewActive{ 0 };
+		std::atomic<bool> g_bDebugViewRefused{ false };
 		std::atomic<const char *> g_pszMotionNote{ "" };  // the library's reason V2 is refused (string literals), else ""
 		std::atomic<float> g_flLastPairGpuMs{ -1.0f };
 		std::atomic<float> g_flLastEstimateMs{ -1.0f };
@@ -451,6 +458,9 @@ namespace fghost
 			// the occlusion softness and unsure sensitivity start at 25 hundredths).
 			uint64_t ulAppliedV3 = 0;
 			int nBlendLogged = 0;   // the blend state last logged (variant * 4 + state), see PublishBlend()
+			// The Debug view index (FrameGenDebug.h) last handled by ApplyDebugView(): accepted OR refused, so a refused view
+			// is not retried every frame (the next change of the row retries). 0 = Off, which init() starts with.
+			int nDebugViewHandled = 0;
 			// A failed init/reconfigure is not retried until the size or the
 			// structural setting changes (or FG is switched off and on): init
 			// builds pipelines, so retrying per frame would be a stutter machine.
@@ -732,6 +742,9 @@ namespace fghost
 			H.uAppliedReach = 0;
 			H.ulAppliedV3 = 0;
 			H.nBlendLogged = 0;
+			H.nDebugViewHandled = 0;
+			g_nDebugViewActive.store( 0, std::memory_order_relaxed );
+			g_bDebugViewRefused.store( false, std::memory_order_relaxed );
 			g_bBlendActive.store( false, std::memory_order_relaxed );
 			g_pszBlendWhy.store( "", std::memory_order_relaxed );
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
@@ -849,9 +862,40 @@ namespace fghost
 			}
 		}
 
+		// The library's debug view (Settings::debugView, superdoc/features/frame-generation-debug.md). `nView` is the Debug view
+		// row's index. A runtime setSettings(): no reconfigure, no estimate dropped, so a change neither resets pacing nor shows
+		// a real frame. Applied on top of the library's CURRENT settings (never the freshly resolved ones), so the view can
+		// never be the reason another setting stays unapplied; a refusal (the debug shader variants of this format are not built
+		// in, or the pipeline could not be created) leaves the settings unchanged, is logged and published once per change.
+		// `Why` a view change alone is applied here and not through the library-config key: that key is full (64 bits), and a
+		// view change must not take the reconfigure / motion-resolution path at all.
+		void ApplyDebugView( Host_t &H, int nView )
+		{
+			if ( nView == H.nDebugViewHandled )
+				return;
+			H.nDebugViewHandled = nView;
+			framegen::Settings st = H.interp.settings();
+			st.debugView = framegen::DebugView( LibraryDebugView( nView ) );
+			if ( H.interp.setSettings( st ) )
+			{
+				g_nDebugViewActive.store( nView, std::memory_order_relaxed );
+				g_bDebugViewRefused.store( false, std::memory_order_relaxed );
+				fg_log.infof( "frame generation: debug view %s", DebugViewName( nView ) );
+				return;
+			}
+			const char *pszWhy = H.interp.settingsError( st );
+			g_bDebugViewRefused.store( true, std::memory_order_relaxed );
+			fg_log.errorf( "frame generation: debug view %s not available: %s", DebugViewName( nView ),
+				pszWhy ? pszWhy : "the library could not create its pipeline" );
+			// Fall back to no view at all, so the picture is never marked with another view than the one the row names.
+			st.debugView = framegen::DebugView::Off;
+			if ( H.interp.setSettings( st ) )
+				g_nDebugViewActive.store( 0, std::memory_order_relaxed );
+		}
+
 		// Brings the library to (w, h, cfg): init the first time, resize on a size
 		// change, apply a changed preset. False = not usable this frame.
-		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const FormatPlan &plan, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur, uint32_t uPackedLearned )
+		bool EnsureReady( Host_t &H, uint32_t w, uint32_t h, const FormatPlan &plan, const Config &c, uint32_t uPackedConfig, const BlurConfig &b, uint32_t uPackedBlur, uint32_t uPackedLearned, int nDebugView )
 		{
 			const uint64_t ulKey = FailKey( w, h, c, plan );
 			if ( H.ulFailedKey == ulKey )
@@ -938,6 +982,7 @@ namespace fghost
 				if ( !bWantV2 )
 				{
 					PublishBlend( H, c );
+					ApplyDebugView( H, nDebugView );
 					return true;
 				}
 			}
@@ -1058,6 +1103,7 @@ namespace fghost
 				H.ulAppliedV3 = ulV3;
 			}
 			PublishBlend( H, c );
+			ApplyDebugView( H, nDebugView );
 			return true;
 		}
 
@@ -2089,6 +2135,8 @@ namespace fghost
 
 	bool BlendActive() { return g_bBlendActive.load( std::memory_order_relaxed ); }
 	const char *BlendWhy() { return g_pszBlendWhy.load( std::memory_order_relaxed ); }
+	int  DebugViewActive() { return g_nDebugViewActive.load( std::memory_order_relaxed ); }
+	bool DebugViewRefused() { return g_bDebugViewRefused.load( std::memory_order_relaxed ); }
 
 	RenderStatus GetRenderStatus()
 	{
@@ -2206,6 +2254,7 @@ namespace fghost
 				env.pszMotionEffective = MotionText( sInEffect.motionVersion );
 				env.nBlend = cfg.motion == Motion::V3 ? cfg.v3Blend : 0;
 				env.bBlendActive = g_pHost->interp.v3BlendActive();
+				env.nView = DebugViewActive();   // what the library really draws (0 when refused)
 				capture::Start( env, ulNowNs, ulCaptureKey );
 			}
 		}
@@ -2267,7 +2316,7 @@ namespace fghost
 		H.bHaveColorspace = true;
 		H.eColorspace = eColorspace;
 
-		if ( !EnsureReady( H, uWidth, uHeight, plan, cfg, uPackedConfig, blurCfg, uPackedBlur, uPackedLearned ) )
+		if ( !EnsureReady( H, uWidth, uHeight, plan, cfg, uPackedConfig, blurCfg, uPackedBlur, uPackedLearned, UnpackDebug( g_uDebug.load( std::memory_order_relaxed ) ).view ) )
 		{
 			// A 10-bit / fp16 game that cannot start says why in terms of the format,
 			// not the generic "could not start": the cause is almost always the format.

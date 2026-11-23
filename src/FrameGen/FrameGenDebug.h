@@ -5,7 +5,7 @@
 // DebugConfig word (g_uDebug, its own atomic: the packed Config word is full):
 //   bit 0      onlyGenerated
 //   bit 1      stats
-//   bits 2-5   view (reserved: 0 = off; the later library debug views, unused for now)
+//   bits 2-5   view: the Debug view row's index, 0 Off, 1 UI highlighted, 2 UI removed, 3 Motion map (kDebugViewKeys order)
 //   bits 6-31  unused, written as 0 and ignored on unpack
 // UI-box word (g_uUiBox): bits 0-7 the crosshair box in tenths of a percent, bit 8 Whole screen V2 (the box then is the whole
 // frame, whatever the tenths say; the tenths stay stored so the slider keeps its value).
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 
 #include "FrameGenHost.h"
 
@@ -38,9 +39,41 @@ namespace fghost
 		return ulPrevId == 0 || flT >= 1.0f;
 	}
 
+	// The Debug view row (framegen.debug_view): stored strings, in the ROW's order (also DebugConfig::view). Note the order differs
+	// from the library's framegen::DebugView (Off 0, Motion 1, UiMask 2, UiClean 3): LibraryDebugView() maps one to the other.
+	constexpr const char *kDebugViewKeys[] = { "off", "ui_highlight", "ui_removed", "motion" };
+	constexpr int kDebugViewCount = 4;
+	constexpr const char *kDebugViewNames[] = { "Off", "UI highlighted", "UI removed", "Motion map" };
+
+	// A stored string -> the row's index; unknown (or empty) = 0 (off).
+	inline int DebugViewFromKey( const std::string &s )
+	{
+		for ( int i = 0; i < kDebugViewCount; ++i )
+			if ( s == kDebugViewKeys[ i ] )
+				return i;
+		return 0;
+	}
+
+	// The row's index -> the library's framegen::DebugView value (the host static_asserts these against the enum).
+	inline uint8_t LibraryDebugView( int nView )
+	{
+		switch ( nView )
+		{
+			case 1: return 2;   // UI highlighted = DebugView::UiMask
+			case 2: return 3;   // UI removed     = DebugView::UiClean
+			case 3: return 1;   // Motion map     = DebugView::Motion
+			default: return 0;  // Off, and anything out of range
+		}
+	}
+
+	inline const char *DebugViewName( int nView )
+	{
+		return nView >= 0 && nView < kDebugViewCount ? kDebugViewNames[ nView ] : kDebugViewNames[ 0 ];
+	}
+
 	inline uint32_t PackDebug( const DebugConfig &d )
 	{
-		return ( d.onlyGenerated ? 1u : 0u ) | ( d.stats ? 2u : 0u ) | ( ( uint32_t( std::max( d.view, 0 ) ) & 0xFu ) << 2 );
+		return ( d.onlyGenerated ? 1u : 0u ) | ( d.stats ? 2u : 0u ) | ( ( uint32_t( std::min( std::max( d.view, 0 ), kDebugViewCount - 1 ) ) & 0xFu ) << 2 );
 	}
 
 	inline DebugConfig UnpackDebug( uint32_t u )

@@ -840,6 +840,7 @@ namespace fghost::capture
 		h.sMotionEffective = env.pszMotionEffective;
 		h.nBlend = env.nBlend;
 		h.bBlendOff = !env.bBlendActive;
+		h.nView = env.nView;
 		h.uFlowScale = env.pSettings->flowScale;
 		h.nFrames = kFrames;
 		h.flPrepareMs = s.flPrepareMs;

@@ -326,6 +326,7 @@ namespace fghost::capture
 		std::string sMotionEffective;   // what the library runs (V1 when it refused the wish)
 		int nBlend = 0;              // V3 Hybrid's variant (1..6 = A, B, C, A-A, A-B, A-C), 0 = none: no `blend=` token
 		bool bBlendOff = false;      // the variant is selected but the library runs V3's rule: the token reads `blend=A(off)`
+		int nView = 0;               // the Debug view the library draws (the row's index: 1 UI highlighted, 2 UI removed, 3 Motion map), 0 = none: no `view=` token
 		uint32_t uFlowScale = 0;
 		int nFrames = kFrames;
 		float flPrepareMs = 0.0f;      // how long the space check + staging allocation + directory took
@@ -390,6 +391,7 @@ namespace fghost::capture
 		const char *pszMotionEffective = "";
 		int nBlend = 0;                            // V3 Hybrid's variant selected (0 = none), see HeaderInfo::nBlend
 		bool bBlendActive = true;                  // Interpolator::v3BlendActive() at the start
+		int nView = 0;                             // the Debug view in effect (HeaderInfo::nView)
 	};
 
 	// Paint thread, once per RecordBaseLayer() call, first. Times out an armed capture that could not

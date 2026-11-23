@@ -32,6 +32,8 @@ namespace fgstats
 		float       flPairMs = -1.0f;
 		float       flUiMs = -1.0f;
 		std::string sUiProtection;         // "Off" / "Crosshair" / "Crosshair V2" / "Whole screen" / "Whole screen V2"
+		std::string sView;                 // the Debug view's name ("Motion map"), "" = none (Off)
+		bool        bViewRefused = false;  // the wanted view could not be drawn (the library lacks it)
 		std::string sReason;               // why it is not generating ("" = none)
 	};
 
@@ -44,7 +46,7 @@ namespace fgstats
 		return sz;
 	}
 
-	// 1 to 6 short plain-ASCII lines.
+	// 1 to 7 short plain-ASCII lines.
 	inline std::vector<std::string> FormatLines( const Input &in )
 	{
 		std::vector<std::string> v;
@@ -74,6 +76,8 @@ namespace fgstats
 			"  pair " + Num( in.flPairMs, "%.2f" ) + "  UI " + Num( in.flUiMs, "%.2f" ) + " ms" );
 		if ( !in.sUiProtection.empty() )
 			v.push_back( "UI protection: " + in.sUiProtection );
+		if ( !in.sView.empty() )
+			v.push_back( "view: " + in.sView + ( in.bViewRefused ? " (not available)" : "" ) );
 		if ( !in.bGenerating && !in.sReason.empty() )
 			v.push_back( "not generating: " + in.sReason );
 		return v;
