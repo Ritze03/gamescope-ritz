@@ -1345,7 +1345,7 @@ TEST_CASE( "a schema-3 profile's vibrancy key renames to saturation on load and 
 // Color Boost (2026-10-29): additive key, no schema bump. A profile that never
 // mentions it loads as off with the 1.0 default strength; one that sets it
 // round-trips through SaveSections/LoadSections.
-TEST_CASE( "reshade.color_boost defaults off at strength 1.0 and round-trips", "[config]" )
+TEST_CASE( "reshade.color_boost defaults off at strength 0.5 and round-trips", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -1356,7 +1356,7 @@ TEST_CASE( "reshade.color_boost defaults off at strength 1.0 and round-trips", "
     })";
     Settings s = LoadSections();
     REQUIRE( s.reshade.color_boost.enabled == false );
-    REQUIRE( s.reshade.color_boost.strength == 1.0f );
+    REQUIRE( s.reshade.color_boost.strength == 0.5f );
 
     s.reshade.color_boost.enabled = true;
     s.reshade.color_boost.strength = 2.35f;

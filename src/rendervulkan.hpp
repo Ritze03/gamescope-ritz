@@ -626,7 +626,7 @@ struct NativeEffectsState_t
 	// NEW 2026-10-29 (ConfigSchema.h's ReshadeColorBoostSettings): lifts
 	// muted colours most, leaves colours at the gamut edge alone.
 	bool  bColorBoost = false;
-	float flColorBoost = 1.0f;           // 0..3, 0 neutral
+	float flColorBoost = 0.5f;           // 0..3, 0 neutral
 
 	bool  bPreSharpen = false;
 	float flPreSharpen = 0.5f;           // 0..2, the panel's slider scale

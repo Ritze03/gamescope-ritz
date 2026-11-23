@@ -211,9 +211,11 @@ the colors more vibrant with a gamma (maybe inverted?) curve, so low saturation 
 greatly boosted and already high saturation stuff doesnt "blow out"."*
 
 **Config**: `ReshadeColorBoostSettings` — `enabled` (default false), `strength` (float,
-0.0..3.0, default 1.0; 0 is an exact identity). JSON `reshade.color_boost`. Additive key,
+0.0..3.0, default 0.5; 0 is an exact identity). JSON `reshade.color_boost`. Additive key,
 no schema bump (Vibrancy's precedent): an older profile has no such object and resolves
 to these defaults. One param, no skin-tone toggle (YAGNI).
+`Why:` the default Strength is 0.5 (was 1.0) because the user asked for it on 2026-11-23, no
+further reason given. Stored profile values are not migrated.
 
 **Against its neighbours.** Saturation is a flat multiplier (every colour gains the same
 factor, so it clips the strong ones first). Vibrancy (this fork's, the user's own
