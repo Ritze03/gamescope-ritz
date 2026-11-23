@@ -1082,8 +1082,9 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.debug_only_generated; },
 				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.debug_only_generated = b; PersistAndPush(); } ) )
 			.Help( "Shows only the generated frames and skips the game's own, to judge the generated "
-			       "picture. At 2x the picture then updates at half the rate. Shows the game's frames "
-			       "while nothing is being generated." )
+			       "picture. With Priority Low latency at 2x the picture then updates at half the rate. "
+			       "With Priority Smoothness every shown frame is already a generated one, so this "
+			       "changes nothing. Shows the game's frames while nothing is being generated." )
 			.Default( false )
 			.Keywords( "frame generation debug only generated frames skip real game frames judge interpolated" )
 			.ShownWhen( DebugOn )

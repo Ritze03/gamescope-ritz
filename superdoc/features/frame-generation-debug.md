@@ -18,7 +18,7 @@ Additive (2026-11-23), schema stays 5; absent or wrong-typed loads false.
 
 ## Only generated frames
 
-Shows only generated images; the game's own frames are skipped on screen. At fixed 2x the picture then updates at half the rate (a generated image, the same one again, a generated image, ...); at 3x it is gen, gen, held. With a Target above what the game delivers a held image can repeat several ticks. While nothing is generated (pass-through, inert, frame generation off) the game's frames show, so the picture never freezes.
+Shows only generated images; the game's own frames are skipped on screen. With Priority Low latency at fixed 2x the picture then updates at half the rate (a generated image, the same one again, a generated image, ...); at 3x it is gen, gen, held. With a Target above what the game delivers a held image can repeat several ticks. While nothing is generated (pass-through, inert, frame generation off) the game's frames show, so the picture never freezes.
 
 **Design** (`RecordBaseLayer()`, `FrameGenHost.cpp`, at the very end, after the stale-guard block and before the submit). The pacer is not touched and the real tick is NOT skipped: its paint still does the ring copy, the observe and the pair bookkeeping that later pairs and UI protection need. Only the image that is returned changes:
 
