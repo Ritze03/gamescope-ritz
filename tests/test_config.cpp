@@ -4728,10 +4728,11 @@ TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
     }
 }
 
-TEST_CASE( "framegen: a variant of a set beyond the active count loads a", "[config]" )
+TEST_CASE( "framegen: every variant string of the table loads, an unknown one loads a", "[config]" )
 {
-    // ar_a is set 2 (third set), ar3_c the last of the table: both are unknown until kHybridSetsActive reaches their set.
-    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar3_c", 4 } };
+    // ar_a is set 2 (third set), ar3_c the last of the table: both load as themselves (kHybridSetsActive is 5); ar4_a and d are unknown.
+    static_assert( fghost::kHybridSetsActive == 5 );
+    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar3_c", 4 }, { "ar4_a", 9 }, { "d", 9 } };
     for ( const auto &k : kCases )
     {
         TempConfigHome home;

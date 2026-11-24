@@ -579,7 +579,7 @@ namespace gamescope::config
         // wrong-typed or unknown value loads the default "off" (it was "guard" for one day, 2026-11-22; back to "off"
         // 2026-11-23). Not an Expert tuning value since 2026-11-23: the stored value always acts. ADDITIVE. Applies live.
         std::string v3_guard = "off";
-        // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1..6): "a" | "b" | "c" | "a_a" | "a_b" | "a_c" (the last three: a second weight set). Read only while motion_version
+        // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1..15): "a" | "b" | "c", then the same three with the prefixes "a_", "ar_", "ar2_", "ar3_" (a_a .. ar3_c; each prefix is one more weight set). Read only while motion_version
         // is "v3_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or unknown value loads "a".
         // ADDITIVE. Not an Expert tuning value: always in force, never reset by FrameGenEffective(). Applies live.
         std::string v3_hybrid_variant = "a";

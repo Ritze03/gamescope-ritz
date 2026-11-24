@@ -851,8 +851,8 @@ TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", 
 	h.uFlowScale = 2;
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=" ) == std::string::npos );
-	const char *const kName[] = { "A", "B", "C", "A-A", "A-B", "A-C" };
-	for ( int i = 0; i < 6; i++ )
+	const char *const kName[] = { "A", "B", "C", "A-A", "A-B", "A-C", "AR-A", "AR-B", "AR-C", "AR2-A", "AR2-B", "AR2-C", "AR3-A", "AR3-B", "AR3-C" };
+	for ( int i = 0; i < 15; i++ )
 	{
 		h.nBlend = i + 1;
 		const std::string sKey = std::string( "fallback_v1=0 blend=" ) + kName[ i ] + " flowScale=2";

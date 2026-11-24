@@ -247,7 +247,7 @@ namespace gamescope
 			}
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			{
-				// "v3_hybrid" = Motion::V3 plus the blend (1..6 = variant A, B, C, A-A, A-B, A-C); every other version has blend 0.
+				// "v3_hybrid" = Motion::V3 plus the blend (1..15 = variant A, B, C, A-A .. A-C, AR-A .. AR-C, AR2-A .. AR2-C, AR3-A .. AR3-C); every other version has blend 0.
 				const fghost::MotionChoice m = fghost::MotionFromKeys( f.motion_version, f.v3_hybrid_variant );
 				c.motion = m.motion;
 				c.v3Blend = m.blend;
@@ -643,10 +643,13 @@ namespace gamescope
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = fghost::HybridKey( ClampIdx( n, fghost::kHybridBlendMax - 1 ) + 1 ); PersistAndPush(); } ),
 			VariantOptions().data(), VariantOptions().size() )
 			.Help( "Experimental versions of the learned blend, to compare: A, B and C, and a second set of "
-			       "weights for the same three, A-A, A-B and A-C. Takes effect at once. "
+			       "weights for the same three, A-A, A-B and A-C. AR, AR2 and AR3 are three further trained "
+			       "sets to compare: AR was trained from scratch on real game frames, AR2 is the first set "
+			       "tuned further on real 60 to 120 fps frames, AR3 is the A- set trained further on real "
+			       "frames. All are experimental; judge them by eye. Takes effect at once. "
 			       "Has no effect while Detail from one frame is on." )
 			.Default( 0 )
-			.Keywords( "frame generation v3 hybrid variant learned blend a b c experiment compare" )
+			.Keywords( "frame generation v3 hybrid variant learned blend a b c ar ar2 ar3 a-a a-b a-c ar-a ar-b ar-c ar2-a ar2-b ar2-c ar3-a ar3-b ar3-c experiment compare" )
 			.ShownWhen( HybridSelected )
 			.DisabledUnless( On, "frame generation is off" );
 

@@ -11,7 +11,7 @@
 //   bit  49     v3DetailSplit  (fine detail taken from one frame)
 //   bits 50-51  v3Guard        0 Off, 1 Guard, 2 V2 motion (3 unpacks as 0)
 //   bits 52-55  v3Blend        0 off (V3's own rule), 1..15 = V3 Hybrid variants (HybridVariants.h: 1 + 3 * set + net; only
-//                              1..kHybridBlendMax are written, today 1..6; two bits until 2026-11-23, then three, now four
+//                              1..kHybridBlendMax are written, today 1..15; two bits until 2026-11-23, then three, now four
 //                              for up to five sets, bit 55 was unused)
 //   bits 56-63  unused, written as 0 and ignored on unpack
 // The whole word is the applied key's comparison in EnsureReady(), so a change to either switch is noticed.
