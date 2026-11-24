@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 #include "FrameGenHost.h"
@@ -112,6 +113,25 @@ namespace fghost
 			case UiProt::CrosshairV2: return bWholeFrame ? "Whole screen V2" : "Crosshair V2";
 		}
 		return "";
+	}
+
+	// Low FPS compensation's bit in the Learned word (FrameGenHost.cpp PackLearned(): the main config word is full, bits 0-6 are
+	// Learned motion's settings, the library-config key masks that word with 0x7F, so this pacing-only flag never reconfigures
+	// the interpolator).
+	constexpr uint32_t kLowFpsCompBit = 1u << 7;
+	inline uint32_t PackLowFps( bool bOn ) { return bOn ? kLowFpsCompBit : 0u; }
+	inline bool     UnpackLowFps( uint32_t uLearned ) { return ( uLearned & kLowFpsCompBit ) != 0; }
+
+	// Low FPS compensation's token for the `frame generation status` log line, with its leading ", ": the length of the
+	// transition while it is acting, "" otherwise. The switch on while the game is at 60 fps or above (the pacer's
+	// lowFpsActive is false then) prints nothing: the token says the feature is DOING something, and at 60 fps it does not.
+	inline std::string LowFpsStatusToken( bool bActive, float flTransitionMs )
+	{
+		if ( !bActive )
+			return "";
+		char sz[ 48 ];
+		snprintf( sz, sizeof( sz ), ", low fps compensation %.1f ms", double( flTransitionMs ) );
+		return sz;
 	}
 
 	// The library's box settings for a mode: the fraction of the height, plus explicit pixel sides (0 = take it from the fraction).

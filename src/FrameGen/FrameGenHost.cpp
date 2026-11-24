@@ -95,7 +95,8 @@ namespace fghost
 		// Learned motion's runtime settings, their own word: bits 0-3 net (framegen::LearnedNet
 		// order: e2v3, e1v3, e2v4, e1v4, e2v5, e1v5, g2v2, g2v3, m2v2, m2v3; ten values, four
 		// bits: three held eight, round 4b's ten do not), 4 half precision, 5 zero-motion test,
-		// 6 static guard (mask 0x7F).
+		// 6 static guard (mask 0x7F), 7 Low FPS compensation (the main word is full; a pacing-only flag, so
+		// it stays outside the library-config key, which masks this word with 0x7F).
 		// Round 1 had the net and precision in bits 30-31 of the main word; round 2 needs two
 		// more bits and the main word is full, so all four moved here (the main word's
 		// defaults still pack to what they did: bits 28-31 are 0 for V1).
@@ -104,7 +105,8 @@ namespace fghost
 			return ( uint32_t( c.learnedNet ) & 0xFu )
 				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 4 )
 				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 5 )
-				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 6 );
+				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 6 )
+				| PackLowFps( c.lowFpsCompensation );
 		}
 
 		// The crosshair box size, its own word (the main one is full): tenths of a
@@ -114,6 +116,7 @@ namespace fghost
 			return PackUiBox( c.uiBoxTenths, c.uiWholeFrame );   // bits 0-7 tenths, bit 8 Whole screen V2
 		}
 
+		static_assert( ( kLowFpsCompBit & 0x7Fu ) == 0, "Low FPS compensation must stay outside the library-config key's mask of the Learned word" );
 		static_assert( sizeof( framegen::Settings ) == 164, "framegen::Settings changed size: re-check ToLibrarySettings() and the library pin" );
 		static_assert( uint8_t( framegen::DebugView::Off ) == 0 && uint8_t( framegen::DebugView::Motion ) == 1
 			&& uint8_t( framegen::DebugView::UiMask ) == 2 && uint8_t( framegen::DebugView::UiClean ) == 3,
@@ -170,6 +173,7 @@ namespace fghost
 			c.learnedHalf = ( ( uLearned >> 4 ) & 1u ) != 0;
 			c.learnedZeroTest = ( ( uLearned >> 5 ) & 1u ) != 0;
 			c.learnedStaticGuard = ( ( uLearned >> 6 ) & 1u ) != 0;
+			c.lowFpsCompensation = UnpackLowFps( uLearned );
 			return c;
 		}
 
@@ -2685,9 +2689,19 @@ namespace fghost
 			// A real frame that is not the newest (a lag-spike buffer plays behind real
 			// time): the ring still holds it, so show that copy instead of layer 0.
 			// (Gone from the ring: layer 0, the newest, stays.)
+			// Low FPS compensation's hold (and Smoothness at its arrival paint) takes this path with the lag buffer off.
 			const int nShowSlot = FindSlot( H, req.showId );
+			static uint64_t s_ulOlder = 0, s_ulOlderMissing = 0;
 			if ( nShowSlot >= 0 )
+			{
 				pResult = H.pRing[ nShowSlot ];
+				if ( ++s_ulOlder == 1 || s_ulOlder % 500 == 0 )
+					fg_log.debugf( "older real frame %llu shown from the ring (newest %llu): %llu so far, %llu not in the ring",
+						(unsigned long long)req.showId, (unsigned long long)req.newestId, (unsigned long long)s_ulOlder, (unsigned long long)s_ulOlderMissing );
+			}
+			else if ( ++s_ulOlderMissing == 1 || s_ulOlderMissing % 100 == 0 )
+				fg_log.debugf( "older real frame %llu is not in the ring (newest %llu, ring %d): the newest is shown instead (%llu times)",
+					(unsigned long long)req.showId, (unsigned long long)req.newestId, H.nRing, (unsigned long long)s_ulOlderMissing );
 		}
 
 		// The stale guard: layer 0 is the refused stale buffer too, so the real frame shown is the newest GOOD one.

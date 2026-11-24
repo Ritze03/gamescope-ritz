@@ -517,6 +517,11 @@ namespace gamescope::config
         // real frames through. false (default, the user's call). ADDITIVE: absent
         // loads false, schema stays 5.
         bool gpu_limit = false;
+        // "Low FPS compensation" (2026-11-24): below 60 fps the transition between two game frames
+        // takes 16.7 ms and the older game frame is held for the rest of the interval (pacer's
+        // Inputs::lowFpsCompensation). Not an Expert tuning value: always in force, never reset by
+        // FrameGenEffective(). ADDITIVE: absent or wrong-typed loads false, schema stays 5.
+        bool low_fps_compensation = false;
         // "quality" | "performance"
         std::string quality = "quality";
         // Artifact safety: "off" | "very_low" | "low" | "default" | "high". Default "default"

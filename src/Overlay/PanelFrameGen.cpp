@@ -236,6 +236,7 @@ namespace gamescope
 			c.pauseAtRefresh = f.pause_at_refresh;
 			c.pauseWhenCursorVisible = f.pause_when_cursor_visible;
 			c.gpuLimit = f.gpu_limit;
+			c.lowFpsCompensation = f.low_fps_compensation;
 			c.quality = IndexOf( f.quality, kQualityKeys, 2, 0 ) == 1
 				? fghost::Quality::Performance : fghost::Quality::Quality;
 			c.safety = (fghost::Safety)IndexOf( f.safety, kSafetyKeys, 5, 1 );
@@ -608,6 +609,17 @@ namespace gamescope
 			.Segmented()
 			.Default( 1 )
 			.Keywords( "frame generation priority low latency smoothness input lag jitter pacing" )
+			.DisabledUnless( On, "frame generation is off" );
+
+		a.Switch( "framegen.low_fps_compensation", "Low FPS compensation",
+			ui::AnyBind::Of<bool>(
+				[]{ EnsureConfigLoaded(); return s_Settings.framegen.low_fps_compensation; },
+				[]( bool b ) { EnsureConfigLoaded(); s_Settings.framegen.low_fps_compensation = b; PersistAndPush(); } ) )
+			.Help( "Below 60 fps: plays the transition between two game frames in 16.7 ms and holds "
+			       "the game frame for the rest. Fewer generated frames on screen, less delay; motion "
+			       "becomes stop-and-go. No effect at 60 fps and above." )
+			.Default( false )
+			.Keywords( "low fps compensation 30 fps hold transition stop-and-go" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.motion_version", "Motion version",

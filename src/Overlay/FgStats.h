@@ -35,6 +35,7 @@ namespace fgstats
 		std::string sView;                 // the Debug view's name ("Motion map"), "" = none (Off)
 		bool        bViewRefused = false;  // the wanted view could not be drawn (the library lacks it)
 		std::string sReason;               // why it is not generating ("" = none)
+		float       flLowFpsMs = 0.0f;     // Low FPS compensation's transition while it acts (pacer Report::transitionMs), 0 = not acting
 	};
 
 	inline std::string Num( float fl, const char *pszFmt )
@@ -46,7 +47,7 @@ namespace fgstats
 		return sz;
 	}
 
-	// 1 to 7 short plain-ASCII lines.
+	// 1 to 8 short plain-ASCII lines.
 	inline std::vector<std::string> FormatLines( const Input &in )
 	{
 		std::vector<std::string> v;
@@ -71,6 +72,9 @@ namespace fgstats
 			s += "   " + in.sModeText;
 		v.push_back( s );
 
+		// Why the shown number is about half of what the multiplier suggests: held game frames are not new images.
+		if ( in.flLowFpsMs > 0.0f )
+			v.push_back( "low fps compensation: " + Num( in.flLowFpsMs, "%.1f" ) + " ms transition, game frame held" );
 		v.push_back( "delay " + Num( in.flDelayMs, "%.1f" ) + " ms   discarded " + Num( in.flDiscardedPerSec, "%.1f" ) + "/s" );
 		v.push_back( "FG GPU: estimate " + Num( in.flEstimateMs, "%.2f" ) + "  synth " + Num( in.flSynthMs, "%.2f" ) +
 			"  pair " + Num( in.flPairMs, "%.2f" ) + "  UI " + Num( in.flUiMs, "%.2f" ) + " ms" );
