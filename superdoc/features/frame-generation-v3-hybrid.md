@@ -81,8 +81,21 @@ count decides the options of the Hybrid variant row, which stored strings the co
 a set beyond it, an unknown one or a wrong type loads `"a"`), how far `PackV3()` writes (`kHybridBlendMax`
 = 3 x active; anything else packs as 0) and the host's clamp in `FrameGenHost.cpp`. `BlendLabel()` /
 `BlendText()` and everything built on them name all 15 values whatever the active count.
-To offer more sets once the pin ships them: change `kHybridSetsActive` in `HybridVariants.h` (and bump
-the pin); tests that name the count follow it.
+The library publishes its own bound, `framegen::kV3BlendMax` (3 x its weight sets; 6 at pin `88e071e`,
+15 planned with five sets); `validate` refuses a `v3Blend` above it. `kHybridSetsActive` stays hand-set:
+`HybridVariants.h` cannot include the library header (it pulls in the Vulkan headers, which Config and
+tests need not have), so `FrameGenHost.cpp` holds two `static_assert`s instead: `kV3BlendMax` is a
+multiple of 3 and at least 3, and `kHybridBlendMax == min( kV3BlendMax, kHybridBlendCount )`. To offer
+more sets once a pin ships them: bump the pin; the build then stops there with a message; set
+`kHybridSetsActive` to `min( kV3BlendMax / 3, kHybridSetsTotal )` in `HybridVariants.h` (a library with
+more than five sets also needs a table row). Tests that name the count follow it.
+The capture header's `blend=` token takes its name from the same table (`BlendToken()` in
+`FrameGenCapture.cpp`; it was a six-name array until the pin `88e071e`).
+Headless proof at pin `88e071e` (private headless compositor, nested, 2x, 8-bit and 10-bit clients): each
+of the six variants logs `learned blend <name>`, shows `blend=<name>` in the status line and generates
+(about 2x presented); plain V3 shows no blend and switching back restores it; no settings error.
+`Why a check and not a derivation:` a header-only derivation would make every Config or test target
+depend on Vulkan; a loud build failure costs one line at a pin bump and cannot be missed.
 
 `Why a table:` each new weight set used to mean edits in six places (config list, row options, key
 array, label array, pack bound, clamp); now the count is one constant.

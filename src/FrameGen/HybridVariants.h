@@ -2,8 +2,9 @@
 // The library's Settings::v3Blend = 1 + 3 * set + net (net 0 / 1 / 2 = A / B / C); 0 = no learned blend. Each set has a
 // label prefix and a stored-string prefix, so the labels are A, B, C, A-A, .. and the stored strings a, b, c, a_a, ..
 // kHybridSetsActive is how many sets the overlay row offers, the config accepts and the host passes on; the table
-// itself holds every set the host knows names for. Raising kHybridSetsActive is the only code edit a new library pin
-// with more sets needs. See superdoc/features/frame-generation-v3-hybrid.md.
+// itself holds every set the host knows names for. kHybridSetsActive must equal min( framegen::kV3BlendMax / 3,
+// kHybridSetsTotal ): FrameGenHost.cpp static_asserts it (this header cannot include the library's, which pulls in
+// Vulkan), so a pin with more sets fails the build there and raising kHybridSetsActive is the only code edit it needs. See superdoc/features/frame-generation-v3-hybrid.md.
 #pragma once
 
 #include <array>
@@ -13,7 +14,7 @@
 namespace fghost
 {
 	constexpr int kHybridSetsTotal  = 5;   // sets with a name in kHybridSets
-	constexpr int kHybridSetsActive = 2;   // sets in use today (A..C, A-A..A-C); the one line to change
+	constexpr int kHybridSetsActive = 2;   // sets in use today (A..C, A-A..A-C); the one line to change, checked against the library
 	constexpr int kHybridNets       = 3;   // A / B / C per set
 
 	struct HybridSet
