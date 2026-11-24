@@ -290,6 +290,96 @@ switches). `Why:` menus and settings screens show the cursor, and interpolating 
 smears it; the user asked for *"a setting to framegen, that allows the user to turn it
 off, while the mouse cursor is visible. (To avoid artifacting in settings menus)"*.
 
+## Low FPS compensation (`framegen.low_fps_compensation`, 2026-11-24)
+
+Row **Low FPS compensation** (a switch in the Frame generation group, right after Priority; per profile, default
+**Off**, greyed with "frame generation is off"). `FrameGen_PrePaint` passes it as `in.lowFpsCompensation`; the
+library's pacer does the work (`gpu/pacing.h`, "LOW FPS COMPENSATION"; pin `156f0b3`).
+
+**What it does.** Below 60 fps the transition between two game frames is played in at most 16.7 ms (a fixed constant,
+no setting) and the older game frame is **held** for the rest of the interval. At 30 fps to 240 Hz that is, per game
+frame: the held frame, a few generated frames of a 16.7 ms transition, the new game frame; the delay rule uses
+min(interval, 16.7 ms). At 60 fps and above nothing changes, bit for bit (the library tests it); in between it
+changes smoothly (45 fps: 16.7 of 22.2 ms). It acts only while frame generation generates: with Frame generation off
+and only Motion blur on, `in.frameGen` is false (real-rate planning) and the switch does nothing (read from code:
+`steamcompmgr.cpp` `in.frameGen = cfg.enabled && ...`; the library says "Not affected: frame generation off").
+
+`Why:` a user found a 30 fps game bad at 30 -> 240 Hz, but "amazing" when every game frame was fed twice (a 60 fps
+stream with duplicates) and generated to 240. Doubling does not change the motion estimate, it changes the schedule:
+generated frames across a 33 ms gap look much worse than across 16.7 ms, so they are shown for less time. The pacer
+now gives that picture and timing without duplicating anything. The owner decided the cap is fixed at 16.7 ms and the
+switch is off by default. The cost is stop-and-go motion (the game frame stands still for up to the rest of the
+interval), the gain fewer generated frames on screen and less delay; the help text says so.
+
+**Config path.** `ConfigSchema.h` `framegen.low_fps_compensation` (bool, additive; absent or wrong-typed loads
+`false`), `ConfigManager.cpp` load/save, `PanelFrameGen.cpp` `ToHostConfig()` -> `fghost::Config::lowFpsCompensation`.
+Not an Expert tuning value: `FrameGenEffective()` leaves it alone (unit-tested). The packed main config word is full
+(bits 0-31 are all in use), so the flag is **bit 7 of the Learned word** (`g_uLearned`; bits 0-6 are Learned motion's
+settings; `PackLowFps()` / `UnpackLowFps()` in `FrameGenDebug.h`). Free: `PackLearned()` fills bits 0-6 only (mask
+`0x7F`, `static_assert`ed against `kLowFpsCompBit`), and the library-config key masks that word with `0x7F`, so the flag
+never reconfigures the interpolator (it is pacing's business, like mode and priority). Checked by reading every use of
+`g_uLearned` / `uPackedLearned` in `FrameGenHost.cpp`.
+
+**How the host shows a hold.** The pacer returns a hold as a plain real-frame decision: `prevId == 0`, `showId` = the
+older game frame, `t = t0 = t1 = 1`; the first hold tick is a new output (`newOutput` true), the following ticks of the
+same hold are repeats (`newOutput` false, `repaintNext` true until the transition starts).
+- *The older frame is shown, not the newest* (`FrameGenHost.cpp` `RecordBaseLayer()`, branch `req.showId &&
+  req.showId != req.newestId`): the ring copy of `showId` is composited. This branch was written for the lag spike
+  buffer but is **not** guarded by it (no `kLagBufferAvailable` or lag-enabled test anywhere on that path), so a hold
+  works with the buffer disabled. The ring follows `Pacer::HistoryDepth()` every paint (`FollowDepth()`, from
+  `FrameRequest::historyDepth`), never below `kHistory` (3): the newest, the previous and one older frame. A new
+  newest frame is copied into the oldest slot in the same command buffer before the hold is looked up, so the previous
+  frame (the usual hold, also under Smoothness) is always still there. If `showId` is ever gone from the ring the
+  fallback is layer 0, the newest frame (a visible jump ahead and back); that fallback is the existing one and needs
+  `HistoryDepth()` to be too small, which the pacer sizes against its own delay.
+- *A repeat is presented again, when it is painted at all.* The host never looks at `newOutput`: every decision that is not
+  `skip` is composited and committed, a repeat of the same output included (the same ring image again). But the pacer
+  asks for a tick only while something is due (`repaintNext`): the real frame that ends a transition says
+  `repaintNext` false, so the game frame simply **stays on screen with no paint at all** until the next game frame
+  arrives (measured: no hold ticks under Low latency). A hold decision exists only when a paint happens inside the hold:
+  the arrival paint of the next game frame and the ticks up to the start of the transition (measured under Smoothness:
+  one or two repeats per game frame, `newOutput` false, `showId` = the older frame, `newestId` = the new one). The
+  counters read: `paints` and the nested host's `sent` / `shown` count those commits; the pacer's `presentedFps` (the
+  status line's "presented", the stats overlay's "shown") counts distinct images only, so a 30 fps game with a fixed 8x
+  at 240 Hz reads 120 (4.00x) with the switch on under Low latency and 250-267 (8.3-8.9x; the output ticks run past the
+  refresh with Pause at refresh off) with it off. That is intended, not a loss; the stats overlay says so on an own line.
+- *The pair span guard* (`FrameGen_PairSpanGuard`) returns at once for `prevId == 0`: a hold is never touched, and its
+  `showId` (older frame) is not overwritten by the guard's `currId`.
+- *Content time for the judder measure* (`steamcompmgr.cpp`, `Arrival( d.showId ? ... )`) is the held frame's own
+  arrival, so a held tick has content step 0.
+- The paint, UI-protection observe, ring copy and the capture header depend on `newestId` and on `prevId` only, not on
+  `showId == newestId`; "debug: only generated frames" treats a hold as a real tick (`IsRealTick( prevId, t1 )`).
+
+**Judder line, by design.** The judder meter compares the content step with the presented step. With the switch on at
+30 fps, the transition plays the game's 33 ms of content in 16.7 ms and the game frame then stands still, so `uneven`
+(about 90-170 per second at 240 Hz) and `step err` (about 4 ms mean) are high, `gap` is 30 per second (one step longer
+than 1.5 refreshes per game frame: the standing game frame) and `repeat` is 0 under Low latency (no hold ticks are
+painted) and about 20 per second under Smoothness (its hold ticks). With the switch off the same stream reads `uneven`
+about 20-25, `gap` 0-4, step err about 0.6 ms. The motion is meant to be stop-and-go: this is not a defect and is not
+filtered out of the numbers.
+
+**Measured (headless nested run, 1280x720 game window, a 30 fps client, fixed 8x, output and sway refresh 240 Hz, 8-bit,
+V3 Hybrid A-C, 8 status intervals each).**
+
+| run | game | presented | delay | token | host sent / shown / discarded per s | paints per s | missed |
+|---|---|---|---|---|---|---|---|
+| Low latency, off | 30.0 | 248.7 (8.29x) | 29.9 ms | none | 251 / 242 / 10 | about 255 | 0 |
+| Low latency, on | 30.0 | 120.0 (4.00x) | 12.6 ms | `16.7 ms` | 120 / 120 / 0 | 120 | 0 |
+| Smoothness, off | 30.0 | 266.7 (8.88x) | 35.3 ms | none | 266 / 249 / 18 | 266 | 0 |
+| Smoothness, on | 29.9 | about 155-175 (5.2-5.8x) | 18.7 ms | `16.7 ms` | 178 / 178 / 0 | about 178 | 0 |
+| 61 fps, off / on (4x) | 61.0 | 258.7 / 260.1 | 12.4 / 12.4 ms | none / none | | | 0 |
+| 10-bit, Low latency, on | 30.0 | about 139 | 13.5 ms | `16.7 ms` | 136 / 134 / 0 | about 140 | 0 |
+
+The delays fit the pacer's formulas at this refresh: Low latency off max(0, 33.3 - o) + margin (o is the output
+interval the cadence really ran at, about 3.75 ms) = 29.6 + 0.3; on, 16.7 - 3.75 + margin = 12.6; Smoothness i + margin
+(2.0): 35.3 off, 18.7 on. At 61 fps the switch changes nothing (identical figures, no token). The per-tick decisions
+(`ritz_fg_capture`, the "decision" lines) show the sequence directly: Low latency, per game frame three generated frames
+(t about 0.31, 0.53, 0.76) and the real frame (t = 1), spaced about 3.75 ms, then nothing until the next game frame;
+Smoothness, the real frame, then a hold (`prevId` 0, `showId` = the older frame, `newestId` = the newer one,
+`newOutput` 0, `repaintNext` 1) for the arrival paint and a tick, then five generated frames and the real frame. The
+debug log line `older real frame N shown from the ring (newest N+1)` counted 500 such presents with 0 "not in the ring".
+Not measured: a refresh other than 240 Hz, a game with a changing frame rate, other motion versions, a real host.
+
 ## Paints behind the game's GPU burst (2026-11-04)
 
 For two days of measurements the paints that showed a generated frame lost their deadline while

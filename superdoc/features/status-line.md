@@ -98,6 +98,12 @@ frame shown now and the one shown before). Pure arithmetic in `fgjudder::Meter`
   periodic uneven steps. `gap` is literal: with paints below the refresh rate every longer step counts
   even when gamescope simply had nothing new, so read it against `paints`.
 
+With [Low FPS compensation](frame-generation-pacing.md#low-fps-compensation-framegenlow_fps_compensation-2026-11-24)
+acting, `uneven` and `step err` are large by design (the transition plays the game's whole interval in 16.7 ms and the
+game frame then stands still), `gap` reads 30 per second at 30 fps (the standing frame is one step over 1.5 refreshes per
+game frame) and `repeat` counts the held ticks that are painted (about 20 per second under Smoothness, none under Low
+latency). Read these numbers with the switch's token in the `frame generation status:` line in mind.
+
 **Limits.** Only the toplevel (plane 0) has feedback. In the direct-plane path (no full composite)
 headless sway answered every toplevel commit with `discarded` (cause not established; plane 0 then
 holds the black backing or the game's buffer, the game on a subsurface), so the judder line and the

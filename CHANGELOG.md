@@ -10,6 +10,7 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-24
 
 ### Added
+- **Frame generation**: new switch "Low FPS compensation" for games below 60 fps.
 - **V3 Hybrid**: nine more variants to compare, the sets AR, AR3 and AR4.
 
 ## 2026-11-23

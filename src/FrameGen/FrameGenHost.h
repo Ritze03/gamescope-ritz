@@ -275,6 +275,9 @@ namespace fghost
 		// "Limit to GPU speed": the cost guard (lower the output rate, or pass
 		// real frames through, when generation takes too much of the GPU).
 		bool gpuLimit = false;
+		// "Low FPS compensation": the pacer's Inputs::lowFpsCompensation (pacing only, never
+		// reaches the library's interpolator settings). Packed at bit 7 of the Learned word.
+		bool lowFpsCompensation = false;
 		Quality quality = Quality::Quality;
 		Safety safety = Safety::Default;
 		HudProtect hud = HudProtect::Strong;
@@ -582,6 +585,11 @@ namespace fghost
 		// steadyMultiplier is informational only.
 		float steadyMultiplier = 0.0f;
 		bool  generating = false;
+		// Low FPS compensation is acting (pacing.h Report::lowFpsActive: the switch is on, frame
+		// generation is generating, the game interval is above 16.7 ms) and the length of the
+		// transition it plays (Report::transitionMs, 16.7 then, else 0).
+		bool  lowFpsActive = false;
+		float transitionMs = 0.0f;
 		// get_time_in_nanos() when this status was published (PublishPacingStatus stamps
 		// it): the status is only republished about every 250 ms while the pacer is
 		// being driven, so a reader treats an old one as "not generating".
