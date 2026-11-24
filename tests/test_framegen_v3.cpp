@@ -278,8 +278,8 @@ TEST_CASE( "framegen v3: the variant table names 15 values, unique and round-tri
 	static_assert( kHybridSetsTotal * kHybridNets == 15 );
 	static_assert( kHybridSetsActive >= 1 && kHybridSetsActive <= kHybridSetsTotal );
 	static_assert( kHybridBlendMax == 3 * kHybridSetsActive );
-	const char *const kLabels[] = { "A", "B", "C", "A-A", "A-B", "A-C", "AR-A", "AR-B", "AR-C", "AR2-A", "AR2-B", "AR2-C", "AR3-A", "AR3-B", "AR3-C" };
-	const char *const kKeys[] = { "a", "b", "c", "a_a", "a_b", "a_c", "ar_a", "ar_b", "ar_c", "ar2_a", "ar2_b", "ar2_c", "ar3_a", "ar3_b", "ar3_c" };
+	const char *const kLabels[] = { "A", "B", "C", "A-A", "A-B", "A-C", "AR-A", "AR-B", "AR-C", "AR3-A", "AR3-B", "AR3-C", "AR4-A", "AR4-B", "AR4-C" };
+	const char *const kKeys[] = { "a", "b", "c", "a_a", "a_b", "a_c", "ar_a", "ar_b", "ar_c", "ar3_a", "ar3_b", "ar3_c", "ar4_a", "ar4_b", "ar4_c" };
 	for ( int b = 1; b <= 15; b++ )
 	{
 		REQUIRE( HybridLabel( b ) == kLabels[ b - 1 ] );
@@ -298,7 +298,7 @@ TEST_CASE( "framegen v3: the variant table names 15 values, unique and round-tri
 	// a string beyond the given set count, an unknown one and an empty one give 0
 	REQUIRE( HybridBlendFromKey( "ar_a", 2 ) == 0 );
 	REQUIRE( HybridBlendFromKey( "ar_a", 3 ) == 7 );
-	REQUIRE( HybridBlendFromKey( "ar3_c", 4 ) == 0 );
+	REQUIRE( HybridBlendFromKey( "ar4_c", 4 ) == 0 );
 	REQUIRE( HybridBlendFromKey( "x", 5 ) == 0 );
 	REQUIRE( HybridBlendFromKey( "", 5 ) == 0 );
 	REQUIRE( HybridBlendFromKey( "A", 5 ) == 0 );
@@ -340,19 +340,19 @@ TEST_CASE( "framegen v3: BlendLabel names a few values of every set", "[framegen
 {
 	REQUIRE( BlendLabel( 7, true ) == "AR-A" );
 	REQUIRE( BlendLabel( 9, false ) == "AR-C(off)" );
-	REQUIRE( BlendLabel( 10, true ) == "AR2-A" );
-	REQUIRE( BlendLabel( 12, true ) == "AR2-C" );
-	REQUIRE( BlendLabel( 13, true ) == "AR3-A" );
-	REQUIRE( BlendLabel( 15, false ) == "AR3-C(off)" );
+	REQUIRE( BlendLabel( 10, true ) == "AR3-A" );
+	REQUIRE( BlendLabel( 12, true ) == "AR3-C" );
+	REQUIRE( BlendLabel( 13, true ) == "AR4-A" );
+	REQUIRE( BlendLabel( 15, false ) == "AR4-C(off)" );
 	REQUIRE( BlendLabel( 16, true ).empty() );
-	REQUIRE( std::string( BlendText( 11 ) ) == "AR2-B" );
+	REQUIRE( std::string( BlendText( 11 ) ) == "AR3-B" );
 }
 
 TEST_CASE( "framegen v3: MotionFromKeys stays inside the active bound", "[framegen_v3]" )
 {
 	// MotionFromKeys only yields variants of the active sets.
 	REQUIRE( MotionFromKeys( "v3_hybrid", "a_c" ).blend == 6 );
-	REQUIRE( MotionFromKeys( "v3_hybrid", "ar3_c" ).blend == 15 );
-	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_a" ).blend == 1 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_c" ).blend == 15 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "ar2_a" ).blend == 1 );
 	REQUIRE( MotionFromKeys( "v3_hybrid", "d" ).blend == 1 );
 }

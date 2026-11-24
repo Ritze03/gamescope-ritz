@@ -10,7 +10,7 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-24
 
 ### Added
-- **V3 Hybrid**: nine more variants to compare, AR-A to AR3-C.
+- **V3 Hybrid**: nine more variants to compare, the sets AR, AR3 and AR4.
 
 ## 2026-11-23
 

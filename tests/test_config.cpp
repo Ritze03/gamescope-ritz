@@ -4730,9 +4730,9 @@ TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
 
 TEST_CASE( "framegen: every variant string of the table loads, an unknown one loads a", "[config]" )
 {
-    // ar_a is set 2 (third set), ar3_c the last of the table: both load as themselves (kHybridSetsActive is 5); ar4_a and d are unknown.
+    // ar_a is set 2 (third set), ar4_c the last of the table: both load as themselves (kHybridSetsActive is 5); ar2_b (the set removed 2026-11-24) and d are unknown and load a.
     static_assert( fghost::kHybridSetsActive == 5 );
-    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar3_c", 4 }, { "ar4_a", 9 }, { "d", 9 } };
+    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar4_c", 4 }, { "ar2_b", 9 }, { "d", 9 } };
     for ( const auto &k : kCases )
     {
         TempConfigHome home;
@@ -4740,6 +4740,23 @@ TEST_CASE( "framegen: every variant string of the table loads, an unknown one lo
         std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
             "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << k.psz << "\" } }";
         REQUIRE( LoadSections().framegen.v3_hybrid_variant == ( fghost::kHybridSetsActive > k.nSet ? k.psz : "a" ) );
+    }
+}
+
+// 2026-11-24: the former fourth set (ar2) left the library; its stored strings fall back to a, no migration. ar3_b is the
+// old ar3_b string and now names blend value 11 (it was 14).
+TEST_CASE( "framegen: a stored ar2_b loads a, ar3_b still loads ar3_b (blend 11)", "[config]" )
+{
+    for ( const char *psz : { "ar2_a", "ar2_b", "ar2_c", "ar3_b" } )
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
+            "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << psz << "\" } }";
+        const bool bKept = std::string( psz ) == "ar3_b";
+        REQUIRE( LoadSections().framegen.v3_hybrid_variant == ( bKept ? "ar3_b" : "a" ) );
+        REQUIRE( fghost::HybridBlendFromKey( "ar3_b" ) == 11 );
+        REQUIRE( fghost::HybridBlendFromKey( "ar2_b" ) == 0 );
     }
 }
 
