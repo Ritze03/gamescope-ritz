@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "FrameGen/HybridVariants.h"
 #include "Config/AppId.h"
 #include "Config/ConfigManager.h"
 #include "Overlay/FpsDisplay.h"
@@ -4724,6 +4725,20 @@ TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
         const Settings l = LoadSections();
         REQUIRE( l.framegen.motion_version == "v3_hybrid" );
         REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+    }
+}
+
+TEST_CASE( "framegen: a variant of a set beyond the active count loads a", "[config]" )
+{
+    // ar_a is set 2 (third set), ar3_c the last of the table: both are unknown until kHybridSetsActive reaches their set.
+    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar3_c", 4 } };
+    for ( const auto &k : kCases )
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
+            "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << k.psz << "\" } }";
+        REQUIRE( LoadSections().framegen.v3_hybrid_variant == ( fghost::kHybridSetsActive > k.nSet ? k.psz : "a" ) );
     }
 }
 
