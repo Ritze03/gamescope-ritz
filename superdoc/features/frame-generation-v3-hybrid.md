@@ -15,10 +15,12 @@ and asked for further trained sets to rate in a game; they named the first of th
 | base | A, B, C | 1..3 | `a`, `b`, `c` | the library's first round (2026-11-23) |
 | A- | A-A, A-B, A-C | 4..6 | `a_a`, `a_b`, `a_c` | the base set fine-tuned on other footage |
 | AR | AR-A, AR-B, AR-C | 7..9 | `ar_a`, `ar_b`, `ar_c` | from scratch on the owner's recorded game footage, real frames only |
-| AR2 | AR2-A, AR2-B, AR2-C | 10..12 | `ar2_a` .. `ar2_c` | the base set fine-tuned, with the recipe of the A- set, on the owner's real 60 to 120 fps frame pairs |
-| AR3 | AR3-A, AR3-B, AR3-C | 13..15 | `ar3_a` .. `ar3_c` | the A- set trained further on the owner's real frames |
+| AR3 | AR3-A, AR3-B, AR3-C | 10..12 | `ar3_a` .. `ar3_c` | the A- set trained further on the owner's real frames |
+| AR4 | AR4-A, AR4-B, AR4-C | 13..15 | `ar4_a` .. `ar4_c` | the A- set trained further with a penalty on double contours at edges; its C differs most, its A and B are close to A-A and A-B |
 
-AR, AR2 and AR3 are experimental, for comparison by eye: on held-out footage their scores are within
+Library `5df970e` (2026-11-24) dropped the former fourth set (AR2) and added AR4: values 1..9 are unchanged, 10..12 are now AR3 (they were 13..15), 13..15 are AR4. A stored `ar2_a` / `ar2_b` / `ar2_c` is unknown and loads as the default `a` (`HybridBlendFromKey()` returns 0 in `ConfigManager.cpp`'s load, no migration, the fallback is intended). Index 9..14 of `overlay_e2_set "framegen.v3_hybrid_variant <index>"` changed meaning on 2026-11-24.
+
+AR, AR3 and AR4 are experimental, for comparison by eye: on held-out footage their scores are within
 0.02 dB of the base set (library measurement). The nets of all sets cost the same (about 0.07 ms above
 V3's rule per real pair at 1080p, 2x).
 
@@ -63,7 +65,7 @@ candidate motions) and arrive as a new `v3Blend` variant, not as a change to A /
 | Key | Values | Meaning |
 |---|---|---|
 | `framegen.motion_version` | `v1` / `v2` / `learned` / `v3` / **`v3_hybrid`** | `v3_hybrid` is the fifth value, after `v3` |
-| `framegen.v3_hybrid_variant` | `"a"` (default) / `"b"` / `"c"`, then `"a_a"` .. `"a_c"`, `"ar_a"` .. `"ar_c"`, `"ar2_a"` .. `"ar2_c"`, `"ar3_a"` .. `"ar3_c"`; absent, wrong type or unknown loads `"a"` | which variant (order as the table above = index 0..14), read only while `motion_version` is `v3_hybrid` |
+| `framegen.v3_hybrid_variant` | `"a"` (default) / `"b"` / `"c"`, then `"a_a"` .. `"a_c"`, `"ar_a"` .. `"ar_c"`, `"ar3_a"` .. `"ar3_c"`, `"ar4_a"` .. `"ar4_c"`; absent, wrong type or unknown loads `"a"` | which variant (order as the table above = index 0..14), read only while `motion_version` is `v3_hybrid` |
 
 An old file without the new key and with `"v3"` loads as before (V3 stays V3, no blend).
 `motion_blur.motion_version` does **not** get the value: Motion blur's own list is unchanged and
@@ -91,9 +93,9 @@ section's leaves, so both keys travel with the Frame generation group without a 
 
 One table, `kHybridSets` in `src/FrameGen/HybridVariants.h` (pure, no host includes, so Config, the
 overlay panel and the host all use it): per weight set a label prefix and a stored-string prefix, five
-sets named (`""`/`""`, `A-`/`a_`, `AR-`/`ar_`, `AR2-`/`ar2_`, `AR3-`/`ar3_`). The library value is
+sets named (`""`/`""`, `A-`/`a_`, `AR-`/`ar_`, `AR3-`/`ar3_`, `AR4-`/`ar4_`). The library value is
 `v3Blend = 1 + 3 * set + net` (net 0 / 1 / 2 = A / B / C), so the stored strings are `a`, `b`, `c`, `a_a`
-.. `ar3_c` and the labels A, B, C, A-A .. AR3-C (15 values). Two constants: `kHybridSetsTotal` = 5 (the
+.. `ar4_c` and the labels A, B, C, A-A .. AR4-C (15 values). Two constants: `kHybridSetsTotal` = 5 (the
 table's size) and `kHybridSetsActive` = 5 (how many sets exist at the current library pin). The active
 count decides the options of the Hybrid variant row, which stored strings the config accepts (a string of
 a set beyond it, an unknown one or a wrong type loads `"a"`), how far `PackV3()` writes (`kHybridBlendMax`
@@ -112,6 +114,7 @@ The capture header's `blend=` token takes its name from the same table (`BlendTo
 Headless proof at pin `aefad17` (private headless compositor, nested, 2x, 8-bit and 10-bit clients): each
 of the 15 variants logs `learned blend <name>`, shows `blend=<name>` in the status line and generates
 (about 2x presented); plain V3 shows no blend and switching back restores it; no settings error. Repeated at `aefad17` with all 15: every variant logged its name and showed `blend=<name>` (no `(off)`) at about 2x presented (116-135 fps for a 61 fps client) in 8-bit and 10-bit; a stored `ar3_b` came back as `AR3-B` after a restart. Only the first run after a pin bump stalled: the first use of the new weights compiled shaders for about 15 s (a cold shader cache), so a 4 s step per variant can pass before the first one generates; rerun with the cache warm.
+Headless proof at pin `5df970e` (2026-11-24, same method): all 15 variants, `gamescopectl overlay_e2_set "framegen.v3_hybrid_variant <0..14>"`, logged `learned blend <name>` with the new names (AR3-A at index 9, AR4-C at index 14) and showed `blend=<name>` (no `(off)`) at about 2x presented (113-128 fps for a 61 fps client) in 8-bit and 10-bit; no `validate` or settings error. The weights header changed, so the first use compiled the learned-blend shader again: one picture stall (`max draw` about 12.7 s in 8-bit, 11.9 s in 10-bit), later variants 2 to 4 ms. A stored `ar4_c` came back as `AR4-C` after a restart; a stored `ar2_b` started with `learned blend A`.
 `Why a check and not a derivation:` a header-only derivation would make every Config or test target
 depend on Vulkan; a loud build failure costs one line at a pin bump and cannot be missed.
 
@@ -139,7 +142,7 @@ generation's rows, as for every V3 value).
 ## Overlay
 
 - **Motion version** gets a fifth option **V3 Hybrid**, listed right after V3.
-- **Hybrid variant** (`image.framegen.v3_hybrid_variant`, a 15-option Choice A .. AR3-C, drawn as a dropdown: the styling guide's 5-option cap on segmented groups applies; the popup shows at most 8 rows and scrolls inside, so 15 options stay usable) sits directly
+- **Hybrid variant** (`image.framegen.v3_hybrid_variant`, a 15-option Choice A .. AR4-C, drawn as a dropdown: the styling guide's 5-option cap on segmented groups applies; the popup shows at most 8 rows and scrolls inside, so 15 options stay usable) sits directly
   under it, shown only while V3 Hybrid is the selected version, and **without** Expert settings.
   It is greyed while frame generation is off. `Why:` the user wants to compare three variants live
   (2026-11-23), so it is not a tuning row; once one net wins the row goes away.
@@ -149,7 +152,7 @@ generation's rows, as for every V3 value).
 
 From the command line (the same binding a click writes through; the value is the option's id, as
 for every Choice): `gamescopectl overlay_e2_set "framegen.motion_version 3"` (V3),
-`"framegen.motion_version 4"` (V3 Hybrid), `"framegen.v3_hybrid_variant 0"` .. `14` (A, B, C, A-A .. A-C, AR-A .. AR-C, AR2-A .. AR2-C, AR3-A .. AR3-C).
+`"framegen.motion_version 4"` (V3 Hybrid), `"framegen.v3_hybrid_variant 0"` .. `14` (A, B, C, A-A .. A-C, AR-A .. AR-C, AR3-A .. AR3-C, AR4-A .. AR4-C).
 The variant row is addressable only while V3 Hybrid is selected (hidden rows do not exist for this
 command).
 
@@ -160,7 +163,7 @@ The status shows what really runs, not just what is selected (2026-11-23):
 | State | Status line mode text | Capture / watch header | One-time log line |
 |---|---|---|---|
 | Plain V3 (or another version) | nothing extra | no token | `learned blend off` (only on a change from a variant) |
-| Variant selected, blend in use | `blend=A` (or `A-A` .. `AR3-C`) | ` blend=A` | `learned blend A` |
+| Variant selected, blend in use | `blend=A` (or `A-A` .. `AR4-C`) | ` blend=A` | `learned blend A` |
 | Variant selected, library runs V3's rule | `blend=A(off)` (likewise `A-A(off)`) | ` blend=A(off)` | `learned blend A not active: format` / `: detail split` / (no reason when not known cheaply, e.g. V3 itself fell back) |
 
 The status line (`steamcompmgr.cpp`, `FrameGen_LogStatus()`) prints a new line when the variant or its
