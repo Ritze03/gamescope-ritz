@@ -193,7 +193,7 @@ TEST_CASE( "framegen v3: the guard takes bits 50 and 51 (0, 1, 2) and leaves bit
 	REQUIRE( r.v3Guard == 0 );
 }
 
-// V3 Hybrid (2026-11-23): the blend takes bits 52 and 53 (0 = off, 1..3 = A..C) and leaves bits 0-51 alone.
+// V3 Hybrid (2026-11-23): the blend takes bits 52-55 (0 = off, 1 / 2 = Fluidity / Consistency) and leaves bits 0-51 alone.
 TEST_CASE( "framegen v3: the blend takes bits 52-55 and leaves bits 0-51 alone", "[framegen_v3]" )
 {
 	Config c; c.v3Smear = 0.80f; c.v3OcclSoft = 2.55f; c.v3Unsure = 0.25f; c.v3SceneCut = 3.95f;
@@ -211,11 +211,12 @@ TEST_CASE( "framegen v3: the blend takes bits 52-55 and leaves bits 0-51 alone",
 		REQUIRE( r.v3Blend == b );
 		REQUIRE( r.v3Guard == 2 );
 	}
-	// The default is off; a value outside 0..kHybridBlendMax (15) packs as 0; a blend change changes the word (so it reaches setSettings()).
+	// The default is off; a value outside 1..kHybridBlendMax (2) packs as 0; a blend change changes the word (so it reaches setSettings()).
 	REQUIRE( Config{}.v3Blend == 0 );
 	Config d; d.v3Blend = 1; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
 	d.v3Blend = 2; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
-	d.v3Blend = 15; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
+	d.v3Blend = 3; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
+	d.v3Blend = 15; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
 	d.v3Blend = 16; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
 	d.v3Blend = -1; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
 	Config r; r.v3Blend = 3;
@@ -231,77 +232,67 @@ TEST_CASE( "framegen v3: config strings map to Motion plus blend", "[framegen_v3
 		return c.motion == m && c.blend == nBlend;
 	};
 	// Plain V3 is blend 0 whatever the variant key says.
-	REQUIRE( Is( "v3", "a", Motion::V3, 0 ) );
-	REQUIRE( Is( "v3", "c", Motion::V3, 0 ) );
-	// V3 Hybrid is Motion::V3 with blend 1 / 2 / 3; an unknown variant is A.
-	REQUIRE( Is( "v3_hybrid", "a", Motion::V3, 1 ) );
-	REQUIRE( Is( "v3_hybrid", "b", Motion::V3, 2 ) );
-	REQUIRE( Is( "v3_hybrid", "c", Motion::V3, 3 ) );
-	REQUIRE( Is( "v3_hybrid", "a_a", Motion::V3, 4 ) );
-	REQUIRE( Is( "v3_hybrid", "a_b", Motion::V3, 5 ) );
-	REQUIRE( Is( "v3_hybrid", "a_c", Motion::V3, 6 ) );
-	REQUIRE( Is( "v3", "a_c", Motion::V3, 0 ) );
+	REQUIRE( Is( "v3", "fluidity", Motion::V3, 0 ) );
+	REQUIRE( Is( "v3", "consistency", Motion::V3, 0 ) );
+	// V3 Hybrid is Motion::V3 with blend 1 / 2; an unknown or old variant is Fluidity (config maps the two kept old strings on load).
+	REQUIRE( Is( "v3_hybrid", "fluidity", Motion::V3, 1 ) );
+	REQUIRE( Is( "v3_hybrid", "consistency", Motion::V3, 2 ) );
 	REQUIRE( Is( "v3_hybrid", "", Motion::V3, 1 ) );
 	REQUIRE( Is( "v3_hybrid", "x", Motion::V3, 1 ) );
+	REQUIRE( Is( "v3_hybrid", "a_c", Motion::V3, 1 ) );
 	// Every other version has blend 0.
 	REQUIRE( Is( "v1", "b", Motion::V1, 0 ) );
 	REQUIRE( Is( "v2", "b", Motion::V2, 0 ) );
 	REQUIRE( Is( "learned", "c", Motion::Learned, 0 ) );
 	REQUIRE( Is( "nonsense", "c", Motion::V1, 0 ) );
 	REQUIRE( std::string( BlendText( 0 ) ).empty() );
-	REQUIRE( std::string( BlendText( 1 ) ) == "A" );
-	REQUIRE( std::string( BlendText( 3 ) ) == "C" );
-	REQUIRE( std::string( BlendText( 4 ) ) == "A-A" );
-	REQUIRE( std::string( BlendText( 5 ) ) == "A-B" );
-	REQUIRE( std::string( BlendText( 6 ) ) == "A-C" );
-	REQUIRE( std::string( BlendText( 16 ) ).empty() );
+	REQUIRE( std::string( BlendText( 1 ) ) == "Fluidity" );
+	REQUIRE( std::string( BlendText( 2 ) ) == "Consistency" );
+	REQUIRE( std::string( BlendText( 3 ) ).empty() );
 }
 
 TEST_CASE( "framegen v3: the status label names the blend honestly", "[framegen_v3]" )
 {
-	REQUIRE( BlendLabel( 1, true ) == "A" );
-	REQUIRE( BlendLabel( 2, true ) == "B" );
-	REQUIRE( BlendLabel( 3, true ) == "C" );
-	REQUIRE( BlendLabel( 1, false ) == "A(off)" );
-	REQUIRE( BlendLabel( 3, false ) == "C(off)" );
+	REQUIRE( BlendLabel( 1, true ) == "Fluidity" );
+	REQUIRE( BlendLabel( 2, true ) == "Consistency" );
+	REQUIRE( BlendLabel( 1, false ) == "Fluidity(off)" );
+	REQUIRE( BlendLabel( 2, false ) == "Consistency(off)" );
 	// Plain V3 (and anything out of range) says nothing, active or not.
 	REQUIRE( BlendLabel( 0, true ).empty() );
 	REQUIRE( BlendLabel( 0, false ).empty() );
-	REQUIRE( BlendLabel( 4, true ) == "A-A" );
-	REQUIRE( BlendLabel( 6, false ) == "A-C(off)" );
+	REQUIRE( BlendLabel( 3, true ).empty() );
 	REQUIRE( BlendLabel( 16, false ).empty() );
 }
 
-// The variant table (HybridVariants.h): all 15 values name themselves, round-trip and are unique.
-TEST_CASE( "framegen v3: the variant table names 15 values, unique and round-tripping", "[framegen_v3]" )
+// The variant table (HybridVariants.h): two values, named, round-tripping.
+TEST_CASE( "framegen v3: the variant table names Fluidity = 1 and Consistency = 2", "[framegen_v3]" )
 {
-	static_assert( kHybridSetsTotal * kHybridNets == 15 );
-	static_assert( kHybridSetsActive >= 1 && kHybridSetsActive <= kHybridSetsTotal );
-	static_assert( kHybridBlendMax == 3 * kHybridSetsActive );
-	const char *const kLabels[] = { "A", "B", "C", "A-A", "A-B", "A-C", "AR-A", "AR-B", "AR-C", "AR3-A", "AR3-B", "AR3-C", "AR4-A", "AR4-B", "AR4-C" };
-	const char *const kKeys[] = { "a", "b", "c", "a_a", "a_b", "a_c", "ar_a", "ar_b", "ar_c", "ar3_a", "ar3_b", "ar3_c", "ar4_a", "ar4_b", "ar4_c" };
-	for ( int b = 1; b <= 15; b++ )
+	static_assert( kHybridBlendMax == 2 );
+	REQUIRE( std::string( HybridLabel( 1 ) ) == "Fluidity" );
+	REQUIRE( std::string( HybridLabel( 2 ) ) == "Consistency" );
+	REQUIRE( std::string( HybridKey( 1 ) ) == "fluidity" );
+	REQUIRE( std::string( HybridKey( 2 ) ) == "consistency" );
+	for ( int b : { 0, 3, 15, 16, -1 } )
 	{
-		REQUIRE( HybridLabel( b ) == kLabels[ b - 1 ] );
-		REQUIRE( HybridKey( b ) == kKeys[ b - 1 ] );
-		REQUIRE( HybridBlendFromKey( HybridKey( b ), kHybridSetsTotal ) == b );
-		for ( int o = b + 1; o <= 15; o++ )
-		{
-			REQUIRE( HybridLabel( b ) != HybridLabel( o ) );
-			REQUIRE( HybridKey( b ) != HybridKey( o ) );
-		}
+		REQUIRE( std::string( HybridLabel( b ) ).empty() );
+		REQUIRE( std::string( HybridKey( b ) ).empty() );
 	}
-	REQUIRE( HybridLabel( 0 ).empty() ); REQUIRE( HybridLabel( 16 ).empty() ); REQUIRE( HybridKey( -1 ).empty() );
-	// the formula 1 + 3 * set + net
-	REQUIRE( HybridBlend( 0, 0 ) == 1 ); REQUIRE( HybridBlend( 1, 0 ) == 4 ); REQUIRE( HybridBlend( 2, 2 ) == 9 );
-	REQUIRE( HybridBlend( 3, 0 ) == 10 ); REQUIRE( HybridBlend( 4, 2 ) == 15 );
-	// a string beyond the given set count, an unknown one and an empty one give 0
-	REQUIRE( HybridBlendFromKey( "ar_a", 2 ) == 0 );
-	REQUIRE( HybridBlendFromKey( "ar_a", 3 ) == 7 );
-	REQUIRE( HybridBlendFromKey( "ar4_c", 4 ) == 0 );
-	REQUIRE( HybridBlendFromKey( "x", 5 ) == 0 );
-	REQUIRE( HybridBlendFromKey( "", 5 ) == 0 );
-	REQUIRE( HybridBlendFromKey( "A", 5 ) == 0 );
+	REQUIRE( HybridBlendFromKey( "fluidity" ) == 1 );
+	REQUIRE( HybridBlendFromKey( "consistency" ) == 2 );
+	// the old strings are no longer table keys, nor are unknown, empty or differently cased ones
+	for ( const char *psz : { "a_c", "ar4_c", "a", "x", "", "Fluidity" } )
+		REQUIRE( HybridBlendFromKey( psz ) == 0 );
+}
+
+// The saved profiles of the fifteen-variant period: only a_c and ar4_c carry over, everything else is the default.
+TEST_CASE( "framegen v3: old stored variant strings map to Fluidity / Consistency or the default", "[framegen_v3]" )
+{
+	REQUIRE( HybridKeyFromStored( "a_c" ) == "fluidity" );
+	REQUIRE( HybridKeyFromStored( "ar4_c" ) == "consistency" );
+	REQUIRE( HybridKeyFromStored( "fluidity" ) == "fluidity" );
+	REQUIRE( HybridKeyFromStored( "consistency" ) == "consistency" );
+	for ( const char *psz : { "a", "b", "c", "a_a", "a_b", "ar_a", "ar3_b", "ar2_b", "ar4_a", "ar4_b", "", "garbage", "Consistency" } )
+		REQUIRE( HybridKeyFromStored( psz ) == "fluidity" );
 }
 
 TEST_CASE( "framegen v3: the blend field packs 0..15 with the bound as a parameter", "[framegen_v3]" )
@@ -320,7 +311,7 @@ TEST_CASE( "framegen v3: the blend field packs 0..15 with the bound as a paramet
 		REQUIRE( r.v3Blend == b );
 		REQUIRE( r.v3Guard == 2 );
 		// at a lower bound the value beyond it packs as 0, and unpacks as 0
-		for ( int nMax : { 6, 9, 12 } )
+		for ( int nMax : { 2, 6, 12 } )
 		{
 			Config d; d.v3Blend = b;
 			REQUIRE( ( ( PackV3( d, nMax ) >> 52 ) & 15u ) == uint64_t( b <= nMax ? b : 0 ) );
@@ -331,28 +322,20 @@ TEST_CASE( "framegen v3: the blend field packs 0..15 with the bound as a paramet
 	}
 	c.v3Blend = 16; REQUIRE( PackV3( c, 15 ) == uOff );
 	c.v3Blend = -1; REQUIRE( PackV3( c, 15 ) == uOff );
-	// the default bound is the active sets: nothing above kHybridBlendMax is written
+	// the default bound is the table: 1 and 2 are written, everything else is 0
+	c.v3Blend = 0; REQUIRE( PackV3( c ) == uOff );
 	c.v3Blend = kHybridBlendMax + 1; REQUIRE( PackV3( c ) == uOff );
-	c.v3Blend = kHybridBlendMax; REQUIRE( ( ( PackV3( c ) >> 52 ) & 15u ) == uint64_t( kHybridBlendMax ) );
+	for ( int b : { 1, 2 } )
+	{
+		c.v3Blend = b;
+		REQUIRE( ( ( PackV3( c ) >> 52 ) & 15u ) == uint64_t( b ) );
+	}
 }
 
-TEST_CASE( "framegen v3: BlendLabel names a few values of every set", "[framegen_v3]" )
+TEST_CASE( "framegen v3: MotionFromKeys yields only 1 or 2 for V3 Hybrid", "[framegen_v3]" )
 {
-	REQUIRE( BlendLabel( 7, true ) == "AR-A" );
-	REQUIRE( BlendLabel( 9, false ) == "AR-C(off)" );
-	REQUIRE( BlendLabel( 10, true ) == "AR3-A" );
-	REQUIRE( BlendLabel( 12, true ) == "AR3-C" );
-	REQUIRE( BlendLabel( 13, true ) == "AR4-A" );
-	REQUIRE( BlendLabel( 15, false ) == "AR4-C(off)" );
-	REQUIRE( BlendLabel( 16, true ).empty() );
-	REQUIRE( std::string( BlendText( 11 ) ) == "AR3-B" );
-}
-
-TEST_CASE( "framegen v3: MotionFromKeys stays inside the active bound", "[framegen_v3]" )
-{
-	// MotionFromKeys only yields variants of the active sets.
-	REQUIRE( MotionFromKeys( "v3_hybrid", "a_c" ).blend == 6 );
-	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_c" ).blend == 15 );
-	REQUIRE( MotionFromKeys( "v3_hybrid", "ar2_a" ).blend == 1 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "fluidity" ).blend == 1 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "consistency" ).blend == 2 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_c" ).blend == 1 );
 	REQUIRE( MotionFromKeys( "v3_hybrid", "d" ).blend == 1 );
 }

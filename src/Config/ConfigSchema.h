@@ -579,10 +579,11 @@ namespace gamescope::config
         // wrong-typed or unknown value loads the default "off" (it was "guard" for one day, 2026-11-22; back to "off"
         // 2026-11-23). Not an Expert tuning value since 2026-11-23: the stored value always acts. ADDITIVE. Applies live.
         std::string v3_guard = "off";
-        // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1..15): "a" | "b" | "c", then the same three with the prefixes "a_", "ar_", "ar3_", "ar4_" (a_a .. ar4_c; each prefix is one more weight set). Read only while motion_version
-        // is "v3_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or unknown value loads "a".
+        // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1..2): "fluidity" | "consistency" (fifteen strings "a" .. "ar4_c" until 2026-11-24).
+        // Read only while motion_version is "v3_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or
+        // unknown value loads "fluidity"; the old "a_c" loads "fluidity" and "ar4_c" "consistency" (fghost::HybridKeyFromStored()).
         // ADDITIVE. Not an Expert tuning value: always in force, never reset by FrameGenEffective(). Applies live.
-        std::string v3_hybrid_variant = "a";
+        std::string v3_hybrid_variant = "fluidity";
         // Expert settings (2026-11-20): the switch for the 14 tuning values above (learned_*, v3_* except v3_guard and
         // v3_hybrid_variant, search_radius, search_radius_top, pyramid_min_side, search_penalty). While it is false they are hidden in the overlay and
         // config::FrameGenEffective() hands the interpolator their DEFAULTS; the stored values are never touched.

@@ -17,7 +17,7 @@ namespace fgstats
 	{
 		bool        bFrameGen = false;     // frame generation switched on
 		std::string sMotion;               // "V1", "V2", "Learned", "V3"
-		std::string sBlend;                // V3 Hybrid's BlendLabel() ("A-A", "A-A(off)"), "" = none
+		std::string sBlend;                // V3 Hybrid's BlendLabel() ("Fluidity", "Fluidity(off)"), "" = none
 		std::string sQuality;              // "Quality" / "Performance"
 		std::string sFormat;               // the renderer's format tag ("10-bit"), "" = plain 8-bit
 		std::string sModeText;             // "fixed 2x" / "target 280 fps" / "target display refresh"

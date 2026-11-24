@@ -462,7 +462,7 @@ namespace
         fgstats::Input in;
         in.bFrameGen = true;
         in.sMotion = "V3";
-        in.sBlend = "A-A";
+        in.sBlend = "Fluidity";
         in.sQuality = "Quality";
         in.sFormat = "10-bit";
         in.sModeText = "target 280 fps";
@@ -485,7 +485,7 @@ TEST_CASE( "fgstats: a generating state shows every field", "[fps_counter]" )
 {
     const auto v = fgstats::FormatLines( GeneratingInput() );
     REQUIRE( v.size() == 5 );
-    REQUIRE( v[0] == "V3 Hybrid A-A   Quality   10-bit" );
+    REQUIRE( v[0] == "V3 Hybrid Fluidity   Quality   10-bit" );
     REQUIRE( v[1] == "game 140 -> shown 280 fps   2.0x   target 280 fps" );
     REQUIRE( v[2] == "delay 8.2 ms   discarded 0.0/s" );
     REQUIRE( v[3] == "FG GPU: estimate 0.31  synth 0.12  pair 0.55  UI 0.02 ms" );
@@ -495,8 +495,8 @@ TEST_CASE( "fgstats: a generating state shows every field", "[fps_counter]" )
 TEST_CASE( "fgstats: a blend that is selected but not running reads (off)", "[fps_counter]" )
 {
     fgstats::Input in = GeneratingInput();
-    in.sBlend = "A-A(off)";
-    REQUIRE( fgstats::FormatLines( in )[0] == "V3 Hybrid A-A(off)   Quality   10-bit" );
+    in.sBlend = "Fluidity(off)";
+    REQUIRE( fgstats::FormatLines( in )[0] == "V3 Hybrid Fluidity(off)   Quality   10-bit" );
     in.sBlend.clear();
     REQUIRE( fgstats::FormatLines( in )[0] == "V3   Quality   10-bit" );
 }

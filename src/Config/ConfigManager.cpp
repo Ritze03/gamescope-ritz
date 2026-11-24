@@ -403,9 +403,9 @@ namespace gamescope::config
                     f.v3_detail_split = JGetBool( *pFrameGen, "v3_detail_split", f.v3_detail_split );
                     const std::string sGuard = JGetString( *pFrameGen, "v3_guard", "" );
                     f.v3_guard = ( sGuard == "off" || sGuard == "guard" || sGuard == "v2_motion" ) ? sGuard : FrameGenSettings{}.v3_guard;
-                    // V3 Hybrid's variant: not a tuning value (no Expert gate), unknown or wrong-typed loads the default "a".
-                    const std::string sVariant = JGetString( *pFrameGen, "v3_hybrid_variant", "" );
-                    f.v3_hybrid_variant = fghost::HybridBlendFromKey( sVariant ) != 0 ? sVariant : FrameGenSettings{}.v3_hybrid_variant;
+                    // V3 Hybrid's variant: not a tuning value (no Expert gate), unknown or wrong-typed loads the default; the two kept
+                    // fifteen-variant strings map to their successors (HybridKeyFromStored), so the next save writes the new string.
+                    f.v3_hybrid_variant = fghost::HybridKeyFromStored( JGetString( *pFrameGen, "v3_hybrid_variant", "" ) );
                 }
                 f.expert = JGetBool( *pFrameGen, "expert", f.expert );
                 f.debug = JGetBool( *pFrameGen, "debug", f.debug );

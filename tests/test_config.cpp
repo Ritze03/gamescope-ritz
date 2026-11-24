@@ -4655,14 +4655,15 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     REQUIRE( in.v3_smear == 0.9f );
 }
 
-// V3 Hybrid (2026-11-23): "v3_hybrid" is a fifth framegen.motion_version and framegen.v3_hybrid_variant ("a" | "b" | "c")
-// picks the learned blend. Motion blur's own list is unchanged: it rejects "v3_hybrid" like any unknown string.
-TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant defaults to a", "[config]" )
+// V3 Hybrid (2026-11-23): "v3_hybrid" is a fifth framegen.motion_version and framegen.v3_hybrid_variant ("fluidity" | "consistency";
+// fifteen strings "a" .. "ar4_c" until 2026-11-24) picks the learned blend. Motion blur's own list is unchanged: it rejects
+// "v3_hybrid" like any unknown string.
+TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant defaults to fluidity", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    REQUIRE( Settings{}.framegen.v3_hybrid_variant == "a" );
-    for ( const char *psz : { "b", "c", "a_a", "a_b", "a_c", "a" } )
+    REQUIRE( Settings{}.framegen.v3_hybrid_variant == "fluidity" );
+    for ( const char *psz : { "consistency", "fluidity" } )
     {
         Settings s{};
         s.framegen.motion_version = "v3_hybrid";
@@ -4675,23 +4676,7 @@ TEST_CASE( "framegen: v3_hybrid and each variant round-trip; the variant default
     REQUIRE( IsSettingsKey( "framegen.v3_hybrid_variant" ) );
 }
 
-TEST_CASE( "framegen: an old file with variant c still loads c; a_b loads from a file", "[config]" )
-{
-    TempConfigHome home;
-    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "c" }
-    })";
-    REQUIRE( LoadSections().framegen.v3_hybrid_variant == "c" );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "a_b" }
-    })";
-    REQUIRE( LoadSections().framegen.v3_hybrid_variant == "a_b" );
-}
-
-TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and variant a", "[config]" )
+TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and fluidity", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
@@ -4701,62 +4686,42 @@ TEST_CASE( "framegen: an old file with v3 and no variant key loads v3 and varian
     })";
     const Settings l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v3" );
-    REQUIRE( l.framegen.v3_hybrid_variant == "a" );
+    REQUIRE( l.framegen.v3_hybrid_variant == "fluidity" );
 }
 
-TEST_CASE( "framegen: an unknown or wrong-typed variant loads a", "[config]" )
+TEST_CASE( "framegen: a wrong-typed variant loads fluidity", "[config]" )
 {
-    {
-        TempConfigHome home;
-        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-        std::ofstream( ProfilePath( "T" ) ) << R"({
-            "schema_version": 5, "name": "T", "kind": "general",
-            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": "d" }
-        })";
-        REQUIRE( LoadSections().framegen.v3_hybrid_variant == "a" );
-    }
-    {
-        TempConfigHome home;
-        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-        std::ofstream( ProfilePath( "T" ) ) << R"({
-            "schema_version": 5, "name": "T", "kind": "general",
-            "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": 2 }
-        })";
-        const Settings l = LoadSections();
-        REQUIRE( l.framegen.motion_version == "v3_hybrid" );
-        REQUIRE( l.framegen.v3_hybrid_variant == "a" );
-    }
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3_hybrid", "v3_hybrid_variant": 2 }
+    })";
+    const Settings l = LoadSections();
+    REQUIRE( l.framegen.motion_version == "v3_hybrid" );
+    REQUIRE( l.framegen.v3_hybrid_variant == "fluidity" );
 }
 
-TEST_CASE( "framegen: every variant string of the table loads, an unknown one loads a", "[config]" )
+// 2026-11-24: the fifteen variants became two. A stored a_c is Fluidity, ar4_c is Consistency, every other old or unknown
+// string is the default Fluidity; after the load the value in memory is the NEW string, so the next save writes it.
+TEST_CASE( "framegen: old stored variants load as Fluidity / Consistency and the next save writes the new string", "[config]" )
 {
-    // ar_a is set 2 (third set), ar4_c the last of the table: both load as themselves (kHybridSetsActive is 5); ar2_b (the set removed 2026-11-24) and d are unknown and load a.
-    static_assert( fghost::kHybridSetsActive == 5 );
-    const struct { const char *psz; int nSet; } kCases[] = { { "ar_a", 2 }, { "ar4_c", 4 }, { "ar2_b", 9 }, { "d", 9 } };
+    const struct { const char *pszStored; const char *pszLoaded; } kCases[] = {
+        { "a_c", "fluidity" }, { "ar4_c", "consistency" }, { "a", "fluidity" }, { "b", "fluidity" }, { "ar3_b", "fluidity" },
+        { "ar2_b", "fluidity" }, { "", "fluidity" }, { "garbage", "fluidity" }, { "fluidity", "fluidity" }, { "consistency", "consistency" } };
     for ( const auto &k : kCases )
     {
         TempConfigHome home;
         std::filesystem::create_directories( ConfigRoot() + "/profiles" );
         std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
-            "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << k.psz << "\" } }";
-        REQUIRE( LoadSections().framegen.v3_hybrid_variant == ( fghost::kHybridSetsActive > k.nSet ? k.psz : "a" ) );
-    }
-}
-
-// 2026-11-24: the former fourth set (ar2) left the library; its stored strings fall back to a, no migration. ar3_b is the
-// old ar3_b string and now names blend value 11 (it was 14).
-TEST_CASE( "framegen: a stored ar2_b loads a, ar3_b still loads ar3_b (blend 11)", "[config]" )
-{
-    for ( const char *psz : { "ar2_a", "ar2_b", "ar2_c", "ar3_b" } )
-    {
-        TempConfigHome home;
-        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
-            "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << psz << "\" } }";
-        const bool bKept = std::string( psz ) == "ar3_b";
-        REQUIRE( LoadSections().framegen.v3_hybrid_variant == ( bKept ? "ar3_b" : "a" ) );
-        REQUIRE( fghost::HybridBlendFromKey( "ar3_b" ) == 11 );
-        REQUIRE( fghost::HybridBlendFromKey( "ar2_b" ) == 0 );
+            "\"framegen\": { \"motion_version\": \"v3_hybrid\", \"v3_hybrid_variant\": \"" << k.pszStored << "\" } }";
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.v3_hybrid_variant == k.pszLoaded );
+        REQUIRE( SaveSections( l ) );
+        std::ifstream in( ProfilePath( "T" ) );
+        const std::string sFile( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sFile.find( std::string( "\"v3_hybrid_variant\": \"" ) + k.pszLoaded + "\"" ) != std::string::npos );
+        REQUIRE( LoadSections().framegen.v3_hybrid_variant == k.pszLoaded );
     }
 }
 
@@ -4776,10 +4741,10 @@ TEST_CASE( "framegen: the hybrid variant is in force with expert settings off", 
 {
     FrameGenSettings f;
     f.motion_version = "v3_hybrid";
-    f.v3_hybrid_variant = "c";
+    f.v3_hybrid_variant = "consistency";
     f.expert = false;
     REQUIRE( FrameGenEffective( f ).motion_version == "v3_hybrid" );
-    REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "c" );
+    REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "consistency" );
 }
 
 // Debug view (2026-11-23): the four stored strings, an unknown one loads "off", and the master switch gates it.
