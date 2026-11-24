@@ -62,12 +62,34 @@ Config to host (`fghost::MotionFromKeys()` in `FrameGenV3.h`, pinned by `tests/t
 `Why the host enum is unchanged:` `fghost::Motion` is packed into two bits of the main config word
 (bits 28-29) and two of the blur word, so a fifth value does not fit. Instead V3 Hybrid is
 `Motion::V3` plus a small separate value `Config::v3Blend` (0 = off, 1..3 = A..C, 4..6 = A-A..A-C), packed into
-bits 52-54 of the V3 word (`PackV3()`; two bits until 2026-11-23, widened to three because 4..6 do not
+bits 52-55 of the V3 word (`PackV3()`; two bits until 2026-11-23, three until the variant table, see below; 4..6 did not
 fit two, bit 54 was unused so no other field moved; unpacking a 7 gives 0). Every existing `Motion::V3` check (rows shown, fallbacks,
 scene-cut default, HUD protection, cost) therefore applies to V3 Hybrid without touching it. The
 config-string checks in the overlay panel (`EffectiveMotionIsV3()`, which feeds the Expert rule,
 `V3GuardOn()` and the V3 rows) count `"v3_hybrid"` as V3 too. Settings export / import work on the
 section's leaves, so both keys travel with the Frame generation group without a change.
+
+## How the variant list is built
+
+One table, `kHybridSets` in `src/FrameGen/HybridVariants.h` (pure, no host includes, so Config, the
+overlay panel and the host all use it): per weight set a label prefix and a stored-string prefix, five
+sets named (`""`/`""`, `A-`/`a_`, `AR-`/`ar_`, `AR2-`/`ar2_`, `AR3-`/`ar3_`). The library value is
+`v3Blend = 1 + 3 * set + net` (net 0 / 1 / 2 = A / B / C), so the stored strings are `a`, `b`, `c`, `a_a`
+.. `ar3_c` and the labels A, B, C, A-A .. AR3-C (15 values). Two constants: `kHybridSetsTotal` = 5 (the
+table's size) and `kHybridSetsActive` = 2 (how many sets exist at the current library pin). The active
+count decides the options of the Hybrid variant row, which stored strings the config accepts (a string of
+a set beyond it, an unknown one or a wrong type loads `"a"`), how far `PackV3()` writes (`kHybridBlendMax`
+= 3 x active; anything else packs as 0) and the host's clamp in `FrameGenHost.cpp`. `BlendLabel()` /
+`BlendText()` and everything built on them name all 15 values whatever the active count.
+To offer more sets once the pin ships them: change `kHybridSetsActive` in `HybridVariants.h` (and bump
+the pin); tests that name the count follow it.
+
+`Why a table:` each new weight set used to mean edits in six places (config list, row options, key
+array, label array, pack bound, clamp); now the count is one constant.
+
+V3 word bits: `v3Blend` has bits 52-55 (four bits, 0..15; it had 52-54 for 0..6). Bits 55-63 were unused before,
+so no other field moved; bits 56-63 stay unused. `PackV3()` / `UnpackV3()` take the bound as a parameter
+(default `kHybridBlendMax`) so `tests/test_framegen_v3.cpp` covers the 15-value case now.
 
 ## Live change
 
