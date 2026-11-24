@@ -14,7 +14,7 @@
 namespace fghost
 {
 	constexpr int kHybridSetsTotal  = 5;   // sets with a name in kHybridSets
-	constexpr int kHybridSetsActive = 2;   // sets in use today (A..C, A-A..A-C); the one line to change, checked against the library
+	constexpr int kHybridSetsActive = 5;   // sets in use today (A.., A-.., AR-.., AR2-.., AR3-..: 15 variants); the one line to change, checked against the library
 	constexpr int kHybridNets       = 3;   // A / B / C per set
 
 	struct HybridSet

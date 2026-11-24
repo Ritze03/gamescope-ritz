@@ -200,7 +200,7 @@ TEST_CASE( "framegen v3: the blend takes bits 52-55 and leaves bits 0-51 alone",
 	c.v3ColourWindow = true; c.v3Guard = 2;
 	const uint64_t uOff = PackV3( c );
 	REQUIRE( ( uOff >> 52 ) == 0 );
-	for ( int b = 1; b <= 6; b++ )
+	for ( int b = 1; b <= kHybridBlendMax; b++ )
 	{
 		c.v3Blend = b;
 		const uint64_t u = PackV3( c );
@@ -211,12 +211,12 @@ TEST_CASE( "framegen v3: the blend takes bits 52-55 and leaves bits 0-51 alone",
 		REQUIRE( r.v3Blend == b );
 		REQUIRE( r.v3Guard == 2 );
 	}
-	// The default is off; a value outside 0..6 packs as 0; a blend change changes the word (so it reaches setSettings()).
+	// The default is off; a value outside 0..kHybridBlendMax (15) packs as 0; a blend change changes the word (so it reaches setSettings()).
 	REQUIRE( Config{}.v3Blend == 0 );
 	Config d; d.v3Blend = 1; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
 	d.v3Blend = 2; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
-	d.v3Blend = 6; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
-	d.v3Blend = 7; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
+	d.v3Blend = 15; REQUIRE( PackV3( d ) != PackV3( Config{} ) );
+	d.v3Blend = 16; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
 	d.v3Blend = -1; REQUIRE( PackV3( d ) == PackV3( Config{} ) );
 	Config r; r.v3Blend = 3;
 	UnpackV3( PackV3( Config{} ), &r );
@@ -352,5 +352,7 @@ TEST_CASE( "framegen v3: MotionFromKeys stays inside the active bound", "[frameg
 {
 	// MotionFromKeys only yields variants of the active sets.
 	REQUIRE( MotionFromKeys( "v3_hybrid", "a_c" ).blend == 6 );
-	REQUIRE( MotionFromKeys( "v3_hybrid", "ar3_c" ).blend == ( kHybridSetsActive == 5 ? 15 : 1 ) );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "ar3_c" ).blend == 15 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_a" ).blend == 1 );
+	REQUIRE( MotionFromKeys( "v3_hybrid", "d" ).blend == 1 );
 }
