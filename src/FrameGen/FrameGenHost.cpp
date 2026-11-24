@@ -44,14 +44,13 @@ uint64_t FrameGen_RecommitCount( uint64_t *pulKept, uint64_t *pulParkedNow );
 
 namespace fghost
 {
-	// The library's bound and the table's active sets must agree: a pin with more sets (framegen::kV3BlendMax = 3 x sets) fails here
-	// instead of silently offering fewer variants. HybridVariants.h is pure and does not include the library header (Vulkan), so
-	// the check lives in the host.
-	static_assert( framegen::kV3BlendMax % kHybridNets == 0 && framegen::kV3BlendMax >= kHybridNets,
-		"framegen::kV3BlendMax must be a multiple of 3 and at least 3 (3 nets per weight set): the library pin is odd" );
-	static_assert( kHybridBlendMax == std::min<int>( framegen::kV3BlendMax, kHybridBlendCount ),
-		"the library's kV3BlendMax and kHybridSetsActive disagree: set kHybridSetsActive in src/FrameGen/HybridVariants.h to "
-		"min( kV3BlendMax / 3, kHybridSetsTotal ) (and add a table row if the library has more than kHybridSetsTotal sets)" );
+	// The library's blend values and the host's table must agree: a pin that renumbers, adds or drops a learned blend fails
+	// here instead of silently offering the wrong names. HybridVariants.h is pure and does not include the library header
+	// (Vulkan), so the check lives in the host.
+	static_assert( kHybridVariants[ 0 ].nBlend == framegen::kV3BlendFluidity && kHybridVariants[ 1 ].nBlend == framegen::kV3BlendConsistency,
+		"the library's kV3BlendFluidity / kV3BlendConsistency differ from the table in src/FrameGen/HybridVariants.h" );
+	static_assert( kHybridBlendMax == framegen::kV3BlendMax,
+		"the library's kV3BlendMax differs from the number of entries in src/FrameGen/HybridVariants.h: add or remove a table row" );
 
 	namespace
 	{

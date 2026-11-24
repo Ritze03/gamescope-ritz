@@ -86,14 +86,14 @@ namespace gamescope
 		// Option::nValue, not to the array position).
 		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 4, "V3 Hybrid" }, { 2, "Learned" } };
 		// V3 Hybrid's variant (2026-11-23): the ids are blend - 1.
-		// Built from the variant table (fghost/HybridVariants.h) for the active sets; the labels live in static strings.
+		// Built from the variant table (fghost/HybridVariants.h); the labels are string literals.
 		const std::array<ui::Option, fghost::kHybridBlendMax> &VariantOptions()
 		{
 			static const std::array<ui::Option, fghost::kHybridBlendMax> k = []
 			{
 				std::array<ui::Option, fghost::kHybridBlendMax> a{};
 				for ( int i = 0; i < fghost::kHybridBlendMax; i++ )
-					a[ i ] = { i, fghost::HybridLabel( i + 1 ).c_str() };
+					a[ i ] = { i, fghost::HybridLabel( i + 1 ) };
 				return a;
 			}();
 			return k;
@@ -247,7 +247,7 @@ namespace gamescope
 			}
 			c.uiBoxTenths = BoxTenths( f.ui_box_height );
 			{
-				// "v3_hybrid" = Motion::V3 plus the blend (1..15 = variant A, B, C, A-A .. A-C, AR-A .. AR-C, AR3-A .. AR3-C, AR4-A .. AR4-C); every other version has blend 0.
+				// "v3_hybrid" = Motion::V3 plus the blend (1..2 = Fluidity, Consistency); every other version has blend 0.
 				const fghost::MotionChoice m = fghost::MotionFromKeys( f.motion_version, f.v3_hybrid_variant );
 				c.motion = m.motion;
 				c.v3Blend = m.blend;
@@ -642,14 +642,12 @@ namespace gamescope
 				[]{ EnsureConfigLoaded(); return std::max( 1, fghost::HybridBlendFromKey( s_Settings.framegen.v3_hybrid_variant ) ) - 1; },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.v3_hybrid_variant = fghost::HybridKey( ClampIdx( n, fghost::kHybridBlendMax - 1 ) + 1 ); PersistAndPush(); } ),
 			VariantOptions().data(), VariantOptions().size() )
-			.Help( "Experimental versions of the learned blend, to compare: A, B and C, and a second set of "
-			       "weights for the same three, A-A, A-B and A-C. AR, AR3 and AR4 are three further trained "
-			       "sets to compare: AR was trained from scratch on real game frames, AR3 is the A- set "
-			       "trained further on real frames, AR4 is the A- set trained further for fewer double "
-			       "contours at edges, a little softer. All are experimental; judge them by eye. Takes effect at once. "
+			.Help( "Fluidity: sharper, can show double contours at edges. Consistency: fewer double "
+			       "contours at edges, a little softer. Both are experimental; judge them by eye. Takes effect at once. "
 			       "Has no effect while Detail from one frame is on." )
 			.Default( 0 )
-			.Keywords( "frame generation v3 hybrid variant learned blend a b c ar ar3 ar4 a-a a-b a-c ar-a ar-b ar-c ar3-a ar3-b ar3-c ar4-a ar4-b ar4-c experiment compare" )
+			.Segmented()
+			.Keywords( "frame generation v3 hybrid variant learned blend fluidity consistency experiment compare" )
 			.ShownWhen( HybridSelected )
 			.DisabledUnless( On, "frame generation is off" );
 

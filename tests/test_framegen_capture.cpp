@@ -851,8 +851,8 @@ TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", 
 	h.uFlowScale = 2;
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=" ) == std::string::npos );
-	const char *const kName[] = { "A", "B", "C", "A-A", "A-B", "A-C", "AR-A", "AR-B", "AR-C", "AR3-A", "AR3-B", "AR3-C", "AR4-A", "AR4-B", "AR4-C" };
-	for ( int i = 0; i < 15; i++ )
+	const char *const kName[] = { "Fluidity", "Consistency" };
+	for ( int i = 0; i < 2; i++ )
 	{
 		h.nBlend = i + 1;
 		const std::string sKey = std::string( "fallback_v1=0 blend=" ) + kName[ i ] + " flowScale=2";
@@ -864,26 +864,26 @@ TEST_CASE( "capture: the header names the V3 Hybrid variant, plain V3 nothing", 
 	}
 }
 
-// V3 Hybrid is honest about the blend (2026-11-23): `blend=A` while the learned blend runs, `blend=A(off)` when the variant is
+// V3 Hybrid is honest about the blend (2026-11-23): `blend=Fluidity` while the learned blend runs, `blend=Fluidity(off)` when the variant is
 // selected but the library runs V3's rule (a format without a blend build, the detail split).
-TEST_CASE( "capture: the header says A(off) when the selected variant is not running", "[framegen_capture]" )
+TEST_CASE( "capture: the header says (off) when the selected variant is not running", "[framegen_capture]" )
 {
 	HeaderInfo h;
 	h.sMotionWanted = "V3";
 	h.sMotionEffective = "V3";
 	h.uFlowScale = 2;
-	h.nBlend = 3;
-	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=C flowScale=2" ) != std::string::npos );
+	h.nBlend = 2;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=Consistency flowScale=2" ) != std::string::npos );
 	h.bBlendOff = true;
-	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=C(off) flowScale=2" ) != std::string::npos );
-	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=C(off) flowScale=2" ) != std::string::npos );
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=Consistency(off) flowScale=2" ) != std::string::npos );
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=Consistency(off) flowScale=2" ) != std::string::npos );
 	for ( const std::string &t : Tokens( FormatHeaderLine( h ) ) )
 		if ( t.find( "blend=" ) == 0 )
-			REQUIRE( t == "blend=C(off)" );
-	h.nBlend = 4;
-	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=A-A(off) flowScale=2" ) != std::string::npos );
+			REQUIRE( t == "blend=Consistency(off)" );
+	h.nBlend = 1;
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=Fluidity(off) flowScale=2" ) != std::string::npos );
 	h.bBlendOff = false;
-	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=A-A flowScale=2" ) != std::string::npos );
+	REQUIRE( FormatWatchHeader( h, 10, 1.0f ).find( "blend=Fluidity flowScale=2" ) != std::string::npos );
 	h.nBlend = 0;   // plain V3: nothing, whatever the flag says
 	REQUIRE( FormatHeaderLine( h ).find( "blend=" ) == std::string::npos );
 }
@@ -907,7 +907,7 @@ TEST_CASE( "capture: the header carries a view= token only while a Debug view is
 	}
 	h.nBlend = 2;   // beside the blend token
 	h.nView = 3;
-	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=B view=motion flowScale=2" ) != std::string::npos );
+	REQUIRE( FormatHeaderLine( h ).find( "fallback_v1=0 blend=Consistency view=motion flowScale=2" ) != std::string::npos );
 	h.nView = 4;    // out of range: nothing
 	REQUIRE( FormatHeaderLine( h ).find( "view=" ) == std::string::npos );
 }

@@ -9,8 +9,9 @@ All notable user-facing changes, newest first. Categories:
 
 ## 2026-11-24
 
-### Added
-- **V3 Hybrid**: nine more variants to compare, the sets AR, AR3 and AR4.
+### Info
+- **V3 Hybrid**: the variants are now two, Fluidity (was A-C) and Consistency; saved
+  profiles move to one of them.
 
 ## 2026-11-23
 

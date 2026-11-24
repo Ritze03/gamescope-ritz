@@ -281,11 +281,11 @@ namespace fghost::capture
 			return s;
 		}
 
-		// " blend=A" for V3 Hybrid's variants (1..15, the table), "" otherwise (plain V3 and every other version say nothing).
+		// " blend=A" for V3 Hybrid's variants (1..2, the table), "" otherwise (plain V3 and every other version say nothing).
 		// " blend=A(off)" when the variant is selected but the library runs V3's rule (HeaderInfo::bBlendOff).
 		std::string BlendToken( int nBlend, bool bOff )
 		{
-			const std::string &sName = HybridLabel( nBlend );   // the variant table names every value 1..15, "" outside
+			const std::string sName = HybridLabel( nBlend );   // the variant table names every value 1..2, "" outside
 			return sName.empty() ? std::string() : " blend=" + sName + ( bOff ? "(off)" : "" );
 		}
 
