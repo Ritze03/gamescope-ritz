@@ -342,7 +342,6 @@ namespace gamescope::config
                 f.pause_at_refresh = JGetBool( *pFrameGen, "pause_at_refresh", f.pause_at_refresh );
                 f.pause_when_cursor_visible = JGetBool( *pFrameGen, "pause_when_cursor_visible", f.pause_when_cursor_visible );
                 f.gpu_limit = JGetBool( *pFrameGen, "gpu_limit", f.gpu_limit );
-                f.low_fps_compensation = JGetBool( *pFrameGen, "low_fps_compensation", f.low_fps_compensation );
                 const std::string sQuality = JGetString( *pFrameGen, "quality", f.quality );
                 if ( sQuality == "quality" || sQuality == "performance" )
                     f.quality = sQuality;
@@ -897,7 +896,6 @@ namespace gamescope::config
             jFrameGen[ "pause_at_refresh" ] = fg.pause_at_refresh;
             jFrameGen[ "pause_when_cursor_visible" ] = fg.pause_when_cursor_visible;
             jFrameGen[ "gpu_limit" ] = fg.gpu_limit;
-            jFrameGen[ "low_fps_compensation" ] = fg.low_fps_compensation;
             jFrameGen[ "quality" ] = fg.quality;
             jFrameGen[ "safety" ] = fg.safety;
             jFrameGen[ "hud_protection" ] = fg.hud_protection;

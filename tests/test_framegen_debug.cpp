@@ -137,22 +137,3 @@ TEST_CASE( "framegen debug: the view survives the DebugConfig word for all four 
     big.view = 9;
     REQUIRE( UnpackDebug( PackDebug( big ) ).view == kDebugViewCount - 1 );
 }
-
-// Low FPS compensation (2026-11-24): its bit in the Learned word and its status token.
-TEST_CASE( "framegen: low fps compensation packs into bit 7 of the Learned word and leaves the other bits alone", "[framegen_debug]" )
-{
-    REQUIRE( !UnpackLowFps( 0 ) );
-    REQUIRE( PackLowFps( false ) == 0u );
-    REQUIRE( PackLowFps( true ) == 0x80u );
-    REQUIRE( UnpackLowFps( PackLowFps( true ) ) );
-    REQUIRE( !UnpackLowFps( 0x7Fu ) );                 // Learned motion's own seven bits do not set it
-    REQUIRE( UnpackLowFps( 0x7Fu | PackLowFps( true ) ) );
-    REQUIRE( ( kLowFpsCompBit & 0x7Fu ) == 0 );        // outside the library-config key's mask
-}
-
-TEST_CASE( "framegen: the status line names low fps compensation only while it acts", "[framegen_debug]" )
-{
-    REQUIRE( LowFpsStatusToken( false, 0.0f ).empty() );
-    REQUIRE( LowFpsStatusToken( false, 16.67f ).empty() );   // never from a stale length
-    REQUIRE( LowFpsStatusToken( true, 16.67f ) == ", low fps compensation 16.7 ms" );
-}

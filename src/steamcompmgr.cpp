@@ -113,7 +113,6 @@
 #include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenCapture.h"
 #include "FrameGen/FrameGenHost.h"
-#include "FrameGen/FrameGenDebug.h"
 #include "FrameGen/FrameGenV3.h"
 #include "FrameGen/HostShown.h"
 #include "FrameGen/PairSpanGuard.h"
@@ -8315,10 +8314,6 @@ namespace
 		else
 			snprintf( szBlur, sizeof( szBlur ), "motion blur on, not applied" );
 
-		// ", low fps compensation 16.7 ms" while the switch acts (nothing otherwise, also on at 60 fps and above).
-		const std::string sLowFps = fghost::LowFpsStatusToken( status.lowFpsActive, status.transitionMs );
-		const char *szLowFps = sLowFps.c_str();
-
 		// "lag buffer off" / "lag buffer 31.4 ms (target 32.0, max 50, look-back 5 min,
 		// test max), last spike 28 ms, 3 in window, 1 outlier(s) ignored, 5 frames kept"
 		char szLag[ 192 ];
@@ -8401,15 +8396,15 @@ namespace
 		// 257-279 presented against a 280 target while still "generating") never
 		// changes state, so it never appeared. One line per 5 s, only while active.
 		if ( bChanged )
-			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms%s, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
+			fg_log.infof( "frame generation: %s%s, %s, pause at refresh %s%s, game %.1f fps, presented %.1f fps (%.2fx, %s), delay %.1f ms, %s, %s, %s, pacing: \"%s\" (%u), renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
 				cfg.enabled ? "" : "off, ", szMode, pszPriority, cfg.pauseAtRefresh ? "on" : "off", bExtra ? " (output timer)" : "",
 				status.gameFps, status.presentedFps, status.effectiveMultiplier,
-				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szLowFps, szBlur, szLag, szLead,
+				bGenerating ? "generating" : ( cfg.enabled ? "passing through" : "frame generation off" ), status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), (unsigned)status.reason, fghost::UnavailableText( eUnavailable ), szTiming, szSplit,
 				(unsigned long long)s_FrameGenSpan.ulPairs, (unsigned long long)s_FrameGenSpan.ulPaints );
 		else
-			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms%s, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
-				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szLowFps, szBlur, szLag, szLead,
+			fg_log.infof( "frame generation status: %s, %s, game %.1f fps, presented %.1f fps (%.2fx), delay %.1f ms, %s, %s, %s, pacing: \"%s\", renderer: %s, %s, %s, pair span guard %llu pairs (%llu paints)",
+				szMode, pszPriority, status.gameFps, status.presentedFps, status.effectiveMultiplier, status.delayMs, szBlur, szLag, szLead,
 				fghost::PassReasonText( status.reason ), fghost::UnavailableText( eUnavailable ), szTiming, szSplit,
 				(unsigned long long)s_FrameGenSpan.ulPairs, (unsigned long long)s_FrameGenSpan.ulPaints );
 	}
@@ -8438,8 +8433,6 @@ namespace
 		status.reason = fghost::PassReason( uint8_t( r.reason ) );
 		status.steadyMultiplier = r.steadyMultiplier;
 		status.generating = r.generating;
-		status.lowFpsActive = r.lowFpsActive;
-		status.transitionMs = r.transitionMs;
 		return status;
 	}
 
@@ -8810,7 +8803,6 @@ static bool FrameGen_PrePaint( global_focus_t *pPaintFocus, bool bVblank, uint64
 	in.priority = fgpacing::Priority( uint8_t( cfg.priority ) );
 	in.pauseAtRefresh = cfg.pauseAtRefresh;
 	in.costGuard = cfg.gpuLimit;
-	in.lowFpsCompensation = cfg.lowFpsCompensation;
 	in.canExceedRefresh = bCanExceed;
 	s_FrameGen.bCanExceed = bCanExceed;
 	// The refresh the vblank timer paces against (vblankmanager.cpp GetRefresh()):

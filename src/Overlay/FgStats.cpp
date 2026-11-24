@@ -115,7 +115,6 @@ namespace fgstats
 				in.flShownFps = st.presentedFps;
 				in.flMultiplier = st.effectiveMultiplier;
 				in.flDelayMs = st.delayMs;
-				in.flLowFpsMs = st.lowFpsActive ? st.transitionMs : 0.0f;
 			}
 			in.flDiscardedPerSec = DiscardedRate( ulNow, s_Base );
 			in.flEstimateMs = rs.lastEstimateMs;

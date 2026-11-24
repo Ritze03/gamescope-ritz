@@ -554,21 +554,3 @@ TEST_CASE( "fgstats: an active Debug view gets its own line, with (not available
     REQUIRE( v[5] == "view: Motion map (not available)" );
     REQUIRE( v[6] == "not generating: Waiting for a second frame" );
 }
-
-TEST_CASE( "fgstats: low fps compensation gets its own line only while it acts", "[fps_counter]" )
-{
-    fgstats::Input in = GeneratingInput();
-    REQUIRE( fgstats::FormatLines( in ).size() == 5 );   // not acting: no line
-    in.flLowFpsMs = 16.67f;
-    const auto v = fgstats::FormatLines( in );
-    REQUIRE( v.size() == 6 );
-    REQUIRE( v[1].rfind( "game 140 -> shown 280 fps", 0 ) == 0 );
-    REQUIRE( v[2] == "low fps compensation: 16.7 ms transition, game frame held" );
-    REQUIRE( v[3] == "delay 8.2 ms   discarded 0.0/s" );
-    in.flLowFpsMs = 0.0f;
-    REQUIRE( fgstats::FormatLines( in ).size() == 5 );
-    // Frame generation off: the one-line answer, whatever the field says.
-    in.bFrameGen = false;
-    in.flLowFpsMs = 16.67f;
-    REQUIRE( fgstats::FormatLines( in ).size() == 1 );
-}
