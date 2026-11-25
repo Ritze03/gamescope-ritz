@@ -149,6 +149,13 @@ draw list only so that it costs no extra layer (layers are limited to 6, another
 starting below a top-left readout's bottom edge. Code: `src/Overlay/FgStats.{h,cpp}`; fields, switch and rationale:
 [frame-generation-debug.md](frame-generation-debug.md#stats-overlay).
 
+## The True Sens recording hint (not the HUD)
+
+While a True Sens recording runs, the same layer also carries a two-line hint plate at the top centre (what is being
+recorded, which key opens the settings): `FpsDisplay_AddLayer()` lets the layer exist while
+`TrueSens_RecordingActive()` and calls `TrueSens_DrawHud()` after the readout, below a top-centre readout. No HUD
+setting. Code `src/Overlay/TrueSensHud.cpp`; why and how: [true-sens.md](true-sens.md#recording-hint-i3).
+
 ## Pages
 
 This page is the hub; the detail lives in these sub-pages (sections moved verbatim, 2026-11-07 superdoc repair).

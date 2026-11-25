@@ -59,6 +59,7 @@
 #include "UI/Registry.h"
 #include "Crosshair.h"
 #include "FgStats.h"
+#include "TrueSens.h"
 #include "FrameGen/FrameGenHost.h"
 
 #include "imgui.h"
@@ -161,6 +162,10 @@ namespace gamescope
 	// recomputes it.
 	static std::atomic<bool> s_bGliding{ false };
 
+	// A True Sens recording was running at the last FpsDisplay_AddLayer() pass: keeps the timer's
+	// 500 ms repaints going, so the hint's end reaches the screen even on an idle client.
+	static std::atomic<bool> s_bTrueSensForTimer{ false };
+
 	static void UpdateTimerFlag()
 	{
 		s_bHudEnabledForTimer.store( s_Settings.fps_display.enabled || Crosshair_IsEnabled(), std::memory_order_relaxed );
@@ -190,7 +195,7 @@ namespace gamescope
 			for ( ;; )
 			{
 				std::this_thread::sleep_for( std::chrono::milliseconds( 16 ) );
-				if ( !s_bHudEnabledForTimer.load( std::memory_order_relaxed ) )
+				if ( !s_bHudEnabledForTimer.load( std::memory_order_relaxed ) && !s_bTrueSensForTimer.load( std::memory_order_relaxed ) )
 					continue;
 				const uint64_t ulNow = get_time_in_nanos();
 				if ( s_bGliding.load( std::memory_order_relaxed ) || ulNow - ulLastKeepaliveNs >= 500ull * 1000000ull )
@@ -1880,7 +1885,12 @@ namespace gamescope
 		const bool bReadout = s_Settings.fps_display.enabled;
 		const bool bCrosshair = Crosshair_IsEnabled();
 		const bool bFgStats = fgstats::Wanted();   // the frame generation stats block (FgStats.cpp), not part of the HUD
-		if ( !bReadout && !bCrosshair && !bFgStats )
+		// True Sens's lasting recording hint (TrueSensHud.cpp): the layer must exist while a recording runs even
+		// with everything above off. When the recording stops and nothing else is on, the early return below
+		// stops submitting the layer at all, so the hint cannot linger.
+		const bool bTrueSens = gamescope::TrueSens_RecordingActive();
+		s_bTrueSensForTimer.store( bTrueSens, std::memory_order_relaxed );
+		if ( !bReadout && !bCrosshair && !bFgStats && !bTrueSens )
 			return;
 
 		// Idle-client keepalive lives entirely in the background repaint-
@@ -1976,6 +1986,17 @@ namespace gamescope
 			if ( bReadout && vReadoutCenter.y >= 0.0f && nVert == 0 && nHoriz == 0 )
 				flYOffset = std::max( 0.0f, 2.0f * vReadoutCenter.y - (float)s_Settings.fps_display.margin_y );
 			fgstats::Draw( ImGui::GetBackgroundDrawList(), (float)g_nOutputWidth, (float)g_nOutputHeight, flYOffset );
+		}
+
+		if ( bTrueSens )
+		{
+			// Top centre; below a top-centre readout (its bottom edge is 2 * centre.y - margin_y), never over it.
+			float flYOffset = 0.0f;
+			int nVert = 0, nHoriz = 2;
+			ParsePlacement( s_Settings.fps_display.anchor, nVert, nHoriz );
+			if ( bReadout && vReadoutCenter.y >= 0.0f && nVert == 0 && nHoriz == 1 )
+				flYOffset = std::max( 0.0f, 2.0f * vReadoutCenter.y - (float)s_Settings.fps_display.margin_y );
+			gamescope::TrueSens_DrawHud( ImGui::GetBackgroundDrawList(), (float)g_nOutputWidth, (float)g_nOutputHeight, flYOffset );
 		}
 
 		ImGui::Render();

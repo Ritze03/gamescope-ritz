@@ -361,6 +361,31 @@ namespace gamescope::truesens
 			default: return "none";
 		}
 	}
+
+	// The lasting hint drawn while a recording runs (TrueSensHud.cpp, D16): two plain
+	// lines. `sChord` is the chord that opens the Shell; an empty one (the action is
+	// unbound) is replaced by `sFallback` (the reserved chord, which always works).
+	// Both empty for Idle: nothing to show.
+	struct HintText
+	{
+		std::string title;  // what is being recorded
+		std::string action; // what to do
+	};
+
+	inline HintText HintLines( Target t, const std::string &sChord, const std::string &sFallback )
+	{
+		HintText h;
+		switch ( t )
+		{
+			case Target::Low: h.title = "Recording Low sensitivity"; break;
+			case Target::High: h.title = "Recording High sensitivity"; break;
+			case Target::Game: h.title = "Recording game sensitivity"; break;
+			default: return h;
+		}
+		h.action = "Turn once around (360\xC2\xB0) to the same spot, then press " +
+			( sChord.empty() ? sFallback : sChord ) + " and Stop recording";
+		return h;
+	}
 }
 
 // ---- the glue (TrueSens.cpp) ----------------------------------------------------
@@ -418,6 +443,12 @@ namespace gamescope
 	const std::string &TrueSens_SessionKey();                     // the config key of this session's game entry
 	bool TrueSens_SessionKeyShared();                             // true = the shared unknown-game entry
 }
+
+// The recording hint (TrueSensHud.cpp): draws it into the HUD layer's draw list
+// (FpsDisplay.cpp calls it, only while TrueSens_RecordingActive()). Returns the
+// plate's bottom edge in px (0 = nothing drawn); the next step's picture goes below it.
+struct ImDrawList;
+namespace gamescope { float TrueSens_DrawHud( ImDrawList *pDrawList, float flWidth, float flHeight, float flYOffset ); }
 
 // The settings area (TrueSensArea.cpp), declared outside the namespace like
 // NullBinds_RegisterArea so Shell.cpp's RegisterAll() names it plainly.

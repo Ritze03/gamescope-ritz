@@ -490,6 +490,7 @@ src = [
   'Overlay/NullBinds.cpp',
   'Overlay/TrueSens.cpp',
   'Overlay/TrueSensArea.cpp',
+  'Overlay/TrueSensHud.cpp',
   'Overlay/EffectPreview.cpp',
   'Overlay/UiBoxPreview.cpp',
   'Overlay/Notifications.cpp',
