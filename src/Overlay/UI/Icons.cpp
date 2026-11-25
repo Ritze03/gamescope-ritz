@@ -377,23 +377,25 @@ namespace gamescope::ui
 			Bar( 16.0f, 10.0f, 20.0f, 14.0f ),
 			Poly( { 10.8f, 10.2f }, { 13.2f, 12.0f }, { 10.8f, 13.8f } ) } },
 
-		{ "system.true_sens", 3, {
-			// A TURN: a plain ring with a small solid dot at its centre and an
-			// arrowhead sitting on the ring's top, pointing clockwise -- one
-			// full 360 degree turn aimed at a spot, which is what a recording
-			// is. Freehand (2026-11-25), later than the mockup like every
-			// glyph after system.zoom.
+		{ "system.true_sens", 5, {
+			// A RULER READING: a wide box with three tick marks hanging from
+			// its top edge (the middle one longer) and a solid marker above
+			// pointing down at the middle tick -- a measured, calibrated
+			// value, which is what the feature keeps the same across games.
+			// Chosen by the owner (2026-11-25) from eight candidates; it
+			// replaced a ring-and-chevron glyph that read too close to the
+			// Crosshair and About rings. The fill is the marker: the reading.
 			//
-			// Read against its nearest neighbours: system.crosshair is the same
-			// ring but with four ARMS through its edge and an open centre, and
-			// system.changelog is a ring with a dot near the TOP and a stem;
-			// here the dot is centred, there is no arm or stem, and the one
-			// open chevron on the rim is the only thing that breaks the ring.
-			// The dot is a Bar (FillRect) like the About glyph's (the set's own
-			// "small solid mark"); the chevron is an open Polyline.
-			Circ( 12.0f, 12.0f, 8.0f ),
-			Bar( 10.8f, 10.8f, 13.2f, 13.2f ),
-			IconShape{ IconOp::Polyline, 3, 0.0f, { { 10.0f, 1.6f }, { 13.2f, 4.0f }, { 10.0f, 6.4f } } } } },
+			// Read against its nearest neighbour: setup.keybinds is also a
+			// wide box, but with filled key blocks inside and nothing above
+			// it; here the box sits low, has thin ticks from its top edge
+			// and a marker above. The ticks start at 11.35 (the top edge's
+			// 10.5 plus half the stroke) so they join it without overshoot.
+			Rect( 2.5f, 10.5f, 21.5f, 18.5f ),
+			Line( { 7.0f, 11.35f }, { 7.0f, 14.0f } ),
+			Line( { 12.0f, 11.35f }, { 12.0f, 15.5f } ),
+			Line( { 17.0f, 11.35f }, { 17.0f, 14.0f } ),
+			IconShape{ IconOp::FillPoly, 3, 0.0f, { { 8.5f, 3.5f }, { 15.5f, 3.5f }, { 12.0f, 7.8f } } } } },
 
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
