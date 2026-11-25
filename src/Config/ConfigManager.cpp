@@ -1546,9 +1546,50 @@ namespace gamescope::config
 
         // ---- the pointers <-> json ----------------------------------------------
 
+        // True Sens' readers clamp: DPI 100..32000, distances/counts 0..a
+        // generous ceiling (a hand distance of 1000 in or 10M counts is already
+        // absurd), and never negative. The limits live here, not in
+        // Overlay/TrueSens.h, so the config layer stays free of Overlay includes.
+        float ClampTrueSensValue( float fl, float flMax )
+        {
+            if ( !( fl > 0.0f ) )
+                return 0.0f; // also catches NaN (checked by range, fast-math safe)
+            return fl > flMax ? flMax : fl;
+        }
+        constexpr float kTrueSensMaxInches = 1000.0f;
+        constexpr float kTrueSensMaxCounts = 10000000.0f;
+        constexpr float kTrueSensMaxIngame = 1000000.0f;
+
+        GameTrueSens GameTrueSensFromJson( const nlohmann::json &jGame )
+        {
+            GameTrueSens t;
+            const nlohmann::json *p = JGetObject( jGame, "true_sens" );
+            if ( !p )
+                return t;
+            t.enabled = JGetBool( *p, "enabled", false );
+            t.counts_360 = ClampTrueSensValue( JGetFloat( *p, "counts_360", 0.0f ), kTrueSensMaxCounts );
+            const std::string sProfile = JGetString( *p, "profile", "low" );
+            t.profile = sProfile == "high" ? "high" : "low"; // unknown string -> the default
+            t.ingame_sens = ClampTrueSensValue( JGetFloat( *p, "ingame_sens", 0.0f ), kTrueSensMaxIngame );
+            return t;
+        }
+
+        TrueSensGlobal TrueSensGlobalFromJson( const nlohmann::json &jGlobal )
+        {
+            TrueSensGlobal t;
+            const nlohmann::json *p = JGetObject( jGlobal, "true_sens" );
+            if ( !p )
+                return t;
+            t.dpi = std::clamp( JGetInt( *p, "dpi", 800 ), 100, 32000 );
+            t.low_inches = ClampTrueSensValue( JGetFloat( *p, "low_inches", 0.0f ), kTrueSensMaxInches );
+            t.high_inches = ClampTrueSensValue( JGetFloat( *p, "high_inches", 0.0f ), kTrueSensMaxInches );
+            return t;
+        }
+
         ProfileAssignments AssignmentsFromJson( const nlohmann::json &jGlobal )
         {
             ProfileAssignments a;
+            a.true_sens = TrueSensGlobalFromJson( jGlobal );
             const nlohmann::json *pProfiles = JGetObject( jGlobal, "profiles" );
             if ( !pProfiles )
                 return a;
@@ -1563,6 +1604,7 @@ namespace gamescope::config
                     g.selected = JGetString( *it, "selected", "" );
                     g.audio_node = JGetString( *it, "audio_node", "" );
                     g.game_volume = std::clamp( JGetFloat( *it, "game_volume", 1.0f ), 0.0f, 1.5f );
+                    g.true_sens = GameTrueSensFromJson( *it );
                     a.games[ it.key() ] = std::move( g );
                 }
             }
@@ -1578,13 +1620,22 @@ namespace gamescope::config
                 // otherwise grow one empty row per game ever launched.
                 // (An absent game_volume means 1.0, so unity is not "something".)
                 const float flVolume = std::clamp( g.game_volume, 0.0f, 1.5f );
-                if ( g.selected.empty() && g.audio_node.empty() && flVolume == 1.0f )
+                if ( g.selected.empty() && g.audio_node.empty() && flVolume == 1.0f && g.true_sens.IsDefault() )
                     continue;
                 nlohmann::json jg = nlohmann::json::object();
                 jg[ "selected" ] = g.selected;
                 jg[ "audio_node" ] = g.audio_node;
                 if ( flVolume != 1.0f )
                     jg[ "game_volume" ] = flVolume;
+                if ( !g.true_sens.IsDefault() )
+                {
+                    nlohmann::json jt = nlohmann::json::object();
+                    jt[ "enabled" ] = g.true_sens.enabled;
+                    jt[ "counts_360" ] = ClampTrueSensValue( g.true_sens.counts_360, kTrueSensMaxCounts );
+                    jt[ "profile" ] = g.true_sens.profile == "high" ? "high" : "low";
+                    jt[ "ingame_sens" ] = ClampTrueSensValue( g.true_sens.ingame_sens, kTrueSensMaxIngame );
+                    jg[ "true_sens" ] = std::move( jt );
+                }
                 jGames[ sAppId ] = std::move( jg );
             }
             nlohmann::json j = nlohmann::json::object();
@@ -1599,6 +1650,17 @@ namespace gamescope::config
             j[ "schema_version" ] = kCurrentSchemaVersion;
             j[ "overlay" ] = OverlayToJson( overlay );
             j[ "profiles" ] = AssignmentsToJson( assignments );
+            // True Sens' global values: a top-level object, outside `overlay`
+            // and `profiles`, written only once something differs from default.
+            const TrueSensGlobal &t = assignments.true_sens;
+            if ( t.dpi != 800 || t.low_inches != 0.0f || t.high_inches != 0.0f )
+            {
+                nlohmann::json jt = nlohmann::json::object();
+                jt[ "dpi" ] = std::clamp( t.dpi, 100, 32000 );
+                jt[ "low_inches" ] = ClampTrueSensValue( t.low_inches, kTrueSensMaxInches );
+                jt[ "high_inches" ] = ClampTrueSensValue( t.high_inches, kTrueSensMaxInches );
+                j[ "true_sens" ] = std::move( jt );
+            }
             return j;
         }
 
@@ -3121,6 +3183,58 @@ namespace gamescope::config
             return;
         g.game_volume = fl;
         EnqueueGlobalFromMirror(); // coalesced: a slider drag costs one write
+    }
+
+    // ---- True Sens ------------------------------------------------------------------
+
+    TrueSensKey SessionTrueSensKey()
+    {
+        if ( std::optional<std::string> oKey = SessionGameVolumeKey() )
+            return { *oKey, false };
+        return { std::string( kSharedTrueSensKey ), true };
+    }
+
+    TrueSensGlobal GetTrueSensGlobal()
+    {
+        EnsureGlobalLoaded();
+        return s_Assignments.true_sens;
+    }
+
+    void SetTrueSensGlobal( const TrueSensGlobal &t )
+    {
+        EnsureGlobalLoaded();
+        TrueSensGlobal c;
+        c.dpi = std::clamp( t.dpi, 100, 32000 );
+        c.low_inches = ClampTrueSensValue( t.low_inches, kTrueSensMaxInches );
+        c.high_inches = ClampTrueSensValue( t.high_inches, kTrueSensMaxInches );
+        const TrueSensGlobal &o = s_Assignments.true_sens;
+        if ( o.dpi == c.dpi && o.low_inches == c.low_inches && o.high_inches == c.high_inches )
+            return;
+        s_Assignments.true_sens = c;
+        EnqueueGlobalFromMirror();
+    }
+
+    GameTrueSens GetGameTrueSens( std::string_view svKey )
+    {
+        return GameEntry( svKey ).true_sens;
+    }
+
+    void SetGameTrueSens( std::string_view svKey, const GameTrueSens &t )
+    {
+        EnsureGlobalLoaded();
+        GameTrueSens c = t;
+        c.counts_360 = ClampTrueSensValue( c.counts_360, kTrueSensMaxCounts );
+        c.ingame_sens = ClampTrueSensValue( c.ingame_sens, kTrueSensMaxIngame );
+        c.profile = c.profile == "high" ? "high" : "low";
+        auto it = s_Assignments.games.find( std::string( svKey ) );
+        if ( it == s_Assignments.games.end() && c.IsDefault() )
+            return; // all defaults is "absent": no empty row for it
+        GameAssignment &g = it != s_Assignments.games.end() ? it->second : s_Assignments.games[ std::string( svKey ) ];
+        const GameTrueSens &o = g.true_sens;
+        if ( o.enabled == c.enabled && o.counts_360 == c.counts_360 && o.profile == c.profile && o.ingame_sens == c.ingame_sens )
+            return;
+        g.true_sens = std::move( c );
+        EnqueueGlobalFromMirror();
     }
 
     // ---- the game's display name ----------------------------------------------------

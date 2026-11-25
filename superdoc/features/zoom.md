@@ -158,7 +158,9 @@ with `mouse_scale` on `wlserver_mousemotion()` multiplies the relative delta by
 `Zoom_MouseScale()` = `1 / factor`, right after — on top of — gamescope's own
 `g_mouseSensitivity` (`--mouse-sensitivity`). Applied at that one site so it
 covers every relative-motion source the sensitivity option covers and nothing
-else; absolute (windowed) motion is untouched.
+else; absolute (windowed) motion is untouched. True Sens' multiplier
+([true-sens.md](true-sens.md)) is applied just before this scale, so Zoom divides
+on top of it, and no True Sens recording is allowed while Zoom is active.
 
 `Why the RAMPED factor, not the configured one (2026-09-16):` with the fade on
 there are frames where the shape is on screen but the magnification is still

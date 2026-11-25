@@ -1510,6 +1510,36 @@ namespace gamescope::config
         std::string inherits;
     };
 
+    // True Sens, the GLOBAL half (global.json top-level `true_sens`): the DPI of
+    // the player's mouse and the two recorded "true sensitivities", each a hand
+    // distance per 360 degrees in INCHES (counts / DPI), 0 = not recorded. Kept
+    // as a distance so a DPI change needs no new recording.
+    struct TrueSensGlobal
+    {
+        int dpi = 800;
+        float low_inches = 0.0f;
+        float high_inches = 0.0f;
+    };
+
+    // True Sens, the per-game half (`profiles.games.<key>.true_sens`).
+    struct GameTrueSens
+    {
+        bool enabled = false;
+        // Mouse counts per 360 degrees at the game's in-game setting, measured
+        // with the multiplier off; 0 = not recorded.
+        float counts_360 = 0.0f;
+        // Which true sensitivity this game uses: "low" | "high".
+        std::string profile = "low";
+        // The in-game value typed into the calculator; 0 = unset.
+        float ingame_sens = 0.0f;
+
+        // Every field at its default: the entry says nothing and is not written.
+        bool IsDefault() const
+        {
+            return !enabled && counts_360 == 0.0f && profile == "low" && ingame_sens == 0.0f;
+        }
+    };
+
     // One game's entry in global.json's `profiles.games` map.
     struct GameAssignment
     {
@@ -1534,6 +1564,11 @@ namespace gamescope::config
         // profile-assignment lookup treats as "never chose". Saved only when the
         // user moves the slider; mute is deliberately not saved.
         float game_volume = 1.0f;
+        // True Sens' per-game values (src/Overlay/TrueSens.h, superdoc/features/
+        // true-sens.md), JSON `true_sens`. Per GAME, not per profile: a game's
+        // counts-per-turn belongs to the game, and these never travel with a
+        // profile file, a settings export or profile inheritance.
+        GameTrueSens true_sens;
     };
 
     // global.json's `profiles` object: the pointers. Assignments are
@@ -1545,5 +1580,8 @@ namespace gamescope::config
         // for the first time starts on it.
         std::string last_general;
         std::map<std::string, GameAssignment> games;
+        // True Sens' global values; serialised as global.json's top-level
+        // `true_sens`, not under `profiles`.
+        TrueSensGlobal true_sens;
     };
 }

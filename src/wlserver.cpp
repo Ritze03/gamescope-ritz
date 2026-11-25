@@ -86,6 +86,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
+#include "Overlay/TrueSens.h"
 #include "color_helpers.h"
 #include "log.hpp"
 #include "ime.hpp"
@@ -4236,6 +4237,15 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	// a menu with a visible-but-idle cursor and leave the mouse divided
 	// there too.
 	const bool bCursorHidden = !wlserver.bCursorHasImage || wlserver_pointer_is_locked();
+
+	// True Sens (Overlay/TrueSens.h, superdoc/features/true-sens.md): scales the
+	// delta by the game's multiplier (or, while a recording runs, sums it
+	// unscaled). Only while the cursor is hidden -- the same signal as above, not
+	// wlserver.bCursorHidden. It sits AFTER --mouse-sensitivity and the overlay
+	// gate and BEFORE the Zoom scale, so the multiplier acts on what the game
+	// would otherwise receive and Zoom's "match mouse speed" divides on top.
+	gamescope::TrueSens_OnMotion( dx, dy, bCursorHidden );
+
 	const float flZoom = gamescope::Zoom_MouseScale( bCursorHidden );
 	dx *= flZoom;
 	dy *= flZoom;

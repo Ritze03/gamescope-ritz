@@ -488,6 +488,7 @@ src = [
   'Overlay/Zoom.cpp',
   'Overlay/Autoclicker.cpp',
   'Overlay/NullBinds.cpp',
+  'Overlay/TrueSens.cpp',
   'Overlay/EffectPreview.cpp',
   'Overlay/UiBoxPreview.cpp',
   'Overlay/Notifications.cpp',
