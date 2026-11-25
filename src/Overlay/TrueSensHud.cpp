@@ -19,6 +19,8 @@
 #include "steamcompmgr_shared.hpp"
 #include "rendervulkan.hpp"
 #include "Zoom.h"
+#include "SettingsOverlay.h"
+#include "UI/Shell.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"   // RegisterUserTexture / ImTextureDataQueueUpload (the box preview's precedent)
@@ -187,6 +189,17 @@ namespace gamescope
 	{
 		if ( !pDrawList || !TrueSens_RecordingActive() )
 			return 0.0f;
+
+		// The Shell (slab, rail, sheet) is open: draw nothing and ask for no live half. The Shell is a
+		// translucent slab over this layer, so the plate and the pair would ghost through it, and a
+		// click goes to the Shell, not to the recording. The recording and the held picture are
+		// untouched; the next paint after the Shell is gone draws them again. The Launcher alone does
+		// not hide them. Both reads are atomics, safe on the compositor thread.
+		if ( SettingsOverlay_IsCapturingInput() && !ui::shell::LauncherOnlyActive() )
+		{
+			Live().bPending = false;
+			return 0.0f;
+		}
 
 		// Two lines per phase (armed: aim and click; recording: turn and click again).
 		const truesens::HintText hint = truesens::HintLines( TrueSens_RecordingTarget(), TrueSens_RecordingPhase() );

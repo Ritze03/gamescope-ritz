@@ -359,7 +359,7 @@ The rules of the result:
 - **Too little movement (D14).** Fewer than 200 net counts (`kMinRecordingCounts`) stores
   nothing and gives a plain reason: no samples at all, "No mouse movement was seen. The game
   has to hold the mouse (cursor hidden) while you turn."; below the floor, "Too little mouse
-  movement was seen...". 200 is far under any real turn (thousands of counts) and well over
+  movement was seen. Turn one full 360° and end where you started.". 200 is far under any real turn (thousands of counts) and well over
   a nudge.
 - **Zoom (D15).** Arming is refused while `Zoom_IsActive()`; if Zoom becomes active while
   armed or running (the hook notes it per event, the tick covers a chord between events) the
@@ -595,6 +595,16 @@ touch it. No second layer, no second ImGui context (layers are limited to 6).
   it is set (the thread otherwise only ticks when the readout or Crosshair is on). `Why:` the
   debug commands run in `TrueSens_Tick()` after the HUD layer of that paint was built.
 - *Thread:* the compositor thread, in `paint_all`, like the rest of the interface.
+- *Nothing while the Shell is open.* `TrueSens_DrawHud()` returns at once (no plate, no pair, no
+  live request) while `SettingsOverlay_IsCapturingInput() && !ui::shell::LauncherOnlyActive()`
+  (the full settings window, fade included; both are atomics, safe on the compositor thread).
+  `Why:` the Shell is a ~85 % opaque slab over this layer, so the plate and the pair ghosted
+  through it and its title line clipped the plate; and the hint says "left click", but with the
+  Shell open a click goes to the Shell. The area's own Recording row and "Stop recording" say
+  what is going on there. The recording, its phase and the held frozen picture are untouched
+  (the reference is neither cleared nor requested again), so the next paint after the Shell
+  closes draws the same picture again; the 500 ms timer above keeps running while hidden. The
+  Launcher alone (no Shell) keeps the hint and the pair.
 
 **Look and size.** Plate colour `palette::kSurfaceRgb` at ~88 % opacity, 1 px accent border, 8 px
 corner radius (all x scale). Fonts from `Fonts.h`, which the HUD context carries in full:

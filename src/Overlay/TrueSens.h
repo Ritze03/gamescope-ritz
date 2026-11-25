@@ -175,7 +175,7 @@ namespace gamescope::truesens
 	inline constexpr const char *kReasonNoMovement =
 		"No mouse movement was seen. The game has to hold the mouse (cursor hidden) while you turn.";
 	inline constexpr const char *kReasonTooLittle =
-		"Too little mouse movement was seen. Turn one full 360 degrees and end where you started.";
+		"Too little mouse movement was seen. Turn one full 360\xC2\xB0 and end where you started.";
 	inline constexpr const char *kReasonZoom = "Zoom was active while recording. Record again with Zoom off.";
 
 	// The pure verdict on one recording, shared by Recorder::Stop() and by the
