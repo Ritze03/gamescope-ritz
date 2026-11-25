@@ -3430,6 +3430,11 @@ paint_all( global_focus_t *pFocus, bool async )
 		// commands. No layer of its own.
 		gamescope::TrueSens_Tick();
 
+		// Sync with window size (Display > Resolution): follows the output
+		// window's size with the game's resolution once it has settled; every
+		// frame, Shell open or not, so a profile with it on syncs from the start.
+		gamescope::PanelDisplay_ResolutionSyncTick();
+
 		// Toast notifications: same independent-lifetime reasoning as the FPS
 		// display above (see Overlay/Notifications.h) -- drawn above the HUD
 		// (g_zposNotifications > g_zposFpsDisplay) but still beneath the

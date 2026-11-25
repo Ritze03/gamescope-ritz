@@ -22,6 +22,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Overlay/ResolutionPresets.h"
+#include "Overlay/ResolutionSync.h"
 #include "Config/ConfigManager.h"
 #include "Config/NestedDefault.h"
 
@@ -281,4 +282,72 @@ TEST_CASE( "Default game resolution is the screen's, not the window's first size
 	def = NativeNestedSize( 2560, 1440, 1280, 720 );
 	REQUIRE( def.uWidth == 2560 );
 	REQUIRE( def.uHeight == 1440 );
+}
+
+// ---- Sync with window size: the pure decision (Overlay/ResolutionSync.h) ----
+
+TEST_CASE( "Sync with window size: turning it on applies at once, then settles to nothing", "[resolution][sync]" )
+{
+	SyncState st;
+	constexpr int64_t kMs = 1000 * 1000;
+	// Off: nothing, whatever the sizes.
+	REQUIRE( DecideSync( st, false, 1280, 720, 1920, 1080, 0 ) == SyncAction::Nothing );
+	// On, sizes differ: applies at once -- no settle wait.
+	REQUIRE( DecideSync( st, true, 1280, 720, 1920, 1080, 10 * kMs ) == SyncAction::Apply );
+	// The caller applied it: equal now, nothing to do.
+	REQUIRE( DecideSync( st, true, 1280, 720, 1280, 720, 11 * kMs ) == SyncAction::Nothing );
+	// Off again re-arms the immediate apply for the next time.
+	REQUIRE( DecideSync( st, false, 1280, 720, 1280, 720, 12 * kMs ) == SyncAction::Nothing );
+	REQUIRE( DecideSync( st, true, 1000, 700, 1280, 720, 13 * kMs ) == SyncAction::Apply );
+}
+
+TEST_CASE( "Sync with window size: waits while the size keeps changing, applies once it settled", "[resolution][sync]" )
+{
+	SyncState st;
+	constexpr int64_t kMs = 1000 * 1000;
+	REQUIRE( DecideSync( st, true, 1280, 720, 1280, 720, 0 ) == SyncAction::Nothing );
+	// A drag: a new size every 20 ms, each restarts the wait.
+	int nApplies = 0;
+	for ( int i = 1; i <= 10; i++ )
+		if ( DecideSync( st, true, 1280 + 40 * i, 720, 1280, 720, ( 100 + 20 * i ) * kMs ) == SyncAction::Apply )
+			nApplies++;
+	REQUIRE( nApplies == 0 );
+	// Released at 1680 (last change at 300 ms): still waiting just before the settle time...
+	REQUIRE( DecideSync( st, true, 1680, 720, 1280, 720, 300 * kMs + kSyncSettleNs - kMs ) == SyncAction::Wait );
+	// ...and applies once, exactly at it.
+	REQUIRE( DecideSync( st, true, 1680, 720, 1280, 720, 300 * kMs + kSyncSettleNs ) == SyncAction::Apply );
+	// The caller applied it; equal means nothing, and a repeat call stays quiet.
+	REQUIRE( DecideSync( st, true, 1680, 720, 1680, 720, 600 * kMs ) == SyncAction::Nothing );
+	REQUIRE( DecideSync( st, true, 1680, 720, 1680, 720, 700 * kMs ) == SyncAction::Nothing );
+}
+
+TEST_CASE( "Sync with window size: ignores zero sizes and re-arms on the next resize", "[resolution][sync]" )
+{
+	SyncState st;
+	constexpr int64_t kMs = 1000 * 1000;
+	REQUIRE( DecideSync( st, true, 0, 0, 1920, 1080, 0 ) == SyncAction::Nothing );
+	REQUIRE( DecideSync( st, true, 1280, 0, 1920, 1080, kMs ) == SyncAction::Nothing );
+	REQUIRE( DecideSync( st, true, 0, 720, 1920, 1080, 2 * kMs ) == SyncAction::Nothing );
+	// The window appears: the first sight of the sync being on is an immediate apply.
+	REQUIRE( DecideSync( st, true, 1280, 720, 1920, 1080, 3 * kMs ) == SyncAction::Apply );
+	REQUIRE( DecideSync( st, true, 1280, 720, 1280, 720, 4 * kMs ) == SyncAction::Nothing );
+	// A later resize waits, then applies once...
+	REQUIRE( DecideSync( st, true, 1024, 768, 1280, 720, 1000 * kMs ) == SyncAction::Wait );
+	REQUIRE( DecideSync( st, true, 1024, 768, 1280, 720, 1000 * kMs + kSyncSettleNs ) == SyncAction::Apply );
+	REQUIRE( DecideSync( st, true, 1024, 768, 1024, 768, 2000 * kMs ) == SyncAction::Nothing );
+	// ...and the next one re-arms the same way.
+	REQUIRE( DecideSync( st, true, 800, 600, 1024, 768, 3000 * kMs ) == SyncAction::Wait );
+	REQUIRE( DecideSync( st, true, 800, 600, 1024, 768, 3000 * kMs + kSyncSettleNs ) == SyncAction::Apply );
+}
+
+TEST_CASE( "Sync with window size: a resize back to the game's own size cancels the wait", "[resolution][sync]" )
+{
+	SyncState st;
+	constexpr int64_t kMs = 1000 * 1000;
+	REQUIRE( DecideSync( st, true, 1280, 720, 1280, 720, 0 ) == SyncAction::Nothing );
+	REQUIRE( DecideSync( st, true, 1300, 720, 1280, 720, 100 * kMs ) == SyncAction::Wait );
+	REQUIRE( DecideSync( st, true, 1280, 720, 1280, 720, 150 * kMs ) == SyncAction::Nothing );
+	// A new differing size starts a fresh wait, not the old one.
+	REQUIRE( DecideSync( st, true, 1300, 720, 1280, 720, 200 * kMs ) == SyncAction::Wait );
+	REQUIRE( DecideSync( st, true, 1300, 720, 1280, 720, 200 * kMs + kSyncSettleNs - kMs ) == SyncAction::Wait );
 }

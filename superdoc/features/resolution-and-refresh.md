@@ -166,6 +166,7 @@ thread reads it while the steamcompmgr thread writes it.
 
 | id | kind | notes |
 |---|---|---|
+| `display.resolution.sync_window` | Switch, `.Key( "gamescope.nested_sync_window" )` | **Sync with window size**, first row of the Game resolution group; default Off. While active, Aspect, Resolution and the Custom steppers are disabled ("follows the window size while Sync with window size is on"). See [Sync with window size](#sync-with-window-size-2026-11-25) |
 | `display.resolution.aspect` | Choice | Native (screen size at the moment of the pick), 16:9, 4:3, 16:10, 21:9, Custom — picking a shape applies the closest size in it, see [One size row](#one-size-row-and-a-shape-that-applies) |
 | `display.resolution.size` | Choice, `Dropdown()` | **One** row; its option list is the selected aspect's real sizes, served live by `Entry::OptionsFrom()` — **no Custom entry** (item 3, below). Native/Custom have no list, so it shows their one true entry and is disabled |
 | `display.refresh` | Choice | Follow host, 60, 90, 120, 144, 165, 240, Custom |
@@ -381,6 +382,62 @@ have added a second source of truth for a number that is always recoverable from
 defaults to on"*, and the audit's own row (`results-after-fix.txt`: `on-disk` and
 `survives-restart` OK in all three situations, where before it changed nothing on disk).
 
+## Sync with window size (2026-11-25)
+
+The owner, verbatim: *"add an Option to Display>Resolution>Game Resolution called "Sync with
+window size", which does what the name implies."* Reading built: a Switch,
+`display.resolution.sync_window` (`gamescope.nested_sync_window`, per profile, default Off).
+While it is active the game's resolution (**Nested resolution**, `g_nNestedWidth/Height`)
+always equals the size the host granted gamescope's window (**Output resolution**,
+`g_nOutputWidth/Height`) and follows every resize of that window live. Refresh is untouched
+(the current `g_nNestedRefresh` is passed through).
+
+- **One write path.** The sync applies through `ApplyNestedMode()` (so
+  `steamcompmgr_set_nested_mode()`, the lock rule and the pointer re-sync are exactly the ones
+  of a size pick). No second mechanism.
+- **Where the watching runs.** `PanelDisplay_ResolutionSyncTick()` (`PanelDisplay.cpp`), called
+  from `paint_all()` in `steamcompmgr.cpp` next to `NullBinds_Tick()`/`TrueSens_Tick()`, i.e.
+  every composited frame on the compositor thread, Shell open or never opened, so a profile with
+  the switch on syncs from the first frames. It does nothing outside nested mode (the area's own
+  gate) and with `--xwayland-count > 1` (the per-frame output-changed block already keeps the
+  nested size there). While waiting it calls `force_repaint()`: an idle game paints nothing and
+  the wait must be able to end.
+- **The decision is pure.** `src/Overlay/ResolutionSync.h`: `DecideSync( state, enabled, output
+  size, nested size, now )` returns Nothing / Wait / Apply; the clock is passed in
+  (`tests/test_resolution.cpp`, tag `[sync]`). Zero output sizes are ignored; the output size
+  is clamped to the limits `ApplyNestedMode()` enforces (320-7680) *before* the comparison, so a
+  window outside them does not re-apply every frame.
+- **Debounce: 250 ms** (`kSyncSettleNs`). Dragging a window edge yields a size every 10-20 ms
+  and each applied size is a RandR mode change the game has to digest. A size is applied only
+  once it has stayed the same for 250 ms; a resize back to the game's own size cancels the wait.
+  *Why 250:* longer than any gap inside a drag, short enough that a released window feels
+  immediate. **Turning the switch on applies at once** (the first look after it became active
+  has no wait), also at session start.
+- **What is persisted.** The switch. While it is active `nested_width/height` are stored as `0`
+  ("as launched"), like Native: the size is the window's, not a choice, and a stale pixel size
+  in the profile would only be wrong on the next launch. At startup with the switch stored on
+  and no `-w/-h`, `main.cpp`'s default-size fallback starts the game at the window's size
+  (`g_bNestedSyncWindowStartup`), so Xwayland's first mode is already right. Turning the
+  switch **off** leaves the game at its size and stores that size (every other size path stores
+  the live size; this keeps the profile equal to the screen). A size picked through
+  `overlay_e2_set` while sync is active is overridden by the next sync.
+- **Explicit `-w`/`-h` wins at startup.** `LaunchOptions::Given( NestedWidth|NestedHeight )` is
+  read at the first tick; if either was given the sync starts *inactive* (suppressed) and the
+  stored setting is not rewritten; the row still shows the stored value. Any toggle of the
+  switch in that session ends the suppression (off then on starts syncing). The Aspect/size rows
+  keep their own launch-option lock while suppressed.
+- **The rows while active.** Aspect, Resolution, Width and Height are disabled with *"follows
+  the window size while Sync with window size is on"* (the Resolution and Width/Height rows
+  append their ordinary second reason after "otherwise", because a row has one disabled-reason
+  slot). They keep showing the live size by the [reflection rule](#the-reflection-rule-currentaspect--currentsizechoice):
+  a window size on a list reads as that shape, anything else as Aspect **Custom** (the
+  steppers show the real size, disabled). After switching off, the same rule applies: the rows
+  show the size the game has.
+- **Honest limits (also in the help text).** A game that keeps its own window size or only reads
+  the resolution at start does not follow ([A game that keeps its window](#a-game-that-keeps-its-window-2026-09-08),
+  [Honest limits](#honest-limits-the-help-text-says-these-too)); the picture is still scaled to
+  the window. The window size itself stays the host's decision (see "Window size - removed").
+
 ## Related
 
 - [display-general.md](display-general.md) — Force maximize nested window and Low-latency wake-up (the other Display > General switches), moved out 2026-11-07.
@@ -398,5 +455,6 @@ defaults to on"*, and the audit's own row (`results-after-fix.txt`: `on-disk` an
 
 ## History
 
+- **2026-11-25** - Sync with window size added (`display.resolution.sync_window`, tick in `paint_all()`, `ResolutionSync.h`); see the section above.
 - **Nested resolution / refresh** (glossary detail): **Nested resolution / refresh** — the game's own resolution and paced refresh (`-w`/`-h`/`-r`; `g_nNestedWidth`/`g_nNestedHeight`/`g_nNestedRefresh`), set live by `steamcompmgr_set_nested_mode()` and shown in the Resolution area's Aspect/Resolution rows and Live-state line (`superdoc/features/resolution-and-refresh.md`). Named for the code's own `g_nNested*` prefix, per the user's instruction (requests-2026-09-07 item 4: "Use the terminology 'nested' and 'output'"). Not the same sense as **Nested mode** (defined in [`superdoc/meta/TERMINOLOGY.md`](../meta/TERMINOLOGY.md); that names the whole run-as-a-window setup); this is specifically the pair of numbers Xwayland reports to the game inside it. With no `-w/-h` and no saved size it defaults to the **screen's** resolution (`g_nScreenWidth/Height`, what the Resolution area's "Native" means), not the window's first size (2026-10-22).
 - **Output resolution / refresh** (glossary detail): **Output resolution / refresh** — the size and refresh the host actually granted gamescope's own window (`g_nOutputWidth`/`g_nOutputHeight`/`g_nOutputRefresh`), i.e. what used to be called "window" and "host refresh" in the Resolution area's Live-state line before requests-2026-09-07 item 4 renamed it. The game's picture is scaled by gamescope to fit this size; it is not requestable from the Resolution area (the window-sizing rows were removed 2026-09-06 — see that doc's "Window size" section) but is always reported, read-only, alongside the **Nested resolution / refresh** it is paired with.
