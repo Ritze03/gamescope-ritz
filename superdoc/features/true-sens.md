@@ -10,10 +10,10 @@ Storage in `src/Config/` (`TrueSensGlobal`, `GameTrueSens`, global.json only).
 Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
-> **Status (2026-11-25): the core (I1) and the settings area (I2).** Maths, recorder,
-> storage, the hook, the tick, the interface, the debug commands and the Shell area
-> exist and are tested. There is no on-screen hint while the window is closed (I3) and
-> no reference picture (I4) yet.
+> **Status (2026-11-25): the core (I1), the settings area (I2) and the recording hint
+> (I3).** Maths, recorder, storage, the hook, the tick, the interface, the debug commands,
+> the Shell area and the hint at the top of the screen exist and are tested. There is no
+> reference picture (I4) yet.
 
 ## Why this exists
 
@@ -308,7 +308,55 @@ glyph set's own primitives (`Icons.cpp`).
 
 ## Recording hint (I3)
 
-Not built yet.
+While a recording runs the Shell is closed (D6), so a lasting hint at the top centre of the
+output says what is happening: two lines on a dark plate.
+
+- Line 1 (accent colour): `Recording Low sensitivity` / `Recording High sensitivity` /
+  `Recording game sensitivity`.
+- Line 2 (light text colour): `Turn once around (360°) to the same spot, then press <chord> and
+  Stop recording`. `<chord>` is `keybinds::ChordTextFor( Action::Shell )` (the primary Shell
+  chord, not `shell_alt`); when that action is unbound the text names `ReservedChordText()`
+  (`Ctrl+Alt+Shift+O`, which always opens the Shell). The lines are built by the pure
+  `truesens::HintLines( target, chord, fallback )` (unit-tested without ImGui).
+
+**Where it is drawn: the HUD layer, not a notification.** `TrueSens_DrawHud( pDrawList, w, h,
+flYOffset )` in `src/Overlay/TrueSensHud.cpp` is called by `FpsDisplay_AddLayer()` into the HUD
+layer's background draw list, beside the crosshair, the readout and the frame generation stats
+block (`fps-display.md`). `Why:` a toast dismisses itself after seconds and a recording can last
+a minute; the HUD layer is drawn over the game, under the Shell, and frame generation does not
+touch it. No second layer, no second ImGui context (layers are limited to 6).
+
+**How it joins the layer.**
+- *Predicate:* the layer exists when `TrueSens_RecordingActive()` is true, even with the FPS
+  readout, the Crosshair and the stats block all off (`FpsDisplay_AddLayer()`, `bTrueSens`).
+- *Redraw:* the text goes through the draw data, so `HashDrawData()` changes on its own when the
+  hint appears or its text changes; nothing extra is hashed.
+- *Disappearing:* when the recording stops and nothing else is on, the early return in
+  `FpsDisplay_AddLayer()` stops submitting the layer (the old texture is simply not used). If
+  the readout or Crosshair is on, the draw data loses the hint's vertices, the hash changes and
+  the texture is redrawn. Both paths were checked on screen.
+- *Repaint:* a static hint needs no animation, but the paint that makes it appear or vanish must
+  happen on an idle client too, so `FpsDisplay_AddLayer()` stores the recording state in
+  `s_bTrueSensForTimer` and the HUD's repaint timer thread keeps its 500 ms repaints going while
+  it is set (the thread otherwise only ticks when the readout or Crosshair is on). `Why:` the
+  debug commands run in `TrueSens_Tick()` after the HUD layer of that paint was built.
+- *Thread:* the compositor thread, in `paint_all`, like the rest of the interface.
+
+**Look and size.** Plate colour `palette::kSurfaceRgb` at ~88 % opacity, 1 px accent border, 8 px
+corner radius (all x scale). Fonts from `Fonts.h`, which the HUD context carries in full:
+`Style::Section` (Sans 500) 22 px for line 1, `Style::Label` (Sans 400) 17 px for line 2. Scale
+= `clamp( output height / 1080, 0.8, 4 )`, so it reads the same at 1080p and 4K; if the text
+would exceed 80 % of the width everything shrinks to fit. Top margin 2.5 % of the height; the plate
+is about 27 % of the width at 1080p, far from the centre the player aims at. If the FPS readout is
+anchored top-centre the plate starts below the readout's bottom edge (same formula as the stats
+block's top-left rule); at any other anchor the readout (default top-right) does not meet it.
+
+**Room for the reference picture (I4).** `TrueSens_DrawHud()` returns the plate's bottom edge in
+px (0 = nothing drawn). The picture's slot is directly below: centred on the plate's x, top at
+`bottom + 8 * scale`, no wider than the plate. Drawn from the same function, into the same draw
+list.
+
+Not checked: a real HDR (PQ) client; a 10-bit SDR client was.
 
 ## Reference picture (I4)
 
@@ -323,6 +371,10 @@ ignored, below the floor refused with a reason, spoiled by Zoom, restart), the f
 helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
 unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
+
+`truesens: recording hint lines` covers `HintLines()` (each target, the chord inserted, the
+reserved-chord fallback for an empty chord, Idle). The draw path (`TrueSensHud.cpp`) and the
+layer predicate are covered by the headless screenshots only.
 
 The area (`TrueSensArea.cpp`) is not linked into the unit binary (like every area's
 `*_RegisterArea`); its pieces are covered by the id/rail census in

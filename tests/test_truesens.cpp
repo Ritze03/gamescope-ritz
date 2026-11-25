@@ -330,3 +330,25 @@ TEST_CASE( "truesens: text helpers", "[truesens]" )
 	CHECK( std::string( TargetName( Target::Low ) ) == "low" );
 	CHECK( std::string( TargetName( Target::Idle ) ) == "none" );
 }
+
+TEST_CASE( "truesens: recording hint lines", "[truesens]" )
+{
+	const std::string kReserved = "Ctrl+Alt+Shift+O";
+	const std::string kAction = "Turn once around (360\xC2\xB0) to the same spot, then press ";
+
+	HintText h = HintLines( Target::Low, "LCtrl+RShift", kReserved );
+	CHECK( h.title == "Recording Low sensitivity" );
+	CHECK( h.action == kAction + "LCtrl+RShift and Stop recording" );
+
+	CHECK( HintLines( Target::High, "F9", kReserved ).title == "Recording High sensitivity" );
+	CHECK( HintLines( Target::Game, "F9", kReserved ).title == "Recording game sensitivity" );
+
+	// the shell action is unbound: the reserved chord is named instead
+	h = HintLines( Target::Game, "", kReserved );
+	CHECK( h.action == kAction + kReserved + " and Stop recording" );
+
+	// no recording: nothing to show
+	h = HintLines( Target::Idle, "F9", kReserved );
+	CHECK( h.title.empty() );
+	CHECK( h.action.empty() );
+}
