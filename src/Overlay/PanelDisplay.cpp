@@ -86,6 +86,7 @@
 // classifications the rows make from a live width/height (unit-tested by
 // tests/test_resolution.cpp).
 #include "ResolutionPresets.h"
+#include "ResolutionSync.h"
 
 // HDR tab's read-only appHDRMetadata readout (DrawHdrAppMetadataReadout()
 // below) -- hdr_output_metadata/hdr_metadata_infoframe (CTA-861.G structs)
@@ -1088,6 +1089,34 @@ namespace gamescope
 		return { g_nNestedWidth, g_nNestedHeight };
 	}
 
+	// ---- Sync with window size (2026-11-25) -----------------------------
+	// While on, the game's resolution (g_nNestedWidth/Height) follows the
+	// size the host granted gamescope's window (g_nOutputWidth/Height). The
+	// switch is the config bool gamescope.nested_sync_window; "active" is the
+	// switch minus the launch-option suppression: an explicit -w/-h on the
+	// command line wins at startup, so a session launched with one starts with
+	// the sync inactive (the stored setting is untouched and the row still
+	// shows it) until the switch is toggled in the session.
+	static LogScope log_resolution_sync( "resolution_sync" );
+	static bool s_bSyncSuppressed = false;
+	static bool s_bSyncSuppressDecided = false;
+	static resolution::SyncState s_SyncState;
+
+	static void SyncDecideSuppression()
+	{
+		if ( s_bSyncSuppressDecided )
+			return;
+		s_bSyncSuppressDecided = true;
+		s_bSyncSuppressed = LaunchOptions::Given( LaunchOptions::Opt::NestedWidth )
+		                 || LaunchOptions::Given( LaunchOptions::Opt::NestedHeight );
+	}
+
+	static bool SyncActive()
+	{
+		SyncDecideSuppression();
+		return Cfg().gamescope.nested_sync_window && !s_bSyncSuppressed;
+	}
+
 	static int ClampDim( int n )
 	{
 		return std::clamp( n, kMinDim, kMaxDim );
@@ -1115,10 +1144,14 @@ namespace gamescope
 		// order is uniform anyway rather than depending on that staying true.
 		const int nW = ClampDim( nWidth );
 		const int nH = ClampDim( nHeight );
+		// While "Sync with window size" is active the size is the window's,
+		// not a choice: stored as 0 ("as launched") like Native -- see
+		// SyncActive() and the docs' "What is persisted".
+		const bool bAsLaunched = s_nAspectChoice == kAspectNative || SyncActive();
 		ApplyEdit(
-			[ nW, nH, nRefreshmHz ]( config::Settings &cfg ) {
-				cfg.gamescope.nested_width  = ( s_nAspectChoice == kAspectNative ) ? 0 : nW;
-				cfg.gamescope.nested_height = ( s_nAspectChoice == kAspectNative ) ? 0 : nH;
+			[ nW, nH, nRefreshmHz, bAsLaunched ]( config::Settings &cfg ) {
+				cfg.gamescope.nested_width  = bAsLaunched ? 0 : nW;
+				cfg.gamescope.nested_height = bAsLaunched ? 0 : nH;
 				cfg.gamescope.nested_refresh_hz = nRefreshmHz ? ConvertmHzToHz( nRefreshmHz ) : 0;
 			},
 			[ nW, nH, nRefreshmHz ] { steamcompmgr_set_nested_mode( nW, nH, nRefreshmHz ); } );
@@ -1330,6 +1363,12 @@ namespace gamescope
 		return CurrentAspect() == kAspectCustom;
 	}
 
+	// The steppers' real gate: Custom, and the window not deciding the size.
+	static bool CustomSizeEditable()
+	{
+		return ResolutionIsCustom() && !SyncActive();
+	}
+
 	// Deliberately NOT a lazy bootstrap off CustomWidth()/CustomHeight() --
 	// that used to read (new width) / (old height) when called from inside
 	// SetCustomWidth() after it had already written the new width but
@@ -1448,6 +1487,71 @@ namespace gamescope
 			} );
 	}
 
+	// The switch. On: the config bool, and nested_width/height stored as 0
+	// ("as launched") at once -- the tick below applies the window's size on
+	// its next frame (turning on applies at once, no settle wait). Off: the
+	// game stays at the size it has, and that size is what gets stored now
+	// (every other size path stores the live size; storing it keeps the
+	// profile equal to the screen). Either way the launch-option suppression
+	// ends: a toggle is the user taking the switch into their own hands.
+	static void SetSyncWindow( bool bOn )
+	{
+		SyncDecideSuppression();
+		const bool bWasActive = SyncActive();
+		const bool bKeepSizes = s_bSyncSuppressed;   // a CLI size is not the profile's to store
+		s_bSyncSuppressed = false;
+		const int nW = g_nNestedWidth, nH = g_nNestedHeight;
+		ApplyEdit(
+			[ bOn, bWasActive, bKeepSizes, nW, nH ]( config::Settings &cfg )
+			{
+				cfg.gamescope.nested_sync_window = bOn;
+				if ( bOn )
+				{
+					cfg.gamescope.nested_width  = 0;
+					cfg.gamescope.nested_height = 0;
+				}
+				else if ( bWasActive && !bKeepSizes )
+				{
+					cfg.gamescope.nested_width  = nW;
+					cfg.gamescope.nested_height = nH;
+				}
+			},
+			[]{} );
+		if ( bOn )
+			force_repaint();
+	}
+
+	// The once-a-frame watcher (called from paint_all(), steamcompmgr thread,
+	// beside NullBinds_Tick()/TrueSens_Tick(): it must run whether or not the
+	// Shell was ever opened). The decision is the pure DecideSync()
+	// (ResolutionSync.h); the apply is ApplyNestedMode() -- the same write
+	// path a size pick uses -- with the refresh passed through unchanged.
+	// Nested-only (the area's own gate); with --xwayland-count > 1 the
+	// per-frame output-changed block in steamcompmgr.cpp already owns the
+	// nested size, so the tick stays out of its way.
+	void PanelDisplay_ResolutionSyncTick()
+	{
+		if ( !NestedModeAvailable() || g_nXWaylandCount > 1 )
+			return;
+		// The size the game can actually be given: the limits ApplyNestedMode()
+		// enforces, so a window outside them does not re-apply every frame.
+		const int nOutW = g_nOutputWidth > 0 ? ClampDim( (int)g_nOutputWidth ) : 0;
+		const int nOutH = g_nOutputHeight > 0 ? ClampDim( (int)g_nOutputHeight ) : 0;
+		const resolution::SyncAction eAction = resolution::DecideSync(
+			s_SyncState, SyncActive(), nOutW, nOutH, g_nNestedWidth, g_nNestedHeight,
+			(int64_t)get_time_in_nanos() );
+		if ( eAction == resolution::SyncAction::Wait )
+		{
+			force_repaint();   // an idle game paints nothing, and the wait must end
+		}
+		else if ( eAction == resolution::SyncAction::Apply )
+		{
+			log_resolution_sync.infof( "sync: game resolution %dx%d -> window %dx%d",
+				g_nNestedWidth, g_nNestedHeight, nOutW, nOutH );
+			ApplyNestedMode( nOutW, nOutH, g_nNestedRefresh );
+		}
+	}
+
 	// ---- refresh ----------------------------------------------------------
 	// Option values are Hz; 0 = follow host, -1 = Custom.
 	static constexpr int kRefreshFollowHost = 0;
@@ -1549,6 +1653,26 @@ namespace gamescope
 
 		a.Group( "Game resolution" );
 
+		static constexpr const char *kFollowsWindow =
+			"follows the window size while Sync with window size is on";
+
+		// The owner, 2026-11-25: 'add an Option to Display>Resolution>Game
+		// Resolution called "Sync with window size", which does what the name
+		// implies.' Shows the STORED switch (a session launched with -w/-h
+		// starts with it inactive but the row still reads on).
+		a.Switch( "display.resolution.sync_window", "Sync with window size",
+			ui::AnyBind::Of<bool>(
+				[]{ return Cfg().gamescope.nested_sync_window; },
+				[]( bool b ) { SetSyncWindow( b ); } ) )
+			.Key( "gamescope.nested_sync_window" )
+			.Help( "The game's resolution always equals the size of gamescope's window and follows "
+			       "it when you resize the window (the game is told once the window has stopped "
+			       "changing, not on every step of a drag). Aspect and Resolution below then follow "
+			       "the window. A game that keeps its own window size, or only reads the resolution "
+			       "when it starts, will not follow; the picture is still scaled to the window." )
+			.Default( false )
+			.Keywords( "sync window size follow resize game resolution automatic match output" );
+
 		a.Choice( "display.resolution.aspect", "Aspect",
 			ui::AnyBind::Of<int>(
 				[]{ return CurrentAspect(); },
@@ -1559,7 +1683,8 @@ namespace gamescope
 			       "on. Native uses your screen's resolution; Custom lets you type any size." )
 			.Default( kAspectNative )
 			.Keywords( "resolution aspect ratio shape native custom 16:9 4:3 16:10 21:9 widescreen "
-			           "ultrawide" );
+			           "ultrawide" )
+			.DisabledUnless( []{ return !SyncActive(); }, kFollowsWindow );
 
 		// ONE size row, whose option list is the aspect's (item 7). Forced to
 		// a dropdown: the lists run to seven entries of "3840 x 2400", which
@@ -1577,8 +1702,9 @@ namespace gamescope
 			       "below." )
 			.Keywords( "resolution render internal nested preset size 16:9 4:3 16:10 21:9 "
 			           "1080p 1440p 4k 720p 1200p" )
-			.DisabledUnless( []{ return ListFor( CurrentAspect() ) != nullptr; },
-			                 "pick a shape (16:9, 4:3, 16:10, 21:9) in Aspect above to choose a size" )
+			.DisabledUnless( []{ return !SyncActive() && ListFor( CurrentAspect() ) != nullptr; },
+			                 "follows the window size while Sync with window size is on; otherwise pick a "
+			                 "shape (16:9, 4:3, 16:10, 21:9) in Aspect above to choose a size" )
 			// Sets BOTH width and height in one pick, so either -w or -h
 			// alone is enough to lock it -- see this file's own
 			// "Resolution rows" note in superdoc/features/launch-option-lock.md.
@@ -1589,7 +1715,8 @@ namespace gamescope
 				"this here." );
 
 		static constexpr const char *kNotCustom =
-			"pick Custom in Aspect above to type your own size";
+			"follows the window size while Sync with window size is on; otherwise pick Custom in "
+			"Aspect above to type your own size";
 
 		a.Stepper( "display.resolution.width", "Width",
 			ui::AnyBind::Of<int>(
@@ -1603,7 +1730,7 @@ namespace gamescope
 			.Unit( "px" )
 			.Default( 1280 )
 			.Keywords( "width custom horizontal pixels" )
-			.DisabledUnless( ResolutionIsCustom, kNotCustom )
+			.DisabledUnless( CustomSizeEditable, kNotCustom )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedWidth ); },
 				LaunchLockReason( LaunchOptions::Opt::NestedWidth ).c_str() )
 			.Param( "lock_aspect", "Lock aspect ratio",
@@ -1628,7 +1755,7 @@ namespace gamescope
 			.Unit( "px" )
 			.Default( 720 )
 			.Keywords( "height custom vertical pixels" )
-			.DisabledUnless( ResolutionIsCustom, kNotCustom )
+			.DisabledUnless( CustomSizeEditable, kNotCustom )
 			.LockedByLaunchOption( []{ return LaunchOptions::Given( LaunchOptions::Opt::NestedHeight ); },
 				LaunchLockReason( LaunchOptions::Opt::NestedHeight ).c_str() );
 

@@ -128,6 +128,11 @@ namespace gamescope::config
         // (PanelDisplay.cpp's EnsureLockedAspectReference()), never stored.
         // See superdoc/features/resolution-and-refresh.md, "Phase B".
         bool nested_lock_aspect = true;
+        // "Sync with window size" (2026-11-25): while on, the game's resolution
+        // follows the size the host granted gamescope's own window, live. While
+        // it is on nested_width/height are stored as 0 ("as launched"); see
+        // superdoc/features/resolution-and-refresh.md, "Sync with window size".
+        bool nested_sync_window = false;
     };
 
     struct FpsDisplaySettings

@@ -37,7 +37,7 @@ namespace gamescope::config::profile_export
 
             add( "display.resolution", "Display", "Resolution", "Depends on this machine's display", false,
                  { "gamescope.nested_width", "gamescope.nested_height", "gamescope.nested_refresh_hz",
-                   "gamescope.nested_lock_aspect" } );
+                   "gamescope.nested_lock_aspect", "gamescope.nested_sync_window" } );
             add( "display.general", "Display", "General, Upscaling, Frame limiter, HDR", "", true,
                  { "gamescope.filter", "gamescope.scaler", "gamescope.sharpness", "gamescope.vrr_enabled",
                    "gamescope.hdr_enabled", "gamescope.tearing_enabled", "gamescope.fps_limit",

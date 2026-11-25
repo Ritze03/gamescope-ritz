@@ -4930,3 +4930,28 @@ TEST_CASE( "overlay.outside_margin round-trips through SaveGlobal/LoadGlobal", "
     REQUIRE( SaveGlobal( s ) );
     REQUIRE( LoadGlobal().overlay.outside_margin == 18.5f );
 }
+
+TEST_CASE( "gamescope.nested_sync_window round-trips, defaults to off, absent key is off", "[config]" )
+{
+    // 2026-11-25: Display > Resolution's "Sync with window size". Additive.
+    TempConfigHome home;
+
+    Settings s{};
+    REQUIRE_FALSE( s.gamescope.nested_sync_window );
+
+    s.gamescope.nested_sync_window = true;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE( LoadSections().gamescope.nested_sync_window );
+
+    s.gamescope.nested_sync_window = false;
+    REQUIRE( SaveSections( s ) );
+    REQUIRE_FALSE( LoadSections().gamescope.nested_sync_window );
+
+    // A file written before the key existed loads as off.
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({
+        "schema_version": 5, "name": "T", "kind": "general",
+        "gamescope": { "nested_width": 1280, "nested_height": 720 }
+    })";
+    REQUIRE_FALSE( LoadSections().gamescope.nested_sync_window );
+}

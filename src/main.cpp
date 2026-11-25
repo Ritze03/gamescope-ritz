@@ -343,6 +343,8 @@ bool g_bOutputHDREnabled = false;
 bool g_bFullscreen = false;
 bool g_bForceRelativeMouse = false;
 bool g_bForceWindowsFullscreenStartup = false;
+// Sync with window size stored on (set by apply_ritz_config_to_startup_state()).
+static bool g_bNestedSyncWindowStartup = false;
 
 bool g_bGrabbed = false;
 
@@ -742,6 +744,11 @@ static void apply_ritz_config_to_startup_state(const gamescope::config::Settings
 		g_nNestedWidth = config.gamescope.nested_width;
 		g_nNestedHeight = config.gamescope.nested_height;
 	}
+	// "Sync with window size": remembered so the default-size fallback in main()
+	// can start the game at the window's size (a stored sync profile keeps
+	// nested_width/height at 0, so that fallback is where it lands).
+	g_bNestedSyncWindowStartup = config.gamescope.nested_sync_window;
+
 	if ( config.gamescope.nested_refresh_hz && !Given( Opt::NestedRefresh ) )
 		g_nNestedRefresh = gamescope::ConvertHztomHz( config.gamescope.nested_refresh_hz ); // g_nNestedRefresh is mHz
 
@@ -1551,6 +1558,13 @@ int main(int argc, char **argv)
 			g_nPreferredOutputHeight != 0, g_nScreenWidth, g_nScreenHeight, g_nOutputWidth, g_nOutputHeight );
 		g_nNestedWidth = def.uWidth;
 		g_nNestedHeight = def.uHeight;
+		// Sync with window size stored on: start at the window's own size (no
+		// -w/-h is given on this path). The per-frame watcher takes it from here.
+		if ( g_bNestedSyncWindowStartup && g_nOutputWidth && g_nOutputHeight )
+		{
+			g_nNestedWidth = g_nOutputWidth;
+			g_nNestedHeight = g_nOutputHeight;
+		}
 	}
 	if ( g_nNestedWidth == 0 )
 		g_nNestedWidth = g_nNestedHeight * 16 / 9;

@@ -157,6 +157,7 @@ namespace gamescope::config
                 s.gamescope.nested_height = JGetInt( *pGamescope, "nested_height", s.gamescope.nested_height );
                 s.gamescope.nested_refresh_hz = JGetInt( *pGamescope, "nested_refresh_hz", s.gamescope.nested_refresh_hz );
                 s.gamescope.nested_lock_aspect = JGetBool( *pGamescope, "nested_lock_aspect", s.gamescope.nested_lock_aspect );
+                s.gamescope.nested_sync_window = JGetBool( *pGamescope, "nested_sync_window", s.gamescope.nested_sync_window );
             }
 
             if ( const nlohmann::json *pFps = JGetObject( j, "fps_display" ) )
@@ -789,6 +790,7 @@ namespace gamescope::config
             jGamescope[ "nested_height" ] = s.gamescope.nested_height;
             jGamescope[ "nested_refresh_hz" ] = s.gamescope.nested_refresh_hz;
             jGamescope[ "nested_lock_aspect" ] = s.gamescope.nested_lock_aspect;
+            jGamescope[ "nested_sync_window" ] = s.gamescope.nested_sync_window;
 
             nlohmann::json jFps = nlohmann::json::object();
             jFps[ "enabled" ] = s.fps_display.enabled;

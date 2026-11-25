@@ -44,4 +44,9 @@ namespace gamescope
 	// An explicit --framerate-limit wins over the profile: applied through the same
 	// setter (the bare variable it set before was zeroed by the first frame).
 	void PanelDisplay_ApplyLaunchFpsLimit( int nFps );
+	// "Sync with window size": the once-a-frame watcher, called from paint_all()
+	// beside NullBinds_Tick(). Does nothing while the switch is off, outside
+	// nested mode, or in a session launched with -w/-h until the switch is
+	// toggled. superdoc/features/resolution-and-refresh.md.
+	void PanelDisplay_ResolutionSyncTick();
 }

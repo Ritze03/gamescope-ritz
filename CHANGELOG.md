@@ -10,6 +10,8 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-25
 
 ### Added
+- **Sync with window size**: new switch in Display > Resolution that keeps the game's
+  resolution equal to gamescope's window and follows it when you resize the window.
 - **Appearance**: new slider "Outside margin" sets how much space is left around the
   settings window.
 - **True Sens**: new Input area that records your own mouse sensitivity once and gives
