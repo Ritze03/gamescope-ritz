@@ -28,7 +28,7 @@
 // (tests/test_truesens.cpp) links only this header, the pattern of NullBinds.h.
 // The second half, at the bottom, declares the glue TrueSens.cpp implements:
 // the mouse hook, the per-frame tick and the interface the settings area, hint
-// and picture (later steps) call.
+// and picture call.
 
 #include <cmath>
 #include <cstdint>
@@ -48,6 +48,11 @@ namespace gamescope::truesens
 	// D18: a bad recording must not make the mouse unusable.
 	inline constexpr double kMinMultiplier = 0.05;
 	inline constexpr double kMaxMultiplier = 20.0;
+
+	// A multiplier this close to 1 is 1: a game recorded at the player's own
+	// sensitivity is passed through untouched instead of being quantised to the
+	// 1/256 wire grid for no gain.
+	inline constexpr double kUnityBand = 0.001;
 
 	// The fewest net counts a recording may end on and still count. A real 360
 	// degree turn is thousands of counts (a fast, low-DPI setup is around 3000;
@@ -112,7 +117,8 @@ namespace gamescope::truesens
 
 	// 1.0 (leave the game alone) for any invalid input: no recorded game counts,
 	// no recorded true distance, or anything non-finite. Otherwise clamped to
-	// [kMinMultiplier, kMaxMultiplier].
+	// [kMinMultiplier, kMaxMultiplier]; within kUnityBand of 1 it is exactly 1.0
+	// (no scaling).
 	inline double Multiplier( double game_counts, double true_inches, int dpi )
 	{
 		if ( !IsPositive( game_counts ) || !IsPositive( true_inches ) || dpi <= 0 )
@@ -123,7 +129,8 @@ namespace gamescope::truesens
 		const double m = game_counts / target;
 		if ( !IsPositive( m ) )
 			return 1.0;
-		return m < kMinMultiplier ? kMinMultiplier : ( m > kMaxMultiplier ? kMaxMultiplier : m );
+		const double c = m < kMinMultiplier ? kMinMultiplier : ( m > kMaxMultiplier ? kMaxMultiplier : m );
+		return std::fabs( c - 1.0 ) < kUnityBand ? 1.0 : c;
 	}
 
 	// The calculator: the in-game value to set so the game's turn matches the
@@ -387,7 +394,7 @@ namespace gamescope::truesens
 		return h;
 	}
 
-	// ---- the reference picture (I4, TrueSensHud.cpp) -------------------------------
+	// ---- the reference picture (TrueSensHud.cpp) -------------------------------
 	// A frozen crop of the middle of the game picture, shown under the hint plate.
 
 	// A crop rectangle in picture pixels; !ok = nothing to crop (picture too small).
@@ -485,6 +492,9 @@ namespace gamescope
 	truesens::Target TrueSens_RecordingTarget();                  // Idle when no recording runs
 	double TrueSens_RecordingNet();                               // |net X| so far
 	std::string TrueSens_LastOutcome();                           // stored value or the reason nothing was stored; "" before any recording
+	// Start/Stop take wlserver_lock() themselves, so they must be called on the compositor thread
+	// WITHOUT the lock held (the Shell's Action callbacks and the debug commands run there; never
+	// call them from a wlserver-thread ConCommand, it would deadlock).
 	truesens::OpResult TrueSens_StartRecording( truesens::Target t ); // !ok: Zoom active / already recording / bad target
 	truesens::RecordResult TrueSens_StopRecording();              // applies a valid result (see true-sens.md); a failed one changes nothing
 
@@ -495,6 +505,7 @@ namespace gamescope
 	void TrueSens_SetUseHigh( bool bHigh );
 	float TrueSens_GetIngameSens();                               // 0 = unset
 	void TrueSens_SetIngameSens( float flValue );
+	uint64_t TrueSens_IngameGeneration();                         // changes when the stored in-game value changes or a recording replaces it
 	double TrueSens_GameCounts360();                              // 0 = not recorded
 
 	// Global values.
@@ -516,7 +527,7 @@ namespace gamescope
 
 // The recording hint (TrueSensHud.cpp): draws it into the HUD layer's draw list
 // (FpsDisplay.cpp calls it, only while TrueSens_RecordingActive()). Returns the
-// plate's bottom edge in px (0 = nothing drawn); the next step's picture goes below it.
+// plate's bottom edge in px (0 = nothing drawn); the reference picture goes below it.
 struct ImDrawList;
 namespace gamescope { float TrueSens_DrawHud( ImDrawList *pDrawList, float flWidth, float flHeight, float flYOffset ); }
 

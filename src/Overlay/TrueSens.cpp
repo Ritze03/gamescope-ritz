@@ -31,9 +31,10 @@ namespace gamescope
 
 		// The running recording's target (a truesens::Target as int; 0 = none) and
 		// its accumulators. The hook is the single writer of the sums, under the
-		// wlserver lock; Start/Stop also take that lock, so a reset or a read never
-		// interleaves with a half-done +=. The compositor thread reads the sums
-		// without the lock only for the live status.
+		// wlserver lock. Start/Stop take that lock too (always: they run on the
+		// compositor thread, which never holds it, see TrueSens_StartRecording), so
+		// a reset or a read never interleaves with a half-done +=. The compositor
+		// thread reads the sums without the lock only for the live status.
 		std::atomic<int>      s_eTarget{ 0 };
 		std::atomic<double>   s_dSumX{ 0.0 };
 		std::atomic<double>   s_dSumY{ 0.0 };
@@ -49,26 +50,27 @@ namespace gamescope
 		truesens::FractionCarry s_Carry;
 
 		// ---- compositor-thread state -----------------------------------------------
-		bool s_bLoaded = false;
+		bool s_bLoaded = false;   // a key has been resolved (possibly provisionally)
+		bool s_bKeyFinal = false; // the first tick has resolved it for good
 		config::TrueSensKey s_Key;
 		std::string s_sLastOutcome;
+		// Bumped whenever the stored in-game value changes or a recording replaces
+		// the game's counts, so the area can drop a stale entry error.
+		uint64_t s_ulIngameGeneration = 0;
 
 		LogScope log_truesens( "truesens" );
 
-		// Takes the wlserver lock unless the caller already holds it.
+		// The wlserver lock, taken unconditionally. wlserver_is_lock_held() is a
+		// global trylock probe ("somebody holds it"), not "this thread holds it", so
+		// it cannot be used to skip locking: while the input thread is inside
+		// wlserver_mousemotion() it answers "held" and the caller would then read
+		// the sums unlocked. This is only correct because every caller runs on the
+		// compositor thread, which never holds the lock there (see
+		// TrueSens_StartRecording).
 		struct ScopedWlserverLock
 		{
-			ScopedWlserverLock() : m_bTook( !wlserver_is_lock_held() )
-			{
-				if ( m_bTook )
-					wlserver_lock();
-			}
-			~ScopedWlserverLock()
-			{
-				if ( m_bTook )
-					wlserver_unlock();
-			}
-			bool m_bTook;
+			ScopedWlserverLock() { wlserver_lock(); }
+			~ScopedWlserverLock() { wlserver_unlock(); }
 		};
 
 		double ChosenInches( const config::TrueSensGlobal &g, const config::GameTrueSens &gm )
@@ -89,10 +91,10 @@ namespace gamescope
 			s_bScale.store( dMult != 1.0, std::memory_order_relaxed );
 		}
 
-		// The first call resolves the key and loads; later calls re-resolve the key
-		// (cheap) because the launch command can be told to the config after the
-		// first frame, and refresh when it changed.
-		void EnsureLoaded()
+		// Resolves the session's key (app id from the environment, else the launch
+		// command's basename) and refreshes the hook's atomics when it changed.
+		// Builds strings and reads the config, so it is NOT called per getter.
+		void ResolveKey()
 		{
 			config::TrueSensKey k = config::SessionTrueSensKey();
 			if ( !s_bLoaded || k.key != s_Key.key || k.shared != s_Key.shared )
@@ -102,6 +104,18 @@ namespace gamescope
 				Refresh();
 				log_truesens.debugf( "game entry '%s'%s", s_Key.key.c_str(), s_Key.shared ? " (shared unknown-game entry)" : "" );
 			}
+		}
+
+		// The getters use the cached key; only a call before the first tick (an
+		// early getter) resolves one, provisionally. What can still change: the
+		// app id is read from the environment once and cached by the config, the
+		// launch command is noted once by LaunchNestedChildren() before the paint
+		// loop starts. So TrueSens_Tick() resolves once more on its first call
+		// (inside the loop, after both are known) and never again.
+		void EnsureLoaded()
+		{
+			if ( !s_bLoaded )
+				ResolveKey();
 		}
 
 		config::GameTrueSens Game()
@@ -272,7 +286,11 @@ namespace gamescope
 
 	void TrueSens_Tick()
 	{
-		EnsureLoaded();
+		if ( !s_bKeyFinal )
+		{
+			ResolveKey();
+			s_bKeyFinal = true;
+		}
 
 		std::vector<std::string> cmds;
 		{
@@ -391,6 +409,11 @@ namespace gamescope
 		const config::TrueSensGlobal g = config::GetTrueSensGlobal();
 		config::GameTrueSens gm = Game();
 		gm.counts_360 = (float)r.counts;
+		// The typed in-game value belongs to the recording it was typed for: with a
+		// new counts_360 the old number would give a wrong result, so the calculator
+		// asks for it again (a failed recording returned above and changes nothing).
+		gm.ingame_sens = 0.0f;
+		s_ulIngameGeneration++;
 		if ( target == Target::Low || target == Target::High )
 		{
 			config::TrueSensGlobal ng = g;
@@ -444,7 +467,13 @@ namespace gamescope
 	{
 		config::GameTrueSens gm = Game();
 		gm.ingame_sens = truesens::IsPositive( flValue ) ? flValue : 0.0f;
+		s_ulIngameGeneration++;
 		SetGame( gm );
+	}
+
+	uint64_t TrueSens_IngameGeneration()
+	{
+		return s_ulIngameGeneration;
 	}
 
 	double TrueSens_GameCounts360()

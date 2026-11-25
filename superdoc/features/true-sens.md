@@ -10,10 +10,9 @@ Storage in `src/Config/` (`TrueSensGlobal`, `GameTrueSens`, global.json only).
 Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
-> **Status (2026-11-25): the core (I1), the settings area (I2), the recording hint (I3)
-> and the reference picture (I4).** Maths, recorder, storage, the hook, the tick, the
-> interface, the debug commands, the Shell area, the hint at the top of the screen and the
-> frozen picture under it exist and are tested.
+> **Status (2026-11-25):** maths, recorder, storage, the hook, the tick, the interface, the
+> debug commands, the Shell area, the hint at the top of the screen and the frozen picture
+> under it exist and are tested.
 
 ## Why this exists
 
@@ -129,8 +128,8 @@ held. The order of everything that scales or gates a relative mouse delta:
 1. `dx/dy *= g_mouseSensitivity` (`--mouse-sensitivity`)
 2. the settings overlay's capture gate (the Shell swallows motion; **returns**, so neither
    True Sens nor Zoom sees it)
-3. `bCursorHidden = !bCursorHasImage || wlserver_pointer_is_locked()` (hoisted so Zoom and
-   True Sens share it)
+3. `bCursorHidden = !bCursorHasImage || wlserver_pointer_is_locked()` (already computed there
+   for Zoom; True Sens shares it)
 4. **`TrueSens_OnMotion`** (this feature)
 5. `Zoom_MouseScale( bCursorHidden )` (Match mouse speed)
 6. `wlserver_perform_rel_pointer_motion( dx, dy )`
@@ -142,6 +141,12 @@ Inside: if a recording runs and the cursor is hidden, the unscaled delta is adde
 accumulators and **not scaled** (D11); else if the feature is enabled for this game, a valid
 multiplier exists and the cursor is hidden, dx and dy are scaled by the cached multiplier
 through the fraction carry; otherwise the delta is left alone and the carry is reset.
+
+**Dead band.** `truesens::Multiplier()` returns exactly 1.0 when the result is within
+`kUnityBand` (0.001) of 1, so the hook's `s_bScale` stays off: a game recorded at the player's
+own sensitivity is passed through untouched (fractional deltas are not snapped to 1/256) and the
+multiplier row shows "1.00x". `Why:` quantising for a factor that is 1 within rounding gains
+nothing.
 
 `Why bCursorHidden and not wlserver.bCursorHidden:` the latter is also set by gamescope's
 idle auto-hide, which would false-positive on a menu with a visible-but-idle cursor (the
@@ -167,16 +172,33 @@ locks. `ConfigManager`'s mirror (`s_Assignments`) has no lock and belongs to the
 thread, so it is never touched from the hook.
 
 `TrueSens_Tick()` (once a frame from `paint_all()`, beside `NullBinds_Tick()`) resolves the
-key, loads the values on the first call and refreshes the atomics, so an enabled game entry
+key on its first call, loads the values and refreshes the atomics, so an enabled game entry
 already in `global.json` gives its multiplier from the first frame without the settings
-window ever being opened. Every setter writes through `ConfigManager` (coalesced
+window ever being opened.
+
+**The session key is resolved once.** `SessionTrueSensKey()` builds strings, so the getters use
+the cached key; only a getter called before the first tick resolves one (provisionally), and
+the first tick resolves again for good. Nothing can change afterwards: the app id comes from the
+environment and is cached by the config, and the launch command is noted once by
+`LaunchNestedChildren()` before the paint loop starts. Every setter writes through `ConfigManager` (coalesced
 background writer, never synchronous disk I/O on the paint thread) and refreshes the atomics
 at once. The per-game values are profile-independent, so no `ConfigGeneration()` tracking is
 needed.
 
-`TrueSens_StartRecording()`/`StopRecording()` take `wlserver_lock()` around resetting or
-reading the sums (unless the caller already holds it), so a motion event is never half
-summed; the hook is the single writer.
+`TrueSens_StartRecording()`/`StopRecording()` take `wlserver_lock()` **unconditionally** around
+resetting or reading the sums, so they exclude the hook (it runs with the lock held) and a
+motion event is never half summed or lost between the read and the stop; the hook is the single
+writer. Only the compositor thread calls them: the Shell's Action callbacks (`RunKeyboard()`,
+the pointer path, also what `overlay_e2_key enter` queues into the overlay's own input queue,
+drained in the Shell's frame in `paint_all()`) and the debug commands (queued, run by
+`TrueSens_Tick()`). The compositor thread never holds the lock there, and no Action can be
+reached from the wlserver thread (`overlay_e2_set` has no setter for an Action; the palette
+only jumps to one). `Why not wlserver_is_lock_held():` it is a global trylock probe ("somebody
+holds the lock"), not "this thread holds it", so with the input thread inside
+`wlserver_mousemotion()` it answered "held" and the caller skipped the lock and read the sums
+unprotected. The conditional pattern of `resolution-and-refresh.md` is for setters that a
+wlserver-thread console command also reaches; these two are not. A wlserver-thread caller would
+deadlock (non-recursive mutex), which the header comment states.
 
 ## The recorder (D11, D12, D14, D15)
 
@@ -187,7 +209,10 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
 
 - **Result.** A valid recording of `Low` or `High` stores `low_inches`/`high_inches` =
   counts / DPI **and** the current game's `counts_360` = counts (D12: same measurement). A
-  `Game` recording stores only `counts_360`. A failed recording changes nothing.
+  `Game` recording stores only `counts_360`. Every valid recording also resets the game's typed
+  `ingame_sens` to 0: it belongs to the recording it was typed for, and `old_typed x new_counts /
+  target` would be a wrong number, so the calculator asks for the value again. A failed
+  recording changes nothing.
 - **Too little movement (D14).** Fewer than 200 net counts (`kMinRecordingCounts`) stores
   nothing and gives a plain reason: no samples at all, "No mouse movement was seen. The game
   has to hold the mouse (cursor hidden) while you turn."; below the floor, "Too little mouse
@@ -216,11 +241,14 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
 - The calculator assumes turn per count proportional to the in-game value. After setting the
   calculated value in the game, switch True Sens off for that game (or record it again),
   otherwise the correction applies twice.
+- Two gamescope instances running at once each rewrite `global.json` from their own copy, so a
+  value recorded in one can be overwritten by the other's next write (the same existing
+  behaviour as the per-game volume and the selected profile). Low and High are global, so this
+  can lose a fresh recording.
 
 ## The interface (compositor thread)
 
-Declared in `TrueSens.h`, for the settings area, hint and picture of the later steps:
-recording state (`TrueSens_RecordingActive`, `_RecordingTarget`, `_RecordingNet`,
+Declared in `TrueSens.h`, for the settings area, hint and picture: recording state (`TrueSens_RecordingActive`, `_RecordingTarget`, `_RecordingNet`,
 `_LastOutcome`), `TrueSens_StartRecording( Target )` / `TrueSens_StopRecording()`, this
 game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GameCounts360`, the global
 `Get/SetDpi`, `LowInches`, `HighInches`, and the derived read-only `Multiplier`,
@@ -229,7 +257,7 @@ game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GameCounts360`,
 
 ## Debug commands
 
-Reached with `gamescopectl`, for headless tests (the area now drives the same interface). They queue their
+Reached with `gamescopectl`, for headless tests (the area drives the same interface). They queue their
 text and `TrueSens_Tick()` runs it on the compositor thread (a ConCommand runs on the
 wlserver thread, which must not touch the config mirror), then prints the status:
 
@@ -243,7 +271,7 @@ wlserver thread, which must not touch the config mirror), then prints the status
 Inject movement with `wlserver_debug_mouse_motion "<dx> <dy> [count]"` (enters at
 `wlserver_mousemotion`).
 
-## Area (I2)
+## The area
 
 `src/Overlay/TrueSensArea.cpp` (`TrueSens_RegisterArea`, declared in `TrueSens.h`), area id
 `system.true_sens`, label **True Sens**, rail group INPUT after Null binds (D20). Summary
@@ -254,21 +282,20 @@ setter) the Launcher's search. Row ids are `true_sens.<name>`.
 
 | Group | Row id | Kind | Label | Notes |
 | --- | --- | --- | --- | --- |
-| Info | `tip` | Facts | Tip | "A low in-game sensitivity works best"; the full D8 sentence is the help. |
-| Info | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
-| This game | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
-| This game | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
-| This game | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
-| This game | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
-| This game | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21). |
-| True sensitivity | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
-| True sensitivity | `low` / `high` | Facts | Low / High | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
-| True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
-| Recording | `stop` | Action | Stop recording | verb "Stop"; shown only while recording (D21). |
-| Recording | `recording` | Facts | Recording | "Low, 1234 counts so far"; shown only while recording. |
-| Recording | `outcome` | Facts | Last recording | Short form of `TrueSens_LastOutcome()`; the full text is a Details line in the Inspector; shown after a recording or a refusal. |
-| Calculator | `ingame` | Text | In-game value used | The typed in-game value (D17). |
-| Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
+| Left, tip part 1 | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
+| Left, tip part 1 | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
+| Left, tip part 1 | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
+| Left, tip part 1 | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
+| Left, tip part 1 | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
+| Left, tip part 1 | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. |
+| Left, Calculator | `ingame` | Text | In-game value | The typed in-game value (D17). |
+| Left, Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
+| Right, tip part 2 | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
+| Right, tip part 2 | `low` / `high` | Facts | Low / High (true sensitivity) | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
+| Right, tip part 2 | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
+| Right, Recording | `stop` | Action | Stop recording | verb "Stop"; shown only while recording (D21). |
+| Right, Recording | `recording` | Facts | Recording | "Low, 1234 counts so far"; shown only while recording. |
+| Right, Recording | `outcome`, `outcome_2` .. `outcome_8` | Facts | Last recording (the rest untitled) | `TrueSens_LastOutcome()` in full, one line per row (see below); shown after a recording or a refusal, a row only while it has a line. |
 
 **Record closes the window (D6).** A record Action calls `TrueSens_StartRecording( target )`
 and, only when that succeeds, `SettingsOverlay_SetVisible( false )` (the precedent of the
@@ -281,10 +308,17 @@ second mechanism. The Launcher: a record Action is a row the palette finds, but 
 row there only jumps the Shell to it (`PaletteJump`); an Action is never run from the
 palette, so nothing closes twice and the player presses it in the Shell.
 
-**Why the outcome row is short.** A Facts value is one right-bound line in the control zone,
-the core's outcome is one or two sentences. The row shows the first clause ("Low stored: 15.9
-cm per 360°", "No mouse movement was seen"), cut at the first parenthesis or full stop, and a
-Details line (`Live`) carries the whole text in the Inspector.
+**The outcome in full.** A Facts value is one right-bound line, capped at 60 % of the label
+zone: about 24 characters in a half-width column (measured at 1080p, the 26th is already cut
+with "..."). The core's outcome is one to three sentences, the second being the instruction
+("Turn Zoom off before recording."). The area splits the text into sentences and wraps each at
+word boundaries to 22 characters (`OutcomeLines()`), one line per Facts row: the first lines are
+what happened, the lines after them what to do. Up to eight rows, each shown only while it has
+a line. `Why:` the first version showed only the first clause, so the player never saw what to
+do; a new row kind for running text was out of scope, and rows are the existing way
+(`diagnostics.scanout_*` does the same). The first row's Details line also carries the whole
+text. A text row spanning the column would read far better than 3 to 5 short lines; that is a
+Registry/Shell change, not made here.
 
 **Why the multiplier row has its own wording.** `TrueSens_MultiplierText()` says "not
 recorded" whenever no multiplier acts, also while the switch is off, which reads wrong
@@ -298,15 +332,38 @@ number above 0" drawn beside the field (`StatusWhen`), and the stored value stay
 An empty field clears the value. `Entry::Validate()` is declared too, but the registry
 only stores it: nothing in the Shell reads it, so a rejection cannot rely on it. The result
 row is for the game's own chosen Low/High, not a second selector; its help says to switch
-True Sens off for the game, or record it again, after setting the value in the game.
+True Sens off for the game, or record it again, after setting the value in the game. A valid
+recording of the game resets the typed value to 0 (the field is empty and the result row says
+"Enter the in-game value"). The refused-entry message belongs to the stored value it was
+raised against: `TrueSens_IngameGeneration()` changes with every stored change (valid entry,
+recording), and `IngameStatus()` shows the message only while it is unchanged, so the warning
+never sits beside a valid field.
 
-**Info text (D8).** There is no plain-text row kind, so the tip is a Facts row at the top
-with a short value and the full sentence as its help.
+**Two columns.** The owner: *"Make the UI page use two collumns."* `Columns( 2 )`, and
+`GroupColumn()` pins the groups: left what belongs to this game (the tip's first half over the
+game rows, then the Calculator), right what is global and the recording state (the tip's second
+half over Mouse DPI, Low, High and the record buttons, then Recording with the outcome). The
+sheet has two columns from a base width of 840 (`kTwoColMin`, `Layout.h`), three from 1680; the
+area asks for two, so a narrower sheet falls back to one column: checked, 1920x1080 has two
+columns and 1280x720 has one (the groups then stack in declaration order: the tip's second
+half sits above the global rows, both halves still unclipped; Calculator and Recording come last). The first version used one
+column because greedy packing split the sequence; pinning removes that.
+
+**The tip (D8).** There is no plain-text row kind, a Facts value is capped at ~24 characters
+and a group band is one line the width of its column (it ends in "..." when too long), so the
+owner's sentence cannot sit whole in one half-width column. It is split in the middle across the
+**captions of the two columns' first groups**, drawn in the band's capital letters: left
+"Setting a low in-game sensitivity is usually the", right "most reliable way to use True Sens in
+a game.", so it reads across the top of the sheet. Consequence: those two groups have no caption
+of their own, so the Low/High rows are labelled "Low (true sensitivity)" / "High (true
+sensitivity)". `Why:` the first version showed "Tip: A low in-game sensitivity works best"
+with the sentence only in the help, which the owner's wording ("the player should be told")
+does not allow.
 
 **Icon.** A ring with a centred dot and an arrowhead on its top rim (a turn), built from the
 glyph set's own primitives (`Icons.cpp`).
 
-## Recording hint (I3)
+## Recording hint
 
 While a recording runs the Shell is closed (D6), so a lasting hint at the top centre of the
 output says what is happening: two lines on a dark plate.
@@ -352,12 +409,12 @@ anchored top-centre the plate starts below the readout's bottom edge (same formu
 block's top-left rule); at any other anchor the readout (default top-right) does not meet it.
 
 **The reference picture** is drawn by the same function into the same draw list, directly below
-the plate (see "Reference picture (I4)"). `TrueSens_DrawHud()` returns the plate's bottom edge in
+the plate (see "Reference picture"). `TrueSens_DrawHud()` returns the plate's bottom edge in
 px (0 = nothing drawn).
 
 Not checked: a real HDR (PQ) client; a 10-bit SDR client was.
 
-## Reference picture (I4)
+## Reference picture
 
 When a recording starts, the middle of the game picture is captured once and shown, frozen,
 under the hint plate until the recording ends, so the player can compare it with what is in the
@@ -470,6 +527,6 @@ layer predicate are covered by the headless screenshots only.
 The area (`TrueSensArea.cpp`) is not linked into the unit binary (like every area's
 `*_RegisterArea`); its pieces are covered by the id/rail census in
 `tests/test_overlay_ui.cpp` (area id list, rail-group table, per-group order, icon census)
-and by the headless runs described in the step's report: the Shell driven with
+and by the headless runs run headless: the Shell driven with
 `overlay_e2_select` / `overlay_e2_key` / `overlay_e2_set`, screenshots, and the recorder
 and calculator numbers read back through `overlay_e2_get` and `global.json`.
