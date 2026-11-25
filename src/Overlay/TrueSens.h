@@ -568,6 +568,21 @@ namespace gamescope::truesens
 		return r;
 	}
 
+	// What the HUD draws under the hint plate (the owner's wish: the live view already while armed, so the
+	// starting point can be set accurately). Nothing = nothing; LiveOnly = pair frame, left half empty (plate
+	// fill), right half live; Pair = frozen left, live right; FrozenAlone = the frozen square, centred.
+	// `bLiveFailed` = the composite cannot build the live view (or Zoom holds the slot).
+	enum class PairLook : int { Nothing = 0, LiveOnly, Pair, FrozenAlone };
+
+	inline PairLook LookFor( Phase phase, bool bFrozenShown, bool bLiveFailed )
+	{
+		if ( phase != Phase::Armed && phase != Phase::Recording )
+			return PairLook::Nothing;
+		if ( bLiveFailed )
+			return ( phase == Phase::Recording && bFrozenShown ) ? PairLook::FrozenAlone : PairLook::Nothing;
+		return ( phase == Phase::Recording && bFrozenShown ) ? PairLook::Pair : PairLook::LiveOnly;
+	}
+
 	// The lone frozen square (the live half cannot be built): centred, same side and top.
 	inline int ReferenceSingleX( int nOutW, int side )
 	{

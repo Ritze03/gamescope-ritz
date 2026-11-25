@@ -61,6 +61,7 @@ namespace gamescope
 		{
 			bool bPending = false;
 			truesens::PairRect pair;
+			int nOutW = 0, nOutH = 0;
 		};
 
 		LiveRequest &Live()
@@ -166,9 +167,20 @@ namespace gamescope
 		g_nPlacedZoomFailure.store( 0, std::memory_order_relaxed ); // the next recording starts optimistic
 	}
 
+	// Taking the picture at the first click: clears the held picture but keeps the failure state the armed
+	// phase already learned (sticky from arming through the recording; only arming/cancel/finish reset it).
+	static void ReferenceClearKeepFailure()
+	{
+		const int nFailure = g_nPlacedZoomFailure.load( std::memory_order_relaxed );
+		const bool bLogged = Ref().bFailureLogged;
+		TrueSens_ReferenceClear();
+		g_nPlacedZoomFailure.store( nFailure, std::memory_order_relaxed );
+		Ref().bFailureLogged = bLogged;
+	}
+
 	void TrueSens_ReferenceRequest()
 	{
-		TrueSens_ReferenceClear();
+		ReferenceClearKeepFailure();
 		const uint64_t ulSeq = Ref().ulSeq;
 		GamescopeScreenshotInfo info;
 		info.eScreenshotType = GAMESCOPE_CONTROL_SCREENSHOT_TYPE_BASE_PLANE_ONLY; // the game alone: no Shell, no HUD
@@ -253,49 +265,55 @@ namespace gamescope
 		pDrawList->AddText( pTitleFont, flTitleSize, ImVec2( flCx - flTitleW * 0.5f, p0.y + flPadY ), palette::kAccentText, hint.title.c_str() );
 		pDrawList->AddText( pBodyFont, flBodySize, ImVec2( flCx - flBodyW * 0.5f, p0.y + flPadY + flTitleSize + flGap ), palette::Text( 1.0f ), hint.action.c_str() );
 
-		// The reference picture, directly below the plate; none while it cannot be taken. Two square
-		// halves (left frozen, right live) as long as the composite can build the live half; if it
-		// cannot, only the frozen square, centred. The live half is drawn by the COMPOSITE under
-		// this layer, so here the right half stays transparent: only border, divider and mark.
+		// The picture pair, directly below the plate (truesens::LookFor decides what shows). The live half
+		// is drawn by the COMPOSITE under this layer, so here the right half stays transparent: only
+		// border, divider and mark. While no frozen picture is held the left half is the plate's fill.
 		Live().bPending = false;
 		Reference &r = Ref();
-		if ( r.bShow && r.nW > 0 && r.nH > 0 )
+		const bool bFrozen = r.bShow && r.nW > 0 && r.nH > 0;
+		const truesens::Phase phase = TrueSens_RecordingPhase();
+		const int nFailure = g_nPlacedZoomFailure.load( std::memory_order_relaxed );
+		const bool bFailed = nFailure != 0 || Zoom_IsActive();
+		const truesens::PairLook look = truesens::LookFor( phase, bFrozen, bFailed );
+		if ( look != truesens::PairLook::Nothing )
 		{
 			const truesens::PairRect pr = truesens::ReferencePair( (int)flWidth, (int)flHeight, p1.y, flScale );
 			if ( pr.ok )
 			{
-				const truesens::Phase phase = TrueSens_RecordingPhase();
-				const bool bLiveWanted = ( phase == truesens::Phase::Recording || phase == truesens::Phase::Finished ) && !Zoom_IsActive();
-				const int nFailure = g_nPlacedZoomFailure.load( std::memory_order_relaxed );
-				const bool bPair = bLiveWanted && nFailure == 0;
-				if ( bLiveWanted && nFailure != 0 && !r.bFailureLogged )
+				const bool bPair = look == truesens::PairLook::Pair || look == truesens::PairLook::LiveOnly;
+				const bool bShowFrozen = look == truesens::PairLook::Pair || look == truesens::PairLook::FrozenAlone;
+				if ( nFailure != 0 && phase == truesens::Phase::Recording && !r.bFailureLogged )
 				{
 					r.bFailureLogged = true;
 					TrueSens_LogScope().infof( "live view not built (%s): showing the frozen picture alone",
 						nFailure == 2 ? "no free layer slot" : "no usable base picture (HDR, YCbCr or none) or no texture" );
 				}
 
-				ImGuiContext *pCtx = ImGui::GetCurrentContext();
-				if ( r.pCtx != pCtx )
-				{
-					ImGui::RegisterUserTexture( &r.tex );
-					r.pCtx = pCtx;
-				}
-				if ( r.bPendingUpload )
-				{
-					r.tex.UseColors = true;
-					ImTextureDataQueueUpload( &r.tex, 0, 0, std::min( r.nW + 1, kTexSide ), std::min( r.nH + 1, kTexSide ) );
-					r.bPendingUpload = false;
-				}
-
 				const float S = (float)pr.side;
 				const float flLeft = bPair ? (float)pr.x : (float)truesens::ReferenceSingleX( (int)flWidth, pr.side );
 				const ImVec2 q0( flLeft, (float)pr.y ), q1( flLeft + S, (float)pr.y + S );
-				// Edge to edge when the texture has room for the repeated edge texel; else half a texel in.
-				const float flIn = ( r.nW < kTexSide && r.nH < kTexSide ) ? 0.0f : 0.5f;
-				const ImVec2 uv0( flIn / kTexSide, flIn / kTexSide );
-				const ImVec2 uv1( ( r.nW - flIn ) / kTexSide, ( r.nH - flIn ) / kTexSide );
-				pDrawList->AddImage( r.tex.GetTexRef(), q0, q1, uv0, uv1 );
+				if ( bShowFrozen )
+				{
+					ImGuiContext *pCtx = ImGui::GetCurrentContext();
+					if ( r.pCtx != pCtx )
+					{
+						ImGui::RegisterUserTexture( &r.tex );
+						r.pCtx = pCtx;
+					}
+					if ( r.bPendingUpload )
+					{
+						r.tex.UseColors = true;
+						ImTextureDataQueueUpload( &r.tex, 0, 0, std::min( r.nW + 1, kTexSide ), std::min( r.nH + 1, kTexSide ) );
+						r.bPendingUpload = false;
+					}
+					// Edge to edge when the texture has room for the repeated edge texel; else half a texel in.
+					const float flIn = ( r.nW < kTexSide && r.nH < kTexSide ) ? 0.0f : 0.5f;
+					const ImVec2 uv0( flIn / kTexSide, flIn / kTexSide );
+					const ImVec2 uv1( ( r.nW - flIn ) / kTexSide, ( r.nH - flIn ) / kTexSide );
+					pDrawList->AddImage( r.tex.GetTexRef(), q0, q1, uv0, uv1 );
+				}
+				else
+					pDrawList->AddRectFilled( q0, q1, uPlate ); // the empty left half: the plate's own fill
 
 				const float flLine = std::max( 1.0f, flScale );
 				const ImU32 uBorder = palette::Accent( 0.5f );
@@ -304,9 +322,9 @@ namespace gamescope
 				if ( bPair )
 					pDrawList->AddRectFilled( ImVec2( flLeft + S, q0.y ), ImVec2( flLeft + S + flLine, q1.y ), uBorder );
 
-				// The spot the player aimed at: a ring with a dark halo (any picture reads) and a centre dot, on each half.
+				// The spot the player aimed at: a ring with a dark halo (any picture reads) and a centre dot, on each picture half (none on the empty one).
 				const float flR = 8.0f * flScale;
-				for ( int nHalf = 0; nHalf < ( bPair ? 2 : 1 ); nHalf++ )
+				for ( int nHalf = bShowFrozen ? 0 : 1; nHalf < ( bPair ? 2 : 1 ); nHalf++ )
 				{
 					const ImVec2 c( flLeft + S * 0.5f + S * (float)nHalf, q0.y + S * 0.5f );
 					pDrawList->AddCircle( c, flR, IM_COL32( 0, 0, 0, 200 ), 0, 4.0f * flScale );
@@ -318,6 +336,8 @@ namespace gamescope
 				{
 					Live().bPending = true;
 					Live().pair = pr;
+					Live().nOutW = (int)flWidth;
+					Live().nOutH = (int)flHeight;
 				}
 			}
 		}
@@ -333,7 +353,7 @@ namespace gamescope
 		const Reference &r = Ref();
 		// The slot is the user's Zoom's when it is active; the two cannot meet (a recording refuses
 		// Zoom and Zoom spoils it), so this is only a guard.
-		if ( !r.bShow || !l.pair.ok || pFrameInfo->zoom.bActive )
+		if ( !l.pair.ok || pFrameInfo->zoom.bActive )
 			return;
 		FrameInfo_t::Zoom_t &z = pFrameInfo->zoom;
 		z = FrameInfo_t::Zoom_t{};
@@ -343,9 +363,26 @@ namespace gamescope
 		z.flPlaceY = (float)l.pair.y;
 		z.flPlaceW = (float)l.pair.side;
 		z.flPlaceH = (float)l.pair.side;
+		// Source part: the frozen crop's own when held; before it arrives, the crop it will have
+		// (same helper on the output size, which the base-plane capture has), so nothing shifts.
 		z.flSrcCenterX = r.flCenterFracX;
 		z.flSrcCenterY = r.flCenterFracY;
 		z.flSrcHeightFrac = r.flHeightFrac;
+		if ( !r.bShow )
+		{
+			const truesens::CropRect crop = truesens::ReferenceCrop( l.nOutW, l.nOutH );
+			if ( crop.ok )
+			{
+				z.flSrcCenterX = ( (float)crop.x + (float)crop.w * 0.5f ) / (float)l.nOutW;
+				z.flSrcCenterY = ( (float)crop.y + (float)crop.h * 0.5f ) / (float)l.nOutH;
+				z.flSrcHeightFrac = (float)crop.h / (float)l.nOutH;
+			}
+			else
+			{
+				z.flSrcCenterX = z.flSrcCenterY = 0.5f;
+				z.flSrcHeightFrac = (float)truesens::kReferenceHeightFraction;
+			}
+		}
 		z.flAlpha = 1.0f;
 		z.flSharpen = 0.0f;
 		// The projection samples the base layer, so the base must be IN the composite (as for Zoom).
