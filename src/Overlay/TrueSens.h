@@ -378,17 +378,66 @@ namespace gamescope::truesens
 		}
 	}
 
-	// The lasting hint drawn while a recording runs (TrueSensHud.cpp, D16): two plain
-	// lines. `sChord` is the chord that opens the Shell; an empty one (the action is
-	// unbound) is replaced by `sFallback` (the reserved chord, which always works).
-	// Both empty for Idle: nothing to show.
+	// ---- the recording's phases and its two left clicks (D24) ---------------------
+	// idle -> armed -> recording -> (finished, until the tick has evaluated) -> idle.
+	// Record ARMS; the first counting left click starts the recording (sums at zero, the
+	// reference picture is taken); the second ends it. `Finished` is the short state
+	// between the second click (input thread) and the tick (compositor thread) that stores
+	// the result and opens the Shell again.
+	enum class Phase : int
+	{
+		Idle = 0,
+		Armed,
+		Recording,
+		Finished,
+	};
+
+	// What one button event does to the phase. Pure: the glue calls it from the input
+	// thread (wlserver_dispatch_mouse_button's game branch) with the live inputs.
+	struct ClickStep
+	{
+		Phase next = Phase::Idle;
+		bool  swallow = false;  // keep the event from the game (the release of it is dropped too)
+		bool  started = false;  // Armed -> Recording: the sums start at zero NOW
+		bool  finished = false; // Recording -> Finished: the tick evaluates
+	};
+
+	// Only a LEFT PRESS, from the user (not the Autoclicker's synthetic one), while the
+	// game holds the mouse (`bCursorHidden`: no cursor image or the pointer locked, the
+	// motion hook's condition) counts. Anything else changes nothing and is not swallowed.
+	// Why only while hidden: a click in a game menu (cursor visible) is the player
+	// navigating, not marking the start or the end of the turn.
+	inline ClickStep StepOnButton( Phase phase, bool bLeft, bool bPressed, bool bCursorHidden, bool bSynthetic )
+	{
+		ClickStep s;
+		s.next = phase;
+		if ( !bLeft || !bPressed || !bCursorHidden || bSynthetic )
+			return s;
+		if ( phase == Phase::Armed )
+		{
+			s.next = Phase::Recording;
+			s.swallow = true;
+			s.started = true;
+		}
+		else if ( phase == Phase::Recording )
+		{
+			s.next = Phase::Finished;
+			s.swallow = true;
+			s.finished = true;
+		}
+		return s;
+	}
+
+	// The lasting hint drawn while a recording is armed or runs (TrueSensHud.cpp, D16, D24):
+	// two plain lines. Both empty for Idle: nothing to show. `Finished` (a frame at most)
+	// keeps the recording text.
 	struct HintText
 	{
 		std::string title;  // what is being recorded
 		std::string action; // what to do
 	};
 
-	inline HintText HintLines( Target t, const std::string &sChord, const std::string &sFallback )
+	inline HintText HintLines( Target t, Phase phase )
 	{
 		HintText h;
 		switch ( t )
@@ -398,9 +447,24 @@ namespace gamescope::truesens
 			case Target::Game: h.title = "Recording game sensitivity"; break;
 			default: return h;
 		}
-		h.action = "Turn once around (360\xC2\xB0) to the same spot, then press " +
-			( sChord.empty() ? sFallback : sChord ) + " and Stop recording";
+		if ( phase == Phase::Armed )
+			h.action = "Aim at a spot you can find again, then left click";
+		else if ( phase == Phase::Recording || phase == Phase::Finished )
+			h.action = "Turn once around (360\xC2\xB0) to the same spot, then left click again";
+		else
+			return HintText{};
 		return h;
+	}
+
+	// The area's read-only "Recording" row: always a value.
+	inline std::string RecordingStatusText( Target t, Phase phase, double flNetCounts )
+	{
+		if ( t == Target::Idle || phase == Phase::Idle )
+			return "None";
+		const char *pszName = t == Target::Low ? "Low" : t == Target::High ? "High" : "Game";
+		if ( phase == Phase::Armed )
+			return std::string( pszName ) + ", waiting for the first click";
+		return std::string( pszName ) + ", " + FormatFixed( flNetCounts, 0 ) + " counts so far";
 	}
 
 	// ---- the reference picture (TrueSensHud.cpp) -------------------------------
@@ -506,15 +570,23 @@ namespace gamescope
 	// the hook's atomics at once).
 
 	// Recording state.
-	bool TrueSens_RecordingActive();
-	truesens::Target TrueSens_RecordingTarget();                  // Idle when no recording runs
-	double TrueSens_RecordingNet();                               // |net X| so far
-	std::string TrueSens_LastOutcome();                           // stored value or the reason nothing was stored; "" before any recording
+	bool TrueSens_RecordingActive();                              // true while armed OR recording (also the one frame between the second click and the tick)
+	truesens::Phase TrueSens_RecordingPhase();                    // Idle / Armed / Recording / Finished
+	truesens::Target TrueSens_RecordingTarget();                  // Idle when no recording is armed or runs
+	double TrueSens_RecordingNet();                               // |net X| so far (0 while armed)
+	std::string TrueSens_LastOutcome();                           // text of the last outcome (stored, failed, refused, cancelled); "" before any
+	bool TrueSens_LastOutcomeWarns();                             // true: nothing was stored because something went wrong (failure, refusal). false: stored, cancelled, none yet
 	// Start/Stop take wlserver_lock() themselves, so they must be called on the compositor thread
 	// WITHOUT the lock held (the Shell's Action callbacks and the debug commands run there; never
 	// call them from a wlserver-thread ConCommand, it would deadlock).
-	truesens::OpResult TrueSens_StartRecording( truesens::Target t ); // !ok: Zoom active / already recording / bad target
-	truesens::RecordResult TrueSens_StopRecording();              // applies a valid result (see true-sens.md); a failed one changes nothing
+	truesens::OpResult TrueSens_StartRecording( truesens::Target t ); // ARMS (no movement summed, no picture yet). !ok: Zoom active / already armed or running / bad target
+	truesens::RecordResult TrueSens_StopRecording();              // CANCEL: ends an armed or running recording, stores nothing ("Recording cancelled. Nothing was stored."); !ok result
+	// THE BUTTON HOOK, called from wlserver_dispatch_mouse_button()'s GAME branch on the input
+	// thread with wlserver_lock() held, before the seat is told (atomics only). `bLeft`: the
+	// button is BTN_LEFT. `bCursorHidden`: the motion hook's condition. Returns true when this
+	// press is True Sens' own click (the caller keeps it, and its release, from the game).
+	// Presses only; a release is never asked.
+	bool TrueSens_OnMousePress( bool bLeft, bool bCursorHidden );
 
 	// This game's values.
 	bool TrueSens_GetEnabled();
@@ -554,7 +626,7 @@ class LogScope;
 namespace gamescope
 {
 	LogScope &TrueSens_LogScope();   // the "truesens" log scope (TrueSens.cpp)
-	// Ask paint_all for one capture of the game picture (called when a recording starts);
+	// Ask paint_all for one capture of the game picture (called by the tick once the first click started the recording);
 	// drops any older picture first. The result arrives in a later paint, or never (no
 	// picture, one log line says why).
 	void TrueSens_ReferenceRequest();

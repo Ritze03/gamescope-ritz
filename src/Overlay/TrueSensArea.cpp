@@ -156,52 +156,37 @@ namespace gamescope
 			return buf;
 		}
 
-		const char *TargetLabel( Target t )
-		{
-			switch ( t )
-			{
-				case Target::Low: return "Low";
-				case Target::High: return "High";
-				case Target::Game: return "Game";
-				default: return "";
-			}
-		}
-
+		// "None" / "Low, waiting for the first click" / "Low, 3120 counts so far": always a
+		// value, so the row (and the Shell around it) never changes shape (D23).
 		std::string RecordingLine()
 		{
-			std::string s = std::string( TargetLabel( TrueSens_RecordingTarget() ) ) + ", " +
-				truesens::FormatFixed( TrueSens_RecordingNet(), 0 ) + " counts so far";
-			return s;
+			return truesens::RecordingStatusText( TrueSens_RecordingTarget(), TrueSens_RecordingPhase(), TrueSens_RecordingNet() );
 		}
 
 		// The last recording's outcome as one Note (see the Recording group): the text the
 		// core left in TrueSens_LastOutcome() -- one to three sentences, what happened and
-		// what to do -- or a placeholder before the first recording. Empty while a recording
-		// runs (its own row shows the progress); the Note keeps its reserved height then.
+		// what to do -- or a placeholder before the first recording. It keeps the previous
+		// text while a new recording is armed or runs and is replaced when the result comes.
 		std::string OutcomeText()
 		{
-			if ( TrueSens_RecordingActive() )
-				return {};
 			const std::string s = TrueSens_LastOutcome();
 			return s.empty() ? std::string( "No recording yet" ) : s;
 		}
 
-		// The stored texts all read "<Low|High|Game> stored: ..." (TrueSens.cpp); every
-		// other outcome, a failed recording or a refused start, is "nothing was stored".
+		// Warning (orange) only when something went wrong: a failed recording or a refused
+		// start. Stored, cancelled and "none yet" are normal. The core says which.
 		ui::NoteTone OutcomeTone()
 		{
-			const std::string s = TrueSens_LastOutcome();
-			if ( s.empty() || s.find( " stored: " ) != std::string::npos )
-				return ui::NoteTone::Normal;
-			return ui::NoteTone::Warn;
+			return TrueSens_LastOutcomeWarns() ? ui::NoteTone::Warn : ui::NoteTone::Normal;
 		}
 
 		// ---- the actions ---------------------------------------------------------
 
-		// D6: Record closes the settings window so the player can turn in the
-		// game. A refusal (Zoom active, a recording already running) leaves the
-		// window open; the core has already put its reason in LastOutcome(),
-		// which the "Last recording" row below shows.
+		// D6, D24: Record ARMS a recording and closes the settings window so the player
+		// can aim in the game; the two left clicks do the rest and the window opens again
+		// by itself. A refusal (Zoom active, a recording already running) leaves the
+		// window open; the core has already put its reason in LastOutcome(), which the
+		// "Last recording" row below shows.
 		void Record( Target t )
 		{
 			if ( TrueSens_StartRecording( t ).ok )
@@ -211,9 +196,13 @@ namespace gamescope
 		const auto kNotRecording = []{ return !TrueSens_RecordingActive(); };
 		const auto kRecording = []{ return TrueSens_RecordingActive(); };
 
+		constexpr const char *kRunningReason = "A recording is running. Stop recording cancels it.";
+
 		constexpr const char *kRecordHelp =
-			"Aim at a spot you can find again, press Record, turn exactly once around (360\xC2\xB0) "
-			"until you aim at the same spot, open the settings again and press Stop recording.";
+			"Closes the settings. Aim at a spot you can find again and left click, turn exactly once "
+			"around (360\xC2\xB0) to the same spot and left click again. The settings open again with "
+			"the result. Both clicks are kept from the game, and they only count while the game holds "
+			"the mouse (the cursor is hidden). Stop recording cancels and stores nothing.";
 	}
 
 	void TrueSens_RegisterArea( ui::Registry &reg )
@@ -260,6 +249,7 @@ namespace gamescope
 			       "scaled so a full turn takes the same hand distance as your recorded sensitivity. "
 			       "Needs a recorded game sensitivity and a recorded Low or High." )
 			.Default( false )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "true sens enable on off multiplier this game" );
 
 		static const ui::Option kLowHigh[] = { { 0, "Low" }, { 1, "High" } };
@@ -269,20 +259,23 @@ namespace gamescope
 		          kLowHigh, std::size( kLowHigh ) )
 			.Help( "Which of your two recorded sensitivities this game uses." )
 			.Default( 0 )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "low high true sensitivity choose" );
 
 		a.Action( "true_sens.record_game", "Record game sensitivity", "Record", []{ Record( Target::Game ); } )
 			.Help( kRecordHelp )
-			.ShownWhen( kNotRecording )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "record game sensitivity calibrate turn 360 counts" );
 
 		a.Facts( "true_sens.game_value", "Game sensitivity", []{ return TrueSens_GameText(); } )
 			.Help( "The mouse movement one full turn takes in this game at its current in-game "
-			       "sensitivity, as you recorded it. Read-only." );
+			       "sensitivity, as you recorded it. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason );
 
 		a.Facts( "true_sens.multiplier", "Multiplier", []{ return MultiplierLine(); } )
 			.Help( "How much this game's mouse movement is scaled right now. Off while True Sens is off "
-			       "for this game. Read-only." );
+			       "for this game. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason );
 
 		// ---- true sensitivity (global): right ----------------------------------------
 		a.Group( "True sensitivity" );
@@ -295,22 +288,25 @@ namespace gamescope
 			.Help( "The DPI set on your mouse. Your recorded Low and High are kept as a hand distance, so "
 			       "changing this later needs no new recording." )
 			.Default( truesens::kDefaultDpi )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "dpi mouse counts per inch cpi" );
 
 		a.Facts( "true_sens.low", "Low", []{ return TrueSens_LowText(); } )
-			.Help( "Your recorded Low sensitivity: the hand distance of one full turn. Read-only." );
+			.Help( "Your recorded Low sensitivity: the hand distance of one full turn. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason );
 
 		a.Action( "true_sens.record_low", "Record Low", "Record", []{ Record( Target::Low ); } )
 			.Help( ( std::string( "Records your Low sensitivity, and this game's value with it. " ) + kRecordHelp ).c_str() )
-			.ShownWhen( kNotRecording )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "record low true sensitivity calibrate turn 360" );
 
 		a.Facts( "true_sens.high", "High", []{ return TrueSens_HighText(); } )
-			.Help( "Your recorded High sensitivity: the hand distance of one full turn. Read-only." );
+			.Help( "Your recorded High sensitivity: the hand distance of one full turn. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason );
 
 		a.Action( "true_sens.record_high", "Record High", "Record", []{ Record( Target::High ); } )
 			.Help( ( std::string( "Records your High sensitivity, and this game's value with it. " ) + kRecordHelp ).c_str() )
-			.ShownWhen( kNotRecording )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "record high true sensitivity calibrate turn 360" );
 
 		// ---- recording -------------------------------------------------------------
@@ -318,14 +314,14 @@ namespace gamescope
 		a.GroupColumn( 1 );
 
 		a.Action( "true_sens.stop", "Stop recording", "Stop", []{ TrueSens_StopRecording(); } )
-			.Help( "Ends the recording and stores it, if you turned once around and the game held the "
-			       "mouse. Nothing stops by itself." )
-			.ShownWhen( kRecording )
-			.Keywords( "stop recording finish" );
+			.Help( "Cancels the recording that is waiting for its first click or running, and stores "
+			       "nothing. The recording ends and stores its result by itself with the second left click." )
+			.DisabledUnless( kRecording, "No recording is running." )
+			.Keywords( "stop recording cancel finish" );
 
 		a.Facts( "true_sens.recording", "Recording", []{ return RecordingLine(); } )
-			.Help( "Which recording is running and how far the mouse has moved sideways so far. Read-only." )
-			.ShownWhen( kRecording );
+			.Help( "None, or which recording is waiting for its first click, or how far the mouse has "
+			       "moved sideways so far. Read-only." );
 
 		// The outcome of the last recording: one Note of a fixed height, so nothing below
 		// or beside it moves when the text changes (the longest text takes two lines even at the
@@ -347,6 +343,7 @@ namespace gamescope
 			.Help( "The in-game sensitivity value you had set when you recorded this game. Numbers with a "
 			       "dot or a comma both work. Recording the game again clears it: enter the value again." )
 			.Validate( ValidateIngame )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.StatusWhen( []{ return IngameStatus(); } )
 			.Keywords( "calculator in-game value sensitivity number" );
 
@@ -354,6 +351,7 @@ namespace gamescope
 			.Help( "The in-game value that gives you your own feel, for the sensitivity chosen above. "
 			       "After setting it in the game, switch True Sens off for this game or record the game "
 			       "again, or the correction is applied twice. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "calculator set ingame value result" );
 	}
 }

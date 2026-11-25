@@ -1151,6 +1151,8 @@ static void wlserver_dispatch_key( wlr_keyboard *keyboard, uint32_t uLinuxKeycod
 	}
 }
 
+static bool wlserver_pointer_is_locked(); // defined with the motion code below
+
 // Mouse-button analogue of wlserver_dispatch_key(). No hotkey layer sits in
 // front of this one (mouse buttons aren't part of the toggle combo), so
 // every caller can route straight through it.
@@ -1185,6 +1187,17 @@ static void wlserver_dispatch_mouse_button( uint32_t uLinuxButton, bool bPressed
 				s_setSwallowedButtons.insert( uLinuxButton );
 				if ( log_binding.Enabled( LOG_DEBUG ) )
 					log_binding.debugf( "zoom: button %u swallowed by zoom.consume_button (never reached the seat).", uLinuxButton );
+			}
+			else if ( gamescope::TrueSens_OnMousePress( uLinuxButton == BTN_LEFT, !wlserver.bCursorHasImage || wlserver_pointer_is_locked() ) )
+			{
+				// True Sens' recording clicks (the first and the second left
+				// click of an armed or running recording, D24): kept from the
+				// game like Zoom's swallow above, so no shot or weapon swap
+				// moves the aim. The keybind check above ran first, so a chord
+				// bound to the left button still sees the press; the release is
+				// dropped by the same swallowed set, whatever the Shell did in
+				// between (it opens right after the second click).
+				s_setSwallowedButtons.insert( uLinuxButton );
 			}
 			else
 			{

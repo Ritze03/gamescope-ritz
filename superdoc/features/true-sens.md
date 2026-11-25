@@ -10,7 +10,7 @@ Storage in `src/Config/` (`TrueSensGlobal`, `GameTrueSens`, global.json only).
 Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
-> **Status (2026-11-25):** maths, recorder, storage, the hook, the tick, the interface, the
+> **Status (2026-11-25):** maths, the two-click recorder, storage, the hooks, the tick, the interface, the
 > debug commands, the Shell area, the hint at the top of the screen and the frozen picture
 > under it exist and are tested.
 
@@ -140,8 +140,9 @@ held. The order of everything that scales or gates a relative mouse delta:
 So the multiplier acts on what the game would otherwise receive and Zoom's own scaling
 divides on top (D15; `zoom.md`, "Match mouse speed").
 
-Inside step 4: if a recording runs and the cursor is hidden, the unscaled delta is added to the
-accumulators and **not scaled** (D11, and nothing is returned as scaled); else if the feature is
+Inside step 4: while a recording is armed or running nothing is scaled (D11, D24; the carry is
+dropped) and, only in the **recording** phase (between the two clicks) with the cursor hidden,
+the unscaled delta is added to the accumulators; movement while armed is never summed. Else if the feature is
 enabled for this game, a valid multiplier exists and the cursor is hidden, dx and dy are
 multiplied by the cached multiplier; otherwise the delta is left alone.
 
@@ -157,7 +158,39 @@ rounding gains nothing.
 idle auto-hide, which would false-positive on a menu with a visible-but-idle cursor (the
 same reason Zoom's "Only while the cursor is hidden" avoids it).
 
-Only `wlserver_mousemotion()` is hooked. The absolute path (`wlserver_mousewarp`,
+### The button hook (recording clicks, D24)
+
+`gamescope::TrueSens_OnMousePress( bool bLeft, bool bCursorHidden )`, called from
+`wlserver_dispatch_mouse_button()` (`src/wlserver.cpp`), the single overlay-vs-game fork, on
+its **game branch only**, on the input thread with `wlserver_lock()` held. A click the Shell
+or the Launcher captures never reaches it. The order on that branch:
+
+1. `wlserver_ritz_mouse_hotkey( button, true )`: the keybind engine sees every press first,
+   as before. If it swallows the press (Zoom's "Keep the button from the game"), that wins
+   and True Sens is not asked: the click was Zoom's.
+2. **`TrueSens_OnMousePress()`**: only for a press of `BTN_LEFT`, with
+   `bCursorHidden = !wlserver.bCursorHasImage || wlserver_pointer_is_locked()` (the motion
+   hook's condition), and not the Autoclicker's synthetic press
+   (`Autoclicker_IsInjecting()`, read inside). While armed the press starts the recording,
+   while recording it ends it; both return true: the press is put into
+   `s_setSwallowedButtons` (Zoom's mechanism) and never forwarded.
+3. otherwise the press goes to the seat as before.
+
+`Why the keybind check first:` it must see every press anyway so its held-button state stays
+true (the release path of a swallowed press also tells it). A left click bound to a chord
+therefore still fires its action during a recording click (Zoom on a left-click chord then
+spoils the recording, which the recorder reports); True Sens does not hide a click from the
+keybind engine, it only hides it from the game.
+
+**The release of a swallowed click.** The release branch looks at
+`s_setMouseButtonsForwardedToOverlay` first (the press went to the game branch, so it is not
+in there), then `s_setSwallowedButtons`, which holds it: the release is dropped (the keybind
+engine still hears it). This does not depend on what the Shell did meanwhile: the second
+click opens the Shell from the tick, and its release arrives after that, still matched by the
+set, so it reaches neither the game nor the Shell as an unmatched release (checked headless:
+the second click's release, delivered with the Shell open, is dropped and nothing stays held).
+
+Only `wlserver_mousemotion()` is hooked for motion. The absolute path (`wlserver_mousewarp`,
 `wlserver_touchmotion`) is untouched: while the cursor is visible in a window, motion
 arrives as absolute positions and is correctly never scaled.
 
@@ -224,8 +257,8 @@ finite is dropped for the event (0 out, carry untouched).
 
 ## Threading
 
-The hook runs on the input thread and reads/writes only atomics (`s_eTarget`, the sums,
-`s_dMultiplier`, `s_bScale`) plus its own `WholeCountCarry` (touched by `TrueSens_OnMotion`'s
+The hooks (motion and button) run on the input thread and read/write only atomics (`s_eTarget`,
+`s_iPhase`, the sums, `s_dMultiplier`, `s_bScale`) plus its own `WholeCountCarry` (touched by `TrueSens_OnMotion`'s
 recording branch and `TrueSens_CarryWholeCounts` only): no config, no allocation, no
 locks. `ConfigManager`'s mirror (`s_Assignments`) has no lock and belongs to the compositor
 thread, so it is never touched from the hook.
@@ -244,10 +277,25 @@ background writer, never synchronous disk I/O on the paint thread) and refreshes
 at once. The per-game values are profile-independent, so no `ConfigGeneration()` tracking is
 needed.
 
+**Recording clicks (D24).** One atomic, `s_iPhase` (`truesens::Phase`: Idle, Armed, Recording,
+Finished), is the whole hand-over. The button hook advances Armed -> Recording (zeroing the
+sums right there: the hook owns them while a recording is active) and Recording -> Finished
+and calls `force_repaint()`; it does nothing else (no picture, no config, no logging, no
+allocation). Everything that needs the compositor thread happens in `TrueSens_Tick()` when it
+sees the phase: **Recording** (first time) -> `TrueSens_ReferenceRequest()` (the capture must
+be queued from the compositor thread); **Finished** -> `FinishByClicks()`: under the lock read
+the sums and go Idle, `TrueSens_ReferenceClear()`, evaluate and store (`ApplyResult()`), then
+`SettingsOverlay_SetVisible( true )` and `ui::shell::RequestArea( "system.true_sens" )` (the
+order of the Friends/Mixer keys in `wlserver.cpp`: visible first, then the request). A second
+click inside the same frame as the first leaves the tick seeing Finished straight away: the
+picture is never requested and the recording ends with "too little movement" (whatever
+moved in that frame). A Stop that wins the lock between the click and the tick cancels the
+pending result (the tick finds the phase Idle and does nothing).
+
 `TrueSens_StartRecording()`/`StopRecording()` take `wlserver_lock()` **unconditionally** around
-resetting or reading the sums, so they exclude the hook (it runs with the lock held) and a
-motion event is never half summed or lost between the read and the stop; the hook is the single
-writer. Only the compositor thread calls them: the Shell's Action callbacks (`RunKeyboard()`,
+changing the phase and the sums, so they exclude the hooks (they run with the lock held) and a
+click or motion event is never half applied; the hooks are the single writers while a
+recording is active. Only the compositor thread calls them: the Shell's Action callbacks (`RunKeyboard()`,
 the pointer path, also what `overlay_e2_key enter` queues into the overlay's own input queue,
 drained in the Shell's frame in `paint_all()`) and the debug commands (queued, run by
 `TrueSens_Tick()`). The compositor thread never holds the lock there, and no Action can be
@@ -264,7 +312,43 @@ deadlock (non-recursive mutex), which the header comment states.
 `Recorder` (pure) and the glue's atomics sum the **net signed sideways (X) movement** of one
 turn while the cursor is hidden and the multiplier is off; the result is its absolute value,
 so corrections back and forth cancel. Y and the sample count are kept for diagnostics only
-(D3). Rules:
+(D3).
+
+**The flow: two left clicks (D24).** States **idle -> armed -> recording -> idle**. The owner
+(2026-11-25): *"Maybe a better design would be closing the UI on pressing record, then waiting
+for a left click (top message says so) to get the beginning point and then pressing left click
+again (message says that too), to end the 360 (open the gui again automatically)."* (This
+replaced "reopen the settings and press Stop recording", the first flow, in which the Stop
+button moved around while recording.)
+
+1. A Record button **arms** (`TrueSens_StartRecording( Target )`) and closes the Shell.
+   Refused while Zoom is active or a recording is armed/running (the Shell stays open and the
+   reason is in "Last recording"). While armed no movement is summed and no picture exists.
+2. The **first counting left click** starts the recording: the sums start at zero at that
+   moment and the reference picture is taken then.
+3. The **second counting left click** ends it: the tick evaluates and stores exactly as
+   before (below), then the **Shell opens on the True Sens area**, also after a failed
+   evaluation (the reason is in "Last recording").
+4. **Stop recording is the cancel**: while armed or running it ends the recording and stores
+   nothing; "Last recording" then reads "Recording cancelled. Nothing was stored." in the
+   normal tone. The player reaches it by opening the Shell with its key during a recording
+   (the Shell captures input, so no click counts and no movement is summed while it is open;
+   closing it again without Stop leaves the recording in the state it was in).
+
+What counts as a click: a **press of the left button, from the user, while the game holds the
+mouse** (`!bCursorHasImage || pointer locked`, the motion hook's condition), on the game
+branch (see "The button hook"). Anything else (right/middle button, a release, a click with a
+visible cursor, the Autoclicker's synthetic press) changes nothing and goes where it would go
+anyway. `truesens::StepOnButton()` is the pure state machine (unit-tested).
+
+`Why both clicks are kept from the game:` the lead's addition: a shot's recoil or a weapon
+swap would move the aim between the two marks. `Why only while the cursor is hidden:` a click
+with a visible cursor is the player in a game menu, not a mark; it must neither advance the
+recording nor be eaten (a game that needs a left click to grab the mouse is a limit, see
+below). `Why the second click opens the Shell by itself:` the owner's wording; the result is
+what the player wants to see next.
+
+The rules of the result:
 
 - **Result.** A valid recording of `Low` or `High` stores `low_inches`/`high_inches` =
   counts / DPI **and** the current game's `counts_360` = counts (D12: same measurement). A
@@ -277,10 +361,14 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
   has to hold the mouse (cursor hidden) while you turn."; below the floor, "Too little mouse
   movement was seen...". 200 is far under any real turn (thousands of counts) and well over
   a nudge.
-- **Zoom (D15).** Starting a recording is refused while `Zoom_IsActive()`; if Zoom becomes
-  active during one (the hook notes it per event, the tick covers a chord between events)
-  the recording is spoiled: stop reports the reason and stores nothing.
+- **Zoom (D15).** Arming is refused while `Zoom_IsActive()`; if Zoom becomes active while
+  armed or running (the hook notes it per event, the tick covers a chord between events) the
+  recording is spoiled: the second click reports the reason and stores nothing.
 - Counts arriving while the Shell is open are never summed (the capture gate returns first).
+- True Sens' own scaling is off the whole time a recording is armed or running (D11); the
+  whole-count carry is reset at arming and kept dropped.
+- **The outcome carries a flag** (`TrueSens_LastOutcomeWarns()`): failures and refusals are a
+  warning, stored / cancelled / none yet are not. The area's tone no longer parses the text.
 - Input emulation (libei, IME, Steam Input) enters the same function and is summed too:
   "what the game receives".
 
@@ -300,6 +388,11 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
   (libinput scales for mice whose DPI it knows); on the DRM path the deltas are accelerated.
   Recording and playing must use the same mouse; the DPI field is the DPI set on the mouse
   and only matters when it changes.
+- **A game that needs a left click to hold the mouse** (a "click to resume" screen): that click
+  happens with the cursor still visible, so it neither counts nor is eaten; the player clicks
+  to get into the game first, and then the two recording clicks.
+- A left click bound to a keybind chord still fires its action on a recording click (the
+  keybind engine is asked first); only the game is spared the click.
 - A recording must be exactly one 360° turn ending where it started; two turns store double.
 - The calculator assumes turn per count proportional to the in-game value. After setting the
   calculated value in the game, switch True Sens off for that game (or record it again),
@@ -311,8 +404,10 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
 
 ## The interface (compositor thread)
 
-Declared in `TrueSens.h`, for the settings area, hint and picture: recording state (`TrueSens_RecordingActive`, `_RecordingTarget`, `_RecordingNet`,
-`_LastOutcome`), `TrueSens_StartRecording( Target )` / `TrueSens_StopRecording()`, this
+Declared in `TrueSens.h`, for the settings area, hint and picture: recording state
+(`TrueSens_RecordingActive` true while armed or recording, `_RecordingPhase`, `_RecordingTarget`,
+`_RecordingNet`, `_LastOutcome`, `_LastOutcomeWarns`), `TrueSens_StartRecording( Target )`
+(arms) / `TrueSens_StopRecording()` (cancels), `TrueSens_OnMousePress()` (the button hook), this
 game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GameCounts360`, the global
 `Get/SetDpi`, `LowInches`, `HighInches`, and the derived read-only `Multiplier`,
 `CalcIngameSens`, `LowText`, `HighText`, `GameText`, `MultiplierText`, `SessionKey`,
@@ -326,13 +421,15 @@ wlserver thread, which must not touch the config mirror), then prints the status
 
 | Command | Effect |
 | --- | --- |
-| `true_sens_record <low\|high\|game>` | Start a recording (refused with a reason while Zoom is active or one runs). |
-| `true_sens_stop` | Stop, store the result or log why nothing was stored. |
+| `true_sens_record <low\|high\|game>` | **Arm** a recording exactly like the button, but leave the Shell alone (refused with a reason while Zoom is active or one is armed/running). |
+| `true_sens_stop` | **Cancel** an armed or running recording; nothing is stored. There is deliberately no command that ends one with a result: the clicks do. |
 | `true_sens_set "<field> <value>"` | `enabled 0\|1`, `profile low\|high`, `dpi N`, `ingame X`. One quoted argument through `gamescopectl`. |
-| `true_sens_status` | Three `true_sens:` log lines: key and settings, multiplier and calculator, recording state and last outcome. |
+| `true_sens_status` | Three `true_sens:` log lines: key and settings, multiplier and calculator, recording state (target, phase, net) and last outcome. |
 
 Inject movement with `wlserver_debug_mouse_motion "<dx> <dy> [count]"` (enters at
-`wlserver_mousemotion`).
+`wlserver_mousemotion`) and a click with `wlserver_debug_mouse_button "272 1"` then `"272 0"`
+(272 = left; enters at `wlserver_mousebutton()` like a real click, so it counts). A whole
+recording headless: `true_sens_record low`, click, move, click.
 
 ## The area
 
@@ -349,28 +446,50 @@ setter) the Launcher's search. Row ids are `true_sens.<name>`.
 | Left, This game | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
 | Left, This game | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
 | Left, This game | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
-| Left, This game | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
+| Left, This game | `record_game` | Action | Record game sensitivity | verb "Record"; greyed while a recording is armed or running. |
 | Left, This game | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
 | Left, This game | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. |
 | Left, Calculator | `ingame` | Text | In-game value | The typed in-game value (D17). |
 | Left, Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
 | Right, True sensitivity | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
 | Right, True sensitivity | `low` / `high` | Facts | Low / High | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
-| Right, True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
-| Right, Recording | `stop` | Action | Stop recording | verb "Stop"; shown only while recording (D21). |
-| Right, Recording | `recording` | Facts | Recording | "Low, 1234 counts so far"; shown only while recording. |
+| Right, True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | greyed while a recording is armed or running. |
+| Right, Recording | `stop` | Action | Stop recording | verb "Stop"; the cancel; enabled only while armed or recording, else greyed ("No recording is running."). |
+| Right, Recording | `recording` | Facts | Recording | always shown: "None" / "Low, waiting for the first click" / "Low, 1234 counts so far". |
 | Right, Recording | `outcome` | Note | Last recording | `TrueSens_LastOutcome()` in full, 3 lines reserved, orange when nothing was stored; "No recording yet" before the first (see below). |
 
-**Record closes the window (D6).** A record Action calls `TrueSens_StartRecording( target )`
-and, only when that succeeds, `SettingsOverlay_SetVisible( false )` (the precedent of the
-Friends area's Join). The player turns in the game, opens the settings again and presses
-**Stop recording** (`TrueSens_StopRecording()`); nothing stops by itself. While the window is
-open the mouse never reaches the recorder (the hook sits behind the overlay's capture gate).
-A refusal (Zoom active, already recording) keeps the window open: the core has already put
-its reason into `TrueSens_LastOutcome()`, so the **Last recording** row shows it, with no
-second mechanism. The Launcher: a record Action is a row the palette finds, but picking a
-row there only jumps the Shell to it (`PaletteJump`); an Action is never run from the
-palette, so nothing closes twice and the player presses it in the Shell.
+**Nothing in the area moves while a recording is armed or running (D23).** The owner
+(2026-11-25): *"make sure that while recording, the controls in the GUI (especially the stop
+recording button) doesnt move around."* Every row exists in every state at the same
+position: no row is hidden or added because of the recording state (only `shared` depends on
+something else, the session's game, which does not change). While a recording is armed or
+running every row except **Stop recording** and **Recording** is **greyed** with the reason
+"A recording is running. Stop recording cancels it." (`DisabledUnless( kNotRecording, ... )`
+on each row; the Inspector shows the reason); the two Notes (the tip and Last recording) stay
+readable and are not greyed. Stop recording is enabled only while armed or recording, else
+greyed with "No recording is running.". `Why greyed and not hidden:` hiding the Record rows
+and adding Stop (the first design) moved every control, which is what the owner complained
+about.
+
+**Record arms and closes the window (D6, D24).** A record Action calls
+`TrueSens_StartRecording( target )` and, only when that succeeds,
+`SettingsOverlay_SetVisible( false )` (the precedent of the Friends area's Join). The player
+aims, left clicks, turns, left clicks again, and the window opens again by itself on this
+area with the result (see "The recorder"). A refusal (Zoom active, already recording) keeps
+the window open: the core has already put its reason into `TrueSens_LastOutcome()`, so the
+**Last recording** row shows it (in the warning tone), with no second mechanism. The Launcher: a record Action is a row
+the palette finds, but picking a row there only jumps the Shell to it (`PaletteJump`); an
+Action is never run from the palette, so nothing closes twice and the player presses it in
+the Shell.
+
+**Row help texts** (plain language, shared by the three Record rows): closes the settings; aim
+at a spot you can find again and left click; turn exactly once around to the same spot and
+left click again; the settings open again with the result; both clicks are kept from the game
+and only count while the game holds the mouse (cursor hidden); Stop recording cancels and
+stores nothing.
+
+**The Recording row** always shows a value (`truesens::RecordingStatusText()`): "None",
+"Low, waiting for the first click", "Low, 3120 counts so far" (High / Game alike).
 
 **The outcome in full.** One **Note** row (`true_sens.outcome`, Registry kind `Note`, see
 [overlay-shell.md](overlay-shell.md#the-note-row)) of `Lines( 3 )`: the core's text, word-wrapped to
@@ -379,14 +498,15 @@ happened, the next what to do ("Turn Zoom off before recording."); the longest, 
 ... The game's value was stored too." and "No mouse movement was seen. The game has to hold
 the mouse (cursor hidden) while you turn.", take two lines at 1920x1080 and also at the
 narrowest two-column sheet (UI scale 1.1 at 1920x1080, a sheet of about 850 base units); the
-third reserved line is spare for longer numbers and for a narrow one-column sheet. The tone is orange (`NoteTone::Warn`) whenever nothing was stored
-(a failed recording or a refused start) and the normal text colour for a stored value; the
-core's stored texts all contain " stored: ", every other outcome does not, and `OutcomeTone()`
-tells them apart by that. Before the first recording the Note reads "No recording yet"; while
-a recording runs it is empty (the Recording row shows the progress). Its height is fixed by
-`Lines( 3 )`, so nothing below or beside it moves with the text. `Why:` the owner: *"make sure
-that while recording, the controls in the GUI (especially the stop recording button) doesnt
-move around."* The first version showed only the first clause, so the player never saw what
+third reserved line is spare for longer numbers and for a narrow one-column sheet. The tone is
+orange (`NoteTone::Warn`) only when something went wrong (a failed recording or a refused
+start) and the normal text colour for a stored value, for "Recording cancelled. Nothing was
+stored." and for "No recording yet": the core says which with `TrueSens_LastOutcomeWarns()`
+(the tone used to be guessed from " stored: " in the text). The Note keeps
+the **previous** text while a new recording is armed or running and is replaced when the
+new result arrives (it used to be emptied at the start); before the first recording it reads
+"No recording yet". Its height is fixed by `Lines( 3 )`, so nothing below or beside it moves
+with the text. `Why fixed:` the owner's rule above. The first version showed only the first clause, so the player never saw what
 to do; the second split the text over up to eight Facts rows of 22 characters (short
 right-aligned fragments, every row below moving when the text changed). A text longer than
 three lines would end in "..." with the whole text in the Inspector (Configure page, and
@@ -441,16 +561,17 @@ glyph set's own primitives (`Icons.cpp`).
 
 ## Recording hint
 
-While a recording runs the Shell is closed (D6), so a lasting hint at the top centre of the
-output says what is happening: two lines on a dark plate.
+While a recording is armed or runs the Shell is closed (D6), so a lasting hint at the top
+centre of the output says what is happening: two lines on a dark plate.
 
 - Line 1 (accent colour): `Recording Low sensitivity` / `Recording High sensitivity` /
   `Recording game sensitivity`.
-- Line 2 (light text colour): `Turn once around (360°) to the same spot, then press <chord> and
-  Stop recording`. `<chord>` is `keybinds::ChordTextFor( Action::Shell )` (the primary Shell
-  chord, not `shell_alt`); when that action is unbound the text names `ReservedChordText()`
-  (`Ctrl+Alt+Shift+O`, which always opens the Shell). The lines are built by the pure
-  `truesens::HintLines( target, chord, fallback )` (unit-tested without ImGui).
+- Line 2 (light text colour) by phase: armed, `Aim at a spot you can find again, then left
+  click`; recording, `Turn once around (360°) to the same spot, then left click again`. The
+  plate is as wide as its text, so it changes width at the first click. The lines are built
+  by the pure `truesens::HintLines( target, phase )` (unit-tested without ImGui); the chord
+  parameters of the first flow (the Shell's key, the reserved chord) are gone, since nothing
+  names a key any more.
 
 **Where it is drawn: the HUD layer, not a notification.** `TrueSens_DrawHud( pDrawList, w, h,
 flYOffset )` in `src/Overlay/TrueSensHud.cpp` is called by `FpsDisplay_AddLayer()` into the HUD
@@ -492,13 +613,17 @@ Not checked: a real HDR (PQ) client; a 10-bit SDR client was.
 
 ## Reference picture
 
-When a recording starts, the middle of the game picture is captured once and shown, frozen,
-under the hint plate until the recording ends, so the player can compare it with what is in the
-middle of the screen now and find the spot again (D6, D16). Where it cannot be taken the hint
+At the **first left click** (the recording starts, D24; not at Record: while armed the player
+is still aiming and there is no spot to mark yet) the middle of the game picture is captured
+once and shown, frozen, under the hint plate until the recording ends, so the player can
+compare it with what is in the middle of the screen now and find the spot again (D6, D16).
+The input thread only changes the phase; the **tick** sees Recording and calls
+`TrueSens_ReferenceRequest()` on the compositor thread, so the picture is the frame of the
+next paint after the click, not of the click itself. Where it cannot be taken the hint
 stays alone: no placeholder box, one `truesens:` log line with the reason. A missing picture
 never delays or breaks the recording.
 
-**Capture: an in-memory screenshot.** `TrueSens_StartRecording()` (success only) calls
+**Capture: an in-memory screenshot.** The tick (once the first click started the recording) calls
 `TrueSens_ReferenceRequest()` (`TrueSensHud.cpp`), which queues one
 `CScreenshotManager::TakeScreenshot()` of type `BASE_PLANE_ONLY` with the new field
 `GamescopeScreenshotInfo::pfnMemory` set (`steamcompmgr_shared.hpp`). `paint_all()` serves it in
@@ -521,7 +646,7 @@ has no sound, clipboard or notification code of its own. Checked headless: no fi
 log line, no toast in the screenshots.
 
 *Limits of the slot:* `CScreenshotManager` holds ONE pending request, so a user screenshot
-requested in the same frame as the Record press is replaced by it (or the reverse: this capture
+requested in the same frame as the first click is replaced by it (or the reverse: this capture
 is then never served and the hint stays alone). A request is also dropped silently if
 `paint_all()` returns early before the block.
 
@@ -552,7 +677,7 @@ created by the first picture and reused by every later one as a sub-rectangle up
 freed when a recording ends. `Why:` the backend only destroys a texture inside a rendered frame
 and the HUD layer draws no frame once nothing is on, so a free would hang until the next
 recording; one fixed texture cannot grow with the number of recordings. What follows a recording
-is `TrueSens_ReferenceClear()` (from `StopRecording()`, so also failed and Zoom-spoiled ones):
+is `TrueSens_ReferenceClear()` (from the cancel and from the finish, so also failed and Zoom-spoiled ones); arming clears the old one too:
 the picture stops being drawn and a capture still on its way is forgotten. A new recording clears
 first, so the old picture never shows under the new hint. 20 start/stop cycles headless: RSS
 92404 -> 92452 kB, fds 75 -> 75, threads 18 -> 17, 21 pictures delivered.
@@ -576,10 +701,10 @@ so without it the layer would keep the first picture.
 **Cost** (headless, 1080p, warm shader cache): the capture inside the paint takes 0.7..1.8 ms
 (measured around the screenshot block); the texture upload 0.9..1.4 ms. The first capture of a
 process took ~35 ms in two of the runs (pipeline and capture image created on first use) and
-~1.1 ms in the others. Once per Record press, while the settings window closes.
+~1.1 ms in the others. Once per recording, at the first click.
 
 **Not checked:** a real HDR client, a real "no focused window" state, a user screenshot racing
-the Record press.
+the first click.
 
 ## Tests
 
@@ -598,9 +723,13 @@ inside, `ReferenceDownscale()`) and `truesens: reference picture display size` (
 placement, shrinking when it would reach the centre, no room, wide aspect) cover the pure helpers;
 capture, upload and drawing are covered by the headless screenshots only.
 
-`truesens: recording hint lines` covers `HintLines()` (each target, the chord inserted, the
-reserved-chord fallback for an empty chord, Idle). The draw path (`TrueSensHud.cpp`) and the
-layer predicate are covered by the headless screenshots only.
+`truesens: recording hint lines` covers `HintLines()` (each target, armed and recording text,
+Idle in either argument), `truesens: the Recording row always has a value` covers
+`RecordingStatusText()`, and three cases cover `StepOnButton()`, the click state machine: the
+two counting clicks, every non-counting event (visible cursor, other button, release,
+Autoclicker, in every phase) and a third click. The glue's cancel, the tick and the swallow in
+`wlserver.cpp` are covered by the headless runs only. The draw path (`TrueSensHud.cpp`) and
+the layer predicate are covered by the headless screenshots only.
 
 The area (`TrueSensArea.cpp`) is not linked into the unit binary (like every area's
 `*_RegisterArea`); its pieces are covered by the id/rail census in
