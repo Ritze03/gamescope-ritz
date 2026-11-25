@@ -15,7 +15,10 @@ the storage layer underneath it.
   leftover that only the 2 -> 3 migration reads and is never deleted.
 - **`global.json` versus a profile file.** `global.json` carries `overlay` (process-level
   UI preferences: appearance, panel geometry, keybinds, toast placement) and `profiles`
-  (the pointers: `last_general`, and per app id `selected` / `audio_node` / `game_volume`).
+  (the pointers: `last_general`, and per app id `selected` / `audio_node` / `game_volume`
+  / `true_sens`), plus a top-level `true_sens` object (`dpi`, `low_inches`, `high_inches`)
+  that no profile carries; both halves of True Sens are described in
+  [true-sens.md](true-sens.md).
   Every other section (`gamescope`, `fps_display`, `reshade`, `framegen`, ...) lives in a
   profile file, never in `global.json`. *Why:* an overlay preference such as UI scale is a
   property of the person at the keyboard, not of a game setup; keeping it out of profiles

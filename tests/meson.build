@@ -23,7 +23,7 @@ endforeach
 unittest_src += files('test_framegen_stale.cpp')   # frame generation's stale real-frame guard (FrameGen/StaleFrame.h)
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp', 'test_framegen_reach.cpp', 'test_framegen_v3.cpp', 'test_framegen_capture.cpp', 'test_framegen_pair_span.cpp', 'test_judder.cpp', 'test_framegen_debug.cpp', 'test_vblank_schedule.cpp'],
+	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_truesens.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp', 'test_framegen_reach.cpp', 'test_framegen_v3.cpp', 'test_framegen_capture.cpp', 'test_framegen_pair_span.cpp', 'test_judder.cpp', 'test_framegen_debug.cpp', 'test_vblank_schedule.cpp'],
 	include_directories: [srcdir, sol2_include, '../subprojects/FrameGen/gpu'],
 	dependencies: [catch2_dep, stb_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
@@ -56,6 +56,7 @@ test('resolution', gamescope_tests, args: ['[resolution]'])
 test('keybinds', gamescope_tests, args: ['[keybinds]'])
 test('steam_friends', gamescope_tests, args: ['[steam_friends]'])
 test('nullbinds', gamescope_tests, args: ['[nullbinds]'])
+test('truesens', gamescope_tests, args: ['[truesens]'])
 test('framegen_format', gamescope_tests, args: ['[framegen_format]'])
 test('framegen_reach', gamescope_tests, args: ['[framegen_reach]'])
 test('framegen_v3', gamescope_tests, args: ['[framegen_v3]'])

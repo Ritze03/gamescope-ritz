@@ -109,6 +109,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/PanelDisplay.h"
 #include "Overlay/NullBinds.h"
+#include "Overlay/TrueSens.h"
 #include "Overlay/Notifications.h"
 #include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenCapture.h"
@@ -3422,6 +3423,12 @@ paint_all( global_focus_t *pFocus, bool async )
 		// both jobs need to run every frame regardless of whether any key
 		// event happens at all.
 		gamescope::NullBinds_Tick();
+
+		// True Sens (Overlay/TrueSens.h): loads its values on the first frame so
+		// an enabled game entry in global.json gives its multiplier from the
+		// start, keeps the mouse hook's atomics current and runs the debug
+		// commands. No layer of its own.
+		gamescope::TrueSens_Tick();
 
 		// Toast notifications: same independent-lifetime reasoning as the FPS
 		// display above (see Overlay/Notifications.h) -- drawn above the HUD

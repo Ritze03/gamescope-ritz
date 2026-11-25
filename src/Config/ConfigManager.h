@@ -242,6 +242,30 @@ namespace gamescope::config
     float GetGameVolume( std::string_view svKey );
     void SetGameVolume( std::string_view svKey, float flDisplayFraction );
 
+    // ---- True Sens (superdoc/features/true-sens.md) -----------------------------------
+    // The global values (global.json top-level `true_sens`: dpi, low_inches,
+    // high_inches) and one game's values (games.<key>.true_sens). Compositor
+    // thread only, like every ConfigManager mirror accessor. Writes are
+    // clamped and go out through the coalesced background writer.
+    //
+    // The key of THIS session's entry: SessionGameVolumeKey() (app id, else the
+    // launched program's basename), and when neither is known ONE shared entry
+    // for every unidentified session, kSharedTrueSensKey. That key starts with
+    // '/', which SanitizeAppId() and a basename both rule out, so no real app
+    // id or program can collide with it, and every profile-assignment lookup
+    // (which is by app id only) never sees it.
+    inline constexpr std::string_view kSharedTrueSensKey = "/unknown-game";
+    struct TrueSensKey
+    {
+        std::string key;
+        bool shared = false; // the shared unknown-game entry
+    };
+    TrueSensKey SessionTrueSensKey();
+    TrueSensGlobal GetTrueSensGlobal();
+    void SetTrueSensGlobal( const TrueSensGlobal &t );
+    GameTrueSens GetGameTrueSens( std::string_view svKey );
+    void SetGameTrueSens( std::string_view svKey, const GameTrueSens &t );
+
     // ---- the game's display name -------------------------------------------------
     // "[Game] Rust" needs a name; the code knows the focused window's title
     // (steamcompmgr) and the app id, nothing more. The first title seen for

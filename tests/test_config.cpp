@@ -3044,6 +3044,161 @@ TEST_CASE( "game volume: per game, defaults to 1, clamps, round-trips and keeps 
     REQUIRE( GameEntry( "d" ).audio_node == "n" );
 }
 
+// True Sens (2026-11-25): the global values (global.json top-level `true_sens`)
+// and one game's values (games.<key>.true_sens). Outside every profile.
+TEST_CASE( "true sens: global values and a game entry round-trip, clamp and stay apart", "[config]" )
+{
+    TempConfigHome home;
+
+    // Defaults: nothing stored, nothing written.
+    REQUIRE( GetTrueSensGlobal().dpi == 800 );
+    REQUIRE( GetTrueSensGlobal().low_inches == 0.0f );
+    REQUIRE( GetTrueSensGlobal().high_inches == 0.0f );
+    REQUIRE( GetGameTrueSens( "g" ).IsDefault() );
+    REQUIRE( GetGameTrueSens( "g" ).profile == "low" );
+    FlushPendingWrites();
+    REQUIRE( ReadText( GlobalConfigPath() ).find( "true_sens" ) == std::string::npos );
+
+    // Defaults written for an unknown game create no row.
+    SetGameTrueSens( "g", GameTrueSens{} );
+    FlushPendingWrites();
+    REQUIRE( ReadText( GlobalConfigPath() ).find( "\"g\"" ) == std::string::npos );
+
+    TrueSensGlobal tg;
+    tg.dpi = 1600;
+    tg.low_inches = 12.5f;
+    tg.high_inches = 3.25f;
+    SetTrueSensGlobal( tg );
+    GameTrueSens gt;
+    gt.enabled = true;
+    gt.counts_360 = 5000.0f;
+    gt.profile = "high";
+    gt.ingame_sens = 0.75f;
+    SetGameTrueSens( "252490", gt );
+    FlushPendingWrites();
+
+    const std::string sGlobal = ReadText( GlobalConfigPath() );
+    REQUIRE( sGlobal.find( "\"true_sens\"" ) != std::string::npos );
+    REQUIRE( sGlobal.find( "\"low_inches\"" ) != std::string::npos );
+    REQUIRE( sGlobal.find( "\"counts_360\"" ) != std::string::npos );
+
+    // A fresh process reads it all back.
+    ResetSessionRoutingForTests();
+    REQUIRE( GetTrueSensGlobal().dpi == 1600 );
+    REQUIRE( GetTrueSensGlobal().low_inches == 12.5f );
+    REQUIRE( GetTrueSensGlobal().high_inches == 3.25f );
+    const GameTrueSens back = GetGameTrueSens( "252490" );
+    REQUIRE( back.enabled );
+    REQUIRE( back.counts_360 == 5000.0f );
+    REQUIRE( back.profile == "high" );
+    REQUIRE( back.ingame_sens == 0.75f );
+    REQUIRE( GetGameTrueSens( "other" ).IsDefault() ); // games stay apart
+    REQUIRE( GameEntry( "252490" ).selected.empty() ); // assigns no profile
+
+    // An entry that only has True Sens values is written (above); one that goes
+    // back to all defaults is dropped again, nothing else being in it.
+    SetGameTrueSens( "252490", GameTrueSens{} );
+    FlushPendingWrites();
+    REQUIRE( ReadText( GlobalConfigPath() ).find( "\"252490\"" ) == std::string::npos );
+
+    // The writers clamp.
+    TrueSensGlobal wild;
+    wild.dpi = 5;
+    wild.low_inches = -4.0f;
+    wild.high_inches = 1e9f;
+    SetTrueSensGlobal( wild );
+    REQUIRE( GetTrueSensGlobal().dpi == 100 );
+    REQUIRE( GetTrueSensGlobal().low_inches == 0.0f );
+    REQUIRE( GetTrueSensGlobal().high_inches == 1000.0f );
+    GameTrueSens wildGame;
+    wildGame.counts_360 = -1.0f;
+    wildGame.ingame_sens = 1e12f;
+    wildGame.profile = "medium";
+    SetGameTrueSens( "w", wildGame );
+    REQUIRE( GetGameTrueSens( "w" ).counts_360 == 0.0f );
+    REQUIRE( GetGameTrueSens( "w" ).ingame_sens == 1000000.0f );
+    REQUIRE( GetGameTrueSens( "w" ).profile == "low" );
+}
+
+TEST_CASE( "true sens: readers clamp a hand-edited file and an unknown profile string loads low", "[config]" )
+{
+    TempConfigHome home;
+    WriteText( GlobalConfigPath(), R"({
+        "schema_version": 5,
+        "true_sens": { "dpi": 99999, "low_inches": -3.0, "high_inches": "far" },
+        "profiles": { "last_general": "", "games": {
+            "a": { "true_sens": { "enabled": true, "counts_360": 4000, "profile": "medium", "ingame_sens": -1 } },
+            "b": { "true_sens": { "enabled": "yes", "counts_360": -50, "profile": "high" } },
+            "c": { "true_sens": 7 } } }
+    })" );
+    ResetSessionRoutingForTests();
+    REQUIRE( GetTrueSensGlobal().dpi == 32000 );
+    REQUIRE( GetTrueSensGlobal().low_inches == 0.0f );
+    REQUIRE( GetTrueSensGlobal().high_inches == 0.0f );
+    REQUIRE( GetGameTrueSens( "a" ).enabled );
+    REQUIRE( GetGameTrueSens( "a" ).counts_360 == 4000.0f );
+    REQUIRE( GetGameTrueSens( "a" ).profile == "low" ); // unknown string -> default
+    REQUIRE( GetGameTrueSens( "a" ).ingame_sens == 0.0f );
+    REQUIRE( !GetGameTrueSens( "b" ).enabled );          // wrong type -> default
+    REQUIRE( GetGameTrueSens( "b" ).counts_360 == 0.0f );
+    REQUIRE( GetGameTrueSens( "b" ).profile == "high" );
+    REQUIRE( GetGameTrueSens( "c" ).IsDefault() );
+}
+
+TEST_CASE( "true sens: the shared unknown-game entry round-trips and is no game for profile assignment", "[config]" )
+{
+    TempConfigHome home;
+
+    // No identified game in this process: the session key is the one shared entry.
+    NoteLaunchCommand( "" );
+    if ( !SessionAppId() )
+    {
+        const TrueSensKey k = SessionTrueSensKey();
+        REQUIRE( k.shared );
+        REQUIRE( k.key == kSharedTrueSensKey );
+    }
+
+    // The key can never be an app id or a program basename.
+    REQUIRE( !SanitizeAppId( kSharedTrueSensKey ) );
+    REQUIRE( ChooseGameVolumeKey( std::nullopt, std::string( kSharedTrueSensKey ) ) != std::string( kSharedTrueSensKey ) );
+
+    GameTrueSens gt;
+    gt.enabled = true;
+    gt.counts_360 = 7000.0f;
+    SetGameTrueSens( kSharedTrueSensKey, gt );
+    FlushPendingWrites();
+    ResetSessionRoutingForTests();
+    REQUIRE( GetGameTrueSens( kSharedTrueSensKey ).enabled );
+    REQUIRE( GetGameTrueSens( kSharedTrueSensKey ).counts_360 == 7000.0f );
+
+    // It assigns no profile, and profile rename/delete leave it alone.
+    REQUIRE( GameEntry( kSharedTrueSensKey ).selected.empty() );
+    REQUIRE( SaveProfile( General( "P" ), Settings{} ) );
+    REQUIRE( EditProfileMeta( "P", General( "Q" ) ).ok );
+    REQUIRE( DeleteProfile( "Q" ).ok );
+    REQUIRE( GetGameTrueSens( kSharedTrueSensKey ).counts_360 == 7000.0f );
+}
+
+TEST_CASE( "true sens: no profile file ever contains it", "[config]" )
+{
+    TempConfigHome home;
+
+    TrueSensGlobal tg;
+    tg.low_inches = 9.0f;
+    SetTrueSensGlobal( tg );
+    GameTrueSens gt;
+    gt.enabled = true;
+    gt.counts_360 = 4000.0f;
+    SetGameTrueSens( "1234", gt );
+
+    REQUIRE( SaveProfile( General( "P" ), Settings{} ) );
+    EnqueueRoutedWrite( Settings{} );
+    FlushPendingWrites();
+    REQUIRE( ReadText( ProfilePath( "P" ) ).find( "true_sens" ) == std::string::npos );
+    REQUIRE( ReadText( ProfilePath( SessionProfile() ) ).find( "true_sens" ) == std::string::npos );
+    REQUIRE( ReadText( GlobalConfigPath() ).find( "true_sens" ) != std::string::npos );
+}
+
 TEST_CASE( "notification placement and panel geometry are global-only and never ride in a profile", "[config]" )
 {
     TempConfigHome home;
