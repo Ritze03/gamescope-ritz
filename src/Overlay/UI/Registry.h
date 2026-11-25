@@ -182,7 +182,38 @@ namespace gamescope::ui
 	enum class Kind : uint8_t
 	{
 		Switch, Slider, Stepper, Choice, Text, Bank, Action, Meter, Facts, Composite,
+		// Note (2026-11-25): read-only running text, word-wrapped over a fixed
+		// number of lines (Entry::Lines). Not one of SPEC's eleven; see Area::Note().
+		Note,
 	};
+
+	// A Note's tone: Normal is the body text colour, Warn the orange status
+	// colour (Role::WarnText) for "nothing was stored, here is what to do".
+	enum class NoteTone : uint8_t { Normal, Warn };
+
+	// How many lines a Note may reserve at most (Entry::Lines() clamps to it).
+	inline constexpr int kNoteMaxLines = 8;
+
+	// The line pitch of a Note's text, base units. A Note of n lines is as tall as
+	// one 44-unit row plus (n - 1) of these, so Lines( 1 ) is exactly a row
+	// and every further line costs one text line, not another 44.
+	namespace notemetrics
+	{
+		inline constexpr float kLineH = 22.0f;
+	}
+
+	// A Note's text broken into lines for a width, pure and ImGui-free (the shell
+	// passes a font measure; a test passes character counts). Greedy word wrap,
+	// a '\n' is a hard break, a word wider than the width is cut by characters.
+	// More than `nMaxLines` lines: the text is cut and the LAST line ends in
+	// "..." (cut at a word where it can), `truncated` is set. Empty text: no lines.
+	struct NoteWrap
+	{
+		std::vector<std::string> lines;
+		bool                     truncated = false;
+	};
+	NoteWrap WrapNote( const std::string &sText, float flWidth,
+	                   const std::function<float( const std::string & )> &fnMeasure, int nMaxLines );
 
 	// List (2026-09-06): the Profiles area's tall list of saved profiles
 	// with its verb strip (Create / Copy / Edit / Delete) underneath. Its
@@ -210,7 +241,7 @@ namespace gamescope::ui
 			// (the lit chips) all self-display. Facts' summary is a string in
 			// the control zone, not a value. Action has no value.
 			case Kind::Choice: case Kind::Text: case Kind::Bank:
-			case Kind::Action: case Kind::Facts:
+			case Kind::Action: case Kind::Facts: case Kind::Note:
 				return false;
 		}
 		return false;
@@ -220,7 +251,7 @@ namespace gamescope::ui
 	// CONFIGURE cell reads `ro`. Not a flag anyone sets.
 	constexpr bool IsReadOnly( Kind eKind )
 	{
-		return eKind == Kind::Meter || eKind == Kind::Facts;
+		return eKind == Kind::Meter || eKind == Kind::Facts || eKind == Kind::Note;
 	}
 
 	struct Option
@@ -430,6 +461,23 @@ namespace gamescope::ui
 		using ValueTextFn = std::function<std::string( const Value & )>;
 		Entry &ValueText( ValueTextFn fn ) { m_ValueText = std::move( fn ); return *this; }
 		const ValueTextFn &ValueTextOf() const { return m_ValueText; }
+
+		// ---- Kind::Note only (2026-11-25) ---------------------------------
+		// `Lines( n )`: the lines the row RESERVES, 1..kNoteMaxLines. Its height is
+		// always that many lines whatever the text; longer text ends in "..." on the
+		// last line and the Inspector carries the whole text. An empty text keeps the
+		// height. Why: the owner's rule for True Sens: the controls must not move
+		// while the text changes.
+		// `FullWidth()`: the row spans the sheet above the columns (declare it first)
+		// instead of sitting in its column. One column: no difference.
+		// `Tone( fn )`: Normal or Warn, re-read when drawn.
+		Entry &Lines( int n ) { m_nNoteLines = n < 1 ? 1 : ( n > kNoteMaxLines ? kNoteMaxLines : n ); return *this; }
+		Entry &FullWidth() { m_bNoteFullWidth = true; return *this; }
+		Entry &Tone( std::function<NoteTone()> fn ) { m_NoteTone = std::move( fn ); return *this; }
+		bool   IsNote() const { return m_eKind == Kind::Note; }
+		int    NoteLines() const { return m_nNoteLines; }
+		bool   IsFullWidthNote() const { return m_eKind == Kind::Note && m_bNoteFullWidth; }
+		NoteTone NoteToneNow() const { return m_NoteTone ? m_NoteTone() : NoteTone::Normal; }
 
 		// A short warn-coloured status the sheet row draws left of its value (e.g.
 		// "Restart to apply"). Evaluated every frame; an empty string draws nothing.
@@ -823,6 +871,9 @@ namespace gamescope::ui
 		ValueTextFn m_ValueText;                     // ValueText() -- 2026-10-05
 		std::function<bool()>        m_WarnWhen;     // WarnWhen() -- 2026-11-13
 		std::function<std::string()> m_StatusWhen;   // StatusWhen() -- 2026-11-08
+		int                          m_nNoteLines = 1;        // Lines() -- Kind::Note
+		bool                         m_bNoteFullWidth = false; // FullWidth() -- Kind::Note
+		std::function<NoteTone()>    m_NoteTone;              // Tone() -- Kind::Note
 		Kind          m_eKind      = Kind::Switch;
 		CompositeKind m_eComposite = CompositeKind::Anchor;
 		AnyBind     m_Bind, m_BindB;
@@ -1002,6 +1053,11 @@ namespace gamescope::ui
 		                std::function<std::string()> fnSummary );
 		Entry &Composite( const char *pszId, const char *pszTitle, CompositeKind eKind,
 		                  AnyBind bindA, AnyBind bindB = {} );
+		// Read-only running text (a tip, the outcome of an action). `fnText` is
+		// re-read whenever the row is drawn; `pszTitle` heads its Inspector page.
+		// `.Lines( n )` / `.FullWidth()` / `.Tone( fn )` shape it; see Entry.
+		Entry &Note   ( const char *pszId, const char *pszTitle,
+		                std::function<std::string()> fnText );
 
 		// ================================================================
 		//  CONTENT AREAS -- P3c

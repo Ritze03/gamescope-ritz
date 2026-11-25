@@ -95,6 +95,127 @@ namespace gamescope::ui
 		return "unknown law";
 	}
 
+	namespace
+	{
+		size_t Utf8Next( const std::string &s, size_t i )
+		{
+			i++;
+			while ( i < s.size() && ( (unsigned char)s[ i ] & 0xC0 ) == 0x80 )
+				i++;
+			return i;
+		}
+
+		// Removes the last code point.
+		void PopCodepoint( std::string &s )
+		{
+			if ( s.empty() )
+				return;
+			size_t i = s.size() - 1;
+			while ( i > 0 && ( (unsigned char)s[ i ] & 0xC0 ) == 0x80 )
+				i--;
+			s.erase( i );
+		}
+	}
+
+	NoteWrap WrapNote( const std::string &sText, float flWidth,
+	                   const std::function<float( const std::string & )> &fnMeasure, int nMaxLines )
+	{
+		NoteWrap out;
+		nMaxLines = std::max( nMaxLines, 1 );
+		if ( sText.empty() )
+			return out;
+		if ( !( flWidth > 0.0f ) )
+		{
+			out.truncated = true;
+			return out;
+		}
+		const auto Fits = [ & ]( const std::string &s ) { return fnMeasure( s ) <= flWidth; };
+
+		// Every line the text needs, unbounded; trimmed to nMaxLines afterwards.
+		std::vector<std::string> all;
+		size_t nPara = 0;
+		while ( nPara <= sText.size() )
+		{
+			const size_t nEnd = std::min( sText.find( '\n', nPara ), sText.size() );
+			const std::string sPara = sText.substr( nPara, nEnd - nPara );
+			nPara = nEnd + 1;
+
+			std::string sLine;
+			size_t p = 0;
+			bool bAny = false;
+			while ( p < sPara.size() )
+			{
+				while ( p < sPara.size() && sPara[ p ] == ' ' )
+					p++;
+				if ( p >= sPara.size() )
+					break;
+				const size_t q = std::min( sPara.find( ' ', p ), sPara.size() );
+				std::string sWord = sPara.substr( p, q - p );
+				p = q;
+				bAny = true;
+
+				const std::string sTry = sLine.empty() ? sWord : sLine + " " + sWord;
+				if ( Fits( sTry ) )
+				{
+					sLine = sTry;
+					continue;
+				}
+				if ( !sLine.empty() )
+				{
+					all.push_back( sLine );
+					sLine.clear();
+				}
+				// A word wider than a whole line is cut by characters.
+				while ( !Fits( sWord ) && sWord.size() > 1 )
+				{
+					std::string sHead;
+					size_t i = 0;
+					while ( i < sWord.size() )
+					{
+						const size_t j = Utf8Next( sWord, i );
+						if ( !sHead.empty() && !Fits( sHead + sWord.substr( i, j - i ) ) )
+							break;
+						sHead += sWord.substr( i, j - i );
+						i = j;
+					}
+					all.push_back( sHead );
+					sWord.erase( 0, i );
+				}
+				sLine = sWord;
+			}
+			if ( !sLine.empty() || !bAny )
+				all.push_back( sLine );   // an empty paragraph is a blank line
+			if ( nEnd >= sText.size() )
+				break;
+		}
+		// A trailing blank line from a final '\n' is not a line.
+		while ( !all.empty() && all.back().empty() )
+			all.pop_back();
+
+		if ( (int)all.size() <= nMaxLines )
+		{
+			out.lines = std::move( all );
+			return out;
+		}
+
+		out.truncated = true;
+		out.lines.assign( all.begin(), all.begin() + ( nMaxLines - 1 ) );
+		std::string sLast;
+		for ( size_t i = (size_t)nMaxLines - 1; i < all.size(); i++ )
+			sLast += ( sLast.empty() ? "" : " " ) + all[ i ];
+		const auto Ellipsised = [ & ]( const std::string &s ) { return s + "..."; };
+		while ( !sLast.empty() && !Fits( Ellipsised( sLast ) ) )
+		{
+			const size_t sp = sLast.find_last_of( ' ' );
+			if ( sp != std::string::npos )
+				sLast.erase( sp );
+			else
+				PopCodepoint( sLast );
+		}
+		out.lines.push_back( Ellipsised( sLast ) );
+		return out;
+	}
+
 	const char *KindName( Kind eKind )
 	{
 		switch ( eKind )
@@ -109,6 +230,7 @@ namespace gamescope::ui
 			case Kind::Meter:     return "meter";
 			case Kind::Facts:     return "facts";
 			case Kind::Composite: return "composite";
+			case Kind::Note:      return "note";
 		}
 		return "unknown";
 	}
@@ -853,6 +975,9 @@ namespace gamescope::ui
 		for ( size_t i = 0, n = EntryCount(); i < n; ++i )
 		{
 			const Entry *p = &EntryAt( i );
+			// A full-width Note sits above the columns, in no group's column.
+			if ( p->IsFullWidthNote() )
+				continue;
 			const int nPin = GroupPin( p->m_nGroup );
 			if ( nPin >= 0 )
 			{
@@ -960,6 +1085,13 @@ namespace gamescope::ui
 	{
 		Entry &e = Emit( pszId, pszTitle, Kind::Facts, {} );
 		e.m_Summary = std::move( fnSummary );
+		return e;
+	}
+
+	Entry &Area::Note( const char *pszId, const char *pszTitle, std::function<std::string()> fnText )
+	{
+		Entry &e = Emit( pszId, pszTitle, Kind::Note, {} );
+		e.m_Summary = std::move( fnText );   // a Note's text is its summary, read the same way
 		return e;
 	}
 

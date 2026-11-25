@@ -3357,6 +3357,10 @@ namespace gamescope::ui::shell
 		// how tall a band is.
 		int LinesFor( const Entry &entry )
 		{
+			// A Note's height is not a whole number of rows (NoteHeightPx() below);
+			// this is its weight for the column packing: its height in rows, rounded up.
+			if ( entry.IsNote() )
+				return ( entry.NoteLines() + 2 ) / 2;
 			if ( entry.GetKind() != Kind::Composite )
 				return 1;
 			// A List with a second verb strip is one line taller (Band.cpp), and
@@ -3364,6 +3368,23 @@ namespace gamescope::ui::shell
 			const BandSpec spec = Band( entry.GetCompositeKind(), entry.ListStripCount() );
 			return ImClamp( spec.nLines, tok::kBandMinLines,
 			                spec.bSpansRow ? tok::kListBandLines + 1 : tok::kBandMaxLines );
+		}
+
+		// A Note (Kind::Note) is one 44-unit row plus one text line per extra line it
+		// reserves, so Lines( 1 ) is exactly a row. Fixed by the declaration, never by
+		// the text: the rows below must not move when the text changes.
+		float NoteHeightPx( const Entry &entry )
+		{
+			return Px( tok::kRowH ) + (float)( entry.NoteLines() - 1 ) * Px( notemetrics::kLineH );
+		}
+
+		// The height of one sheet/Inspector line of `entry`, in px. EVERY place that
+		// advances a y cursor past an entry goes through this, not Px( kRowH ) *
+		// LinesFor(), so a Note cannot be mis-sized in one host.
+		float EntryHeightPx( const Entry &entry )
+		{
+			return entry.IsNote() ? NoteHeightPx( entry )
+			                      : Px( tok::kRowH ) * (float)LinesFor( entry );
 		}
 
 		// The nine anchors, named. A lookup and not a format string, so the
@@ -3951,6 +3972,64 @@ namespace gamescope::ui::shell
 			}
 		}
 
+		// The colour a Note's text is drawn in: the body text colour, the status
+		// orange for Tone Warn, the primary text colour while the row is selected.
+		ImU32 NoteColor( const Entry &entry, bool bSelected )
+		{
+			if ( entry.NoteToneNow() == NoteTone::Warn )
+				return Col( Role::WarnText );
+			return bSelected ? Col( Role::TextPrimary ) : Col( Role::TextBody );
+		}
+
+		// A Note row (Kind::Note): read-only running text, word-wrapped to the lane's
+		// label-to-control span, always NoteLines() lines tall whatever the text (a
+		// longer text ends in "..." on the last line; the Inspector has it whole).
+		// Selectable like a Facts row; no value, no control, no affordance column.
+		// Left edge = the row labels', right edge = the controls' (the Facts value's).
+		bool DrawNoteRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
+		                  bool bSelected )
+		{
+			const RowCtx row = RowCtx::ForRow( laneBase, flOriginPx, flTopPx );
+			const ImRect rb  = row.Bounds();
+			const ImRect rcRow( rb.Min, ImVec2( rb.Max.x, rb.Min.y + NoteHeightPx( entry ) ) );
+
+			ImGui::SetCursorScreenPos( rcRow.Min );
+			ImGui::PushID( entry.Id().c_str() );
+			const bool bClicked = ImGui::InvisibleButton( "##row", rcRow.GetSize() );
+			const bool bHovered = ImGui::IsItemHovered();
+
+			if ( bSelected )
+				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, Accent( 0.08f ) );
+			else if ( bHovered )
+				Fill( { rcRow.Min.x, rcRow.Min.y, rcRow.Max.x, rcRow.Max.y }, IM_COL32( 255, 255, 255, 10 ) );
+
+			if ( const ImU32 colEdge = StateEdgeColor( entry, bSelected ) )
+			{
+				const ImRect rcEdge = row.StateEdge();
+				Fill( { rcEdge.Min.x, rcRow.Min.y, rcEdge.Max.x, rcRow.Max.y }, colEdge );
+			}
+			HLine( rcRow.Min.x, rcRow.Max.x, rcRow.Max.y - Hairline(), Col( Role::Line ) );
+
+			ImRect rcLabel, rcValue;
+			row.SplitLabelZone( 0.0f, &rcLabel, &rcValue );
+			const float flX0 = rcLabel.Min.x;
+			const float flX1 = row.PlaceFull().Max.x;
+
+			const NoteWrap wrap = WrapNote( entry.SummaryText(), flX1 - flX0,
+				[]( const std::string &sLine ) { return MeasureText( TypeRole::Label, sLine.c_str() ).x; },
+				entry.NoteLines() );
+
+			const ImU32 col   = NoteColor( entry, bSelected );
+			const float flLn  = Px( notemetrics::kLineH );
+			const float flTop = rcRow.Min.y + ( Px( tok::kRowH ) - flLn ) * 0.5f;
+			for ( size_t i = 0; i < wrap.lines.size(); ++i )
+				Label( { flX0, flTop + (float)i * flLn, flX1, flTop + (float)( i + 1 ) * flLn },
+				       TypeRole::Label, col, wrap.lines[ i ].c_str() );
+
+			ImGui::PopID();
+			return controls::ShouldSelectRow( bClicked, false, false );
+		}
+
 		// One Inspector/sheet row of the Row grammar.
 		bool DrawEntryRow( const Entry &entry, const Lane &laneBase, float flOriginPx, float flTopPx,
 		                   bool bSelected, bool bAffordance = true )
@@ -3960,6 +4039,8 @@ namespace gamescope::ui::shell
 			// Configure -- goes on treating it as one declaration.
 			if ( entry.GetKind() == Kind::Composite )
 				return DrawCompositeBand( entry, laneBase, flOriginPx, flTopPx, bSelected, bAffordance );
+			if ( entry.IsNote() )
+				return DrawNoteRow( entry, laneBase, flOriginPx, flTopPx, bSelected );
 
 			const RowCtx row = RowCtx::ForRow( laneBase, flOriginPx, flTopPx );
 			const ImRect rcRow = row.Bounds();
@@ -4794,6 +4875,9 @@ namespace gamescope::ui::shell
 
 				for ( size_t i = 0; !bRowsElsewhere && i < pArea->EntryCount(); ++i )
 				{
+					// A full-width Note is drawn above the columns, below.
+					if ( pArea->EntryAt( i ).IsFullWidthNote() )
+						continue;
 					const size_t nGroup = pArea->GroupOf( i );
 					// A band is emitted when the group index CHANGES, so a
 					// group declared with no entries under it draws nothing
@@ -4823,8 +4907,33 @@ namespace gamescope::ui::shell
 
 				// ---- draw ------------------------------------------------
 				float yOf[ kMaxSheetColumns ];
+				float flTopY = rc.y0 + Px( tok::kM );
+
+				// Full-width Notes (Entry::FullWidth): one band across the sheet above
+				// the columns, in the lane of a one-column sheet, so the text starts at
+				// column 0's label edge and ends at the last column's control edge. The
+				// columns start below it; an area without one starts where it always did.
+				if ( !bRowsElsewhere )
+				{
+					const SheetColumnSet colsFull =
+						LayOutSheetColumns( rc.Width(), flOccludedPx, 1, Scale() );
+					const Lane &laneFull     = colsFull.cols[ 0 ].lane;
+					const float flOriginFull = rc.x0 + colsFull.cols[ 0 ].rc.x0;
+					for ( size_t i = 0; i < pArea->EntryCount(); ++i )
+					{
+						const Entry &entry = pArea->EntryAt( i );
+						if ( !entry.IsFullWidthNote() )
+							continue;
+						if ( DrawEntryRow( entry, laneFull, flOriginFull, flTopY, SelectedEntry() == &entry ) )
+						{
+							Select( &entry );
+							s_eFocusRegion = Region::Sheet;
+						}
+						flTopY += EntryHeightPx( entry );
+					}
+				}
 				for ( int c = 0; c < cols.nColumns; ++c )
-					yOf[ c ] = rc.y0 + Px( tok::kM );
+					yOf[ c ] = flTopY;
 
 				for ( size_t b = 0; b < blocks.size(); ++b )
 				{
@@ -4857,7 +4966,7 @@ namespace gamescope::ui::shell
 						// n x 44 for a composite, 44 for everything else --
 						// from Band.cpp, never from a call site (SPEC §4.2
 						// clause 1).
-						yOf[ c ] += Px( tok::kRowH ) * (float)LinesFor( entry );
+						yOf[ c ] += EntryHeightPx( entry );
 
 						// SPEC §6.3's inline expansion, beneath the row that
 						// owns the params -- see DrawInlineParams.
@@ -5189,6 +5298,15 @@ namespace gamescope::ui::shell
 
 			y = DrawInspectorSwitchRow( rcIn, y, entry );
 
+			// A Note's Inspector page carries its WHOLE text (the sheet row may end in
+			// "..."), in the sheet's tone.
+			if ( entry.IsNote() )
+			{
+				const std::string sText = entry.SummaryText();
+				return sText.empty() ? y
+					: DrawWrapped( rcIn, TypeRole::Body, NoteColor( entry, false ), sText.c_str(), y );
+			}
+
 			if ( entry.ReadOnly() && !entry.HasInspectorSwitch() )
 			{
 				// SPEC §5.1: "For a read-only row the values block is
@@ -5312,7 +5430,7 @@ namespace gamescope::ui::shell
 			// would point at nothing -- and a lock is redundant next to the
 			// mode strip's own `ro` marker.
 			DrawEntryRow( entry, lane, rcIn.x0, y, bFocusOwnRow, /* bAffordance */ false );
-			y += Px( tok::kRowH ) * (float)LinesFor( entry );
+			y += EntryHeightPx( entry );
 
 			// index.html's `parameters  <n> of N` header. The denominator is
 			// the Six Budget itself (ui::ParamBudget(), Registry.cpp's
@@ -5432,7 +5550,7 @@ namespace gamescope::ui::shell
 			// band's line 1 and the palette show. Printing its A-axis
 			// binding put `0` under a VALUES line reading
 			// `top-right · 32 / 32`, two lines apart on the same page.
-			Grid( "NOW", entry.GetKind() == Kind::Facts
+			Grid( "NOW", ( entry.GetKind() == Kind::Facts || entry.IsNote() )
 				? entry.SummaryText()
 				: entry.GetKind() == Kind::Composite
 					? CompositeValue( entry )
@@ -5704,7 +5822,7 @@ namespace gamescope::ui::shell
 					Select( &entry );
 					s_eFocusRegion = Region::Inspector;
 				}
-				y += Px( tok::kRowH ) * (float)LinesFor( entry );
+				y += EntryHeightPx( entry );
 			}
 
 			// The selected row's help and its reset, beneath the list. This is
@@ -6335,7 +6453,7 @@ namespace gamescope::ui::shell
 			// thing and the row it jumps to showed another.
 			if ( eKind == Kind::Composite && pE )
 				return CompositeValue( *pE );
-			if ( eKind == Kind::Facts )
+			if ( eKind == Kind::Facts || eKind == Kind::Note )
 				return pE ? pE->SummaryText() : std::string();
 			// A Meter's value is its scalar; it has no binding to fall
 			// through to, so without this the palette printed nothing for

@@ -282,20 +282,21 @@ setter) the Launcher's search. Row ids are `true_sens.<name>`.
 
 | Group | Row id | Kind | Label | Notes |
 | --- | --- | --- | --- | --- |
-| Left, tip part 1 | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
-| Left, tip part 1 | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
-| Left, tip part 1 | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
-| Left, tip part 1 | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
-| Left, tip part 1 | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
-| Left, tip part 1 | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. |
+| Top, full width | `tip` | Note | Tip | The owner's sentence (D8), 2 lines, above both columns. |
+| Left, This game | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
+| Left, This game | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
+| Left, This game | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
+| Left, This game | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
+| Left, This game | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
+| Left, This game | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. |
 | Left, Calculator | `ingame` | Text | In-game value | The typed in-game value (D17). |
 | Left, Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
-| Right, tip part 2 | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
-| Right, tip part 2 | `low` / `high` | Facts | Low / High (true sensitivity) | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
-| Right, tip part 2 | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
+| Right, True sensitivity | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
+| Right, True sensitivity | `low` / `high` | Facts | Low / High | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
+| Right, True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
 | Right, Recording | `stop` | Action | Stop recording | verb "Stop"; shown only while recording (D21). |
 | Right, Recording | `recording` | Facts | Recording | "Low, 1234 counts so far"; shown only while recording. |
-| Right, Recording | `outcome`, `outcome_2` .. `outcome_8` | Facts | Last recording (the rest untitled) | `TrueSens_LastOutcome()` in full, one line per row (see below); shown after a recording or a refusal, a row only while it has a line. |
+| Right, Recording | `outcome` | Note | Last recording | `TrueSens_LastOutcome()` in full, 3 lines reserved, orange when nothing was stored; "No recording yet" before the first (see below). |
 
 **Record closes the window (D6).** A record Action calls `TrueSens_StartRecording( target )`
 and, only when that succeeds, `SettingsOverlay_SetVisible( false )` (the precedent of the
@@ -308,17 +309,25 @@ second mechanism. The Launcher: a record Action is a row the palette finds, but 
 row there only jumps the Shell to it (`PaletteJump`); an Action is never run from the
 palette, so nothing closes twice and the player presses it in the Shell.
 
-**The outcome in full.** A Facts value is one right-bound line, capped at 60 % of the label
-zone: about 24 characters in a half-width column (measured at 1080p, the 26th is already cut
-with "..."). The core's outcome is one to three sentences, the second being the instruction
-("Turn Zoom off before recording."). The area splits the text into sentences and wraps each at
-word boundaries to 22 characters (`OutcomeLines()`), one line per Facts row: the first lines are
-what happened, the lines after them what to do. Up to eight rows, each shown only while it has
-a line. `Why:` the first version showed only the first clause, so the player never saw what to
-do; a new row kind for running text was out of scope, and rows are the existing way
-(`diagnostics.scanout_*` does the same). The first row's Details line also carries the whole
-text. A text row spanning the column would read far better than 3 to 5 short lines; that is a
-Registry/Shell change, not made here.
+**The outcome in full.** One **Note** row (`true_sens.outcome`, Registry kind `Note`, see
+[overlay-shell.md](overlay-shell.md#the-note-row)) of `Lines( 3 )`: the core's text, word-wrapped to
+the column in the normal label font. The text is one to three sentences, the first what
+happened, the next what to do ("Turn Zoom off before recording."); the longest, "Low stored:
+... The game's value was stored too." and "No mouse movement was seen. The game has to hold
+the mouse (cursor hidden) while you turn.", take two lines at 1920x1080 and also at the
+narrowest two-column sheet (UI scale 1.1 at 1920x1080, a sheet of about 850 base units); the
+third reserved line is spare for longer numbers and for a narrow one-column sheet. The tone is orange (`NoteTone::Warn`) whenever nothing was stored
+(a failed recording or a refused start) and the normal text colour for a stored value; the
+core's stored texts all contain " stored: ", every other outcome does not, and `OutcomeTone()`
+tells them apart by that. Before the first recording the Note reads "No recording yet"; while
+a recording runs it is empty (the Recording row shows the progress). Its height is fixed by
+`Lines( 3 )`, so nothing below or beside it moves with the text. `Why:` the owner: *"make sure
+that while recording, the controls in the GUI (especially the stop recording button) doesnt
+move around."* The first version showed only the first clause, so the player never saw what
+to do; the second split the text over up to eight Facts rows of 22 characters (short
+right-aligned fragments, every row below moving when the text changed). A text longer than
+three lines would end in "..." with the whole text in the Inspector (Configure page, and
+Details "NOW").
 
 **Why the multiplier row has its own wording.** `TrueSens_MultiplierText()` says "not
 recorded" whenever no multiplier acts, also while the switch is off, which reads wrong
@@ -340,25 +349,29 @@ recording), and `IngameStatus()` shows the message only while it is unchanged, s
 never sits beside a valid field.
 
 **Two columns.** The owner: *"Make the UI page use two collumns."* `Columns( 2 )`, and
-`GroupColumn()` pins the groups: left what belongs to this game (the tip's first half over the
-game rows, then the Calculator), right what is global and the recording state (the tip's second
-half over Mouse DPI, Low, High and the record buttons, then Recording with the outcome). The
-sheet has two columns from a base width of 840 (`kTwoColMin`, `Layout.h`), three from 1680; the
-area asks for two, so a narrower sheet falls back to one column: checked, 1920x1080 has two
-columns and 1280x720 has one (the groups then stack in declaration order: the tip's second
-half sits above the global rows, both halves still unclipped; Calculator and Recording come last). The first version used one
-column because greedy packing split the sequence; pinning removes that.
+`GroupColumn()` pins the groups: left what belongs to this game (This game, then the
+Calculator), right what is global and the recording state (True sensitivity: Mouse DPI, Low,
+High and the record buttons, then Recording with the outcome). The sheet has two columns from
+a base width of 840 (`kTwoColMin`, `Layout.h`), three from 1680; the area asks for two, so a
+narrower sheet falls back to one column: checked, 1920x1080 has two columns and 1280x720 has
+one (the groups then stack in declaration order: This game, True sensitivity, Recording,
+Calculator, the tip still on top). The first version used one column because greedy packing
+split the sequence; pinning removes that.
 
-**The tip (D8).** There is no plain-text row kind, a Facts value is capped at ~24 characters
-and a group band is one line the width of its column (it ends in "..." when too long), so the
-owner's sentence cannot sit whole in one half-width column. It is split in the middle across the
-**captions of the two columns' first groups**, drawn in the band's capital letters: left
-"Setting a low in-game sensitivity is usually the", right "most reliable way to use True Sens in
-a game.", so it reads across the top of the sheet. Consequence: those two groups have no caption
-of their own, so the Low/High rows are labelled "Low (true sensitivity)" / "High (true
-sensitivity)". `Why:` the first version showed "Tip: A low in-game sensitivity works best"
-with the sentence only in the help, which the owner's wording ("the player should be told")
-does not allow.
+**The tip (D8).** The owner: *"At the top, the player should be told, that setting a low
+ingame sensitivity is usually the most reliable way for using true sens in a game."* One
+full-width **Note** (`true_sens.tip`, `.FullWidth().Lines( 2 )`) above the columns, in normal
+case: "Setting a low in-game sensitivity is usually the most reliable way to use True Sens in a
+game." It is one line at 1920x1080, at the narrowest two-column sheet and at 1280x720 (one
+column); the second reserved line is for a narrow one-column sheet (a large UI scale), where
+the sentence would otherwise end in "..." (the Inspector still shows it whole). `Why` a Note and not group captions: until 2026-11-25 there was no
+running-text row, so the sentence was split across the captions of the two columns' first
+groups (small, muted, uppercase, five rows apart in the one-column fallback), those groups
+lost their real captions and the Low/High rows had to be labelled "Low (true sensitivity)" /
+"High (true sensitivity)". The Note restores the captions "This game" and "True sensitivity"
+and the plain labels Low and High. The first version showed "Tip: A low in-game sensitivity
+works best" with the sentence only in the help, which the owner's wording ("the player should
+be told") does not allow.
 
 **Icon.** A ring with a centred dot and an arrowhead on its top rim (a turn), built from the
 glyph set's own primitives (`Icons.cpp`).

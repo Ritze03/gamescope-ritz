@@ -25,6 +25,7 @@
 #include "Overlay/Fonts.h"
 #include "Overlay/EffectPreviewMath.h"
 #include "Overlay/UI/Band.h"
+#include "Overlay/UI/CommandPalette.h"
 #include "Overlay/UI/Controls.h"
 #include "Overlay/UI/Icons.h"
 #include "Overlay/UI/Lane.h"
@@ -4168,4 +4169,170 @@ TEST_CASE( "listbox: Shift range select (anchor, replace, Ctrl+Shift add, exclus
 	s3[ 0 ] = true;
 	ListBoxMultiClick( s3, 3, false, -1, true, &a3 );
 	REQUIRE( s3 == V{ true, true, true, true } );
+}
+
+// =========================================================================
+//  Note -- read-only running text over a fixed number of lines (2026-11-25)
+// =========================================================================
+namespace
+{
+	// One unit per byte: the tests' measure, so a width is a character count.
+	const std::function<float( const std::string & )> kCharMeasure =
+		[]( const std::string &s ) { return (float)s.size(); };
+}
+
+TEST_CASE( "note: registered like a row, read-only, text re-read on every ask", "[overlay_ui][note]" )
+{
+	STATIC_REQUIRE( ui::IsReadOnly( ui::Kind::Note ) );
+	STATIC_REQUIRE_FALSE( ui::UsesValueColumn( ui::Kind::Note ) );
+
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &area = reg.Add( "test.area", "Test", ui::Section::Display );
+
+	std::string sText = "first";
+	ui::NoteTone eTone = ui::NoteTone::Normal;
+	ui::Entry &n = area.Note( "test.note", "A note", [ & ] { return sText; } )
+		.Tone( [ & ] { return eTone; } )
+		.Help( "h" );
+
+	REQUIRE( n.GetKind() == ui::Kind::Note );
+	REQUIRE( n.IsNote() );
+	REQUIRE( n.ReadOnly() );
+	REQUIRE_FALSE( n.UsesValue() );
+	REQUIRE( std::string( ui::KindName( n.GetKind() ) ) == "note" );
+	REQUIRE_FALSE( n.Binding().IsBound() );
+
+	REQUIRE( n.SummaryText() == "first" );
+	sText = "second";
+	eTone = ui::NoteTone::Warn;
+	REQUIRE( n.SummaryText() == "second" );
+	REQUIRE( n.NoteToneNow() == ui::NoteTone::Warn );
+
+	// No Tone provider: Normal.
+	ui::Entry &plain = area.Note( "test.plain", "Plain", [] { return std::string( "x" ); } ).Help( "h" );
+	REQUIRE( plain.NoteToneNow() == ui::NoteTone::Normal );
+
+	REQUIRE( reg.SelfTest() == 0 );
+	REQUIRE( rec.Count() == 0 );
+}
+
+TEST_CASE( "note: Lines and FullWidth are stored, Lines is clamped", "[overlay_ui][note]" )
+{
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "test.area", "Test", ui::Section::Display );
+	const auto Text = [] { return std::string( "t" ); };
+
+	REQUIRE( area.Note( "n.default", "D", Text ).Help( "h" ).NoteLines() == 1 );
+	REQUIRE_FALSE( area.Note( "n.col", "C", Text ).Help( "h" ).IsFullWidthNote() );
+	REQUIRE( area.Note( "n.three", "T", Text ).Lines( 3 ).Help( "h" ).NoteLines() == 3 );
+	REQUIRE( area.Note( "n.zero", "Z", Text ).Lines( 0 ).Help( "h" ).NoteLines() == 1 );
+	REQUIRE( area.Note( "n.huge", "H", Text ).Lines( 99 ).Help( "h" ).NoteLines() == ui::kNoteMaxLines );
+	REQUIRE( area.Note( "n.wide", "W", Text ).FullWidth().Help( "h" ).IsFullWidthNote() );
+
+	// FullWidth is a Note's property only.
+	bool b = false;
+	REQUIRE_FALSE( area.Switch( "n.sw", "S", ui::Bind( &b ) ).Help( "h" ).IsFullWidthNote() );
+}
+
+TEST_CASE( "note: help is required like for every row", "[overlay_ui][note]" )
+{
+	ui::Registry reg;
+	ui::LawRecorder rec;
+	ui::Area &area = reg.Add( "test.area", "Test", ui::Section::Display );
+	area.Note( "test.nohelp", "No help", [] { return std::string( "x" ); } );
+	REQUIRE( reg.SelfTest() > 0 );
+	REQUIRE( rec.Count() > 0 );
+}
+
+TEST_CASE( "note: a full-width Note does not count as a column's group", "[overlay_ui][note]" )
+{
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "test.area", "Test", ui::Section::Display );
+	area.Columns( 2 );
+	bool b = false;
+	area.Note( "t.tip", "Tip", [] { return std::string( "x" ); } ).FullWidth().Lines( 2 ).Help( "h" );
+	area.Group( "Only" );
+	area.GroupColumn( 0 );
+	area.Switch( "t.sw", "S", ui::Bind( &b ) ).Help( "h" );
+	// The tip alone must not open a second column.
+	REQUIRE( area.WantedColumns() == 1 );
+}
+
+TEST_CASE( "note: the palette never lists it", "[overlay_ui][note]" )
+{
+	ui::Registry reg;
+	ui::Area &area = reg.Add( "test.area", "Test", ui::Section::Display );
+	area.Note( "test.tipnote", "Zebra tip", [] { return std::string( "zebra" ); } )
+		.Help( "zebra help" ).Keywords( "zebra" );
+	bool b = false;
+	area.Switch( "test.zebra_switch", "Zebra switch", ui::Bind( &b ) ).Help( "h" );
+
+	const std::vector<ui::PaletteItem> hits = ui::Build( reg, "zebra" );
+	REQUIRE_FALSE( hits.empty() );
+	for ( const ui::PaletteItem &it : hits )
+		REQUIRE( it.sId != "test.tipnote" );
+}
+
+TEST_CASE( "note wrap: greedy word wrap to the width", "[overlay_ui][note]" )
+{
+	const ui::NoteWrap w = ui::WrapNote( "aaa bbb ccc ddd", 7.0f, kCharMeasure, 4 );
+	REQUIRE_FALSE( w.truncated );
+	REQUIRE( w.lines == std::vector<std::string>{ "aaa bbb", "ccc ddd" } );
+
+	REQUIRE( ui::WrapNote( "short", 40.0f, kCharMeasure, 2 ).lines == std::vector<std::string>{ "short" } );
+}
+
+TEST_CASE( "note wrap: empty text has no lines, a hard break splits", "[overlay_ui][note]" )
+{
+	const ui::NoteWrap e = ui::WrapNote( "", 10.0f, kCharMeasure, 3 );
+	REQUIRE( e.lines.empty() );
+	REQUIRE_FALSE( e.truncated );
+
+	const ui::NoteWrap h = ui::WrapNote( "one\ntwo", 20.0f, kCharMeasure, 3 );
+	REQUIRE( h.lines == std::vector<std::string>{ "one", "two" } );
+}
+
+TEST_CASE( "note wrap: more than the reserved lines ends in an ellipsis", "[overlay_ui][note]" )
+{
+	const ui::NoteWrap w = ui::WrapNote( "aaa bbb ccc ddd eee fff", 7.0f, kCharMeasure, 2 );
+	REQUIRE( w.truncated );
+	REQUIRE( w.lines.size() == 2 );
+	REQUIRE( w.lines[ 0 ] == "aaa bbb" );
+	REQUIRE( w.lines[ 1 ] == "ccc..." );   // "ccc ddd..." would be 10 wide: cut at a word
+	for ( const std::string &l : w.lines )
+		REQUIRE( l.size() <= 7 );
+
+	// Exactly the reserved number of lines is not a truncation.
+	REQUIRE_FALSE( ui::WrapNote( "aaa bbb ccc ddd", 7.0f, kCharMeasure, 2 ).truncated );
+	// One reserved line: the single line ends in the ellipsis.
+	const ui::NoteWrap one = ui::WrapNote( "aaa bbb ccc", 8.0f, kCharMeasure, 1 );
+	REQUIRE( one.truncated );
+	REQUIRE( one.lines == std::vector<std::string>{ "aaa..." } );
+}
+
+TEST_CASE( "note wrap: a word wider than the line is cut by characters; width zero is truncated",
+           "[overlay_ui][note]" )
+{
+	const ui::NoteWrap w = ui::WrapNote( "abcdefghij", 4.0f, kCharMeasure, 5 );
+	REQUIRE_FALSE( w.truncated );
+	REQUIRE( w.lines == std::vector<std::string>{ "abcd", "efgh", "ij" } );
+
+	const ui::NoteWrap z = ui::WrapNote( "text", 0.0f, kCharMeasure, 2 );
+	REQUIRE( z.lines.empty() );
+	REQUIRE( z.truncated );
+}
+
+TEST_CASE( "note wrap: multi-byte characters are never cut in the middle", "[overlay_ui][note]" )
+{
+	// Four 2-byte code points; a measure counting code points, width 2.
+	const std::function<float( const std::string & )> fnCp = []( const std::string &s )
+	{
+		float n = 0;
+		for ( unsigned char c : s )
+			n += ( c & 0xC0 ) != 0x80 ? 1.0f : 0.0f;
+		return n;
+	};
+	const ui::NoteWrap w = ui::WrapNote( "\xC3\xA4\xC3\xA4\xC3\xA4\xC3\xA4", 2.0f, fnCp, 5 );
+	REQUIRE( w.lines == std::vector<std::string>{ "\xC3\xA4\xC3\xA4", "\xC3\xA4\xC3\xA4" } );
 }

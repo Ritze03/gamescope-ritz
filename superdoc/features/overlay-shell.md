@@ -58,6 +58,7 @@ a.Switch( "input.force_grab_cursor", "Force grab cursor",
 | `Bank` | `Bank` | A mask of chips. |
 | `Action` | `Action` | A verb chip; `.Confirm( prompt )` makes it two-press (destructive actions). |
 | `Meter`, `Facts` | read-only | `IsReadOnly()`; no setter exists. |
+| `Note` | `Note` | Read-only running text, see "The Note row" below. `.Lines( n )`, `.FullWidth()`, `.Tone( fn )`. |
 | `Composite` | `Composite` | `CompositeKind`: `Anchor`, `Hue`, `Strip`, `Graph`, `Color`, `List`. |
 | `Content( fn )` | content area | A body of lines (Log, About) beneath the rows; the call site returns data, never draws. |
 
@@ -68,6 +69,43 @@ Other per-row calls: `.Param( leaf, title, bind )` (inspector-depth parameters),
 Area-level: `.Keywords()`, `.Summary()`, `.Badge()`, `.AvailableWhen()`, `.WarnWhen()`, `.Group()` /
 `.GroupCount()`, `.Content()`, `.FollowsTail()`, `.RowsInInspector()`, and the dynamic-area builder
 (`Area::Rebuilds()`, used by the Mixer, whose rows are one per live PipeWire stream).
+
+### The Note row
+
+`Area::Note( id, title, fnText )` (2026-11-25) is the one row that holds a sentence: read-only
+running text, word-wrapped to the lane (left edge = the row labels', right edge = the controls'),
+in `TypeRole::Label` and `Role::TextBody`. Registry side, ImGui-free: `Kind::Note`,
+`NoteTone { Normal, Warn }`, `Entry::Lines( n )` (clamped 1 to `kNoteMaxLines` 8),
+`Entry::FullWidth()`, `Entry::Tone( fn )`, and the pure `WrapNote( text, width, measure,
+maxLines )` returning the lines and a truncated flag. The text provider is stored as the
+entry's summary, so `SummaryText()` (and `overlay_e2_get`) returns it, re-read on every ask.
+It is read-only (`IsReadOnly( Kind::Note )`): no binding, no setter, excluded from the command
+palette structurally like a Facts row (`CommandPalette.cpp` needed no line), and selectable
+like a Facts row so the Inspector can show its help; Up/Down walks over it in registration
+order. Its Inspector Configure page is title, help, then the whole text in the sheet's tone;
+Details' NOW is the whole text too.
+
+- **Fixed lines.** The height is `Px( kRowH ) + ( n - 1 ) * Px( notemetrics::kLineH )` (44 + 22
+  per extra line), whatever the text, so an empty text keeps it and a changing text never moves
+  a row. A text needing more than n lines ends in "..." on line n (cut at a word). `Why:` the
+  owner's rule for True Sens: *"make sure that while recording, the controls in the GUI
+  (especially the stop recording button) doesnt move around."*
+- **Span.** Default: the Note sits in its column like any row. `.FullWidth()`: `DrawSheetBody`
+  skips it while packing the groups and draws it first, in the lane of a one-column layout
+  (`LayOutSheetColumns( ..., 1, ... )`), so it starts at column 0's label edge and ends at the
+  last column's control edge; the columns start below it. With one column the two are the same.
+  A full-width Note is drawn above the columns wherever it was declared (declare it first), and
+  `WantedColumns()` ignores it. `Why` above the columns and not as the first row of column 0:
+  the tip is about the whole area and one sentence across the sheet reads better than a half
+  column of wrapped text. Used by True Sens (`true_sens.tip`, `true_sens.outcome`).
+- **Where the row height is assumed.** `LinesFor()` (column-packing weight, a Note counts its
+  height in rows rounded up) and the three y advances in `DrawSheetBody`, `DrawConfigure`'s own
+  row and `DrawContentFilter` now all go through `EntryHeightPx()`; the inline-param, Inspector
+  param and wheel-scroll uses of `kRowH` are not about entries and are unchanged. The sheet's
+  scroll extent comes from the tallest column's y, so it follows.
+- **Not done.** No selection-follows-scroll exists for sheet rows (`StepRow()` only changes the
+  selection), so a selected row below the fold is not scrolled into view for any kind, a
+  Note included.
 
 ### The four laws (enforced at registration)
 
