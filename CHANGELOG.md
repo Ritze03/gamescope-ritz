@@ -10,6 +10,8 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-25
 
 ### Added
+- **V3.5 and V3.5 Hybrid**: two new experimental Motion versions for Frame generation
+  with improved motion detection.
 - **Sync with window size**: new switch in Display > Resolution that keeps the game's
   resolution equal to gamescope's window and follows it when you resize the window.
 - **Appearance**: new slider "Outside margin" sets how much space is left around the

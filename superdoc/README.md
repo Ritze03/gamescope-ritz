@@ -84,6 +84,7 @@ indented under it.
   - [Learned motion](features/frame-generation-learned.md)
   - [Motion version 3](features/frame-generation-motion-v3.md)
   - [V3 Hybrid](features/frame-generation-v3-hybrid.md)
+  - [V3.5 and V3.5 Hybrid](features/frame-generation-v3-5.md)
   - [Debug options (only generated frames, stats overlay)](features/frame-generation-debug.md)
   - [Capture (`ritz_fg_capture`)](features/frame-generation-capture.md)
   - [Stale real frames (the guard at the ring copy)](features/frame-generation-stale-frames.md)

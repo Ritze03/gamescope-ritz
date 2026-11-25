@@ -192,7 +192,7 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 {
 	const framegen::Settings s;
 	const auto v = FormatSettingLines( s );
-	REQUIRE( v.size() == 45 );   // every field (the static_assert in FrameGenCapture.cpp guards the struct's size)
+	REQUIRE( v.size() == 46 );   // every field (the static_assert in FrameGenCapture.cpp guards the struct's size)
 	std::set<std::string> names;
 	for ( const std::string &l : v )
 	{
@@ -203,7 +203,7 @@ TEST_CASE( "capture: one setting line per field of framegen::Settings", "[frameg
 		REQUIRE( nEq != std::string::npos );
 		names.insert( t[ 1 ].substr( 0, nEq ) );
 	}
-	REQUIRE( names.size() == 45 );   // all distinct
+	REQUIRE( names.size() == 46 );   // all distinct
 	for ( const char *pszName : { "trustLow", "searchPenalty", "uiProtection", "blurWeights", "motionVersion", "v2Mode", "v2StaticMask",
 		"v3Smear", "v3Guard", "v3Blend", "learnedNet", "learnedStaticGuard", "flowScale", "pyramidMinSide", "uiBoxOffsetX" } )
 		REQUIRE( names.count( pszName ) == 1 );

@@ -105,6 +105,8 @@ namespace fgstats
 			const int nBlend = cfg.motion == fghost::Motion::V3 ? cfg.v3Blend : 0;
 			if ( nBlend )
 				in.sBlend = fghost::BlendLabel( nBlend, fghost::BlendActive() );
+			if ( cfg.motion == fghost::Motion::V3 )
+				in.sV35 = fghost::V35Label( cfg.v3Motion, fghost::V35Active() );
 			in.sQuality = cfg.quality == fghost::Quality::Quality ? "Quality" : "Performance";
 			in.sFormat = rs.formatTag ? rs.formatTag : "";
 			in.sModeText = ModeText( cfg );

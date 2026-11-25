@@ -284,6 +284,7 @@ namespace fghost
 		// render thread at the end of every EnsureReady()), and why not when a variant is selected but is not (string
 		// literal, "" = no cheap reason). Read by the compositor thread's status line through BlendActive() / BlendWhy().
 		std::atomic<bool> g_bBlendActive{ false };
+		std::atomic<bool> g_bV35Active{ false };   // V3.5's motion passes really run (Interpolator::v3MotionActive())
 		std::atomic<const char *> g_pszBlendWhy{ "" };
 		// Debug view: the row's index of the view the library draws now (0 = none), and whether the wanted one was refused.
 		std::atomic<int> g_nDebugViewActive{ 0 };
@@ -459,6 +460,7 @@ namespace fghost
 			// The V3 word (PackV3) last applied, for the same reason. 0 = none applied (a real V3 word is never 0:
 			// the occlusion softness and unsure sensitivity start at 25 hundredths).
 			uint64_t ulAppliedV3 = 0;
+			int nV35Logged = 0;     // V3.5's state last logged, see PublishBlend()
 			int nBlendLogged = 0;   // the blend state last logged (variant * 4 + state), see PublishBlend()
 			// The Debug view index (FrameGenDebug.h) last handled by ApplyDebugView(): accepted OR refused, so a refused view
 			// is not retried every frame (the next change of the row retries). 0 = Off, which init() starts with.
@@ -603,6 +605,7 @@ namespace fghost
 			// V3 Hybrid: 0 = off (V3's own rule), 1..kHybridBlendMax = the active variants (HybridVariants.h; the V3 word already limits it). Runtime; the library
 			// falls back to the rule for formats other than Rgba8/Bgra8 and while v3DetailSplit is on.
 			s.v3Blend = uint8_t( c.v3Blend >= 1 && c.v3Blend <= kHybridBlendMax ? c.v3Blend : 0 );
+			s.v3Motion = c.v3Motion == 1 ? framegen::kV3MotionV35 : framegen::kV3MotionClassic;   // V3.5; the library ignores it under every other version
 			return s;
 		}
 
@@ -627,6 +630,19 @@ namespace fghost
 				// V3 honours flowScale (1, 2, 4), so it is checked with the Quality row's own value, which
 				// EnsureReady() leaves alone for V3.
 				pszWhy = H.interp.settingsError( sCheck );
+				// V3.5 refused (a library without it): plain V3 / V3 Hybrid with the same settings, logged once per change.
+				if ( pszWhy && bV3 && s.v3Motion != 0 )
+				{
+					sCheck.v3Motion = framegen::kV3MotionClassic;
+					if ( !H.interp.settingsError( sCheck ) )
+					{
+						fg_log.warnf( "frame generation: V3.5 refused, Motion version 3 runs with its own motion detection: %s", pszWhy );
+						s.v3Motion = framegen::kV3MotionClassic;
+						pszWhy = nullptr;
+					}
+					else
+						sCheck.v3Motion = s.v3Motion;
+				}
 				// The Motion guard (a chosen Guard) needs what V2 needs. A device that runs V3 but not
 				// V2 keeps V3 with the guard Off, logged only: the optional guard must not cost V3 or leave a lasting Status note.
 				if ( pszWhy && bV3 && s.v3Guard != framegen::V3Guard::Off )
@@ -733,10 +749,12 @@ namespace fghost
 			H.uAppliedReach = 0;
 			H.ulAppliedV3 = 0;
 			H.nBlendLogged = 0;
+			H.nV35Logged = 0;
 			H.nDebugViewHandled = 0;
 			g_nDebugViewActive.store( 0, std::memory_order_relaxed );
 			g_bDebugViewRefused.store( false, std::memory_order_relaxed );
 			g_bBlendActive.store( false, std::memory_order_relaxed );
+			g_bV35Active.store( false, std::memory_order_relaxed );
 			g_pszBlendWhy.store( "", std::memory_order_relaxed );
 			g_uGate.fetch_and( ~kGateLive, std::memory_order_relaxed );
 			g_flLastPairGpuMs.store( -1.0f, std::memory_order_relaxed );
@@ -839,6 +857,15 @@ namespace fghost
 			}
 			g_bBlendActive.store( bActive, std::memory_order_relaxed );
 			g_pszBlendWhy.store( pszWhy, std::memory_order_relaxed );
+			// V3.5: logged on a change of state (0 not asked, 1 running, 2 asked but not running).
+			const bool bV35 = c.motion == Motion::V3 && c.v3Motion == 1 && H.interp.v3MotionActive();
+			g_bV35Active.store( bV35, std::memory_order_relaxed );
+			const int nV35 = c.motion != Motion::V3 || c.v3Motion != 1 ? 0 : bV35 ? 1 : 2;
+			if ( nV35 != H.nV35Logged )
+			{
+				H.nV35Logged = nV35;
+				fg_log.infof( "frame generation: Motion version 3 motion detection %s", nV35 == 1 ? "V3.5" : nV35 == 2 ? "V3.5 requested but not active (V3's own runs)" : "V3 (own)" );
+			}
 			const int nKey = nSel * 4 + ( nSel == 0 ? 0 : bActive ? 1 : 2 );
 			if ( nKey != H.nBlendLogged )
 			{
@@ -1054,7 +1081,16 @@ namespace fghost
 					// Runtime change: every record after this uses the new values; nothing
 					// in flight changes, so no wait. A refusal keeps the old settings; it is
 					// logged once and not retried every frame (the next change retries).
-					if ( !H.interp.setSettings( want ) )
+					// V3.5's pipelines are created here the first time (about 275 ms with an empty shader cache): if that fails, retry as plain
+					// V3 / V3 Hybrid so frame generation never ends up on a refused request; the status shows `V3.5(off)`.
+					bool bSet = H.interp.setSettings( want );
+					if ( !bSet && want.v3Motion != 0 )
+					{
+						fg_log.errorf( "frame generation: the library could not create V3.5 (its pipelines); running Motion version 3 with its own motion detection" );
+						want.v3Motion = framegen::kV3MotionClassic;
+						bSet = H.interp.setSettings( want );
+					}
+					if ( !bSet )
 					{
 						if ( want.motionVersion == framegen::MotionVersion::V2 )
 							g_pszMotionNote.store( "the library could not create V2", std::memory_order_relaxed );
@@ -2125,6 +2161,7 @@ namespace fghost
 	}
 
 	bool BlendActive() { return g_bBlendActive.load( std::memory_order_relaxed ); }
+	bool V35Active() { return g_bV35Active.load( std::memory_order_relaxed ); }
 	const char *BlendWhy() { return g_pszBlendWhy.load( std::memory_order_relaxed ); }
 	int  DebugViewActive() { return g_nDebugViewActive.load( std::memory_order_relaxed ); }
 	bool DebugViewRefused() { return g_bDebugViewRefused.load( std::memory_order_relaxed ); }
@@ -2179,7 +2216,10 @@ namespace fghost
 		// Motion blur's own Motion version has no V3 Hybrid entry: its V3 is plain V3, whatever Frame generation's row says
 		// (the other V3 settings are shared; the blend is Frame generation's choice only).
 		if ( blurCfg.enabled && blurCfg.useOwnInterp )
+		{
 			cfg.v3Blend = 0;
+			cfg.v3Motion = 0;
+		}
 		const bool bLagOn = ( g_uLag.load( std::memory_order_relaxed ) & kLagEnabledBit ) != 0;
 
 		// ritz_fg_capture (FrameGenCapture.h): idle = this one relaxed load. Otherwise it times out, ends on a
@@ -2245,6 +2285,8 @@ namespace fghost
 				env.pszMotionEffective = MotionText( sInEffect.motionVersion );
 				env.nBlend = cfg.motion == Motion::V3 ? cfg.v3Blend : 0;
 				env.bBlendActive = g_pHost->interp.v3BlendActive();
+				env.nV35 = cfg.motion == Motion::V3 ? cfg.v3Motion : 0;
+				env.bV35Active = g_pHost->interp.v3MotionActive();
 				env.nView = DebugViewActive();   // what the library really draws (0 when refused)
 				capture::Start( env, ulNowNs, ulCaptureKey );
 			}
