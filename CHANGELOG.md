@@ -12,6 +12,8 @@ All notable user-facing changes, newest first. Categories:
 ### Added
 - **Appearance**: new slider "Outside margin" sets how much space is left around the
   settings window.
+- **True Sens**: new Input area that records your own mouse sensitivity once and gives
+  you the same feel in every game, with a calculator for the in-game value.
 
 ### Removed
 - **Learned motion**: the "Learned net" choice is gone; Learned always uses its default

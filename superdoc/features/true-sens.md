@@ -10,10 +10,10 @@ Storage in `src/Config/` (`TrueSensGlobal`, `GameTrueSens`, global.json only).
 Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
-> **Status (2026-11-25): the core only (step I1 of 5).** Maths, recorder, storage,
-> the hook, the tick, the interface and the debug commands exist and are tested.
-> There is no settings area yet (I2), no on-screen hint (I3) and no reference
-> picture (I4); until then the feature is driven with the debug commands below.
+> **Status (2026-11-25): the core (I1) and the settings area (I2).** Maths, recorder,
+> storage, the hook, the tick, the interface, the debug commands and the Shell area
+> exist and are tested. There is no on-screen hint while the window is closed (I3) and
+> no reference picture (I4) yet.
 
 ## Why this exists
 
@@ -229,7 +229,7 @@ game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GameCounts360`,
 
 ## Debug commands
 
-Reached with `gamescopectl`, for headless tests (no area exists yet). They queue their
+Reached with `gamescopectl`, for headless tests (the area now drives the same interface). They queue their
 text and `TrueSens_Tick()` runs it on the compositor thread (a ConCommand runs on the
 wlserver thread, which must not touch the config mirror), then prints the status:
 
@@ -245,7 +245,66 @@ Inject movement with `wlserver_debug_mouse_motion "<dx> <dy> [count]"` (enters a
 
 ## Area (I2)
 
-Not built yet.
+`src/Overlay/TrueSensArea.cpp` (`TrueSens_RegisterArea`, declared in `TrueSens.h`), area id
+`system.true_sens`, label **True Sens**, rail group INPUT after Null binds (D20). Summary
+`on` / `off` (this game's switch); badge `per game`, or `shared` while the session has no
+identified game (the values live outside every profile, so the default profile badge would
+lie). Every row is a registry row: it is in the sheet, the Inspector and (when it has a
+setter) the Launcher's search. Row ids are `true_sens.<name>`.
+
+| Group | Row id | Kind | Label | Notes |
+| --- | --- | --- | --- | --- |
+| Info | `tip` | Facts | Tip | "A low in-game sensitivity works best"; the full D8 sentence is the help. |
+| Info | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
+| This game | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
+| This game | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
+| This game | `record_game` | Action | Record game sensitivity | verb "Record"; hidden while recording. |
+| This game | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
+| This game | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21). |
+| True sensitivity | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
+| True sensitivity | `low` / `high` | Facts | Low / High | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
+| True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | hidden while recording. |
+| Recording | `stop` | Action | Stop recording | verb "Stop"; shown only while recording (D21). |
+| Recording | `recording` | Facts | Recording | "Low, 1234 counts so far"; shown only while recording. |
+| Recording | `outcome` | Facts | Last recording | Short form of `TrueSens_LastOutcome()`; the full text is a Details line in the Inspector; shown after a recording or a refusal. |
+| Calculator | `ingame` | Text | In-game value used | The typed in-game value (D17). |
+| Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
+
+**Record closes the window (D6).** A record Action calls `TrueSens_StartRecording( target )`
+and, only when that succeeds, `SettingsOverlay_SetVisible( false )` (the precedent of the
+Friends area's Join). The player turns in the game, opens the settings again and presses
+**Stop recording** (`TrueSens_StopRecording()`); nothing stops by itself. While the window is
+open the mouse never reaches the recorder (the hook sits behind the overlay's capture gate).
+A refusal (Zoom active, already recording) keeps the window open: the core has already put
+its reason into `TrueSens_LastOutcome()`, so the **Last recording** row shows it, with no
+second mechanism. The Launcher: a record Action is a row the palette finds, but picking a
+row there only jumps the Shell to it (`PaletteJump`); an Action is never run from the
+palette, so nothing closes twice and the player presses it in the Shell.
+
+**Why the outcome row is short.** A Facts value is one right-bound line in the control zone,
+the core's outcome is one or two sentences. The row shows the first clause ("Low stored: 15.9
+cm per 360°", "No mouse movement was seen"), cut at the first parenthesis or full stop, and a
+Details line (`Live`) carries the whole text in the Inspector.
+
+**Why the multiplier row has its own wording.** `TrueSens_MultiplierText()` says "not
+recorded" whenever no multiplier acts, also while the switch is off, which reads wrong
+(D21). The row says what is missing, in the order the player fixes it: the game first, then
+the chosen Low or High.
+
+**The calculator (D9, D17).** The in-game field is a Text row (no decimal field exists). The
+setter does the checking: `0.35` and `0,35` are accepted, spaces ignored, anything that is
+not a positive finite number (also `abc`, `-1`, `0`) is refused with the message "Enter a
+number above 0" drawn beside the field (`StatusWhen`), and the stored value stays as it was.
+An empty field clears the value. `Entry::Validate()` is declared too, but the registry
+only stores it: nothing in the Shell reads it, so a rejection cannot rely on it. The result
+row is for the game's own chosen Low/High, not a second selector; its help says to switch
+True Sens off for the game, or record it again, after setting the value in the game.
+
+**Info text (D8).** There is no plain-text row kind, so the tip is a Facts row at the top
+with a short value and the full sentence as its help.
+
+**Icon.** A ring with a centred dot and an arrowhead on its top rim (a turn), built from the
+glyph set's own primitives (`Icons.cpp`).
 
 ## Recording hint (I3)
 
@@ -264,3 +323,10 @@ ignored, below the floor refused with a reason, spoiled by Zoom, restart), the f
 helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
 unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
+
+The area (`TrueSensArea.cpp`) is not linked into the unit binary (like every area's
+`*_RegisterArea`); its pieces are covered by the id/rail census in
+`tests/test_overlay_ui.cpp` (area id list, rail-group table, per-group order, icon census)
+and by the headless runs described in the step's report: the Shell driven with
+`overlay_e2_select` / `overlay_e2_key` / `overlay_e2_set`, screenshots, and the recorder
+and calculator numbers read back through `overlay_e2_get` and `global.json`.

@@ -377,6 +377,24 @@ namespace gamescope::ui
 			Bar( 16.0f, 10.0f, 20.0f, 14.0f ),
 			Poly( { 10.8f, 10.2f }, { 13.2f, 12.0f }, { 10.8f, 13.8f } ) } },
 
+		{ "system.true_sens", 3, {
+			// A TURN: a plain ring with a small solid dot at its centre and an
+			// arrowhead sitting on the ring's top, pointing clockwise -- one
+			// full 360 degree turn aimed at a spot, which is what a recording
+			// is. Freehand (2026-11-25), later than the mockup like every
+			// glyph after system.zoom.
+			//
+			// Read against its nearest neighbours: system.crosshair is the same
+			// ring but with four ARMS through its edge and an open centre, and
+			// system.changelog is a ring with a dot near the TOP and a stem;
+			// here the dot is centred, there is no arm or stem, and the one
+			// open chevron on the rim is the only thing that breaks the ring.
+			// The dot is a Bar (FillRect) like the About glyph's (the set's own
+			// "small solid mark"); the chevron is an open Polyline.
+			Circ( 12.0f, 12.0f, 8.0f ),
+			Bar( 10.8f, 10.8f, 13.2f, 13.2f ),
+			IconShape{ IconOp::Polyline, 3, 0.0f, { { 10.0f, 1.6f }, { 13.2f, 4.0f }, { 10.0f, 6.4f } } } } },
+
 		{ "system.friends", 2, {
 			// A PERSON: a head over a pair of shoulders. Freehand
 			// (2026-09-08), like the crosshair and resolution glyphs before

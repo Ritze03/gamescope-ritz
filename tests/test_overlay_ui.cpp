@@ -1937,6 +1937,8 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twentieth (2026-09-27): null binds / WASD SOCD cleaning. See
 		// NullBinds.cpp and Icons.cpp.
 		"system.null_binds",
+		// 2026-11-25: True Sens, INPUT after Null binds. See TrueSensArea.cpp.
+		"system.true_sens",
 		// The twenty-first (2026-09-27): input.general -- force grab cursor
 		// (moved out of display.general) and force grab keyboard, INPUT's
 		// own General area. See PanelInput.cpp and Icons.cpp.
@@ -2184,6 +2186,7 @@ TEST_CASE( "rail: the eight groups are in the order the request named", "[overla
 		{ "input.general",         ui::RailGroup::Input },
 		{ "system.autoclicker",    ui::RailGroup::Input },
 		{ "system.null_binds",     ui::RailGroup::Input },
+		{ "system.true_sens",      ui::RailGroup::Input },
 		// AUDIO (2026-10-22): Mixer (volume only) and Effects (the compressor),
 		// between INPUT and MISC; MISC is Friends alone.
 		{ "audio.mixer",           ui::RailGroup::Audio },
@@ -2346,7 +2349,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"display.frame_limiter", "display.hdr", "image.shaders",
 		"image.framegen", "image.motionblur", "image.lagbuffer",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
-		"input.general", "system.autoclicker", "system.null_binds",
+		"input.general", "system.autoclicker", "system.null_binds", "system.true_sens",
 		"audio.mixer", "audio.effects", "system.friends",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",

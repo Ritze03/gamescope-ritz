@@ -60,6 +60,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
+#include "Overlay/TrueSens.h"
 #include "Overlay/PanelFrameGen.h"
 #include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelLagBuffer.h"
@@ -939,6 +940,9 @@ namespace gamescope::ui::shell
 			// INPUT areas that change what the game receives without a
 			// visible surface of their own. See Overlay/NullBinds.h.
 			NullBinds_RegisterArea( reg );
+			// True Sens (2026-11-25): the same hand distance per 360 degree turn
+			// in every game; INPUT, after Null binds. See Overlay/TrueSens.h.
+			TrueSens_RegisterArea( reg );
 			// 2026-11-08: Compatibility (id system.diagnostics, was Diagnostics),
 			// first in OTHER: Compatibility, Log, About.
 			PanelDiagnostics_RegisterArea( reg );

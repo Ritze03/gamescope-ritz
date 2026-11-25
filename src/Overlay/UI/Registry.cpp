@@ -1090,6 +1090,7 @@ namespace gamescope::ui
 			{ "input.general",         RailGroup::Input },
 			{ "system.autoclicker",    RailGroup::Input },
 			{ "system.null_binds",     RailGroup::Input },
+			{ "system.true_sens",      RailGroup::Input },
 			// ---- AUDIO -- 2026-10-22: the game's sound. Mixer is volume
 			// only; Effects holds the compressor/limiter (Dynamics) that
 			// used to be a group inside the Mixer. A Visualizer joins later.
