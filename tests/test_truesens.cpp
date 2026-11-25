@@ -782,3 +782,22 @@ TEST_CASE( "truesens: reference picture pair layout", "[truesens]" )
 		CHECK_THAT( p.side / ( kReferenceHeightFraction * h ), Catch::Matchers::WithinAbs( 2.0, 0.03 ) ); // 2x
 	}
 }
+
+TEST_CASE( "truesens: LookFor, what shows under the hint plate", "[truesens]" )
+{
+	using namespace gamescope::truesens;
+	for ( bool bFrozen : { false, true } )
+		for ( bool bFailed : { false, true } )
+		{
+			CHECK( LookFor( Phase::Idle, bFrozen, bFailed ) == PairLook::Nothing );
+			CHECK( LookFor( Phase::Finished, bFrozen, bFailed ) == PairLook::Nothing );
+		}
+	// armed: the live view alone (empty left half); no empty box when it cannot be built
+	CHECK( LookFor( Phase::Armed, false, false ) == PairLook::LiveOnly );
+	CHECK( LookFor( Phase::Armed, false, true ) == PairLook::Nothing );
+	// recording
+	CHECK( LookFor( Phase::Recording, false, false ) == PairLook::LiveOnly );
+	CHECK( LookFor( Phase::Recording, true, false ) == PairLook::Pair );
+	CHECK( LookFor( Phase::Recording, true, true ) == PairLook::FrozenAlone );
+	CHECK( LookFor( Phase::Recording, false, true ) == PairLook::Nothing );
+}

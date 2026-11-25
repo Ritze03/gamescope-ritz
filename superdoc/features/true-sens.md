@@ -343,7 +343,7 @@ button moved around while recording.)
 
 1. A Record button **arms** (`TrueSens_StartRecording( Target )`) and closes the Shell.
    Refused while Zoom is active or a recording is armed/running (the Shell stays open and the
-   reason is in "Last recording"). While armed no movement is summed and no picture exists.
+   reason is in "Last recording"). While armed no movement is summed and no frozen picture exists (the live view of the picture pair is already shown, see "Reference picture").
 2. The **first counting left click** starts the recording: the sums start at zero at that
    moment and the reference picture is taken then.
 3. The **second counting left click** ends it: the tick evaluates and stores exactly as
@@ -596,7 +596,8 @@ centre of the output says what is happening: two lines on a dark plate.
   `Recording game sensitivity`.
 - Line 2 (light text colour) by phase: armed, `Aim at a spot you can find again, then left
   click`; recording, `Turn once around (360°) to the same spot, then left click again`. The
-  plate is as wide as its text, so it changes width at the first click. The lines are built
+  plate is as wide as its text, so it changes width at the first click; its height is the same in both
+  phases (two lines, same fonts), so the picture pair under it stays at the same pixels. The lines are built
   by the pure `truesens::HintLines( target, phase )` (unit-tested without ImGui); the chord
   parameters of the first flow (the Shell's key, the reserved chord) are gone, since nothing
   names a key any more.
@@ -661,12 +662,45 @@ left", and 2x makes a small turn error visible.
 
 **The picture is twice as wide as high, in two square halves of side S.** The left half is the
 frozen picture of the starting point, the right half is a live view of the middle of the
-screen; both show the same centre square of the game picture, 2x. It appears with the **first
-left click** (the recording starts, D24; not at Record: while armed the player is still aiming
-and nothing is held yet, so only the hint plate shows). If the frozen capture fails or has not
-arrived yet the hint stays alone: no live half without the frozen half (a lone live view has
-nothing to compare with). The live request starts in the same paint in which the frozen
-picture first appears.
+screen; both show the same centre square of the game picture, 2x. The live half appears as
+soon as the recording is **armed** (2026-11-25), at the place it has during the turn, so nothing
+moves at the first click; the frozen half appears with the **first left click** (the recording
+starts, D24), once the capture has arrived. `Why:` the owner: *"For True Sens, it should
+already show the zoomed live view, when the first point hasnt been set (just so the starting
+point can be accurately set aswell."* This replaces the earlier rule "no live half without the
+frozen half".
+
+What is drawn below the plate is one pure decision, `truesens::LookFor( phase, frozenShown,
+liveFailed )` -> `PairLook` (`TrueSens.h`, unit-tested row by row), used by the HUD drawing and
+the live request:
+
+| Phase | Frozen picture | Live view builds | Drawn |
+| --- | --- | --- | --- |
+| Armed | none yet | yes | `LiveOnly`: pair frame, left half empty, right half live |
+| Armed | none yet | no | nothing (hint plate alone, no empty box) |
+| Recording | not arrived / capture failed | yes | `LiveOnly` (the live half does not vanish at the click) |
+| Recording | shown | yes | `Pair`: frozen left, live right |
+| Recording | shown | no | `FrozenAlone`: the frozen square, centred |
+| Recording | not shown | no | nothing |
+
+Idle and Finished: nothing. `liveFailed` = `g_nPlacedZoomFailure != 0` or Zoom active.
+- *The empty left half* is the hint plate's own fill (same colour and alpha) inside the pair's
+  border, divider at the first column of the right half as always, no centre mark on it (the
+  mark is on the right half). The frozen picture replaces the fill when it arrives; border,
+  divider and the right half stay at exactly the same pixels.
+- *Same pixels across the click:* `ReferencePair()` takes the plate's bottom; the plate has the
+  same height armed and recording (same two-line layout and fonts), so the rectangle is identical.
+  (Only on an output so narrow that the text-fit shrink differs between the two texts would the
+  scale, hence the top, differ; not handled.) The plate's width changes at the click, that is fine.
+- *The live source part while no frozen picture exists* is the crop the capture will have:
+  `ReferenceCrop()` on the output size (the capture is at the game's render size, so this is exact
+  when that equals the output and otherwise differs by at most the rounding of one odd-sized crop,
+  a fraction of a texel), so the live source barely shifts when the picture arrives.
+- *The failure flag* is reset when a recording is armed (and on cancel / finish) and is sticky
+  through the click: `TrueSens_ReferenceRequest()` keeps it (it used to reset it with the held
+  picture). Armed + failure: only the plate, nothing requested.
+- *Cost:* the live half forces the full composite (`bNeedsDestinationBlend`) already while armed,
+  which can last as long as the player aims; the same cost as during the turn.
 
 **Geometry: one pure helper, `truesens::ReferencePair( outW, outH, plateBottom, scale )`**
 (`TrueSens.h`, unit-tested), used by the HUD drawing AND by the live request, so the halves can
@@ -707,7 +741,7 @@ thing, with no relation to the output size to get out of step.
   fractions of the base texture: centre = the frozen crop's centre (so the half-texel offset of
   an odd-sized crop in an even picture is matched exactly), height = the crop's height fraction.
   No outline ring (the HUD border and divider are the only edges: no doubled or mismatched edge),
-  no factor, no circle. `bNeedsDestinationBlend` is set only while the live half is requested,
+  no factor, no circle. `bNeedsDestinationBlend` is set only while the live half is requested (armed or recording),
   exactly as Zoom does (the base must be IN the composite).
 - *Frame generation:* the projection is built after the frame-generation substitution, so
   the live half shows the generated frame like the rest of the picture (the same as Zoom);
@@ -731,7 +765,7 @@ Zoom's own state is touched:
 slot or no texture) the right half would be an empty hole. `vulkan_composite()` stores the
 outcome of every placed request in `g_nPlacedZoomFailure` (0 built; 1 no usable base or no
 texture; 2 no free layer slot) and calls `force_repaint()` when it changes. The HUD reads it each
-paint: non-zero means it draws ONLY the frozen square, centred (`ReferenceSingleX()`), with border
+paint: non-zero means (see the table above) it draws ONLY the frozen square, centred (`ReferenceSingleX()`), with border
 and mark, no divider and no empty half, and the filler requests nothing, so the full composite is
 no longer forced. It starts optimistic (0, reset by every `TrueSens_ReferenceClear()`), so the
 normal case never flickers on the first frame; one `truesens: live view not built (<reason>)`
@@ -871,6 +905,8 @@ pixels and an even side over a sweep of outputs and plate heights, the pair 2:1 
 output, the shrink rule, the no-room rule, a narrow output, the single square's centring, 2x
 against the crop's fraction) cover the pure helpers; capture, upload, drawing and the live half
 are covered by the headless screenshots only.
+
+`truesens: LookFor, what shows under the hint plate` covers every row of the table in "Reference picture".
 
 `truesens: recording hint lines` covers `HintLines()` (each target, armed and recording text,
 Idle in either argument), `truesens: the Recording row always has a value` covers
