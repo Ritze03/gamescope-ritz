@@ -10,10 +10,10 @@ Storage in `src/Config/` (`TrueSensGlobal`, `GameTrueSens`, global.json only).
 Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
-> **Status (2026-11-25): the core (I1), the settings area (I2) and the recording hint
-> (I3).** Maths, recorder, storage, the hook, the tick, the interface, the debug commands,
-> the Shell area and the hint at the top of the screen exist and are tested. There is no
-> reference picture (I4) yet.
+> **Status (2026-11-25): the core (I1), the settings area (I2), the recording hint (I3)
+> and the reference picture (I4).** Maths, recorder, storage, the hook, the tick, the
+> interface, the debug commands, the Shell area, the hint at the top of the screen and the
+> frozen picture under it exist and are tested.
 
 ## Why this exists
 
@@ -351,16 +351,102 @@ is about 27 % of the width at 1080p, far from the centre the player aims at. If 
 anchored top-centre the plate starts below the readout's bottom edge (same formula as the stats
 block's top-left rule); at any other anchor the readout (default top-right) does not meet it.
 
-**Room for the reference picture (I4).** `TrueSens_DrawHud()` returns the plate's bottom edge in
-px (0 = nothing drawn). The picture's slot is directly below: centred on the plate's x, top at
-`bottom + 8 * scale`, no wider than the plate. Drawn from the same function, into the same draw
-list.
+**The reference picture** is drawn by the same function into the same draw list, directly below
+the plate (see "Reference picture (I4)"). `TrueSens_DrawHud()` returns the plate's bottom edge in
+px (0 = nothing drawn).
 
 Not checked: a real HDR (PQ) client; a 10-bit SDR client was.
 
 ## Reference picture (I4)
 
-Not built yet.
+When a recording starts, the middle of the game picture is captured once and shown, frozen,
+under the hint plate until the recording ends, so the player can compare it with what is in the
+middle of the screen now and find the spot again (D6, D16). Where it cannot be taken the hint
+stays alone: no placeholder box, one `truesens:` log line with the reason. A missing picture
+never delays or breaks the recording.
+
+**Capture: an in-memory screenshot.** `TrueSens_StartRecording()` (success only) calls
+`TrueSens_ReferenceRequest()` (`TrueSensHud.cpp`), which queues one
+`CScreenshotManager::TakeScreenshot()` of type `BASE_PLANE_ONLY` with the new field
+`GamescopeScreenshotInfo::pfnMemory` set (`steamcompmgr_shared.hpp`). `paint_all()` serves it in
+the next paint through the ordinary screenshot block (`steamcompmgr.cpp`), which for a focused
+game repaints the game window alone at the game's render size (`bRenderSizeScreenshot`), so the
+Shell that is just closing, the HUD and the hint are never in it. With `pfnMemory` the block:
+- captures 8-bit (`DRM_FORMAT_XRGB8888`, B8G8R8A8) whatever the path's extension would say;
+- after `vulkan_wait()` calls `pfnMemory( pixels, w, h, pitch, ns, nullptr )` **synchronously on the
+  compositor thread** (the pixels are only valid during the call), then does not start the
+  encoder thread;
+- on any failure calls it with `pixels == nullptr` and a reason: no focused game window, no free
+  capture image, capture failed.
+
+*Side effects of a user screenshot, all skipped:* the PNG/AVIF/NV12 file (and the "Unsupported
+extension" error an empty path would give), the encoder thread, the "Screenshot saved" log line,
+`gamescope_control_send_screenshot_taken` (the Wayland "screenshot taken" event that Steam turns
+into its notification and message; it is sent only when `bWaylandRequested`, which this request
+never sets) and the X11 screenshot-atom deletion (only when `bX11PropertyRequested`). The block
+has no sound, clipboard or notification code of its own. Checked headless: no file anywhere, no
+log line, no toast in the screenshots.
+
+*Limits of the slot:* `CScreenshotManager` holds ONE pending request, so a user screenshot
+requested in the same frame as the Record press is replaced by it (or the reverse: this capture
+is then never served and the hint stays alone). A request is also dropped silently if
+`paint_all()` returns early before the block.
+
+**Pixels to screen (all on the compositor thread):**
+1. `paint_all()` screenshot block: composite into a pooled linear texture, wait.
+2. `Deliver()` (`TrueSensHud.cpp`, the callback): accepts only the answer to the newest request
+   while a recording runs (a request counter, bumped by every request and by `Clear`, drops stale
+   answers); crops with `truesens::ReferenceCrop()`; reduces by a whole factor with a box average
+   if the crop is wider than the 768 px texture (`ReferenceDownscale()`, 4K gives x2); converts to
+   RGBA into the texture's CPU pixels (alpha 255; a G of 0 beside non-zero R/B becomes 1, because
+   the HUD's inverted colour mode reads G == 0 as its marker); bumps the generation and calls
+   `force_repaint()` (an idle client would not paint again by itself).
+3. `TrueSens_DrawHud()` (HUD ImGui context): registers the texture in the current context once,
+   queues the upload rectangle (`ImTextureDataQueueUpload`), draws `AddImage`, border and mark.
+4. `RenderAndSubmit()` in `FpsDisplay.cpp` uploads (the backend's own `vkQueueWaitIdle`).
+
+**Crop and placement.** Crop = the centre 25 % x 25 % of the captured picture. Drawn at 25 % x 25 %
+of the output (the same scale as the live middle of the screen), centred horizontally, top at the
+plate's bottom edge + 8 px x scale. At 1080p that is y 98..368 (34 % of the height). If the bottom
+would come closer than 8 % of the height to the screen centre it shrinks keeping the aspect
+(`truesens::ReferenceDisplay()`, below 24 px high nothing is drawn). A 1 px accent border
+(`max( 1, scale )`, like the plate's) and a ring with a dark halo and a centre dot in the accent
+colour mark the picture's centre: the spot the player aimed at. No caption of its own: the plate's
+second line already says "to the same spot". Verified at 1280x720, 1920x1080 and 2560x1440.
+
+**Lifetime.** One `ImTextureData` (768 x 768 RGBA, 2.25 MB CPU and GPU) for the whole process,
+created by the first picture and reused by every later one as a sub-rectangle upload; it is not
+freed when a recording ends. `Why:` the backend only destroys a texture inside a rendered frame
+and the HUD layer draws no frame once nothing is on, so a free would hang until the next
+recording; one fixed texture cannot grow with the number of recordings. What follows a recording
+is `TrueSens_ReferenceClear()` (from `StopRecording()`, so also failed and Zoom-spoiled ones):
+the picture stops being drawn and a capture still on its way is forgotten. A new recording clears
+first, so the old picture never shows under the new hint. 20 start/stop cycles headless: RSS
+92404 -> 92452 kB, fds 75 -> 75, threads 18 -> 17, 21 pictures delivered.
+
+**Redraw.** The HUD layer is only re-rendered when `HashDrawData()` changes. `FpsDisplay.cpp`
+folds `TrueSens_ReferenceGeneration()` into the hash seed (xor with `Crosshair_RasterGeneration()`
+scaled by a large odd constant): a second picture under the same texture id adds no draw command,
+so without it the layer would keep the first picture.
+
+**Where there is no picture.**
+- No focused game window (also when the capture or a capture image is unavailable): hint only,
+  log `no reference picture: <reason>`. Driven headless only by a temporary forced switch
+  (removed): an unmapped X11 window stays focused in gamescope, and with no client at all no paint
+  happens, so the debug command never runs.
+- HDR content: the capture goes through the same LUT path as a PNG screenshot (the SDR set, since
+  the HDR set is chosen only for `.avif`), so it is tone-converted by the existing code and should
+  show; **not checked** with a real PQ client. 8-bit and 10-bit SDR were.
+- Frame generation: the repaint is of the game window alone (the real game frame, not a generated
+  one); checked with fixed 2x and an animated client: the picture shows a real frame.
+
+**Cost** (headless, 1080p, warm shader cache): the capture inside the paint takes 0.7..1.8 ms
+(measured around the screenshot block); the texture upload 0.9..1.4 ms. The first capture of a
+process took ~35 ms in two of the runs (pipeline and capture image created on first use) and
+~1.1 ms in the others. Once per Record press, while the settings window closes.
+
+**Not checked:** a real HDR client, a real "no focused window" state, a user screenshot racing
+the Record press.
 
 ## Tests
 
@@ -371,6 +457,11 @@ ignored, below the floor refused with a reason, spoiled by Zoom, restart), the f
 helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
 unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
+
+`truesens: reference picture crop` (even/odd sizes, centring, tiny pictures, every size stays
+inside, `ReferenceDownscale()`) and `truesens: reference picture display size` (1080p and 4K
+placement, shrinking when it would reach the centre, no room, wide aspect) cover the pure helpers;
+capture, upload and drawing are covered by the headless screenshots only.
 
 `truesens: recording hint lines` covers `HintLines()` (each target, the chord inserted, the
 reserved-chord fallback for an empty chord, Idle). The draw path (`TrueSensHud.cpp`) and the
