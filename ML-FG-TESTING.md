@@ -1,5 +1,9 @@
 # ML-FG-TESTING: Learned motion in gamescope-ritz
 
+> **Historical log.** Since 2026-11-25 Learned motion keeps only the net `e2v5`; the other
+> nets named below, the "Learned net" row and the `learned_net` setting no longer exist.
+> Current state: `superdoc/features/frame-generation-learned.md`.
+
 Branch `ml-fg-testing` (local only, based on master `c52a245`; not pushed, not merged).
 It integrates frame-gen-ritz's (FGR) opt-in `MotionVersion::Learned` (V1 with its motion
 search replaced by a small learned conv net). V1 and V2 stay the defaults; with Learned off
