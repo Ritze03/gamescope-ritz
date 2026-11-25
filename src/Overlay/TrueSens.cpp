@@ -98,7 +98,7 @@ namespace gamescope
 			const config::GameTrueSens gm = config::GetGameTrueSens( s_Key.key );
 			double dMult = 1.0;
 			if ( gm.enabled )
-				dMult = truesens::Multiplier( gm.counts_360, ChosenInches( g, gm ), g.dpi );
+				dMult = truesens::Multiplier( truesens::EffectiveCounts( gm.counts_360, gm.recorded_sens, gm.ingame_sens ), ChosenInches( g, gm ), g.dpi );
 			s_dMultiplier.store( dMult, std::memory_order_relaxed );
 			s_bScale.store( dMult != 1.0, std::memory_order_relaxed );
 		}
@@ -192,8 +192,8 @@ namespace gamescope
 			console_log.infof( "true_sens: key='%s' shared=%d enabled=%d profile=%s dpi=%d low_inches=%.4f high_inches=%.4f",
 				s_Key.key.c_str(), s_Key.shared ? 1 : 0, gm.enabled ? 1 : 0, gm.profile.c_str(), g.dpi,
 				(double)g.low_inches, (double)g.high_inches );
-			console_log.infof( "true_sens: counts_360=%.2f ingame_sens=%.4f multiplier=%.6f (%s) calc_ingame=%s low='%s' high='%s'",
-				(double)gm.counts_360, (double)gm.ingame_sens, TrueSens_Multiplier(), TrueSens_MultiplierText().c_str(),
+			console_log.infof( "true_sens: counts_360=%.2f ingame_sens=%.4f recorded_sens=%.4f multiplier=%.6f (%s) calc_ingame=%s low='%s' high='%s'",
+				(double)gm.counts_360, (double)gm.ingame_sens, (double)gm.recorded_sens, TrueSens_Multiplier(), TrueSens_MultiplierText().c_str(),
 				oCalc ? truesens::FormatFixed( *oCalc, 4 ).c_str() : "n/a",
 				TrueSens_LowText().c_str(), TrueSens_HighText().c_str() );
 			static const char *const kPhaseNames[] = { "idle", "armed", "recording", "finished" };
@@ -231,8 +231,16 @@ namespace gamescope
 					TrueSens_SetDpi( gamescope::Parse<int>( sVal ).value_or( truesens::kDefaultDpi ) );
 				else if ( a[ 1 ] == "ingame" )
 					TrueSens_SetIngameSens( (float)gamescope::Parse<double>( sVal ).value_or( 0.0 ) );
+				else if ( a[ 1 ] == "recorded" )
+				{
+					config::GameTrueSens gm = Game();
+					const double d = gamescope::Parse<double>( sVal ).value_or( 0.0 );
+					gm.recorded_sens = truesens::IsPositive( d ) ? (float)d : 0.0f;
+					s_ulIngameGeneration++;
+					SetGame( gm );
+				}
 				else
-					console_log.errorf( "true_sens_set: unknown field '%s' (enabled|profile|dpi|ingame)", a[ 1 ].c_str() );
+					console_log.errorf( "true_sens_set: unknown field '%s' (enabled|profile|dpi|ingame|recorded)", a[ 1 ].c_str() );
 			}
 			else if ( a[ 0 ] != "status" )
 				console_log.errorf( "true_sens: bad command '%s'", sLine.c_str() );
@@ -253,7 +261,7 @@ namespace gamescope
 
 		static ConCommand cc_true_sens_set(
 			"true_sens_set",
-			"Set a True Sens value: true_sens_set <enabled 0|1 | profile low|high | dpi N | ingame X>. "
+			"Set a True Sens value: true_sens_set <enabled 0|1 | profile low|high | dpi N | ingame X | recorded X>. "
 			"Through gamescopectl the arguments must be ONE quoted argument: gamescopectl true_sens_set \"dpi 800\".",
 			[]( std::span<std::string_view> args ) { QueueCmd( "set", args ); } );
 
@@ -284,10 +292,9 @@ namespace gamescope
 			const config::TrueSensGlobal g = config::GetTrueSensGlobal();
 			config::GameTrueSens gm = Game();
 			gm.counts_360 = (float)r.counts;
-			// The typed in-game value belongs to the recording it was typed for: with a
-			// new counts_360 the old number would give a wrong result, so the calculator
-			// asks for it again (a failed recording returned above and changes nothing).
-			gm.ingame_sens = 0.0f;
+			// The value the game is set to now is the one it was recorded at (0 = none
+			// entered); ingame_sens stays, the player keeps it up to date.
+			gm.recorded_sens = gm.ingame_sens;
 			s_ulIngameGeneration++;
 			if ( target == Target::Low || target == Target::High )
 			{
@@ -584,6 +591,9 @@ namespace gamescope
 	{
 		config::GameTrueSens gm = Game();
 		gm.ingame_sens = truesens::IsPositive( flValue ) ? flValue : 0.0f;
+		// A value typed after a recording that has none is the value it was made at.
+		if ( gm.ingame_sens > 0.0f && gm.counts_360 > 0.0f && !( gm.recorded_sens > 0.0f ) )
+			gm.recorded_sens = gm.ingame_sens;
 		s_ulIngameGeneration++;
 		SetGame( gm );
 	}
@@ -591,6 +601,11 @@ namespace gamescope
 	uint64_t TrueSens_IngameGeneration()
 	{
 		return s_ulIngameGeneration;
+	}
+
+	float TrueSens_GetRecordedSens()
+	{
+		return Game().recorded_sens;
 	}
 
 	double TrueSens_GameCounts360()
@@ -639,7 +654,7 @@ namespace gamescope
 		EnsureLoaded();
 		const config::TrueSensGlobal g = config::GetTrueSensGlobal();
 		const config::GameTrueSens gm = config::GetGameTrueSens( s_Key.key );
-		return truesens::IngameSensForTarget( gm.ingame_sens, gm.counts_360, ChosenInches( g, gm ), g.dpi );
+		return truesens::IngameSensForTarget( gm.recorded_sens, gm.counts_360, ChosenInches( g, gm ), g.dpi );
 	}
 
 	std::string TrueSens_LowText()
@@ -654,7 +669,11 @@ namespace gamescope
 
 	std::string TrueSens_GameText()
 	{
-		return truesens::FormatCounts360( TrueSens_GameCounts360() );
+		std::string s = truesens::FormatCounts360( TrueSens_GameCounts360() );
+		const float fl = TrueSens_GetRecordedSens();
+		if ( TrueSens_GameCounts360() > 0.0 && fl > 0.0f )
+			s += " at " + truesens::FormatTrimmed( fl );
+		return s;
 	}
 
 	std::string TrueSens_MultiplierText()

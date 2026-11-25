@@ -75,13 +75,7 @@ namespace gamescope
 			const float fl = TrueSens_GetIngameSens();
 			if ( !( fl > 0.0f ) )
 				return {};
-			// Trim trailing zeros: 0.3500 -> 0.35, 1.0000 -> 1.
-			std::string t = truesens::FormatFixed( fl, 4 );
-			while ( t.back() == '0' )
-				t.pop_back();
-			if ( t.back() == '.' )
-				t.pop_back();
-			return t;
+			return truesens::FormatTrimmed( fl );
 		}
 
 		void SetIngameText( const std::string &s )
@@ -144,16 +138,15 @@ namespace gamescope
 
 		std::string CalcLine()
 		{
-			if ( const std::string s = MissingText(); !s.empty() )
-				return s;
-			if ( !( TrueSens_GetIngameSens() > 0.0f ) )
-				return "Enter the in-game value";
+			// The player's order: the value first, then the recording.
+			if ( !( TrueSens_GameCounts360() > 0.0 ) )
+				return TrueSens_GetIngameSens() > 0.0f ? "Record the game first" : "Enter the in-game value";
+			if ( !( ChosenInches() > 0.0 ) )
+				return std::string( "Record " ) + ChosenName() + " first";
 			const std::optional<double> d = TrueSens_CalcIngameSens();
 			if ( !d )
 				return "Enter the in-game value";
-			char buf[32];
-			std::snprintf( buf, sizeof( buf ), "%.4g", *d );
-			return buf;
+			return truesens::FormatTrimmed( *d );
 		}
 
 		// "None" / "Low, waiting for the first click" / "Low, 3120 counts so far": always a
@@ -262,6 +255,20 @@ namespace gamescope
 			.DisabledUnless( kNotRecording, kRunningReason )
 			.Keywords( "low high true sensitivity choose" );
 
+		a.Group( "Game setup" );
+		a.GroupColumn( 0 );
+
+		a.Text( "true_sens.ingame", "In-game sensitivity",
+		        ui::AnyBind::Of<std::string>( []{ return IngameText(); },
+		                                      []( std::string s ) { SetIngameText( s ); } ) )
+			.Help( "What the game's sensitivity is set to right now. Enter it before you record. If you "
+			       "change it in the game later, enter the new value here; no new recording is needed. "
+			       "Numbers with a dot or a comma both work." )
+			.Validate( ValidateIngame )
+			.DisabledUnless( kNotRecording, kRunningReason )
+			.StatusWhen( []{ return IngameStatus(); } )
+			.Keywords( "in-game sensitivity value number calculator" );
+
 		a.Action( "true_sens.record_game", "Record game sensitivity", "Record", []{ Record( Target::Game ); } )
 			.Help( kRecordHelp )
 			.DisabledUnless( kNotRecording, kRunningReason )
@@ -271,6 +278,13 @@ namespace gamescope
 			.Help( "The mouse movement one full turn takes in this game at its current in-game "
 			       "sensitivity, as you recorded it. Read-only." )
 			.DisabledUnless( kNotRecording, kRunningReason );
+
+		a.Facts( "true_sens.calc", "Best in-game value", []{ return CalcLine(); } )
+			.Help( "Set the game to this value, or the nearest one it allows, and enter what you set above; "
+			       "True Sens then only corrects the rest. Or leave the game as it is and True Sens "
+			       "corrects all of it. Read-only." )
+			.DisabledUnless( kNotRecording, kRunningReason )
+			.Keywords( "calculator best set ingame value result" );
 
 		a.Facts( "true_sens.multiplier", "Multiplier", []{ return MultiplierLine(); } )
 			.Help( "How much this game's mouse movement is scaled right now. Off while True Sens is off "
@@ -332,26 +346,5 @@ namespace gamescope
 			.Tone( []{ return OutcomeTone(); } )
 			.Help( "What the last recording stored, or why nothing was stored, and what to do about it. "
 			       "Read-only." );
-
-		// ---- calculator (D9, D17): about this game, so left, under its rows -------------
-		a.Group( "Calculator" );
-		a.GroupColumn( 0 );
-
-		a.Text( "true_sens.ingame", "In-game value",
-		        ui::AnyBind::Of<std::string>( []{ return IngameText(); },
-		                                      []( std::string s ) { SetIngameText( s ); } ) )
-			.Help( "The in-game sensitivity value you had set when you recorded this game. Numbers with a "
-			       "dot or a comma both work. Recording the game again clears it: enter the value again." )
-			.Validate( ValidateIngame )
-			.DisabledUnless( kNotRecording, kRunningReason )
-			.StatusWhen( []{ return IngameStatus(); } )
-			.Keywords( "calculator in-game value sensitivity number" );
-
-		a.Facts( "true_sens.calc", "Set in the game", []{ return CalcLine(); } )
-			.Help( "The in-game value that gives you your own feel, for the sensitivity chosen above. "
-			       "After setting it in the game, switch True Sens off for this game or record the game "
-			       "again, or the correction is applied twice. Read-only." )
-			.DisabledUnless( kNotRecording, kRunningReason )
-			.Keywords( "calculator set ingame value result" );
 	}
 }
