@@ -7,6 +7,11 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-26
+
+### Fixed
+- **Frame generation V3.5**: V3.5 and V3.5 Hybrid need less GPU time per frame.
+
 ## 2026-11-25
 
 ### Added

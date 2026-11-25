@@ -150,7 +150,7 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
                 'v3_stats', 'v3_occl', 'v3_fill', 'v3_project', 'v3_enclose', 'v3_decide',
                 # Motion guard (2026-11-20; library f301d7d): 2 more plain compiles, no define.
                 'v3_anchor', 'v3_guard',
-                # V3.5 (2026-11-25; library 1ccc602): 3 more plain compiles; its dense pass (-DV35=1) is below.
+                # V3.5 (2026-11-25; library a1d18f9): 3 more plain compiles; its dense and search passes (-DV35=1) are below.
                 'v35_stats', 'v35_rgn', 'v35_reg']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
@@ -203,7 +203,8 @@ endforeach
 foreach h : [['-DV3J=1', 'v3_search', 'v3_search_j'], ['-DV3J=1', 'v3_search_top', 'v3_search_top_j'],
              ['-DV3J=1', 'v3_dense', 'v3_dense_j'], ['-DV3L=1', 'v3_synth', 'v3_synth_l'],
              ['-DV3B=1', 'v3_synth', 'v3_synth_b'],
-             ['-DV35=1', 'v3_dense', 'v3_dense_35']]   # V3.5's dense pass (Settings::v3Motion = 1)
+             ['-DV35=1', 'v3_dense', 'v3_dense_35'],   # V3.5's dense pass (Settings::v3Motion = 1)
+             ['-DV35=1', 'v3_search', 'v3_search_35']]   # V3.5's block search (reads the parent level's regularised slot)
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', h[0], '--vn', h[2] + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (h[1] + '.comp')]
   if framegen_has_depfile
