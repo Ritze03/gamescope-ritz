@@ -581,8 +581,11 @@ and the plain labels Low and High. The first version showed "Tip: A low in-game 
 works best" with the sentence only in the help, which the owner's wording ("the player should
 be told") does not allow.
 
-**Icon.** A ring with a centred dot and an arrowhead on its top rim (a turn), built from the
-glyph set's own primitives (`Icons.cpp`).
+**Icon.** A ruler with three ticks hanging from its top edge and a solid marker pointing down at
+the middle tick (a measured, calibrated value), built from the glyph set's own primitives
+(`Icons.cpp`). `Why:` the owner picked it from eight candidates (*"Icon C looks the best"*,
+2026-11-25); it replaced a ring-and-chevron glyph that read too close to the Crosshair and About
+rings.
 
 ## Recording hint
 
