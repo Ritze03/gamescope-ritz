@@ -22,7 +22,6 @@ keybind, config section `framegen` (schema stays 5; additive).
 | `framegen.hud_protection` | `off` / `normal` / `strong` (default) | zero-vector bonus 0 / 1 / 2.5 (honoured by V1 and, since 2026-11-19, V3; V2 and Learned ignore it): a soft "prefer still" bias for see-through HUD. It no longer gates anything else (until 2026-10-04 it also switched the crosshair protection on) |
 | `framegen.ui_protection` | `off` / `crosshair` (default) / `crosshair_v2` / `whole_screen` / `whole_screen_v2` (2026-11-23, see [UI protection](frame-generation-ui-protection.md#whole-screen-v2)) | the library's [UI protection](frame-generation-ui-protection.md#ui-protection); additive (schema stays 5), an older config loads `crosshair`, an unknown string keeps it (`crosshair_v2` added 2026-10-05) |
 | `framegen.motion_version` | `v1` (default) / `v2` / `learned` / `v3` / `v3_hybrid` | the row "Motion version": the library's [Motion version 2](frame-generation-motion-v2.md#motion-version-2) on (any built format, capable GPU) or the original V1; additive, absent loads `v1` (2026-10-22); `learned` = [Learned motion](frame-generation-learned.md#learned-motion) (2026-10-26); `v3` = [Motion version 3](frame-generation-motion-v3.md) (2026-11-19), the most fluid and about three times V1's cost; `v3_hybrid` = [V3 Hybrid](frame-generation-v3-hybrid.md) (2026-11-23), V3 with a learned blend (counts as V3 everywhere) |
-| `framegen.learned_net` | `e2v5` (default) / `e1v5` / `e2v4` / `e1v4` / `e2v3` / `e1v3` / `g2v2` / `g2v3` / `m2v2` / `m2v3` (round 4b) | the row "Learned net", used only while Learned runs; additive, an unknown string keeps `e2v5` (`e2v5` / `e1v5` and the new default are round 3, 2026-10-27; round 2 defaulted to `e2v4`, round 1 to `e2v3`, and since saving writes every key, a profile saved by an earlier build keeps its explicit net) |
 | `framegen.learned_half` | `false` (default) / `true` | the row "Learned precision" (Full / Half), used only while Learned runs; additive (2026-10-26) |
 | `framegen.learned_zero_test` | `true` (default) / `false` | the row "Zero-motion test", used only while Learned runs; additive (2026-10-26, round 2) |
 | `framegen.learned_static_guard` | `false` (default) / `true` | the row "Static guard", used only while Learned runs; additive (2026-10-26, round 2) |
@@ -96,7 +95,7 @@ between two real frames needs a longer search, and only trying it shows what it 
 ## Expert settings
 
 *2026-11-20.* The row **Expert settings** (`framegen.expert`, a switch, default off, the last row
-of group "Frame generation", never greyed) hides the 14 tuning rows and decides whether their
+of group "Frame generation", never greyed) hides the 13 tuning rows and decides whether their
 stored values act. Help: *Shows the tuning settings of the selected Motion version. While it is
 off they are hidden and their defaults are used; your own values are kept and apply again when you
 turn it back on.* Keywords make the palette find it under "expert", "advanced" and "tuning".
@@ -109,7 +108,7 @@ The version rule only: whether frame generation is on is not asked, a shown row 
 
 | Rows | Shown under the effective version |
 | --- | --- |
-| Learned net, Learned precision, Zero-motion test, Static guard | Learned |
+| Learned precision, Zero-motion test, Static guard | Learned |
 | Smear, Occlusion softness, Unsure sensitivity, Scene cut threshold, Colour-weighted matching, Detail from one frame | V3 |
 | Search radius, Search radius (coarsest level) | V1, V2, and V3 while Motion guard is not Off |
 | Pyramid smallest level, Search penalty | V1, V2, Learned, and V3 while Motion guard is not Off |
@@ -123,7 +122,7 @@ Overview, as for every other `ShownWhen` row; "differs N" and the changed-value 
 the shown rows only, so hidden rows are not counted.
 
 **Defaults in effect while off.** `config::FrameGenEffective( f )` (`Config/ConfigManager.cpp`)
-returns `f` unchanged when `f.expert`, else a copy whose 14 values (`learned_net`, `learned_half`,
+returns `f` unchanged when `f.expert`, else a copy whose 13 values (`learned_half`,
 `learned_zero_test`, `learned_static_guard`, `v3_smear`, `v3_occl_soft`, `v3_unsure`,
 `v3_scene_cut`, `v3_colour_window`, `v3_detail_split`, `search_radius`,
 `search_radius_top`, `pyramid_min_side`, `search_penalty`) are those of a default-constructed
@@ -204,7 +203,7 @@ version, Quality, Expert settings), then "Artifact protection" (Motion guard, sh
 protection, UI protection, Crosshair box size). Column 1 (reordered 2026-11-20, see "Expert
 settings" below): "Pausing and limits" (Pause at refresh rate, Pause while cursor visible, Limit to
 GPU speed), "Status", then the three groups that only show with Expert settings on: "Learned
-motion" (Learned net, Learned precision, Zero-motion test, Static guard), "Motion version 3" (six rows; the Motion guard moved out 2026-11-23) and
+motion" (Learned precision, Zero-motion test, Static guard), "Motion version 3" (six rows; the Motion guard moved out 2026-11-23) and
 "Motion search" (Search radius, Search radius (coarsest level), Pyramid smallest level, Search
 penalty; 2026-11-19). Priority and Quality are `.Segmented()` buttons (as is Motion blur's Measured
 against and Quality), because the user wanted them "like Motion version"; a row that cannot fit
@@ -223,7 +222,7 @@ enum and `kMotionKeys` indices 0 / 1 / 3 / 2, so `overlay_e2_set` still means 2 
 **Crosshair box size** (a slider, `2.5% · 24 px`, disabled while UI protection is Off). Column 1,
 **Pausing and limits** group: **Pause at refresh rate** (a switch; help: stops at the
 refresh rate or the Target fps, whichever is lower), **Pause while cursor visible**, **Limit to GPU
-speed**. **Status** group: the status line. Then **Learned motion** (**Learned net**, **Learned
+speed**. **Status** group: the status line. Then **Learned motion** (**Learned
 precision**, **Zero-motion test**, **Static guard**), **Motion version 3** and **Motion search**,
 which only show under Expert settings. Multiplier and the rows after it are disabled while the
 switch is off. The rail summary reads "off", "N×" or "target N". Priority help: *Low latency adds the least

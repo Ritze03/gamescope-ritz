@@ -1894,33 +1894,14 @@ TEST_CASE( "framegen: motion_version round-trips, defaults when absent, invalid 
     REQUIRE( l.framegen.motion_version == "v1" );
 }
 
-// Round 4b: round 4's stand-in net names load as the real nets that replaced them.
-TEST_CASE( "framegen: a saved c2smoke / c2feat loads as g2v2 / g2v3", "[config]" )
+// Learned motion (2026-10-26): a third motion_version plus three additive keys (precision,
+// the zero-motion test and the static guard). Its net choice (`learned_net`) was removed
+// 2026-11-25: Learned has one network.
+TEST_CASE( "framegen: learned motion, precision, zero test and guard round-trip, default when absent", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
 
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "framegen": { "learned_net": "c2smoke" }
-    })";
-    REQUIRE( LoadSections().framegen.learned_net == "g2v2" );
-
-    std::ofstream( ProfilePath( "U" ) ) << R"({
-        "schema_version": 5, "name": "U", "kind": "general",
-        "framegen": { "learned_net": "c2feat" }
-    })";
-    REQUIRE( LoadProfile( "U" ).value_or( Settings{} ).framegen.learned_net == "g2v3" );
-}
-
-// Learned motion (2026-10-26): a third motion_version plus four additive keys (round 2: four nets,
-// the zero-motion test and the static guard).
-TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-trip, default when absent, invalid keeps the default", "[config]" )
-{
-    TempConfigHome home;
-    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-
-    REQUIRE( Settings{}.framegen.learned_net == "e2v5" );
     REQUIRE( Settings{}.framegen.learned_half == false );
     REQUIRE( Settings{}.framegen.learned_zero_test == true );
     REQUIRE( Settings{}.framegen.learned_static_guard == false );
@@ -1931,23 +1912,12 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     })";
     Settings l = LoadSections();
     REQUIRE( l.framegen.motion_version == "v1" );
-    REQUIRE( l.framegen.learned_net == "e2v5" );
     REQUIRE( l.framegen.learned_half == false );
     REQUIRE( l.framegen.learned_zero_test == true );
     REQUIRE( l.framegen.learned_static_guard == false );
 
-    // Every net name round-trips.
-    for ( const char *pszNet : { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" } )
-    {
-        Settings n{};
-        n.framegen.learned_net = pszNet;
-        REQUIRE( SaveSections( n ) );
-        REQUIRE( LoadSections().framegen.learned_net == pszNet );
-    }
-
     Settings s{};
     s.framegen.motion_version = "learned";
-    s.framegen.learned_net = "e1v5";
     s.framegen.learned_half = true;
     s.framegen.learned_zero_test = false;
     s.framegen.learned_static_guard = true;
@@ -1955,50 +1925,38 @@ TEST_CASE( "framegen: learned motion, net, precision, zero test and guard round-
     REQUIRE( SaveSections( s ) );
     l = LoadSections();
     REQUIRE( l.framegen.motion_version == "learned" );
-    REQUIRE( l.framegen.learned_net == "e1v5" );
     REQUIRE( l.framegen.learned_half == true );
     REQUIRE( l.framegen.learned_zero_test == false );
     REQUIRE( l.framegen.learned_static_guard == true );
     REQUIRE( l.motion_blur.motion_version == "learned" );
 
-    s.framegen.learned_net = "e9v9";
-    REQUIRE( SaveSections( s ) );
-    l = LoadSections();
-    REQUIRE( l.framegen.learned_net == "e2v5" );
-
-    REQUIRE( IsSettingsKey( "framegen.learned_net" ) );
+    REQUIRE( !IsSettingsKey( "framegen.learned_net" ) );
     REQUIRE( IsSettingsKey( "framegen.learned_half" ) );
     REQUIRE( IsSettingsKey( "framegen.learned_zero_test" ) );
     REQUIRE( IsSettingsKey( "framegen.learned_static_guard" ) );
 }
 
-// A profile saved by a round-1 build carries its explicit "e2v3" (the serializer writes every
-// key) and keeps it: the e2v5 default only applies where the key is absent. No migration.
-TEST_CASE( "framegen: a profile saved with round 1's learned_net keeps it, the new keys default", "[config]" )
+// A profile written by an older build holds `learned_net` (a name, a retired name or a number):
+// every value is ignored without harm, the other Learned keys still load, and the next save
+// no longer writes the key.
+TEST_CASE( "framegen: a stored learned_net of any value is ignored and gone after the next save", "[config]" )
 {
     TempConfigHome home;
     std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    std::ofstream( ProfilePath( "T" ) ) << R"({
-        "schema_version": 5, "name": "T", "kind": "general",
-        "framegen": { "motion_version": "learned", "learned_net": "e2v3", "learned_half": false }
-    })";
-    const Settings l = LoadSections();
-    REQUIRE( l.framegen.motion_version == "learned" );
-    REQUIRE( l.framegen.learned_net == "e2v3" );
-    REQUIRE( l.framegen.learned_zero_test == true );
-    REQUIRE( l.framegen.learned_static_guard == false );
-}
-
-// Likewise for round 2's explicit "e2v4" and "e1v4": round 3's e2v5 default does not replace them.
-TEST_CASE( "framegen: a profile saved with round 2's learned_net keeps it", "[config]" )
-{
-    TempConfigHome home;
-    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
-    for ( const char *pszNet : { "e2v4", "e1v4" } )
+    for ( const char *pszValue : { "\"e1v5\"", "\"m2v3\"", "\"e2v5\"", "\"c2smoke\"", "\"nonsense\"", "7", "4", "null", "true" } )
     {
         std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
-            "\"framegen\": { \"motion_version\": \"learned\", \"learned_net\": \"" << pszNet << "\" } }";
-        REQUIRE( LoadSections().framegen.learned_net == pszNet );
+            "\"framegen\": { \"motion_version\": \"learned\", \"learned_net\": " << pszValue
+            << ", \"learned_half\": true } }" << std::flush;
+        const Settings l = LoadSections();
+        REQUIRE( l.framegen.motion_version == "learned" );
+        REQUIRE( l.framegen.learned_half == true );
+        REQUIRE( l.framegen.learned_zero_test == true );
+        REQUIRE( SaveSections( l ) );
+        std::ifstream in( ProfilePath( "T" ) );
+        const std::string sWritten( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sWritten.find( "learned_net" ) == std::string::npos );
+        REQUIRE( sWritten.find( "learned_half" ) != std::string::npos );
     }
 }
 
@@ -4419,7 +4377,7 @@ TEST_CASE( "framegen: V3 switches of the wrong type keep the default", "[config]
     REQUIRE( !l.framegen.v3_detail_split );
 }
 
-// Expert settings (2026-11-20): `framegen.expert` is the switch over the 14 tuning values. Each "file X loads as Y" check has
+// Expert settings (2026-11-20): `framegen.expert` is the switch over the 13 tuning values. Each "file X loads as Y" check has
 // its own TEST_CASE with a fresh TempConfigHome (LoadSections() carries values forward).
 namespace
 {
@@ -4573,11 +4531,10 @@ TEST_CASE( "framegen: an absent expert key with the legacy scene cut 0.45 loads 
     REQUIRE( !f.expert );
 }
 
-TEST_CASE( "framegen: FrameGenEffective with expert off puts the 14 tuning values at their defaults", "[config]" )
+TEST_CASE( "framegen: FrameGenEffective with expert off puts the 13 tuning values at their defaults", "[config]" )
 {
     FrameGenSettings in;
     in.expert = false;
-    in.learned_net = "e1v5";
     in.learned_half = true;
     in.learned_zero_test = false;
     in.learned_static_guard = true;
@@ -4603,7 +4560,6 @@ TEST_CASE( "framegen: FrameGenEffective with expert off puts the 14 tuning value
 
     const FrameGenSettings out = FrameGenEffective( in );
     const FrameGenSettings d;
-    REQUIRE( out.learned_net == d.learned_net );
     REQUIRE( out.learned_half == d.learned_half );
     REQUIRE( out.learned_zero_test == d.learned_zero_test );
     REQUIRE( out.learned_static_guard == d.learned_static_guard );
@@ -4629,7 +4585,6 @@ TEST_CASE( "framegen: FrameGenEffective with expert off puts the 14 tuning value
     REQUIRE( out.ui_box_height == 5.0f );
     // The input is not modified.
     REQUIRE( in.v3_smear == 0.9f );
-    REQUIRE( in.learned_net == "e1v5" );
     REQUIRE( in.v3_guard == "v2_motion" );
     REQUIRE( in.search_radius == 9 );
 }
@@ -4639,7 +4594,6 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     FrameGenSettings in;
     in.expert = true;
     in.v3_smear = 0.9f;
-    in.learned_net = "m2v3";
     in.v3_guard = "off";
     in.search_radius = 9;
     in.search_penalty = 2.0f;
@@ -4647,7 +4601,6 @@ TEST_CASE( "framegen: FrameGenEffective with expert on returns the settings unch
     const FrameGenSettings out = FrameGenEffective( in );
     REQUIRE( out.expert );
     REQUIRE( out.v3_smear == 0.9f );
-    REQUIRE( out.learned_net == "m2v3" );
     REQUIRE( out.v3_guard == "off" );
     REQUIRE( out.search_radius == 9 );
     REQUIRE( out.search_penalty == 2.0f );

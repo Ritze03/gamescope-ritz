@@ -91,17 +91,16 @@ namespace fghost
 				| ( uint32_t( c.pauseWhenCursorVisible ? 1 : 0 ) << 31 );
 		}
 
-		// Learned motion's runtime settings, their own word: bits 0-3 net (framegen::LearnedNet
-		// order: e2v3, e1v3, e2v4, e1v4, e2v5, e1v5, g2v2, g2v3, m2v2, m2v3; ten values, four
-		// bits: three held eight, round 4b's ten do not), 4 half precision, 5 zero-motion test,
+		// Learned motion's runtime settings, their own word: bits 0-3 are FREE (they held the net
+		// choice until 2026-11-25, when Learned kept only its default network; written as 0,
+		// ignored on read; the other fields did not move), 4 half precision, 5 zero-motion test,
 		// 6 static guard (mask 0x7F).
 		// Round 1 had the net and precision in bits 30-31 of the main word; round 2 needs two
 		// more bits and the main word is full, so all four moved here (the main word's
 		// defaults still pack to what they did: bits 28-31 are 0 for V1).
 		uint32_t PackLearned( const Config &c )
 		{
-			return ( uint32_t( c.learnedNet ) & 0xFu )
-				| ( uint32_t( c.learnedHalf ? 1 : 0 ) << 4 )
+			return ( uint32_t( c.learnedHalf ? 1 : 0 ) << 4 )
 				| ( uint32_t( c.learnedZeroTest ? 1 : 0 ) << 5 )
 				| ( uint32_t( c.learnedStaticGuard ? 1 : 0 ) << 6 );
 		}
@@ -161,11 +160,6 @@ namespace fghost
 			c.motion = Motion( ( u >> 28 ) & 0x3u );
 			if ( c.motion > Motion::V3 )
 				c.motion = Motion::V1;
-			{
-				// An out-of-range value (cannot happen from PackLearned) falls back to the default.
-				const uint32_t uNet = uLearned & 0xFu;
-				c.learnedNet = uNet <= uint32_t( LearnedNet::M2v3 ) ? LearnedNet( uNet ) : LearnedNet::E2v5;
-			}
 			c.learnedHalf = ( ( uLearned >> 4 ) & 1u ) != 0;
 			c.learnedZeroTest = ( ( uLearned >> 5 ) & 1u ) != 0;
 			c.learnedStaticGuard = ( ( uLearned >> 6 ) & 1u ) != 0;
@@ -577,21 +571,10 @@ namespace fghost
 			s.motionVersion = c.motion == Motion::V2 ? framegen::MotionVersion::V2
 				: c.motion == Motion::Learned ? framegen::MotionVersion::Learned
 				: c.motion == Motion::V3 ? framegen::MotionVersion::V3 : framegen::MotionVersion::V1;
-			// Learned's net, activation precision, zero-motion test and static guard (every other
-			// version ignores all four). The host enum has the library's values.
-			switch ( c.learnedNet )
-			{
-				case LearnedNet::E2v3: s.learnedNet = framegen::LearnedNet::E2v3; break;
-				case LearnedNet::E1v3: s.learnedNet = framegen::LearnedNet::E1v3; break;
-				case LearnedNet::E2v4: s.learnedNet = framegen::LearnedNet::E2v4; break;
-				case LearnedNet::E1v4: s.learnedNet = framegen::LearnedNet::E1v4; break;
-				case LearnedNet::E2v5: s.learnedNet = framegen::LearnedNet::E2v5; break;
-				case LearnedNet::E1v5: s.learnedNet = framegen::LearnedNet::E1v5; break;
-				case LearnedNet::G2v2: s.learnedNet = framegen::LearnedNet::G2v2; break;
-				case LearnedNet::G2v3: s.learnedNet = framegen::LearnedNet::G2v3; break;
-				case LearnedNet::M2v2: s.learnedNet = framegen::LearnedNet::M2v2; break;
-				case LearnedNet::M2v3: s.learnedNet = framegen::LearnedNet::M2v3; break;
-			}
+			// Learned's activation precision, zero-motion test and static guard (every other
+			// version ignores all three). The library has ONE net and refuses any other value
+			// under EVERY motion version, so the net is always E2v5.
+			s.learnedNet = framegen::LearnedNet::E2v5;
 			s.learnedHalf = c.learnedHalf;
 			s.learnedZeroTest = c.learnedZeroTest;
 			s.learnedStaticGuard = c.learnedStaticGuard;

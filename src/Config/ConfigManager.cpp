@@ -358,16 +358,6 @@ namespace gamescope::config
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
                 if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" || sMotion == "v3_hybrid" )
                     f.motion_version = sMotion;
-                std::string sLearnedNet = JGetString( *pFrameGen, "learned_net", f.learned_net );
-                // Round 4's test stand-ins became the real nets (round 4b); a saved choice follows.
-                if ( sLearnedNet == "c2smoke" )
-                    sLearnedNet = "g2v2";
-                else if ( sLearnedNet == "c2feat" )
-                    sLearnedNet = "g2v3";
-                if ( sLearnedNet == "e2v5" || sLearnedNet == "e1v5" || sLearnedNet == "e2v4" || sLearnedNet == "e1v4"
-                    || sLearnedNet == "e2v3" || sLearnedNet == "e1v3" || sLearnedNet == "g2v2"
-                    || sLearnedNet == "g2v3" || sLearnedNet == "m2v2" || sLearnedNet == "m2v3" )
-                    f.learned_net = sLearnedNet;
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
                 f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );
                 f.learned_static_guard = JGetBool( *pFrameGen, "learned_static_guard", f.learned_static_guard );
@@ -904,7 +894,6 @@ namespace gamescope::config
             // Rounded to the slider's 0.1 step through a double, so 2.7f is stored as 2.7, not 2.7000000476...
             jFrameGen[ "ui_box_height" ] = std::round( double( fg.ui_box_height ) * 10.0 ) / 10.0;
             jFrameGen[ "motion_version" ] = fg.motion_version;
-            jFrameGen[ "learned_net" ] = fg.learned_net;
             jFrameGen[ "learned_half" ] = fg.learned_half;
             jFrameGen[ "learned_zero_test" ] = fg.learned_zero_test;
             jFrameGen[ "learned_static_guard" ] = fg.learned_static_guard;
@@ -2727,7 +2716,6 @@ namespace gamescope::config
         }
         if ( f.expert )
             return e;
-        e.learned_net = d.learned_net;
         e.learned_half = d.learned_half;
         e.learned_zero_test = d.learned_zero_test;
         e.learned_static_guard = d.learned_static_guard;

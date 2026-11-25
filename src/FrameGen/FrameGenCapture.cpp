@@ -299,8 +299,8 @@ namespace fghost::capture
 
 		const char *LearnedNetText( uint32_t u )
 		{
-			static const char *const k[] = { "E2v3", "E1v3", "E2v4", "E1v4", "E2v5", "E1v5", "G2v2", "G2v3", "M2v2", "M2v3" };
-			return u < 10 ? k[ u ] : "Unknown";
+			// The library has one net since 2026-11-25 (value 4); the header keeps printing it so captures stay comparable.
+			return u == uint32_t( framegen::LearnedNet::E2v5 ) ? "E2v5" : "Unknown";
 		}
 	}
 

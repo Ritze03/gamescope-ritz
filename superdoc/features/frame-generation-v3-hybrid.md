@@ -115,7 +115,7 @@ generation's rows, as for every V3 value).
   row; once one wins the row goes away.
 - Every V3 row acts under V3 Hybrid exactly as under V3, including the Expert rule (tuning rows
   only with Expert on; defaults act with it off; the Motion guard is no Expert row). The variant is
-  not one of the 14 tuning values, so `config::FrameGenEffective()` never resets it.
+  not one of the 13 tuning values, so `config::FrameGenEffective()` never resets it.
 
 From the command line (the same binding a click writes through; the value is the option's id, as
 for every Choice): `gamescopectl overlay_e2_set "framegen.motion_version 3"` (V3),
