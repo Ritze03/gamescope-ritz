@@ -290,6 +290,11 @@ namespace gamescope
 
 	// ---- recording -------------------------------------------------------------------
 
+	LogScope &TrueSens_LogScope()
+	{
+		return log_truesens;
+	}
+
 	bool TrueSens_RecordingActive()
 	{
 		return s_eTarget.load( std::memory_order_relaxed ) != 0;
@@ -345,6 +350,8 @@ namespace gamescope
 			s_eTarget.store( (int)t, std::memory_order_relaxed );
 		}
 		s_sLastOutcome.clear();
+		TrueSens_ReferenceRequest();
+		force_repaint(); // the hint (and the picture) must appear on an idle client too
 		return st;
 	}
 
@@ -363,6 +370,7 @@ namespace gamescope
 			bSpoiled = s_bZoomSpoiled.load( std::memory_order_relaxed );
 			s_eTarget.store( 0, std::memory_order_relaxed );
 		}
+		TrueSens_ReferenceClear();
 
 		if ( target == Target::Idle )
 		{

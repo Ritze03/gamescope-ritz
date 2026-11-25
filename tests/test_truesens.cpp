@@ -352,3 +352,96 @@ TEST_CASE( "truesens: recording hint lines", "[truesens]" )
 	CHECK( h.title.empty() );
 	CHECK( h.action.empty() );
 }
+
+TEST_CASE( "truesens: reference picture crop", "[truesens]" )
+{
+	// 1080p: the centre 25 % x 25 %, centred exactly
+	CropRect c = ReferenceCrop( 1920, 1080 );
+	REQUIRE( c.ok );
+	CHECK( c.w == 480 );
+	CHECK( c.h == 270 );
+	CHECK( c.x == 720 );
+	CHECK( c.y == 405 );
+
+	// odd sizes: integer division, centred to within one pixel, never outside the picture
+	c = ReferenceCrop( 1001, 777 );
+	REQUIRE( c.ok );
+	CHECK( c.w == 250 );
+	CHECK( c.h == 194 );
+	CHECK( c.x == 375 );
+	CHECK( c.y == 291 );
+	CHECK( c.x + c.w <= 1001 );
+	CHECK( c.y + c.h <= 777 );
+	CHECK( std::abs( ( c.x + c.w / 2 ) - 1001 / 2 ) <= 1 );
+
+	// tiny pictures: the smallest that works, then nothing
+	c = ReferenceCrop( 4, 4 );
+	REQUIRE( c.ok );
+	CHECK( c.w == 1 );
+	CHECK( c.h == 1 );
+	CHECK( c.x == 1 );
+	CHECK( c.y == 1 );
+	CHECK( !ReferenceCrop( 3, 100 ).ok );
+	CHECK( !ReferenceCrop( 100, 3 ).ok );
+	CHECK( !ReferenceCrop( 0, 0 ).ok );
+	CHECK( !ReferenceCrop( -5, 1080 ).ok );
+
+	// every size from 4 up stays inside the picture
+	for ( int w = 4; w < 300; w += 7 )
+		for ( int h = 4; h < 300; h += 11 )
+		{
+			const CropRect r = ReferenceCrop( w, h );
+			REQUIRE( r.ok );
+			REQUIRE( r.w >= 1 );
+			REQUIRE( r.h >= 1 );
+			REQUIRE( r.x >= 0 );
+			REQUIRE( r.y >= 0 );
+			REQUIRE( r.x + r.w <= w );
+			REQUIRE( r.y + r.h <= h );
+		}
+
+	// the texture reduction
+	CHECK( ReferenceDownscale( 480, 270, 768 ) == 1 );
+	CHECK( ReferenceDownscale( 768, 10, 768 ) == 1 );
+	CHECK( ReferenceDownscale( 960, 540, 768 ) == 2 );
+	CHECK( ReferenceDownscale( 10, 1537, 768 ) == 3 );
+	CHECK( ReferenceDownscale( 100, 100, 0 ) == 1 );
+}
+
+TEST_CASE( "truesens: reference picture display size", "[truesens]" )
+{
+	// 1080p, plate bottom at 90 px (scale 1): 25 % of the output, centred, 8 px below the plate
+	DisplayRect d = ReferenceDisplay( 1920.0f, 1080.0f, 90.0f, 1.0f, 480.0f / 270.0f );
+	REQUIRE( d.ok );
+	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 480.0, 0.01 ) );
+	CHECK_THAT( d.h, Catch::Matchers::WithinAbs( 270.0, 0.01 ) );
+	CHECK_THAT( d.x, Catch::Matchers::WithinAbs( 720.0, 0.01 ) );
+	CHECK_THAT( d.y, Catch::Matchers::WithinAbs( 98.0, 0.01 ) );
+	CHECK( d.y + d.h < 1080.0f * 0.5f - 1080.0f * 0.08f ); // clear of the centre
+
+	// 4K: the scale (and so the plate and the gap) is twice as large, same relative place
+	d = ReferenceDisplay( 3840.0f, 2160.0f, 180.0f, 2.0f, 16.0f / 9.0f );
+	REQUIRE( d.ok );
+	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 960.0, 0.01 ) );
+	CHECK_THAT( d.y, Catch::Matchers::WithinAbs( 196.0, 0.01 ) );
+
+	// a low plate (a readout above it pushed it down): the picture shrinks, keeping the aspect,
+	// and its bottom stops 8 % of the height short of the centre
+	d = ReferenceDisplay( 1920.0f, 1080.0f, 200.0f, 1.0f, 16.0f / 9.0f );
+	REQUIRE( d.ok );
+	CHECK_THAT( d.y + d.h, Catch::Matchers::WithinAbs( 1080.0 * 0.42, 0.01 ) );
+	CHECK_THAT( d.w / d.h, Catch::Matchers::WithinAbs( 16.0 / 9.0, 0.001 ) );
+	CHECK( d.w < 480.0f );
+	CHECK_THAT( d.x, Catch::Matchers::WithinAbs( ( 1920.0 - d.w ) * 0.5, 0.01 ) );
+
+	// no room at all: nothing is drawn
+	CHECK( !ReferenceDisplay( 1920.0f, 1080.0f, 440.0f, 1.0f, 16.0f / 9.0f ).ok );
+	CHECK( !ReferenceDisplay( 1920.0f, 1080.0f, 90.0f, 1.0f, 0.0f ).ok );
+	CHECK( !ReferenceDisplay( 0.0f, 0.0f, 0.0f, 1.0f, 1.0f ).ok );
+
+	// a wide picture is shorter at the same width, so it fits where a square one would shrink
+	d = ReferenceDisplay( 2560.0f, 1080.0f, 90.0f, 1.0f, 640.0f / 270.0f );
+	REQUIRE( d.ok );
+	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 640.0, 0.01 ) );
+	CHECK_THAT( d.h, Catch::Matchers::WithinAbs( 270.0, 0.01 ) );
+}

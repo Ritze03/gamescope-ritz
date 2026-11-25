@@ -1,6 +1,7 @@
 #pragma once
 
 #include <variant>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -288,6 +289,14 @@ namespace gamescope
 		uint32_t uScreenshotFlags = 0;
 		bool bX11PropertyRequested = false;
 		bool bWaylandRequested = false;
+
+		// In-memory destination (ritz: True Sens reference picture). When set, szScreenshotPath is
+		// unused: paint_all captures 8-bit SDR (B8G8R8A8) and calls this synchronously on the
+		// compositor thread instead of writing a file, with no X11 property, no gamescope_control
+		// "screenshot taken" event. pPixels == nullptr means no picture; pszFailure says why.
+		// The pixels are only valid during the call.
+		std::function<void( const uint8_t *pPixels, uint32_t uWidth, uint32_t uHeight, uint32_t uPitch,
+		                    uint64_t ulCaptureNs, const char *pszFailure )> pfnMemory;
 	};
 
 	class CScreenshotManager

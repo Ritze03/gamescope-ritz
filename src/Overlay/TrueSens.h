@@ -386,6 +386,76 @@ namespace gamescope::truesens
 			( sChord.empty() ? sFallback : sChord ) + " and Stop recording";
 		return h;
 	}
+
+	// ---- the reference picture (I4, TrueSensHud.cpp) -------------------------------
+	// A frozen crop of the middle of the game picture, shown under the hint plate.
+
+	// A crop rectangle in picture pixels; !ok = nothing to crop (picture too small).
+	struct CropRect
+	{
+		int x = 0, y = 0, w = 0, h = 0;
+		bool ok = false;
+	};
+
+	// The centre 25 % x 25 % of a `w` x `h` picture (integer division, so an odd size
+	// loses at most one pixel and stays centred to within one pixel). Pictures under
+	// 4 px on a side have nothing sensible to show: !ok.
+	inline CropRect ReferenceCrop( int w, int h )
+	{
+		CropRect r;
+		if ( w < 4 || h < 4 )
+			return r;
+		r.w = w / 4;
+		r.h = h / 4;
+		r.x = ( w - r.w ) / 2;
+		r.y = ( h - r.h ) / 2;
+		r.ok = true;
+		return r;
+	}
+
+	// Integer reduction that makes a `w` x `h` crop fit in a `maxSide` square texture (1 = none).
+	inline int ReferenceDownscale( int w, int h, int maxSide )
+	{
+		const int big = w > h ? w : h;
+		if ( maxSide < 1 || big <= maxSide )
+			return 1;
+		return ( big + maxSide - 1 ) / maxSide;
+	}
+
+	// Where the picture is drawn, in output px; !ok = no room, draw nothing.
+	struct DisplayRect
+	{
+		float x = 0, y = 0, w = 0, h = 0;
+		bool ok = false;
+	};
+
+	// The picture is shown at 25 % x 25 % of the output (the scale of the live middle of the
+	// screen), horizontally centred, its top at `flPlateBottom + 8 * flScale`. If its bottom
+	// would come closer than 8 % of the height to the screen centre (the spot the player aims
+	// at) it shrinks, keeping the aspect `flAspect` (crop width / height); below 24 px high there
+	// is no room and nothing is drawn.
+	inline DisplayRect ReferenceDisplay( float flOutW, float flOutH, float flPlateBottom, float flScale, float flAspect )
+	{
+		DisplayRect d;
+		if ( !( flOutW > 0.0f ) || !( flOutH > 0.0f ) || !( flAspect > 0.0f ) || !( flScale > 0.0f ) )
+			return d;
+		float w = flOutW * 0.25f;
+		float h = w / flAspect;
+		d.y = flPlateBottom + 8.0f * flScale;
+		const float flMaxBottom = flOutH * 0.5f - flOutH * 0.08f;
+		if ( d.y + h > flMaxBottom )
+		{
+			h = flMaxBottom - d.y;
+			w = h * flAspect;
+		}
+		if ( h < 24.0f )
+			return d;
+		d.w = w;
+		d.h = h;
+		d.x = ( flOutW - w ) * 0.5f;
+		d.ok = true;
+		return d;
+	}
 }
 
 // ---- the glue (TrueSens.cpp) ----------------------------------------------------
@@ -449,6 +519,22 @@ namespace gamescope
 // plate's bottom edge in px (0 = nothing drawn); the next step's picture goes below it.
 struct ImDrawList;
 namespace gamescope { float TrueSens_DrawHud( ImDrawList *pDrawList, float flWidth, float flHeight, float flYOffset ); }
+
+// The reference picture (TrueSensHud.cpp). All on the compositor thread.
+class LogScope;
+namespace gamescope
+{
+	LogScope &TrueSens_LogScope();   // the "truesens" log scope (TrueSens.cpp)
+	// Ask paint_all for one capture of the game picture (called when a recording starts);
+	// drops any older picture first. The result arrives in a later paint, or never (no
+	// picture, one log line says why).
+	void TrueSens_ReferenceRequest();
+	// Drop the picture and forget any capture still on its way (a recording ended).
+	void TrueSens_ReferenceClear();
+	// Changes whenever the picture appears, changes or goes: the HUD layer folds it into its
+	// redraw hash (a new picture under the same texture id adds no draw command).
+	uint64_t TrueSens_ReferenceGeneration();
+}
 
 // The settings area (TrueSensArea.cpp), declared outside the namespace like
 // NullBinds_RegisterArea so Shell.cpp's RegisterAll() names it plainly.

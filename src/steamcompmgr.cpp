@@ -3495,8 +3495,11 @@ paint_all( global_focus_t *pFocus, bool async )
 		std::filesystem::path path = std::filesystem::path{ oScreenshotInfo->szScreenshotPath };
 
 		uint32_t drmCaptureFormat = DRM_FORMAT_INVALID;
+		const uint64_t ulMemoryStartNs = oScreenshotInfo->pfnMemory ? get_time_in_nanos() : 0;
 
-		if ( path.extension() == ".avif" )
+		if ( oScreenshotInfo->pfnMemory )
+			drmCaptureFormat = DRM_FORMAT_XRGB8888; // in-memory destination (True Sens): 8-bit SDR, no file
+		else if ( path.extension() == ".avif" )
 			drmCaptureFormat = vulkan_get_rgb10_capture_format();
 		else if ( path.extension() == ".png" )
 			drmCaptureFormat = DRM_FORMAT_XRGB8888;
@@ -3504,6 +3507,12 @@ paint_all( global_focus_t *pFocus, bool async )
 			drmCaptureFormat = DRM_FORMAT_NV12;
 		else
 			xwm_log.errorf( "Unsupported extension for a screenshot: %s", path.extension().string().c_str() );
+
+		if ( oScreenshotInfo->pfnMemory && pFocus->focusWindow == nullptr )
+		{
+			oScreenshotInfo->pfnMemory( nullptr, 0, 0, 0, 0, "no game window is focused" );
+			drmCaptureFormat = DRM_FORMAT_INVALID;
+		}
 
 		// Repaint base-plane-only screenshots at the game's render resolution to preserve supersampling.
 		const bool bRenderSizeScreenshot =
@@ -3639,10 +3648,16 @@ paint_all( global_focus_t *pFocus, bool async )
 			if ( !oScreenshotSeq )
 			{
 				xwm_log.errorf("vulkan_screenshot failed");
+				if ( oScreenshotInfo->pfnMemory )
+					oScreenshotInfo->pfnMemory( nullptr, 0, 0, 0, 0, "the capture failed" );
 				return;
 			}
 
 			vulkan_wait( *oScreenshotSeq, false );
+
+			if ( oScreenshotInfo->pfnMemory )
+				oScreenshotInfo->pfnMemory( pScreenshotTexture->mappedData(), pScreenshotTexture->width(), pScreenshotTexture->height(),
+					pScreenshotTexture->rowPitch(), get_time_in_nanos() - ulMemoryStartNs, nullptr );
 
 			uint16_t maxCLLNits = 0;
 			uint16_t maxFALLNits = 0;
@@ -3674,7 +3689,9 @@ paint_all( global_focus_t *pFocus, bool async )
 				}
 			}
 
-			std::thread screenshotThread = std::thread([=] {
+			std::thread screenshotThread;
+			if ( !oScreenshotInfo->pfnMemory ) // the in-memory destination has been served above: no file, no thread
+			screenshotThread = std::thread([=] {
 				pthread_setname_np( pthread_self(), "gamescope-scrsh" );
 
 				const uint8_t *mappedData = pScreenshotTexture->mappedData();
@@ -3859,12 +3876,15 @@ paint_all( global_focus_t *pFocus, bool async )
 				}
 			});
 
-			screenshotThread.detach();
+			if ( screenshotThread.joinable() )
+				screenshotThread.detach();
 		}
 		else
 		{
 			if ( drmCaptureFormat != DRM_FORMAT_INVALID )
 				xwm_log.errorf( "Oh no, we ran out of screenshot images. Not actually writing a screenshot." );
+			if ( oScreenshotInfo->pfnMemory && drmCaptureFormat != DRM_FORMAT_INVALID )
+				oScreenshotInfo->pfnMemory( nullptr, 0, 0, 0, 0, "no capture image was free" );
 			if ( oScreenshotInfo->bX11PropertyRequested )
 			{
 				XDeleteProperty( root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeScreenShotAtom );

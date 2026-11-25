@@ -2001,7 +2001,8 @@ namespace gamescope
 
 		ImGui::Render();
 
-		const uint64_t ulHash = HashDrawData( ImGui::GetDrawData(), Crosshair_RasterGeneration() );
+		const uint64_t ulHash = HashDrawData( ImGui::GetDrawData(),
+			Crosshair_RasterGeneration() ^ ( gamescope::TrueSens_ReferenceGeneration() * 0x9E3779B97F4A7C15ull ) );
 		const bool bSubmitted = ulHash == s_ulDrawnHash || RenderAndSubmit();
 		if ( bSubmitted )
 			s_ulDrawnHash = ulHash;
