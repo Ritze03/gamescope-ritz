@@ -380,6 +380,10 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 - **A/D or W/S are not behaving like normal keys** — [null-binds](../features/null-binds.md):
   the hook sits at the top of both `wlserver_key()` and `wlserver_handle_key()` in
   `src/wlserver.cpp`; engine `src/Overlay/NullBinds.cpp`.
+- **Mouse movement is scaled per game (True Sens)** — [true-sens](../features/true-sens.md):
+  the hook `TrueSens_OnMotion()` in `wlserver_mousemotion()` (`src/wlserver.cpp`), before
+  Zoom's scale; maths and recorder `src/Overlay/TrueSens.{h,cpp}`, area
+  `src/Overlay/TrueSensArea.cpp`.
 - **Force grab cursor/keyboard** — [input-general](../features/input-general.md):
   `src/Overlay/PanelInput.cpp`.
 
