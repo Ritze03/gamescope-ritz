@@ -154,7 +154,7 @@ starting below a top-left readout's bottom edge. Code: `src/Overlay/FgStats.{h,c
 While a True Sens recording runs, the same layer also carries a two-line hint plate at the top centre (what is being
 recorded, which key opens the settings): `FpsDisplay_AddLayer()` lets the layer exist while
 `TrueSens_RecordingActive()` and calls `TrueSens_DrawHud()` after the readout, below a top-centre readout. No HUD
-setting. Code `src/Overlay/TrueSensHud.cpp`; why and how: [true-sens.md](true-sens.md#recording-hint-i3).
+setting. Code `src/Overlay/TrueSensHud.cpp`; why and how: [true-sens.md](true-sens.md#recording-hint).
 
 ## Pages
 

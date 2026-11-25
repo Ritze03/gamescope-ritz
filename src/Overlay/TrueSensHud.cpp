@@ -2,7 +2,7 @@
 // Drawn by FpsDisplay.cpp into the HUD layer's background draw list (the layer is drawn
 // over the game, under the Shell, and frame generation does not touch it), only while
 // TrueSens_RecordingActive(). The text itself is the pure gamescope::truesens::HintLines().
-// superdoc/features/true-sens.md, "Recording hint (I3)".
+// superdoc/features/true-sens.md, "Recording hint".
 //
 // Runs on the compositor thread inside the HUD's ImGui frame (its own context, which carries
 // the whole font set of Fonts.h).
@@ -26,7 +26,7 @@
 
 namespace gamescope
 {
-	// ---- the reference picture (I4) ---------------------------------------------------
+	// ---- the reference picture ---------------------------------------------------
 	// One texture for the whole process, created by the first picture and reused by every later
 	// one (a new picture is a sub-rectangle upload): nothing grows with the number of recordings.
 	// Everything here runs on the compositor thread: the capture callback is called by paint_all.

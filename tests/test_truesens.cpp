@@ -84,6 +84,18 @@ TEST_CASE( "truesens: multiplier", "[truesens]" )
 		CHECK( Multiplier( kInf, 5.0, 800 ) == 1.0 );
 		CHECK( Multiplier( 5000, kInf, 800 ) == 1.0 );
 	}
+	SECTION( "within the unity band the multiplier is exactly 1 (no scaling)" )
+	{
+		// 4005 / 4000 = 1.00125: just outside the band, applied.
+		CHECK_THAT( Multiplier( 4005, 5.0, 800 ), WithinAbs( 1.00125, 1e-9 ) );
+		// 4003 / 4000 = 1.00075 and 3997 / 4000 = 0.99925: inside, passed through untouched.
+		CHECK( Multiplier( 4003, 5.0, 800 ) == 1.0 );
+		CHECK( Multiplier( 3997, 5.0, 800 ) == 1.0 );
+		CHECK( Multiplier( 4000, 5.0, 800 ) == 1.0 );
+		// 3995 / 4000 = 0.99875: just outside, applied.
+		CHECK_THAT( Multiplier( 3995, 5.0, 800 ), WithinAbs( 0.99875, 1e-9 ) );
+		CHECK( kUnityBand == 0.001 );
+	}
 	SECTION( "limits" )
 	{
 		// would be 0.01x and 100x: applied as 0.05x and 20x (D18).

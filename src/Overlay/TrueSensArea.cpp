@@ -1,6 +1,6 @@
 // The True Sens settings area (id `system.true_sens`, INPUT group, after Null
 // binds) -- see TrueSens.h for the core it drives and
-// superdoc/features/true-sens.md ("Area") for the rows and the wording
+// superdoc/features/true-sens.md ("The area") for the rows and the wording
 // decisions. No pixel, colour or ImGui call lives here: every row is declared
 // through ui::Area, the shell draws it.
 //
@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "SettingsOverlay.h"
 #include "UI/Registry.h"
@@ -28,6 +29,10 @@ namespace gamescope
 		// registry but never consulted by the shell, so the setter has to do the
 		// rejecting and this is where its message lives.
 		std::string s_sIngameError;
+		// TrueSens_IngameGeneration() when the error was raised: the stored value
+		// changed since (a recording replaced it, a valid entry set it) means the
+		// warning is stale and is not shown, so it never sits beside a valid field.
+		uint64_t s_ulIngameErrorGen = 0;
 
 		constexpr const char *kBadIngame = "Enter a number above 0";
 
@@ -91,10 +96,16 @@ namespace gamescope
 			if ( !d )
 			{
 				s_sIngameError = kBadIngame;
+				s_ulIngameErrorGen = TrueSens_IngameGeneration();
 				return; // the stored value is unchanged
 			}
 			s_sIngameError.clear();
 			TrueSens_SetIngameSens( (float)*d );
+		}
+
+		std::string IngameStatus()
+		{
+			return s_ulIngameErrorGen == TrueSens_IngameGeneration() ? s_sIngameError : std::string();
 		}
 
 		// ---- read-only lines -----------------------------------------------------
@@ -163,20 +174,63 @@ namespace gamescope
 			return s;
 		}
 
-		// The sheet row has room for a short line only; the core's outcome is a
-		// sentence or two. The row shows the first clause ("Low stored: 15.9 cm
-		// per 360°", "No mouse movement was seen"), the Inspector's Details shows
-		// the whole text.
-		std::string ShortOutcome( const std::string &s )
+		// A Facts value is one right-bound line, capped at 60% of the label zone:
+		// about 24 characters of the value font in a half-width column (measured at
+		// 1080p: the 26th character is already cut). The core's outcome is one to three
+		// sentences, so it is shown as several Facts rows, one line each: sentence by
+		// sentence (the first is what happened, the next what to do), a sentence
+		// wrapped at word boundaries when it is longer than a line. The first row's
+		// Details line in the Inspector still carries the whole text.
+		constexpr size_t kOutcomeLineChars = 22;
+		constexpr size_t kOutcomeRows = 8;
+
+		size_t Utf8Len( const std::string &s )
 		{
-			size_t n = s.find( " (" );
-			const size_t nDot = s.find( ". " );
-			if ( n == std::string::npos || ( nDot != std::string::npos && nDot < n ) )
-				n = nDot;
-			std::string r = s.substr( 0, n );
-			while ( !r.empty() && r.back() == '.' )
-				r.pop_back();
-			return r;
+			size_t n = 0;
+			for ( unsigned char c : s )
+				if ( ( c & 0xC0 ) != 0x80 )
+					n++;
+			return n;
+		}
+
+		// Sentences end at ". " (the end of the text counts too); a parenthesis stays
+		// in its sentence.
+		std::vector<std::string> OutcomeLines( const std::string &s )
+		{
+			std::vector<std::string> out;
+			size_t i = 0;
+			while ( i < s.size() )
+			{
+				const size_t e = s.find( ". ", i );
+				const std::string sent = e == std::string::npos ? s.substr( i ) : s.substr( i, e - i + 1 );
+				i = e == std::string::npos ? s.size() : e + 2;
+				std::string line;
+				size_t p = 0;
+				while ( p < sent.size() )
+				{
+					const size_t q = sent.find( ' ', p );
+					const std::string word = sent.substr( p, q == std::string::npos ? std::string::npos : q - p );
+					p = q == std::string::npos ? sent.size() : q + 1;
+					if ( !line.empty() && Utf8Len( line ) + 1 + Utf8Len( word ) > kOutcomeLineChars )
+					{
+						out.push_back( line );
+						line.clear();
+					}
+					line += ( line.empty() ? "" : " " ) + word;
+				}
+				if ( !line.empty() )
+					out.push_back( line );
+			}
+			return out;
+		}
+
+		// Line `n` of the last outcome; "" when there is none (the row is then hidden).
+		std::string OutcomeLine( size_t n )
+		{
+			if ( TrueSens_RecordingActive() )
+				return {};
+			const std::vector<std::string> v = OutcomeLines( TrueSens_LastOutcome() );
+			return n < v.size() ? v[ n ] : std::string();
 		}
 
 		// ---- the actions ---------------------------------------------------------
@@ -205,22 +259,22 @@ namespace gamescope
 
 		a.Keywords( "true sens sensitivity mouse dpi 360 cm per 360 edpi calibrate calibration "
 		            "same feel every game multiplier calculator record low high" );
-		// One column: the rows are a sequence (info, this game, the global values,
-		// the recording, the calculator) and greedy two-column packing would split
-		// it into two half-stories.
-		a.Columns( 1 );
+		// Two columns (the owner: "Make the UI page use two collumns."): this game and its
+		// calculator on the left, the global values and the recording on the right.
+		a.Columns( 2 );
 		a.Summary( []{ return TrueSens_GetEnabled() ? std::string( "on" ) : std::string( "off" ); } );
 		// Where the values live: outside every profile, per game (or the shared
 		// entry when no game is identified).
 		a.Badge( []{ return TrueSens_SessionKeyShared() ? std::string( "shared" ) : std::string( "per game" ); } );
 
-		// ---- info ----------------------------------------------------------------
-		a.Group( "Info" );
-
-		a.Facts( "true_sens.tip", "Tip", []{ return std::string( "A low in-game sensitivity works best" ); } )
-			.Help( "Setting a low in-game sensitivity is usually the most reliable way to use True Sens in "
-			       "a game. Record the game at a low value, then let True Sens scale it to your own feel." )
-			.Keywords( "tip advice low sensitivity" );
+		// ---- the tip (D8), then this game --------------------------------------------
+		// The owner's sentence is the captions of the two columns' first groups, left half
+		// then right half, so it reads across the top of the sheet. A group band is one
+		// line the width of its column (it ends in "..." when too long), and a Facts
+		// value is capped at ~24 characters, so neither can carry the whole sentence in
+		// one column. Fixed text, and the first thing in the area.
+		a.Group( "Setting a low in-game sensitivity is usually the" );
+		a.GroupColumn( 0 );
 
 		a.Facts( "true_sens.shared", "Game", []{ return std::string( "not identified, shared" ); } )
 			.Help( "No game was identified for this session, so these values are shared by all sessions "
@@ -228,9 +282,8 @@ namespace gamescope
 			.ShownWhen( []{ return TrueSens_SessionKeyShared(); } )
 			.Keywords( "unknown game shared" );
 
-		// ---- this game -----------------------------------------------------------
-		a.Group( "This game" );
-
+		// ---- this game (the rows below share the tip's group: a group with only the
+		// conditional "shared" row would show no caption) ------------------------------
 		a.Switch( "true_sens.enabled", "True Sens",
 		          ui::AnyBind::Of<bool>( []{ return TrueSens_GetEnabled(); },
 		                                 []( bool b ) { TrueSens_SetEnabled( b ); } ) )
@@ -262,8 +315,9 @@ namespace gamescope
 			.Help( "How much this game's mouse movement is scaled right now. Off while True Sens is off "
 			       "for this game. Read-only." );
 
-		// ---- true sensitivity (global) ---------------------------------------------
-		a.Group( "True sensitivity" );
+		// ---- true sensitivity (global): right ----------------------------------------
+		a.Group( "most reliable way to use True Sens in a game." );
+		a.GroupColumn( 1 );
 
 		a.Stepper( "true_sens.dpi", "Mouse DPI",
 		           ui::AnyBind::Of<int>( []{ return TrueSens_GetDpi(); },
@@ -274,7 +328,7 @@ namespace gamescope
 			.Default( truesens::kDefaultDpi )
 			.Keywords( "dpi mouse counts per inch cpi" );
 
-		a.Facts( "true_sens.low", "Low", []{ return TrueSens_LowText(); } )
+		a.Facts( "true_sens.low", "Low (true sensitivity)", []{ return TrueSens_LowText(); } )
 			.Help( "Your recorded Low sensitivity: the hand distance of one full turn. Read-only." );
 
 		a.Action( "true_sens.record_low", "Record Low", "Record", []{ Record( Target::Low ); } )
@@ -282,7 +336,7 @@ namespace gamescope
 			.ShownWhen( kNotRecording )
 			.Keywords( "record low true sensitivity calibrate turn 360" );
 
-		a.Facts( "true_sens.high", "High", []{ return TrueSens_HighText(); } )
+		a.Facts( "true_sens.high", "High (true sensitivity)", []{ return TrueSens_HighText(); } )
 			.Help( "Your recorded High sensitivity: the hand distance of one full turn. Read-only." );
 
 		a.Action( "true_sens.record_high", "Record High", "Record", []{ Record( Target::High ); } )
@@ -292,6 +346,7 @@ namespace gamescope
 
 		// ---- recording -------------------------------------------------------------
 		a.Group( "Recording" );
+		a.GroupColumn( 1 );
 
 		a.Action( "true_sens.stop", "Stop recording", "Stop", []{ TrueSens_StopRecording(); } )
 			.Help( "Ends the recording and stores it, if you turned once around and the game held the "
@@ -303,21 +358,34 @@ namespace gamescope
 			.Help( "Which recording is running and how far the mouse has moved sideways so far. Read-only." )
 			.ShownWhen( kRecording );
 
-		a.Facts( "true_sens.outcome", "Last recording", []{ return ShortOutcome( TrueSens_LastOutcome() ); } )
-			.Help( "What the last recording stored, or why nothing was stored. Read-only." )
-			.ShownWhen( []{ return !TrueSens_RecordingActive() && !TrueSens_LastOutcome().empty(); } )
+		// The outcome, in full: line 1 is what happened, the lines after it what to do
+		// (see OutcomeLines). Same help on every row; the first carries the Details.
+		static constexpr const char *kOutcomeHelp =
+			"What the last recording stored, or why nothing was stored, and what to do about it. Read-only.";
+		a.Facts( "true_sens.outcome", "Last recording", []{ return OutcomeLine( 0 ); } )
+			.Help( kOutcomeHelp )
+			.ShownWhen( []{ return !OutcomeLine( 0 ).empty(); } )
 			.Live( "detail", []{ return ui::Fact{ "result", TrueSens_LastOutcome() }; } );
+		for ( size_t n = 1; n < kOutcomeRows; n++ )
+		{
+			static std::string sIds[ kOutcomeRows ];
+			sIds[ n ] = "true_sens.outcome_" + std::to_string( n + 1 );
+			a.Facts( sIds[ n ].c_str(), "", [n]{ return OutcomeLine( n ); } )
+				.Help( kOutcomeHelp )
+				.ShownWhen( [n]{ return !OutcomeLine( n ).empty(); } );
+		}
 
-		// ---- calculator (D9, D17) ------------------------------------------------------
+		// ---- calculator (D9, D17): about this game, so left, under its rows -------------
 		a.Group( "Calculator" );
+		a.GroupColumn( 0 );
 
-		a.Text( "true_sens.ingame", "In-game value used",
+		a.Text( "true_sens.ingame", "In-game value",
 		        ui::AnyBind::Of<std::string>( []{ return IngameText(); },
 		                                      []( std::string s ) { SetIngameText( s ); } ) )
 			.Help( "The in-game sensitivity value you had set when you recorded this game. Numbers with a "
-			       "dot or a comma both work." )
+			       "dot or a comma both work. Recording the game again clears it: enter the value again." )
 			.Validate( ValidateIngame )
-			.StatusWhen( []{ return s_sIngameError; } )
+			.StatusWhen( []{ return IngameStatus(); } )
 			.Keywords( "calculator in-game value sensitivity number" );
 
 		a.Facts( "true_sens.calc", "Set in the game", []{ return CalcLine(); } )
