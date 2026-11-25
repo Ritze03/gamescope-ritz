@@ -13,6 +13,10 @@ All notable user-facing changes, newest first. Categories:
 - **Appearance**: new slider "Outside margin" sets how much space is left around the
   settings window.
 
+### Removed
+- **Learned motion**: the "Learned net" choice is gone; Learned always uses its default
+  network.
+
 ### Info
 - **Appearance**: Window transparency now starts at 0.95; an existing setup keeps its
   value.

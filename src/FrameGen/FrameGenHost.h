@@ -89,7 +89,7 @@ namespace fghost
 	// Learned (2026-10-26, experimental, opt-in): V1 with its motion search replaced by a
 	// small learned conv net (the library's MotionVersion::Learned). Needs flowScale 2, so the
 	// Quality row's Performance is ignored while it runs; a refused Learned runs V1 and
-	// RenderStatus::motionNote says why. Its runtime settings are Config::learnedNet /
+	// RenderStatus::motionNote says why. Its runtime settings are Config::
 	// learnedHalf / learnedZeroTest / learnedStaticGuard (Motion blur's own Motion version
 	// borrows them).
 	// V3 (2026-11-19): the library's MotionVersion::V3, a fourth value of the same two bits (its settings:
@@ -97,15 +97,6 @@ namespace fghost
 	// (2026-11-23) is NOT a fifth value: it is Motion::V3 plus Config::v3Blend (superdoc/features/
 	// frame-generation-v3-hybrid.md), and every Motion::V3 check applies to it.
 	enum class Motion : uint8_t { V1, V2, Learned, V3 };
-
-	// Learned's weights, with the values of framegen::LearnedNet (round 3 of Learned, 2026-10-27):
-	// E2v5 = the default (width 24, e2v4 fine-tuned further), E1v5 = the small net (width 12, about
-	// 2.4x cheaper, the fallback when E2v5 costs too much), E2v4 / E1v4 = round 2's nets, E2v3 /
-	// E1v3 = round 1's, G2v2 / G2v3 = round 4b's colour and learned-features nets trained on games, M2v2 / M2v3 =
-	// the same two as allrounders. Old values keep their numbers. Packed in the Learned word (bits 0-3),
-	// not the main one. Runtime.
-	enum class LearnedNet : uint8_t { E2v3 = 0, E1v3 = 1, E2v4 = 2, E1v4 = 3, E2v5 = 4, E1v5 = 5,
-	                                   G2v2 = 6, G2v3 = 7, M2v2 = 8, M2v3 = 9 };
 
 	// The crosshair box's side, in tenths of a percent of the game's height
 	// (25 = 2.5%). The library's side = clamp(round(height * frac), 8, min(w, h)).
@@ -287,13 +278,12 @@ namespace fghost
 		// Packed at bit 8 of the UI-box word.
 		bool uiWholeFrame = false;
 		Motion motion = Motion::V1;
-		// Motion::Learned only (every other version ignores all four): which net, whether its
+		// Motion::Learned only (every other version ignores all three): whether its
 		// activations are stored as half (cheaper, tiny quality cost) instead of float32, ml-fg's
 		// zero-motion test (on: the vector becomes 0 where a still pixel fits as well as the
 		// net's motion; fixes most of the warped static HUD, ~0.006 ms at 1080p) and ml-fg's
 		// static guard (off: a full-res pass per generated frame, ~0.05 ms at 1080p, that shows
 		// the plain time mix where both frames are locally identical and the motion is small).
-		LearnedNet learnedNet = LearnedNet::E2v5;
 		bool learnedHalf = false;
 		bool learnedZeroTest = true;
 		bool learnedStaticGuard = false;

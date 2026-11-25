@@ -34,7 +34,7 @@
 // looked at. The one exception (2026-11-19) is the "Motion search" group at the end
 // of the area (search radius, coarsest-level radius, pyramid smallest level, search
 // penalty): the user asked to watch what more reach does while a game runs.
-// EXPERT SETTINGS (2026-11-20). The Learned, V3 and Motion search rows (14 in all; the Motion guard is no
+// EXPERT SETTINGS (2026-11-20). The Learned, V3 and Motion search rows (13 in all; the Motion guard is no
 // Expert row since 2026-11-23, it sits above Artifact safety while V3 is selected) are hidden
 // (ShownWhen) unless the "Expert settings" switch (`framegen.expert`) is on AND the row acts on the
 // effective motion version; while it is off the renderer gets their DEFAULTS
@@ -98,12 +98,6 @@ namespace gamescope
 			}();
 			return k;
 		}
-		// The ids are the indices into kLearnedNetKeys (GUI order); kLearnedNets maps them to the host enum.
-		constexpr ui::Option kLearnedNetOptions[] = {
-			{ 0, "e2v5 (default)" }, { 1, "e1v5 (small, cheaper)" }, { 2, "e2v4 (round 2)" }, { 3, "e1v4 (round 2, small)" },
-			{ 4, "e2v3 (round 1)" }, { 5, "e1v3 (round 1, small)" },
-			{ 6, "g2v2 Colour (games)" }, { 7, "g2v3 Features (games)" },
-			{ 8, "m2v2 Colour (allround)" }, { 9, "m2v3 Features (allround)" } };
 		constexpr ui::Option kLearnedPrecOptions[] = { { 0, "Full" }, { 1, "Half" } };
 		constexpr ui::Option kSafetyOptions[]  = { { 3, "Off" }, { 4, "Very low" }, { 0, "Low" }, { 1, "Default" }, { 2, "High" } };
 		// Debug view: ids = fghost::kDebugViewKeys indices (FrameGenDebug.h), the row's order.
@@ -137,12 +131,6 @@ namespace gamescope
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
 		// Index 0-3 = fghost::Motion's values; 4 = "v3_hybrid", which is Motion::V3 plus a blend (no fifth enum value).
 		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3", "v3_hybrid" };
-		constexpr const char *kLearnedNetKeys[] = { "e2v5", "e1v5", "e2v4", "e1v4", "e2v3", "e1v3", "g2v2", "g2v3", "m2v2", "m2v3" };
-		constexpr fghost::LearnedNet kLearnedNets[] = {
-			fghost::LearnedNet::E2v5, fghost::LearnedNet::E1v5, fghost::LearnedNet::E2v4,
-			fghost::LearnedNet::E1v4, fghost::LearnedNet::E2v3, fghost::LearnedNet::E1v3,
-			fghost::LearnedNet::G2v2, fghost::LearnedNet::G2v3,
-			fghost::LearnedNet::M2v2, fghost::LearnedNet::M2v3 };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		constexpr const char *kGuardKeys[]   = { "off", "guard", "v2_motion" };
@@ -252,7 +240,6 @@ namespace gamescope
 				c.motion = m.motion;
 				c.v3Blend = m.blend;
 			}
-			c.learnedNet = kLearnedNets[ IndexOf( f.learned_net, kLearnedNetKeys, 10, 0 ) ];
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
 			c.learnedStaticGuard = f.learned_static_guard;
@@ -275,7 +262,7 @@ namespace gamescope
 		// PanelFrameGen_ApplyStartupConfig().
 		void PushToRenderer( const config::FrameGenSettings &f )
 		{
-			// The effective values: with Expert settings off the 14 tuning values are the defaults (no "ghost settings").
+			// The effective values: with Expert settings off the 13 tuning values are the defaults (no "ghost settings").
 			const config::FrameGenSettings e = config::FrameGenEffective( f );
 			fghost::SetConfig( ToHostConfig( e ) );
 			// Debug options: the children are already false while the master switch is off.
@@ -312,7 +299,7 @@ namespace gamescope
 			return s_Settings.framegen.enabled;
 		}
 
-		// Learned net / precision / zero-motion test / static guard rows: they matter only while Learned motion is what the
+		// Learned precision / zero-motion test / static guard rows: they matter only while Learned motion is what the
 		// interpolator actually runs. That is Frame generation's Motion version, or Motion blur's
 		// own one while the blur is on and "Use Frame generation's settings" is off (the blur
 		// then borrows these rows -- they are Frame generation's only), and
@@ -406,7 +393,7 @@ namespace gamescope
 			return ReachRowsUsable() && PenaltyVersionApplies();
 		}
 
-		// Expert settings (2026-11-20): the 14 tuning rows are SHOWN (Entry::ShownWhen, so also absent from keyboard
+		// Expert settings (2026-11-20): the 13 tuning rows are SHOWN (Entry::ShownWhen, so also absent from keyboard
 		// navigation and the command palette) only while the switch is on and the row acts on the effective motion
 		// version. Not whether frame generation is on: a shown row is greyed by its DisabledUnless() instead.
 		bool ExpertOn()
@@ -627,8 +614,8 @@ namespace gamescope
 			       "V3 Hybrid: Motion version 3 with a learned blend (experimental). "
 			       "Learned is an experimental, opt-in estimator: a small neural network finds the "
 			       "motion instead of V1's search, then V1 makes the picture. It costs several "
-			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms with e2v5, 0.6 ms "
-			       "with the small e1v5, V1 0.3 ms) and always works at Quality's resolution, so the "
+			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms, "
+			       "V1 0.3 ms) and always works at Quality's resolution, so the "
 			       "Quality row's Performance is ignored. Static HUD text over moving scenery can "
 			       "still get a little torn; the Zero-motion test (shown with Expert settings on) fixes most of it. Two "
 			       "identical frames are left alone. If it cannot run the Status line says why and "
@@ -860,34 +847,16 @@ namespace gamescope
 		a.Group( "Learned motion" );
 		a.GroupColumn( 1 );
 
-		a.Choice( "framegen.learned_net", "Learned net",
-			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.learned_net, kLearnedNetKeys, 10, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_net = kLearnedNetKeys[ ClampIdx( n, 9 ) ]; PersistAndPush(); } ),
-			kLearnedNetOptions, std::size( kLearnedNetOptions ) )
-			.Help( "Which trained network Learned motion uses (experimental). e2v5 is the default "
-			       "and the best one: about 1.4 ms of GPU time at 1080p 2x. e1v5 is the small one, "
-			       "about 2.4 times cheaper (about 0.6 ms) and the one to pick when e2v5 costs too "
-			       "much. e2v4 / e1v4 and e2v3 / e1v3 are the earlier versions of the same two nets, kept for "
-			       "comparing. g2v2 and g2v3 are the colour and learned-features nets "
-			       "trained on games, m2v2 and m2v3 the allrounders (about 1.8 / 1.9 ms at 1080p 2x, "
-			       "colour / features); the allround features net m2v3 held up best even on game "
-			       "clips in the library's spot check. Motion blur's Learned borrows this and the rows below: it has no "
-			       "copy of its own. Only used while Motion version is Learned." )
-			.Default( 0 )
-			.Keywords( "frame generation learned net network e2v5 e1v5 e2v4 e1v4 e2v3 e1v3 colour features g2v2 g2v3 m2v2 m2v3 games allround small neural ml weights experimental" )
-			.ShownWhen( ShowLearnedRows )
-			.DisabledUnless( LearnedRowsUsable, "Motion version is not Learned (or nothing that uses it is on)" );
-
 		a.Choice( "framegen.learned_half", "Learned precision",
 			ui::AnyBind::Of<int>(
 				[]{ EnsureConfigLoaded(); return s_Settings.framegen.learned_half ? 1 : 0; },
 				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.learned_half = n == 1; PersistAndPush(); } ),
 			kLearnedPrecOptions, std::size( kLearnedPrecOptions ) )
 			.Help( "How Learned motion stores its working data. Full is the exact version. Half "
-			       "uses half the memory and about a quarter less GPU time (e2v5, 1080p: about "
-			       "1.1 ms instead of 1.4) for a tiny, hardly visible difference. Only used while "
-			       "Motion version is Learned." )
+			       "uses half the memory and about a quarter less GPU time (1080p: about "
+			       "1.1 ms instead of 1.4) for a tiny, hardly visible difference. Motion blur's "
+			       "Learned borrows this and the rows below: it has no copy of its own. Only used "
+			       "while Motion version is Learned." )
 			.Default( 0 )
 			.Keywords( "frame generation learned precision half full fp16 fp32 float memory experimental" )
 			.ShownWhen( ShowLearnedRows )
