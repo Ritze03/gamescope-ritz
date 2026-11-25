@@ -1,7 +1,7 @@
 # Frame generation: V3.5 and V3.5 Hybrid
 
 Part of [Frame generation](frame-generation.md). Two experimental entries in the **Motion version**
-list (2026-11-25, library pin `1ccc602`), built exactly like [V3 Hybrid](frame-generation-v3-hybrid.md):
+list (added 2026-11-25; library pin `a1d18f9` since 2026-11-26, `1ccc602` before), built exactly like [V3 Hybrid](frame-generation-v3-hybrid.md):
 each is `Motion::V3` plus extra settings, so every rule of [Motion version 3](frame-generation-motion-v3.md)
 applies.
 
@@ -56,11 +56,14 @@ In both cases the status reads `V3.5(off)` (see below) because `v3MotionActive()
 
 ## First use and cost
 
-The four V3.5 pipelines (`v35_stats`, `v35_rgn`, `v35_reg`, `v3_dense_35`) are created lazily inside the first
+The five V3.5 pipelines (`v35_stats`, `v35_rgn`, `v35_reg`, `v3_dense_35`, `v3_search_35`) are created lazily inside the first
 `setSettings()` with `v3Motion != 0`. First switch 0 to 1 on a running interpolator: about 275 ms with an empty
-shader cache, 0.33 ms warm, later 0 ms. We accept this one hitch (no extra machinery). Cost per real pair at
-1080p, 8-bit, V3 to V3.5: about +0.5 ms (2x 0.95 to 1.47 ms, 4x 1.43 to 1.93 ms), about +0.63 ms at 1440p;
-the Hybrids the same amount on top of V3 Hybrid.
+shader cache, 0.33 ms warm, later 0 ms (both measured at `1ccc602` with four pipelines; the fifth makes the
+cold first switch a little longer, not re-measured). We accept this one hitch (no extra machinery). Cost per real pair, V3 to V3.5, the library's own
+measurement at pin `a1d18f9` (the host did not re-measure): about +0.30 ms at flow scale 2, subpixel on,
+1440x1080, 2x; about +0.15 ms at flow scale 4, subpixel off. At `1ccc602` it was about +0.43 ms and +0.24 ms
+(the library's figures), and 1080p 8-bit measured here then: about +0.5 ms (2x 0.95 to 1.47 ms, 4x 1.43 to
+1.93 ms). The Hybrids cost the same amount on top of V3 Hybrid.
 
 ## Where it shows
 
@@ -73,7 +76,7 @@ the Hybrids the same amount on top of V3 Hybrid.
 and publishes it (`g_bV35Active`, read through `fghost::V35Active()`); `fghost::V35Label()` formats it. The
 capture dump lists `setting v3Motion=N`.
 
-## Library contract (pin `1ccc602`)
+## Library contract (pin `a1d18f9`)
 
 `framegen::Settings::v3Motion`: `uint8_t` at offset 155 (a former padding byte before `flowScale`), so
 `sizeof(Settings)` stays 164 and the two `static_assert`s are unchanged. `kV3MotionClassic` = 0 (byte-identical
@@ -84,7 +87,9 @@ V3.5's motion); `v3ColourWindow` is ignored.
 
 **Build:** this repo does not use the library's `gpu/meson.build`; `src/meson.build` lists the shaders itself. The
 pin added `v35_stats`, `v35_rgn` and `v35_reg` (plain compiles, in the `framegen_shaders` name list) and
-`v3_dense` with `-DV35=1` into `v3_dense_35_spv` (in the `-DV3J=1` / `-DV3L=1` / `-DV3B=1` list). Without them
+`v3_dense` and `v3_search` with `-DV35=1` into `v3_dense_35_spv` and `v3_search_35_spv` (in the `-DV3J=1` /
+`-DV3L=1` / `-DV3B=1` list; the search variant came with `a1d18f9`, which also made the regularisation cheaper,
+no API change). Without them
 the build fails (the library includes them unconditionally).
 
 ## Honest state
