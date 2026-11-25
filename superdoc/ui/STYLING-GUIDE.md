@@ -45,8 +45,19 @@ a.Slider( "overlay.example.opacity", "Opacity",
 - Do NOT add a disabled state without a reason: `.DisabledUnless( pred, "Why it is off." )` has no
   overload without one, and the reason renders in the Inspector. Do NOT fold a launch-flag lock into
   it; use `.LockedByLaunchOption()` (a separate slot, because a row can need both).
-- Do NOT put a `Facts`/`Meter` where a setting belongs: they are read-only kinds, excluded from the
-  palette, and have no setter.
+- Do NOT put a `Facts`/`Meter`/`Note` where a setting belongs: they are read-only kinds, excluded
+  from the palette, and have no setter.
+- Use `Note` for running text the player must read in the sheet (a tip at the top of an area, the
+  outcome of an action): `a.Note( id, "Title", fnText ).Lines( n ).Help( "..." )`, plus
+  `.FullWidth()` for a band across the sheet above the columns (declare it first) and
+  `.Tone( fn )` for orange (`NoteTone::Warn`) when it is a warning. Do NOT use it for a value
+  (that is a `Facts`: label left, one short value right), as a substitute for a label or for the
+  row's `.Help()`, or for more than one or two sentences. `Lines( n )` is the height it reserves
+  whatever the text, so rows beside and below never move; longer text ends in "..." and the
+  Inspector shows it whole. Pick n for the longest text at the narrowest two-column width.
+  `Why:` True Sens's tip and last-recording outcome had no row that could hold a sentence; they
+  were faked with group captions and eight Facts rows, and the owner's rule is that the controls
+  must not move around while the text changes.
 - Use `.Dropdown()` on a `Choice` only when the option set is user-created or unbounded; a fixed few
   words stays a plain `Choice`, which picks segmented vs dropdown by measurement. `Why:` a caller
   cannot pick wrong because a caller does not pick.
@@ -147,7 +158,14 @@ bool bChanged = ui::controls::Switch( row, "##my_switch", &bValue );
   `Place()` clamps to the lane so an over-wide atom shrinks rather than escaping left.
 - Do NOT draw a value readout beside a control that displays its own value. `UsesValueColumn( Kind )`
   decides: `Switch`, `Slider`, `Stepper`, `Meter`, `Composite` use the value column; `Choice`,
-  `Text`, `Bank`, `Action`, `Facts` self-display.
+  `Text`, `Bank`, `Action`, `Facts`, `Note` self-display.
+- A `Note` is the one row that is not 44 units tall: its height is 44 plus 22 (`notemetrics::kLineH`)
+  per line after the first, so `Lines( 1 )` is exactly a row. Its text is `TypeRole::Label`
+  (normal case, not the caption style) in `Role::TextBody` (`TextPrimary` while selected,
+  `Role::WarnText` for the warning tone), from the label edge to the control edge of the lane,
+  with the same hover and selected fills and bottom rule as a row. It has no value, control or
+  affordance chevron. Any new code that advances a y cursor past an entry must use
+  `EntryHeightPx()` in `Shell.cpp`, never `kRowH * LinesFor()`.
 - Use `SplitLabelZone()` (label and value from one subdivision) rather than computing two rects.
   For a fixed-size atom well inside the control zone (a switch, a stepper) pass the control's left edge
   so the value sits next to it instead of stranded at `Lw`.
