@@ -181,6 +181,7 @@ static bool vulkan_compress_output_images()
 // bumped inside LayerStack_t::push(), read by "layer_budget_stats" below.
 std::atomic<uint64_t> g_nLayerPushDrops{ 0 };
 std::atomic<int> g_nLayerPushMaxCount{ 0 };
+std::atomic<int> g_nPlacedZoomFailure{ 0 };
 
 static void vk_errorf(VkResult result, const char *fmt, ...) {
 	static char buf[1024];
@@ -6293,6 +6294,8 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 	// full; the frame then draws without it rather than without something
 	// else. YCbCr and HDR bases are skipped too, as the effects pass skips
 	// them -- the sampler would not give encoded RGB back.
+	const bool bPlacedZoom = frameInfo->zoom.bActive && frameInfo->zoom.bPlaced;
+	int nPlacedFailure = 1; // 0 once the projection is built (placed requests only)
 	if ( frameInfo->zoom.bActive && frameInfo->layers.count() > 0 && frameInfo->layers.get( 0 ).tex )
 	{
 		const FrameInfo_t::Layer_t &base = frameInfo->layers.get( 0 );
@@ -6302,8 +6305,8 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 		{
 			const float flOnScreenW = (float)base.tex->width() / base.scale.x;
 			const float flOnScreenH = (float)base.tex->height() / base.scale.y;
-			const uint32_t uW = std::clamp( (uint32_t)lroundf( frameInfo->zoom.flWidth * flOnScreenW ), 4u, currentOutputWidth );
-			const uint32_t uH = std::clamp( (uint32_t)lroundf( frameInfo->zoom.flHeight * flOnScreenH ), 4u, currentOutputHeight );
+			const uint32_t uW = std::clamp( (uint32_t)lroundf( bPlacedZoom ? frameInfo->zoom.flPlaceW : frameInfo->zoom.flWidth * flOnScreenW ), 4u, currentOutputWidth );
+			const uint32_t uH = std::clamp( (uint32_t)lroundf( bPlacedZoom ? frameInfo->zoom.flPlaceH : frameInfo->zoom.flHeight * flOnScreenH ), 4u, currentOutputHeight );
 			const float flFactor = std::max( frameInfo->zoom.flFactor, 1.0f );
 
 			// The projection is placed at WHOLE pixels (the composite then
@@ -6318,11 +6321,12 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 			// at most half a source texel, which is not visible.
 			const float flCenterX = -base.offset.x + flOnScreenW * 0.5f;
 			const float flCenterY = -base.offset.y + flOnScreenH * 0.5f;
-			const float flDstX = std::floor( flCenterX - (float)uW * 0.5f );
-			const float flDstY = std::floor( flCenterY - (float)uH * 0.5f );
+			const float flDstX = bPlacedZoom ? std::floor( frameInfo->zoom.flPlaceX ) : std::floor( flCenterX - (float)uW * 0.5f );
+			const float flDstY = bPlacedZoom ? std::floor( frameInfo->zoom.flPlaceY ) : std::floor( flCenterY - (float)uH * 0.5f );
 
 			if ( frameInfo->layers.count() >= k_nMaxLayers )
 			{
+				nPlacedFailure = 2;
 				static uint32_t s_nDropped = 0;
 				if ( ( ++s_nDropped % 600 ) == 1 )
 					vk_log.warnf( "zoom layer dropped: layer budget full (%d/%d), %u drop(s) so far",
@@ -6330,11 +6334,21 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 			}
 			else if ( update_zoom_image( uW, uH ) )
 			{
+				nPlacedFailure = 0;
+				// A placed request names its own source part: the centre as a fraction of the base
+				// texture and the part's height as a fraction of the texture's height (the same on
+				// both axes, so the part is square in source texels). No outline ring.
+				const float flSrcCx = bPlacedZoom ? frameInfo->zoom.flSrcCenterX * (float)base.tex->width()
+					: ( flDstX + (float)uW * 0.5f + base.offset.x ) * base.scale.x;
+				const float flSrcCy = bPlacedZoom ? frameInfo->zoom.flSrcCenterY * (float)base.tex->height()
+					: ( flDstY + (float)uH * 0.5f + base.offset.y ) * base.scale.y;
+				const float flSrcPerDstX = bPlacedZoom ? frameInfo->zoom.flSrcHeightFrac * (float)base.tex->height() / (float)uH
+					: base.scale.x / flFactor;
+				const float flSrcPerDstY = bPlacedZoom ? flSrcPerDstX : base.scale.y / flFactor;
 				cmdBuffer->uploadConstants<ZoomPushData_t>(
-					( flDstX + (float)uW * 0.5f + base.offset.x ) * base.scale.x,
-					( flDstY + (float)uH * 0.5f + base.offset.y ) * base.scale.y,
-					base.scale.x / flFactor, base.scale.y / flFactor,
-					uW, uH, frameInfo->zoom.bCircle, 1u,
+					flSrcCx, flSrcCy,
+					flSrcPerDstX, flSrcPerDstY,
+					uW, uH, bPlacedZoom ? false : frameInfo->zoom.bCircle, bPlacedZoom ? 0u : 1u,
 					// Already ramped to 0 through the fade's phase 1 by
 					// Zoom_FillRequest() (Zoom_SharpenRamp, Zoom.h) -- see
 					// zoom.md's fade-identity invariant this preserves.
@@ -6372,6 +6386,13 @@ std::optional<uint64_t> vulkan_composite( const struct FrameInfo_t *pCallerFrame
 				z.colorspace = effectsFrameInfo.layers.get( 0 ).colorspace;
 			}
 		}
+	}
+
+	if ( bPlacedZoom )
+	{
+		// Tell the HUD whether the live half exists; when that changes it must repaint to switch layout.
+		if ( g_nPlacedZoomFailure.exchange( nPlacedFailure, std::memory_order_relaxed ) != nPlacedFailure )
+			force_repaint();
 	}
 
 	if ( frameInfo->useFSRLayer0 )

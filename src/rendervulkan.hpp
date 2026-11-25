@@ -47,6 +47,11 @@ class CVulkanCmdBuffer;
 // reached, so "how close did we get" is answerable even when nothing dropped.
 extern std::atomic<uint64_t> g_nLayerPushDrops;
 extern std::atomic<int> g_nLayerPushMaxCount;
+// Result of the last composite that carried a PLACED zoom request (FrameInfo_t::Zoom_t::bPlaced,
+// True Sens' live half): 0 = built, else why not (1 no usable base (not SDR / YCbCr / none) or
+// the texture could not be made, 2 no free layer slot). Written by vulkan_composite(), read by
+// the HUD; starts optimistic.
+extern std::atomic<int> g_nPlacedZoomFailure;
 
 #define k_nMaxYcbcrMask 16
 #define k_nMaxYcbcrMask_ToPreCompile 3
@@ -417,6 +422,20 @@ struct FrameInfo_t
 		// straight to ZoomPushData_t's constructor (rendervulkan.cpp) with
 		// no further mapping.
 		float flSharpen = 0.0f;
+
+		// A SECOND USER of this request (True Sens' live half, 2026-11-25,
+		// TrueSensHud.cpp / true-sens.md "Reference picture"): an explicit
+		// placement. When bPlaced is set (with bActive) the projection is a
+		// rectangle of exactly flPlaceW x flPlaceH output pixels whose
+		// top-left is (flPlaceX, flPlaceY) -- instead of being centred on
+		// layer 0 -- showing the base around (flSrcCenterX/Y), as FRACTIONS of
+		// the base texture, with the projection's height covering
+		// flSrcHeightFrac of the base texture's height (no factor, no circle,
+		// no outline ring). Not set = the user's Zoom, byte for byte as before.
+		bool  bPlaced = false;
+		float flPlaceX = 0.0f, flPlaceY = 0.0f, flPlaceW = 0.0f, flPlaceH = 0.0f;
+		float flSrcCenterX = 0.5f, flSrcCenterY = 0.5f;
+		float flSrcHeightFrac = 0.125f;
 	} zoom;
 
 	gamescope::Rc<CVulkanTexture> shaperLut[EOTF_Count];
