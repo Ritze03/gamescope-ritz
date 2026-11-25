@@ -46,8 +46,21 @@ All pure, in `gamescope::truesens` (`TrueSens.h`):
 | `counts_360` | Mouse counts for one 360° turn at the game's in-game setting, measured with the multiplier off (per game). |
 | `true_inches` | The player's hand distance per 360° = counts / DPI at recording time (global, Low and High). Shown as cm (x 2.54). |
 | `TargetCounts` | `true_inches x dpi`: the counts one turn should take. |
-| `Multiplier( game_counts, true_inches, dpi )` | `game_counts / (true_inches x dpi)`. **1.0** for any invalid input (0, negative, non-finite, no DPI); otherwise limited to **0.05x .. 20x** (D18). |
-| `IngameSensForTarget( typed, game_counts, true_inches, dpi )` | The calculator: `typed x game_counts / target_counts`, nullopt for invalid input, not limited. Assumes the game's turn per count is proportional to its sensitivity value (true for most games, not all). |
+| `recorded_sens` / `ingame_sens` | The in-game value the game was set to when `counts_360` was recorded / the value it is set to now (per game, both typed by the player or taken from the typing; 0 = unknown). |
+| `EffectiveCounts( counts_360, recorded, entered )` | `counts_360 x recorded / entered` when both are valid and above 0, else `counts_360` unchanged: a game's turn per count is taken as proportional to its sensitivity value, so counts per turn go with 1 / value. |
+| `Multiplier( game_counts, true_inches, dpi )` | `game_counts / (true_inches x dpi)`, called with the **effective** counts. In effect `best value / entered value`. **1.0** for any invalid input (0, negative, non-finite, no DPI); otherwise limited to **0.05x .. 20x** (D18). |
+| `IngameSensForTarget( typed, game_counts, true_inches, dpi )` | The best in-game value: `typed x game_counts / target_counts`, called with `recorded_sens` as `typed`, so it does not depend on `ingame_sens`. nullopt for invalid input, not limited. Assumes the game's turn per count is proportional to its sensitivity value (true for most games, not all). |
+
+`Why the entered value (2026-11-25):` the owner's procedure: *"1. User enters the current ingame
+sensitivity (example: 7)  2. User does the measurement.  A/B, two routes from there.  A3. The user
+just uses the sensitivity he had before and gamescope-ritz does the rest (like it works now).  B3.
+gamescope-ritz tells the user what ingame sensitivity would be perfect (example: 4.3356)  B4. The
+user sets it to the closest value possible (example: 4)  B5. The user then enters the new
+sensitivity (4) in gamescope-ritz and it then makes the adjustment from 4->4.3356 instead of
+7->4.3356"*. With the value remembered with the recording, route B ends with a multiplier near 1
+(best 4.3356, entered 4: 4.3356 / 4 = 1.08x, instead of 4.3356 / 7 = 0.62x), so True Sens only
+corrects the small rest and the game's own sensitivity does most of the work. Route A (nothing
+entered, or the value left as recorded) is unchanged.
 
 `Why a distance, not counts:` the stored Low/High are `counts / DPI`, so changing the DPI
 needs no new recording; only the target counts change. With one mouse only the ratio
@@ -79,7 +92,8 @@ Per game, `profiles.games.<key>.true_sens` (`config::GameTrueSens`, a member of
 | `enabled` | bool | false | The per-game switch. |
 | `counts_360` | float | 0 (not recorded) | Counts per turn at the game's setting, multiplier off. Clamped 0..10M. |
 | `profile` | `"low"` / `"high"` | `"low"` | Which true sensitivity this game uses. An unknown string loads `"low"`. |
-| `ingame_sens` | float | 0 (unset) | The calculator's typed in-game value, stored so the area only needs a row. |
+| `ingame_sens` | float | 0 (unset) | The in-game value the game is set to **now**, the one field the player types. Clamped 0..1M. |
+| `recorded_sens` | float | 0 (unknown) | The in-game value the game was set to when `counts_360` was recorded. Same clamp. Written only when not 0. |
 
 ```json
 {
@@ -89,7 +103,7 @@ Per game, `profiles.games.<key>.true_sens` (`config::GameTrueSens`, a member of
     "games": {
       "252490": {
         "selected": "", "audio_node": "",
-        "true_sens": { "enabled": true, "counts_360": 5000.0, "profile": "low", "ingame_sens": 0.8 }
+        "true_sens": { "enabled": true, "counts_360": 5000.0, "profile": "low", "ingame_sens": 4.0, "recorded_sens": 7.0 }
       }
     }
   }
@@ -100,6 +114,12 @@ The `true_sens` object is written only once a value differs from its default; a 
 whose True Sens values are all defaults (and that says nothing else) is not written
 (`AssignmentsToJson`'s "says nothing" test includes `GameTrueSens::IsDefault()`). No schema
 bump: absent means default, as for every additive key (see `config-system.md`).
+
+**Old files.** An entry with `counts_360` > 0, `ingame_sens` > 0 and no `recorded_sens` is
+normalised **on load** (`GameTrueSensFromJson`): `recorded_sens` = `ingame_sens`, because the typed
+value used to be the one the recording was made at. Multiplier and best value are then exactly
+what they were before the key existed (unit-tested). `Why on load and not in the maths:` the maths
+stays one rule (unknown = unchanged), and the typing rule below stores the same.
 
 **Out of every profile.** These values live outside the `Settings` sections, so a profile
 file, a settings export/import (`profile-export.md`) and profile inheritance never carry
@@ -352,10 +372,16 @@ The rules of the result:
 
 - **Result.** A valid recording of `Low` or `High` stores `low_inches`/`high_inches` =
   counts / DPI **and** the current game's `counts_360` = counts (D12: same measurement). A
-  `Game` recording stores only `counts_360`. Every valid recording also resets the game's typed
-  `ingame_sens` to 0: it belongs to the recording it was typed for, and `old_typed x new_counts /
-  target` would be a wrong number, so the calculator asks for the value again. A failed
+  `Game` recording stores only `counts_360`. Every valid recording also stores `recorded_sens` =
+  the current `ingame_sens` (0 when the field is empty) and no longer resets `ingame_sens`: the
+  game is still set to that value, and the field is the one the player keeps up to date. A failed
   recording changes nothing.
+- **Typing the value** (`TrueSens_SetIngameSens`) stores `ingame_sens`; when a recording exists
+  and `recorded_sens` is 0, the same value is stored as `recorded_sens` too (a value typed after a
+  recording that has none is the one it was made at). Emptying the field sets `ingame_sens` to 0
+  and keeps `recorded_sens`; the multiplier then falls back to plain `counts_360`. A change of
+  `ingame_sens` refreshes the hook's atomics at once (`SetGame()` calls `Refresh()`), no
+  recording, restart or switch toggle needed.
 - **Too little movement (D14).** Fewer than 200 net counts (`kMinRecordingCounts`) stores
   nothing and gives a plain reason: no samples at all, "No mouse movement was seen. The game
   has to hold the mouse (cursor hidden) while you turn."; below the floor, "Too little mouse
@@ -394,9 +420,10 @@ The rules of the result:
 - A left click bound to a keybind chord still fires its action on a recording click (the
   keybind engine is asked first); only the game is spared the click.
 - A recording must be exactly one 360° turn ending where it started; two turns store double.
-- The calculator assumes turn per count proportional to the in-game value. After setting the
-  calculated value in the game, switch True Sens off for that game (or record it again),
-  otherwise the correction applies twice.
+- The in-game value maths assumes turn per count proportional to the value (true for most games,
+  not all). After setting the best value (or the nearest the game allows) in the game, the player
+  must enter what was set, otherwise the correction applies twice; a value the game does not
+  follow proportionally gives a multiplier that is off by that much.
 - Two gamescope instances running at once each rewrite `global.json` from their own copy, so a
   value recorded in one can be overwritten by the other's next write (the same existing
   behaviour as the per-game volume and the selected profile). Low and High are global, so this
@@ -408,7 +435,7 @@ Declared in `TrueSens.h`, for the settings area, hint and picture: recording sta
 (`TrueSens_RecordingActive` true while armed or recording, `_RecordingPhase`, `_RecordingTarget`,
 `_RecordingNet`, `_LastOutcome`, `_LastOutcomeWarns`), `TrueSens_StartRecording( Target )`
 (arms) / `TrueSens_StopRecording()` (cancels), `TrueSens_OnMousePress()` (the button hook), this
-game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GameCounts360`, the global
+game's `Get/SetEnabled`, `Get/SetUseHigh`, `Get/SetIngameSens`, `GetRecordedSens`, `GameCounts360`, the global
 `Get/SetDpi`, `LowInches`, `HighInches`, and the derived read-only `Multiplier`,
 `CalcIngameSens`, `LowText`, `HighText`, `GameText`, `MultiplierText`, `SessionKey`,
 `SessionKeyShared`.
@@ -423,8 +450,8 @@ wlserver thread, which must not touch the config mirror), then prints the status
 | --- | --- |
 | `true_sens_record <low\|high\|game>` | **Arm** a recording exactly like the button, but leave the Shell alone (refused with a reason while Zoom is active or one is armed/running). |
 | `true_sens_stop` | **Cancel** an armed or running recording; nothing is stored. There is deliberately no command that ends one with a result: the clicks do. |
-| `true_sens_set "<field> <value>"` | `enabled 0\|1`, `profile low\|high`, `dpi N`, `ingame X`. One quoted argument through `gamescopectl`. |
-| `true_sens_status` | Three `true_sens:` log lines: key and settings, multiplier and calculator, recording state (target, phase, net) and last outcome. |
+| `true_sens_set "<field> <value>"` | `enabled 0\|1`, `profile low\|high`, `dpi N`, `ingame X`, `recorded X`. One quoted argument through `gamescopectl`. |
+| `true_sens_status` | Three `true_sens:` log lines: key and settings, counts, `ingame_sens`, `recorded_sens`, multiplier and best value, recording state (target, phase, net) and last outcome. |
 
 Inject movement with `wlserver_debug_mouse_motion "<dx> <dy> [count]"` (enters at
 `wlserver_mousemotion`) and a click with `wlserver_debug_mouse_button "272 1"` then `"272 0"`
@@ -446,11 +473,11 @@ setter) the Launcher's search. Row ids are `true_sens.<name>`.
 | Left, This game | `shared` | Facts | Game | "not identified, shared"; shown only while `TrueSens_SessionKeyShared()` (D2). |
 | Left, This game | `enabled` | Switch | True Sens | This game's switch (D7 step 1). |
 | Left, This game | `profile` | Choice | Sensitivity | Low / High, segmented (D1, D7 step 4). |
-| Left, This game | `record_game` | Action | Record game sensitivity | verb "Record"; greyed while a recording is armed or running. |
-| Left, This game | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`. |
-| Left, This game | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. |
-| Left, Calculator | `ingame` | Text | In-game value | The typed in-game value (D17). |
-| Left, Calculator | `calc` | Facts | Set in the game | `TrueSens_CalcIngameSens()` or what is missing (D9). |
+| Left, Game setup | `ingame` | Text | In-game sensitivity | What the game's sensitivity is set to right now (`ingame_sens`); enter it before recording; changing it in the game later needs only a new entry here. |
+| Left, Game setup | `record_game` | Action | Record game sensitivity | verb "Record"; greyed while a recording is armed or running. |
+| Left, Game setup | `game_value` | Facts | Game sensitivity | `TrueSens_GameText()`, plus " at 7" when `recorded_sens` is known ("5000 counts per 360° at 7"). |
+| Left, Game setup | `calc` | Facts | Best in-game value | `TrueSens_CalcIngameSens()` (up to 4 decimals, trailing zeros trimmed) or what is missing, in the player's order: "Enter the in-game value", "Record the game first", "Record Low first" / "Record High first". |
+| Left, Game setup | `multiplier` | Facts | Multiplier | "Off", "Record the game first", "Record Low first" or the value (D21); "1.00x" inside the dead band. From the effective counts. |
 | Right, True sensitivity | `dpi` | Stepper | Mouse DPI | 100..32000 (`kMinDpi`..`kMaxDpi`), step 50, default 800, can be typed. |
 | Right, True sensitivity | `low` / `high` | Facts | Low / High | `TrueSens_LowText()` / `HighText()`, cm per 360°. |
 | Right, True sensitivity | `record_low` / `record_high` | Action | Record Low / Record High | greyed while a recording is armed or running. |
@@ -517,28 +544,26 @@ recorded" whenever no multiplier acts, also while the switch is off, which reads
 (D21). The row says what is missing, in the order the player fixes it: the game first, then
 the chosen Low or High.
 
-**The calculator (D9, D17).** The in-game field is a Text row (no decimal field exists). The
+**The in-game value and the best value (D9, D17, changed 2026-11-25).** The group "Game setup" reads in the order of the procedure (see "The maths", `Why the entered value`): the in-game field, Record game sensitivity, the recorded Game sensitivity (with " at <value>"), the Best in-game value and the Multiplier. The in-game field is a Text row (no decimal field exists). The
 setter does the checking: `0.35` and `0,35` are accepted, spaces ignored, anything that is
 not a positive finite number (also `abc`, `-1`, `0`) is refused with the message "Enter a
 number above 0" drawn beside the field (`StatusWhen`), and the stored value stays as it was.
 An empty field clears the value. `Entry::Validate()` is declared too, but the registry
-only stores it: nothing in the Shell reads it, so a rejection cannot rely on it. The result
-row is for the game's own chosen Low/High, not a second selector; its help says to switch
-True Sens off for the game, or record it again, after setting the value in the game. A valid
-recording of the game resets the typed value to 0 (the field is empty and the result row says
-"Enter the in-game value"). The refused-entry message belongs to the stored value it was
+only stores it: nothing in the Shell reads it, so a rejection cannot rely on it. The best
+value row is for the game's own chosen Low/High, not a second selector; its help says to set the
+game to it or the nearest value the game allows and enter what was set, or to leave the game as
+it is. A recording no longer clears the field (it stores `recorded_sens` from it). The refused-entry message belongs to the stored value it was
 raised against: `TrueSens_IngameGeneration()` changes with every stored change (valid entry,
 recording), and `IngameStatus()` shows the message only while it is unchanged, so the warning
 never sits beside a valid field.
 
 **Two columns.** The owner: *"Make the UI page use two collumns."* `Columns( 2 )`, and
-`GroupColumn()` pins the groups: left what belongs to this game (This game, then the
-Calculator), right what is global and the recording state (True sensitivity: Mouse DPI, Low,
+`GroupColumn()` pins the groups: left what belongs to this game (This game, then Game setup), right what is global and the recording state (True sensitivity: Mouse DPI, Low,
 High and the record buttons, then Recording with the outcome). The sheet has two columns from
 a base width of 840 (`kTwoColMin`, `Layout.h`), three from 1680; the area asks for two, so a
 narrower sheet falls back to one column: checked, 1920x1080 has two columns and 1280x720 has
-one (the groups then stack in declaration order: This game, True sensitivity, Recording,
-Calculator, the tip still on top). The first version used one column because greedy packing
+one (the groups then stack in declaration order: This game, Game setup, True sensitivity, Recording,
+the tip still on top). The first version used one column because greedy packing
 split the sequence; pinning removes that.
 
 **The tip (D8).** The owner: *"At the top, the player should be told, that setting a low
@@ -824,14 +849,17 @@ the first click, frame generation on, the composite layer budget actually full.
 ## Tests
 
 `tests/test_truesens.cpp` (`[truesens]`, header only): the multiplier (valid, every invalid
-input, both limits), the calculator, conversions, the recorder (net with back and forth, Y
+input, both limits), the calculator, the effective counts (both values valid; either 0 or invalid
+leaves the counts), multiplier = best / entered with the owner's numbers (7 -> 0.6194, 4 -> 1.0839),
+the best value independent of the entered one, `FormatTrimmed`, conversions, the recorder (net with back and forth, Y
 ignored, below the floor refused with a reason, spoiled by Zoom, restart), the whole-count
 carry (the sum invariant at every step and whole outputs for 0.05, 0.3, 0.37, 0.5, 1.25, 2.5 and
 20 over slow, burst, back-and-forth, diagonal, fractional and random sequences; slow movement
 arrives; 2.5x alternates 2, 3; truncation against rounding on a wobble; a ramping factor; reset
 and non-finite input) and the text helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
-unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
+unknown `profile` string, `recorded_sens` (round trip, absent = 0, not written at 0, an old entry
+loading as recorded at its typed value with the same multiplier and best value), the shared key, and that no profile file contains `true_sens`.
 
 `truesens: reference picture crop` (the centre square with side = height / 8 at 1080p, 720p, 1440p,
 4K, 5:4 and ultrawide, odd sizes, tiny pictures, every size stays inside, `ReferenceDownscale()`)

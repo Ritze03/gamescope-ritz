@@ -1536,13 +1536,15 @@ namespace gamescope::config
         float counts_360 = 0.0f;
         // Which true sensitivity this game uses: "low" | "high".
         std::string profile = "low";
-        // The in-game value typed into the calculator; 0 = unset.
+        // The in-game value the game is set to NOW (typed by the player); 0 = unset.
         float ingame_sens = 0.0f;
+        // The in-game value the game was set to when counts_360 was recorded; 0 = unknown.
+        float recorded_sens = 0.0f;
 
         // Every field at its default: the entry says nothing and is not written.
         bool IsDefault() const
         {
-            return !enabled && counts_360 == 0.0f && profile == "low" && ingame_sens == 0.0f;
+            return !enabled && counts_360 == 0.0f && profile == "low" && ingame_sens == 0.0f && recorded_sens == 0.0f;
         }
     };
 

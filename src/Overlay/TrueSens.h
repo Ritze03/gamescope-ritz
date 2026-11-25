@@ -19,7 +19,9 @@
 // DPI at recording time). Target counts = true_inches * dpi, and
 //     multiplier = counts_360 / (true_inches * dpi)
 // scales the game's mouse movement so its turn takes exactly the player's own
-// distance. The calculator (the same numbers, for a game that should be set in
+// distance. The game may have been changed since the recording: `counts_360` was
+// measured at `recorded_sens`, the game is set to `ingame_sens` now, and the counts
+// used are counts_360 * recorded_sens / ingame_sens (EffectiveCounts). The calculator (the same numbers, for a game that should be set in
 // its own options instead) is `typed * counts_360 / target_counts`, assuming the
 // game's turn per count is proportional to its sensitivity value.
 //
@@ -127,6 +129,18 @@ namespace gamescope::truesens
 			return 1.0;
 		const double c = m < kMinMultiplier ? kMinMultiplier : ( m > kMaxMultiplier ? kMaxMultiplier : m );
 		return std::fabs( c - 1.0 ) < kUnityBand ? 1.0 : c;
+	}
+
+	// The counts one turn takes at the value the game is set to NOW: `counts_360` was
+	// measured at `recorded`, and a game's turn per count is taken as proportional to its
+	// sensitivity value, so counts per turn go with 1 / value. Unchanged (counts_360) when
+	// either value is unknown (0) or invalid.
+	inline double EffectiveCounts( double counts_360, double recorded, double entered )
+	{
+		if ( !IsPositive( counts_360 ) || !IsPositive( recorded ) || !IsPositive( entered ) )
+			return counts_360;
+		const double c = counts_360 * recorded / entered;
+		return IsPositive( c ) ? c : counts_360;
 	}
 
 	// The calculator: the in-game value to set so the game's turn matches the
@@ -341,6 +355,17 @@ namespace gamescope::truesens
 		char buf[64];
 		std::snprintf( buf, sizeof( buf ), "%.*f", decimals, v );
 		return buf;
+	}
+
+	// Up to 4 decimals, trailing zeros trimmed: 7 -> "7", 0.8 -> "0.8", 4.3356 -> "4.3356".
+	inline std::string FormatTrimmed( double v )
+	{
+		std::string t = FormatFixed( v, 4 );
+		while ( t.back() == '0' )
+			t.pop_back();
+		if ( t.back() == '.' )
+			t.pop_back();
+		return t;
 	}
 
 	// "34.2 cm per 360°"; "not recorded" for 0 or anything invalid.
@@ -605,6 +630,7 @@ namespace gamescope
 	void TrueSens_SetEnabled( bool bEnabled );
 	bool TrueSens_GetUseHigh();                                   // false = Low, true = High
 	void TrueSens_SetUseHigh( bool bHigh );
+	float TrueSens_GetRecordedSens();                             // the value the game was at when recorded; 0 = unknown
 	float TrueSens_GetIngameSens();                               // 0 = unset
 	void TrueSens_SetIngameSens( float flValue );
 	uint64_t TrueSens_IngameGeneration();                         // changes when the stored in-game value changes or a recording replaces it

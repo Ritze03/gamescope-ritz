@@ -19,6 +19,7 @@
 #include "Overlay/Zoom.h"
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
+#include "Overlay/TrueSens.h"
 #include "log.hpp"
 
 using namespace gamescope::config;
@@ -3074,6 +3075,7 @@ TEST_CASE( "true sens: global values and a game entry round-trip, clamp and stay
     gt.counts_360 = 5000.0f;
     gt.profile = "high";
     gt.ingame_sens = 0.75f;
+    gt.recorded_sens = 7.0f;
     SetGameTrueSens( "252490", gt );
     FlushPendingWrites();
 
@@ -3092,6 +3094,8 @@ TEST_CASE( "true sens: global values and a game entry round-trip, clamp and stay
     REQUIRE( back.counts_360 == 5000.0f );
     REQUIRE( back.profile == "high" );
     REQUIRE( back.ingame_sens == 0.75f );
+    REQUIRE( back.recorded_sens == 7.0f );
+    REQUIRE( sGlobal.find( "\"recorded_sens\"" ) != std::string::npos );
     REQUIRE( GetGameTrueSens( "other" ).IsDefault() ); // games stay apart
     REQUIRE( GameEntry( "252490" ).selected.empty() ); // assigns no profile
 
@@ -3143,6 +3147,46 @@ TEST_CASE( "true sens: readers clamp a hand-edited file and an unknown profile s
     REQUIRE( GetGameTrueSens( "b" ).counts_360 == 0.0f );
     REQUIRE( GetGameTrueSens( "b" ).profile == "high" );
     REQUIRE( GetGameTrueSens( "c" ).IsDefault() );
+}
+
+TEST_CASE( "true sens: recorded_sens absent is 0, an old entry reads as recorded at its typed value, defaults are not written", "[config]" )
+{
+    TempConfigHome home;
+    WriteText( GlobalConfigPath(), R"({
+        "schema_version": 5,
+        "true_sens": { "dpi": 800, "low_inches": 12.5, "high_inches": 0 },
+        "profiles": { "last_general": "", "games": {
+            "old": { "true_sens": { "enabled": true, "counts_360": 8000, "profile": "low", "ingame_sens": 0.8 } },
+            "norec": { "true_sens": { "enabled": true, "counts_360": 8000, "profile": "low" } },
+            "nocounts": { "true_sens": { "enabled": true, "ingame_sens": 0.8 } },
+            "new": { "true_sens": { "counts_360": 8000, "ingame_sens": 0.4, "recorded_sens": 0.8 } } } }
+    })" );
+    ResetSessionRoutingForTests();
+    const TrueSensGlobal g = GetTrueSensGlobal();
+    const GameTrueSens o = GetGameTrueSens( "old" );
+    REQUIRE( o.recorded_sens == 0.8f );
+    // same multiplier and best value as before the key existed: 8000 / (12.5 * 800) = 0.8, best 0.64.
+    const double mOld = gamescope::truesens::Multiplier(
+        gamescope::truesens::EffectiveCounts( o.counts_360, o.recorded_sens, o.ingame_sens ), g.low_inches, g.dpi );
+    REQUIRE( std::fabs( mOld - 0.8 ) < 1e-6 );
+    const auto best = gamescope::truesens::IngameSensForTarget( o.recorded_sens, o.counts_360, g.low_inches, g.dpi );
+    REQUIRE( best.has_value() );
+    REQUIRE( std::fabs( *best - 0.64 ) < 1e-6 );
+    REQUIRE( GetGameTrueSens( "norec" ).recorded_sens == 0.0f );
+    REQUIRE( GetGameTrueSens( "nocounts" ).recorded_sens == 0.0f );
+    REQUIRE( GetGameTrueSens( "new" ).recorded_sens == 0.8f );
+    REQUIRE( GetGameTrueSens( "new" ).ingame_sens == 0.4f );
+
+    // not written when default (0): a game with only counts and a switch has no such key.
+    GameTrueSens t;
+    t.enabled = true;
+    t.counts_360 = 5000.0f;
+    SetGameTrueSens( "x", t );
+    FlushPendingWrites();
+    const std::string s = ReadText( GlobalConfigPath() );
+    const size_t at = s.find( "\"x\"" );
+    REQUIRE( at != std::string::npos );
+    REQUIRE( s.find( "recorded_sens", at ) == std::string::npos );
 }
 
 TEST_CASE( "true sens: the shared unknown-game entry round-trips and is no game for profile assignment", "[config]" )

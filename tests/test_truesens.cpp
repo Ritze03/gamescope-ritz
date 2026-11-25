@@ -127,6 +127,47 @@ TEST_CASE( "truesens: calculator", "[truesens]" )
 	CHECK_FALSE( IngameSensForTarget( 0.8, kInf, 10.0, 800 ).has_value() );
 }
 
+TEST_CASE( "truesens: effective counts follow the entered in-game value", "[truesens]" )
+{
+	// recorded at 7, now set to 4: counts per turn go with 1 / value.
+	CHECK_THAT( EffectiveCounts( 5000, 7, 4 ), WithinAbs( 8750.0, 1e-9 ) );
+	CHECK_THAT( EffectiveCounts( 5000, 7, 7 ), WithinAbs( 5000.0, 1e-9 ) );
+	// either value 0 or invalid: counts unchanged.
+	CHECK( EffectiveCounts( 5000, 0, 4 ) == 5000.0 );
+	CHECK( EffectiveCounts( 5000, 7, 0 ) == 5000.0 );
+	CHECK( EffectiveCounts( 5000, -7, 4 ) == 5000.0 );
+	CHECK( EffectiveCounts( 5000, 7, kNaN ) == 5000.0 );
+	CHECK( EffectiveCounts( 5000, kInf, 4 ) == 5000.0 );
+	CHECK( EffectiveCounts( 0, 7, 4 ) == 0.0 );
+}
+
+TEST_CASE( "truesens: multiplier is best value / entered value", "[truesens]" )
+{
+	// target 10 in * 800 = 8000 counts; recorded at 7 with 5000 counts: best = 7 * 5000 / 8000.
+	const auto best = IngameSensForTarget( 7, 5000, 10.0, 800 );
+	REQUIRE( best.has_value() );
+	CHECK_THAT( *best, WithinAbs( 4.375, 1e-9 ) );
+	for ( double entered : { 7.0, 4.0, 3.0 } )
+		CHECK_THAT( Multiplier( EffectiveCounts( 5000, 7, entered ), 10.0, 800 ), WithinAbs( *best / entered, 1e-9 ) );
+	// the owner's numbers: best 4.3356 -> 0.6194 at 7, 1.0839 at 4.
+	const double counts = 4.3356 * 8000.0 / 7.0;
+	CHECK_THAT( Multiplier( EffectiveCounts( counts, 7, 7 ), 10.0, 800 ), WithinAbs( 0.6194, 1e-4 ) );
+	CHECK_THAT( Multiplier( EffectiveCounts( counts, 7, 4 ), 10.0, 800 ), WithinAbs( 1.0839, 1e-4 ) );
+	// the best value does not depend on the entered one.
+	CHECK_THAT( *IngameSensForTarget( 7, counts, 10.0, 800 ), WithinAbs( 4.3356, 1e-9 ) );
+	// the limits still apply.
+	CHECK_THAT( Multiplier( EffectiveCounts( 5000, 7, 0.001 ), 10.0, 800 ), WithinAbs( kMaxMultiplier, 1e-12 ) );
+	CHECK_THAT( Multiplier( EffectiveCounts( 5000, 0.001, 700 ), 10.0, 800 ), WithinAbs( kMinMultiplier, 1e-12 ) );
+}
+
+TEST_CASE( "truesens: FormatTrimmed", "[truesens]" )
+{
+	CHECK( FormatTrimmed( 7 ) == "7" );
+	CHECK( FormatTrimmed( 0.8 ) == "0.8" );
+	CHECK( FormatTrimmed( 4.3356 ) == "4.3356" );
+	CHECK( FormatTrimmed( 3.5 ) == "3.5" );
+}
+
 TEST_CASE( "truesens: recorder net movement", "[truesens]" )
 {
 	Recorder r;

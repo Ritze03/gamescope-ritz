@@ -1573,6 +1573,11 @@ namespace gamescope::config
             const std::string sProfile = JGetString( *p, "profile", "low" );
             t.profile = sProfile == "high" ? "high" : "low"; // unknown string -> the default
             t.ingame_sens = ClampTrueSensValue( JGetFloat( *p, "ingame_sens", 0.0f ), kTrueSensMaxIngame );
+            t.recorded_sens = ClampTrueSensValue( JGetFloat( *p, "recorded_sens", 0.0f ), kTrueSensMaxIngame );
+            // Files from before `recorded_sens`: the typed value was the one the recording was
+            // made at, so it is both.
+            if ( t.counts_360 > 0.0f && t.ingame_sens > 0.0f && t.recorded_sens == 0.0f )
+                t.recorded_sens = t.ingame_sens;
             return t;
         }
 
@@ -1636,6 +1641,8 @@ namespace gamescope::config
                     jt[ "counts_360" ] = ClampTrueSensValue( g.true_sens.counts_360, kTrueSensMaxCounts );
                     jt[ "profile" ] = g.true_sens.profile == "high" ? "high" : "low";
                     jt[ "ingame_sens" ] = ClampTrueSensValue( g.true_sens.ingame_sens, kTrueSensMaxIngame );
+                    if ( g.true_sens.recorded_sens != 0.0f )
+                        jt[ "recorded_sens" ] = ClampTrueSensValue( g.true_sens.recorded_sens, kTrueSensMaxIngame );
                     jg[ "true_sens" ] = std::move( jt );
                 }
                 jGames[ sAppId ] = std::move( jg );
@@ -3227,13 +3234,14 @@ namespace gamescope::config
         GameTrueSens c = t;
         c.counts_360 = ClampTrueSensValue( c.counts_360, kTrueSensMaxCounts );
         c.ingame_sens = ClampTrueSensValue( c.ingame_sens, kTrueSensMaxIngame );
+        c.recorded_sens = ClampTrueSensValue( c.recorded_sens, kTrueSensMaxIngame );
         c.profile = c.profile == "high" ? "high" : "low";
         auto it = s_Assignments.games.find( std::string( svKey ) );
         if ( it == s_Assignments.games.end() && c.IsDefault() )
             return; // all defaults is "absent": no empty row for it
         GameAssignment &g = it != s_Assignments.games.end() ? it->second : s_Assignments.games[ std::string( svKey ) ];
         const GameTrueSens &o = g.true_sens;
-        if ( o.enabled == c.enabled && o.counts_360 == c.counts_360 && o.profile == c.profile && o.ingame_sens == c.ingame_sens )
+        if ( o.enabled == c.enabled && o.counts_360 == c.counts_360 && o.profile == c.profile && o.ingame_sens == c.ingame_sens && o.recorded_sens == c.recorded_sens )
             return;
         g.true_sens = std::move( c );
         EnqueueGlobalFromMirror();
