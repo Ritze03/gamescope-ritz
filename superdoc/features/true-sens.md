@@ -601,7 +601,7 @@ corner radius (all x scale). Fonts from `Fonts.h`, which the HUD context carries
 `Style::Section` (Sans 500) 22 px for line 1, `Style::Label` (Sans 400) 17 px for line 2. Scale
 = `clamp( output height / 1080, 0.8, 4 )`, so it reads the same at 1080p and 4K; if the text
 would exceed 80 % of the width everything shrinks to fit. Top margin 2.5 % of the height; the plate
-is about 27 % of the width at 1080p, far from the centre the player aims at. If the FPS readout is
+is about 16 % of the width at 1080p while armed and 21 % while recording (measured), far from the centre the player aims at. If the FPS readout is
 anchored top-centre the plate starts below the readout's bottom edge (same formula as the stats
 block's top-left rule); at any other anchor the readout (default top-right) does not meet it.
 
