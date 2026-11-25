@@ -326,6 +326,8 @@ namespace fghost::capture
 		std::string sMotionEffective;   // what the library runs (V1 when it refused the wish)
 		int nBlend = 0;              // V3 Hybrid's variant (1 = Fluidity, 2 = Consistency), 0 = none: no `blend=` token
 		bool bBlendOff = false;      // the variant is selected but the library runs V3's rule: the token reads `blend=Fluidity(off)`
+		int nV35 = 0;                // V3.5 requested (1), 0 = no `v3motion=` token
+		bool bV35Off = false;        // requested but not running: the token reads `v3motion=V3.5(off)`
 		int nView = 0;               // the Debug view the library draws (the row's index: 1 UI highlighted, 2 UI removed, 3 Motion map), 0 = none: no `view=` token
 		uint32_t uFlowScale = 0;
 		int nFrames = kFrames;
@@ -391,6 +393,8 @@ namespace fghost::capture
 		const char *pszMotionEffective = "";
 		int nBlend = 0;                            // V3 Hybrid's variant selected (0 = none), see HeaderInfo::nBlend
 		bool bBlendActive = true;                  // Interpolator::v3BlendActive() at the start
+		int nV35 = 0;                              // V3.5 requested (HeaderInfo::nV35)
+		bool bV35Active = true;                    // Interpolator::v3MotionActive() at the start
 		int nView = 0;                             // the Debug view in effect (HeaderInfo::nView)
 	};
 

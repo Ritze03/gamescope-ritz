@@ -339,3 +339,59 @@ TEST_CASE( "framegen v3: MotionFromKeys yields only 1 or 2 for V3 Hybrid", "[fra
 	REQUIRE( MotionFromKeys( "v3_hybrid", "ar4_c" ).blend == 1 );
 	REQUIRE( MotionFromKeys( "v3_hybrid", "d" ).blend == 1 );
 }
+
+// V3.5 (2026-11-25): "v3_5" / "v3_5_hybrid" are Motion::V3 plus v3Motion = 1 (and the blend for the Hybrid); every older string has v3Motion 0.
+TEST_CASE( "framegen v3: V3.5 config strings map to Motion V3 plus v3Motion 1", "[framegen_v3]" )
+{
+	const auto Is = []( const char *pszMotion, const char *pszVariant, Motion m, int nBlend, int nV35 )
+	{
+		const MotionChoice c = MotionFromKeys( pszMotion, pszVariant );
+		return c.motion == m && c.blend == nBlend && c.v3Motion == nV35;
+	};
+	REQUIRE( Is( "v3_5", "fluidity", Motion::V3, 0, 1 ) );
+	REQUIRE( Is( "v3_5", "consistency", Motion::V3, 0, 1 ) );
+	REQUIRE( Is( "v3_5_hybrid", "fluidity", Motion::V3, 1, 1 ) );
+	REQUIRE( Is( "v3_5_hybrid", "consistency", Motion::V3, 2, 1 ) );
+	REQUIRE( Is( "v3_5_hybrid", "x", Motion::V3, 1, 1 ) );
+	REQUIRE( Is( "v3", "fluidity", Motion::V3, 0, 0 ) );
+	REQUIRE( Is( "v3_hybrid", "consistency", Motion::V3, 2, 0 ) );
+	REQUIRE( Is( "v1", "", Motion::V1, 0, 0 ) );
+	REQUIRE( Is( "v2", "", Motion::V2, 0, 0 ) );
+	REQUIRE( Is( "learned", "", Motion::Learned, 0, 0 ) );
+	REQUIRE( Is( "nonsense", "", Motion::V1, 0, 0 ) );
+}
+
+TEST_CASE( "framegen v3: v3Motion takes bit 56 and leaves bits 0-55 alone", "[framegen_v3]" )
+{
+	Config c; c.v3Smear = 0.80f; c.v3OcclSoft = 2.55f; c.v3Guard = 2; c.v3Blend = 2; c.v3ColourWindow = true;
+	const uint64_t uOff = PackV3( c );
+	REQUIRE( ( uOff >> 56 ) == 0 );
+	c.v3Motion = 1;
+	const uint64_t u = PackV3( c );
+	REQUIRE( ( u >> 56 ) == 1 );
+	REQUIRE( ( u & ( ( 1ull << 56 ) - 1 ) ) == uOff );
+	Config r;
+	UnpackV3( u, &r );
+	REQUIRE( r.v3Motion == 1 );
+	REQUIRE( r.v3Blend == 2 );
+	REQUIRE( r.v3Guard == 2 );
+	REQUIRE( Config{}.v3Motion == 0 );
+	// anything but 1 packs as 0 (the library's kV3MotionMax is 1), so a change reaches setSettings() and nothing else does
+	for ( int n : { 2, 3, -1, 255 } )
+	{
+		c.v3Motion = n;
+		REQUIRE( PackV3( c ) == uOff );
+	}
+	Config e; e.v3Motion = 1;
+	UnpackV3( uOff, &e );
+	REQUIRE( e.v3Motion == 0 );
+}
+
+TEST_CASE( "framegen v3: the V3.5 label is honest", "[framegen_v3]" )
+{
+	REQUIRE( V35Label( 1, true ) == "V3.5" );
+	REQUIRE( V35Label( 1, false ) == "V3.5(off)" );
+	REQUIRE( V35Label( 0, true ).empty() );
+	REQUIRE( V35Label( 0, false ).empty() );
+	REQUIRE( V35Label( 2, true ).empty() );
+}

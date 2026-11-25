@@ -2,7 +2,7 @@
 
 Part of [Frame generation](frame-generation.md). The library's third motion algorithm, the one built for the best picture.
 Since 2026-11-23 an experimental variant with a learned colour blend, [V3 Hybrid](frame-generation-v3-hybrid.md), runs
-as `Motion::V3` plus a blend value, so every rule on this page applies to it.
+as `Motion::V3` plus a blend value, so every rule on this page applies to it. The same holds for [V3.5](frame-generation-v3-5.md) (2026-11-25), V3 with the library's improved motion detection.
 
 ## Motion version 3
 

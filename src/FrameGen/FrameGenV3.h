@@ -57,7 +57,8 @@ namespace fghost
 			| ( uint64_t( c.v3ColourWindow ) << 48 )
 			| ( uint64_t( c.v3DetailSplit ) << 49 )
 			| ( uint64_t( c.v3Guard >= 1 && c.v3Guard <= 2 ? c.v3Guard : 0 ) << 50 )
-			| ( uint64_t( c.v3Blend >= 1 && c.v3Blend <= nBlendMax ? c.v3Blend : 0 ) << 52 );
+			| ( uint64_t( c.v3Blend >= 1 && c.v3Blend <= nBlendMax ? c.v3Blend : 0 ) << 52 )
+			| ( uint64_t( c.v3Motion == 1 ? 1 : 0 ) << 56 );   // V3.5: the library's kV3MotionMax is 1
 	}
 
 	inline void UnpackV3( uint64_t u, Config *c, int nBlendMax = kHybridBlendMax )
@@ -77,6 +78,7 @@ namespace fghost
 			const uint64_t uBlend = ( u >> 52 ) & 15u;
 			c->v3Blend = uBlend <= uint64_t( nBlendMax ) ? int( uBlend ) : 0;
 		}
+		c->v3Motion = int( ( u >> 56 ) & 1u );
 	}
 
 	// V3 Hybrid (2026-11-23): the config's motion_version string plus the variant key become the host's Motion and
@@ -87,19 +89,24 @@ namespace fghost
 	{
 		Motion motion = Motion::V1;
 		int blend = 0;
+		int v3Motion = 0;   // 1 = V3.5 ("v3_5", "v3_5_hybrid"): V3 with the library's v3Motion = 1
 	};
 
 	inline MotionChoice MotionFromKeys( std::string_view svMotion, std::string_view svVariant )
 	{
 		if ( svMotion == "v2" )
-			return { Motion::V2, 0 };
+			return { Motion::V2, 0, 0 };
 		if ( svMotion == "learned" )
-			return { Motion::Learned, 0 };
+			return { Motion::Learned, 0, 0 };
 		if ( svMotion == "v3" )
-			return { Motion::V3, 0 };
+			return { Motion::V3, 0, 0 };
 		if ( svMotion == "v3_hybrid" )
-			return { Motion::V3, std::max( 1, HybridBlendFromKey( svVariant ) ) };
-		return { Motion::V1, 0 };
+			return { Motion::V3, std::max( 1, HybridBlendFromKey( svVariant ) ), 0 };
+		if ( svMotion == "v3_5" )
+			return { Motion::V3, 0, 1 };
+		if ( svMotion == "v3_5_hybrid" )
+			return { Motion::V3, std::max( 1, HybridBlendFromKey( svVariant ) ), 1 };
+		return { Motion::V1, 0, 0 };
 	}
 
 	// "" for blend 0 (plain V3, nothing to say), else the variant label from HybridVariants.h, "Fluidity" / "Consistency" (logs and the capture header's `blend=`).
@@ -114,5 +121,12 @@ namespace fghost
 	{
 		const std::string s = BlendText( nBlend );
 		return s.empty() || bActive ? s : s + "(off)";
+	}
+
+	// V3.5 (2026-11-25): "" when not requested (v3Motion 0), "V3.5" while the library runs its motion passes, "V3.5(off)" when requested but not running
+	// (the library refused it and the host fell back to V3's own motion). Logs, status line, stats overlay and the capture header.
+	inline std::string V35Label( int nV3Motion, bool bActive )
+	{
+		return nV3Motion != 1 ? std::string() : bActive ? "V3.5" : "V3.5(off)";
 	}
 }

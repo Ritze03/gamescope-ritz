@@ -149,7 +149,9 @@ foreach name : ['luma', 'down', 'medhist', 'search', 'median3', 'subpix', 'pixfi
                 'v3_synth', 'v3_planes', 'v3_pyr', 'v3_hist', 'v3_search', 'v3_search_top', 'v3_dense', 'v3_wide',
                 'v3_stats', 'v3_occl', 'v3_fill', 'v3_project', 'v3_enclose', 'v3_decide',
                 # Motion guard (2026-11-20; library f301d7d): 2 more plain compiles, no define.
-                'v3_anchor', 'v3_guard']
+                'v3_anchor', 'v3_guard',
+                # V3.5 (2026-11-25; library 1ccc602): 3 more plain compiles; its dense pass (-DV35=1) is below.
+                'v35_stats', 'v35_rgn', 'v35_reg']
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', '--vn', name + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (name + '.comp')]
   if framegen_has_depfile
@@ -200,7 +202,8 @@ endforeach
 # includes the plain ones unconditionally. -DV3B=1 (V3 Hybrid's learned blend, Settings::v3Blend) into v3_synth_b_spv (rgb10 gets its own entry below; includes shaders/v3_blend.glsl and v3_blend_weights.glsl, tracked through the depfile). The plain builds stay as they were (both switches off cost nothing).
 foreach h : [['-DV3J=1', 'v3_search', 'v3_search_j'], ['-DV3J=1', 'v3_search_top', 'v3_search_top_j'],
              ['-DV3J=1', 'v3_dense', 'v3_dense_j'], ['-DV3L=1', 'v3_synth', 'v3_synth_l'],
-             ['-DV3B=1', 'v3_synth', 'v3_synth_b']]
+             ['-DV3B=1', 'v3_synth', 'v3_synth_b'],
+             ['-DV35=1', 'v3_dense', 'v3_dense_35']]   # V3.5's dense pass (Settings::v3Motion = 1)
   fg_args = ['-V', '--target-env', 'vulkan1.2', '--quiet', h[0], '--vn', h[2] + '_spv',
              '-o', '@OUTPUT@', framegen_gpu_dir / 'shaders' / (h[1] + '.comp')]
   if framegen_has_depfile

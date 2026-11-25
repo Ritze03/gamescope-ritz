@@ -313,6 +313,9 @@ namespace fghost
 		// Motion::V3 only, runtime (V3 Hybrid, 2026-11-23): the learned blend that replaces V3's colour-mixing rule.
 		// 0 = off (plain V3), 1 / 2 / 3 = variant A / B / C. Any other value is treated as 0. Packed with the V3 word.
 		int v3Blend = 0;
+		// Motion::V3 only, runtime (V3.5, 2026-11-25): 1 = the library's improved motion detection (Settings::v3Motion = 1), 0 = V3's own. Any
+		// other value is treated as 0. Packed with the V3 word.
+		int v3Motion = 0;
 	};
 
 	// Replace the whole config. Thread-safe, cheap, callable at any time
@@ -506,6 +509,8 @@ namespace fghost
 	// is selected but is not in use ("format", "detail split", or "" when not known cheaply). Thread-safe.
 	bool BlendActive();
 	const char *BlendWhy();
+	// V3.5: whether the library really runs its motion passes (v3MotionActive(), published by the render thread; false while not live). Thread-safe.
+	bool V35Active();
 
 	// Debug view: the view the library is really drawing (0 = none; the row's index), and whether a wanted view was
 	// refused (the library cannot draw it: shader variants missing, pipeline creation failed). Thread-safe.

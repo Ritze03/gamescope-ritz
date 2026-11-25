@@ -18,6 +18,7 @@ namespace fgstats
 		bool        bFrameGen = false;     // frame generation switched on
 		std::string sMotion;               // "V1", "V2", "Learned", "V3"
 		std::string sBlend;                // V3 Hybrid's BlendLabel() ("Fluidity", "Fluidity(off)"), "" = none
+		std::string sV35;                  // V3.5's V35Label() ("V3.5", "V3.5(off)"), "" = not requested
 		std::string sQuality;              // "Quality" / "Performance"
 		std::string sFormat;               // the renderer's format tag ("10-bit"), "" = plain 8-bit
 		std::string sModeText;             // "fixed 2x" / "target 280 fps" / "target display refresh"
@@ -59,6 +60,8 @@ namespace fgstats
 		std::string s = in.sMotion;
 		if ( !in.sBlend.empty() )
 			s = "V3 Hybrid " + in.sBlend;
+		if ( !in.sV35.empty() )
+			s += "   motion " + in.sV35;
 		if ( !in.sQuality.empty() )
 			s += "   " + in.sQuality;
 		if ( !in.sFormat.empty() )

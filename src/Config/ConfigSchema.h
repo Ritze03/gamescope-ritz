@@ -540,7 +540,8 @@ namespace gamescope::config
         // loads 2.5. The old fixed box was 3% of the frame's AREA (192 px at 1280x960).
         float ui_box_height = 2.5f;
         // Motion version (2026-10-22, the library's framegen-v2 branch): "v1" | "v2" | "learned" (2026-10-26) | "v3"
-        // (2026-11-19) | "v3_hybrid" (2026-11-23: V3 with a learned blend; the variant is v3_hybrid_variant below).
+        // (2026-11-19) | "v3_hybrid" (2026-11-23: V3 with a learned blend; the variant is v3_hybrid_variant below)
+        // | "v3_5" | "v3_5_hybrid" (2026-11-25: V3 with the library's improved motion detection, with the same variant for the Hybrid).
         // ADDITIVE: absent loads "v1"; an unknown string keeps it. V2 is Rgba8-only:
         // other content stays on V1. Shared by Frame generation and Motion blur (one
         // interpolator), as is `quality` above, which on V2 picks its mode.
@@ -583,7 +584,7 @@ namespace gamescope::config
         // 2026-11-23). Not an Expert tuning value since 2026-11-23: the stored value always acts. ADDITIVE. Applies live.
         std::string v3_guard = "off";
         // V3 Hybrid's variant (2026-11-23; library Settings::v3Blend 1..2): "fluidity" | "consistency" (fifteen strings "a" .. "ar4_c" until 2026-11-24).
-        // Read only while motion_version is "v3_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or
+        // Read only while motion_version is "v3_hybrid" or "v3_5_hybrid" (every Motion version 3 row applies to it too). An absent, wrong-typed or
         // unknown value loads "fluidity"; the old "a_c" loads "fluidity" and "ar4_c" "consistency" (fghost::HybridKeyFromStored()).
         // ADDITIVE. Not an Expert tuning value: always in force, never reset by FrameGenEffective(). Applies live.
         std::string v3_hybrid_variant = "fluidity";

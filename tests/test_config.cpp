@@ -4855,6 +4855,55 @@ TEST_CASE( "framegen: the hybrid variant is in force with expert settings off", 
     REQUIRE( FrameGenEffective( f ).v3_hybrid_variant == "consistency" );
 }
 
+// V3.5 (2026-11-25): "v3_5" and "v3_5_hybrid" are two more framegen.motion_version strings (the variant is the existing v3_hybrid_variant);
+// Motion blur's own list does not get them; an older file with v3 / v3_hybrid is unchanged.
+TEST_CASE( "framegen: v3_5 and v3_5_hybrid round-trip with the variant", "[config]" )
+{
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    for ( const char *pszMotion : { "v3_5", "v3_5_hybrid" } )
+        for ( const char *pszVariant : { "fluidity", "consistency" } )
+        {
+            Settings s{};
+            s.framegen.motion_version = pszMotion;
+            s.framegen.v3_hybrid_variant = pszVariant;
+            REQUIRE( SaveSections( s ) );
+            const Settings l = LoadSections();
+            REQUIRE( l.framegen.motion_version == pszMotion );
+            REQUIRE( l.framegen.v3_hybrid_variant == pszVariant );
+            REQUIRE( FrameGenEffective( l.framegen ).motion_version == pszMotion );
+        }
+}
+
+TEST_CASE( "motion_blur: motion_version v3_5 and v3_5_hybrid are rejected like any unknown string", "[config]" )
+{
+    for ( const char *psz : { "v3_5", "v3_5_hybrid" } )
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
+            "\"motion_blur\": { \"motion_version\": \"" << psz << "\" } }";
+        REQUIRE( LoadSections().motion_blur.motion_version == "v1" );
+    }
+}
+
+TEST_CASE( "framegen: an unknown motion_version string next to V3.5 keeps the default; v3 and v3_hybrid load unchanged", "[config]" )
+{
+    for ( const char *psz : { "v3", "v3_hybrid" } )
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+        std::ofstream( ProfilePath( "T" ) ) << "{ \"schema_version\": 5, \"name\": \"T\", \"kind\": \"general\", "
+            "\"framegen\": { \"motion_version\": \"" << psz << "\" } }";
+        REQUIRE( LoadSections().framegen.motion_version == psz );
+    }
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() + "/profiles" );
+    std::ofstream( ProfilePath( "T" ) ) << R"({ "schema_version": 5, "name": "T", "kind": "general",
+        "framegen": { "motion_version": "v3_6" } })";
+    REQUIRE( LoadSections().framegen.motion_version == "v1" );
+}
+
 // Debug view (2026-11-23): the four stored strings, an unknown one loads "off", and the master switch gates it.
 TEST_CASE( "framegen: debug_view defaults to off and round-trips its four values", "[config]" )
 {

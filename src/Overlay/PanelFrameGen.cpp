@@ -82,9 +82,9 @@ namespace gamescope
 			{ 6, "6×" }, { 7, "7×" }, { 8, "8×" }, { kTargetChoice, "Target fps" } };
 		constexpr ui::Option kPriorityOptions[] = { { 0, "Low latency" }, { 1, "Smoothness" } };
 		constexpr ui::Option kQualityOptions[] = { { 0, "Quality" }, { 1, "Performance" } };
-		// Display order V1, V2, V3, V3 Hybrid, Learned; the values stay the kMotionKeys indices (a Choice maps a click to
+		// Display order V1, V2, V3, V3 Hybrid, V3.5, V3.5 Hybrid, Learned; the values stay the kMotionKeys indices (a Choice maps a click to
 		// Option::nValue, not to the array position).
-		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 4, "V3 Hybrid" }, { 2, "Learned" } };
+		constexpr ui::Option kMotionOptions[]  = { { 0, "V1" }, { 1, "V2" }, { 3, "V3" }, { 4, "V3 Hybrid" }, { 5, "V3.5" }, { 6, "V3.5 Hybrid" }, { 2, "Learned" } };
 		// V3 Hybrid's variant (2026-11-23): the ids are blend - 1.
 		// Built from the variant table (fghost/HybridVariants.h); the labels are string literals.
 		const std::array<ui::Option, fghost::kHybridBlendMax> &VariantOptions()
@@ -129,8 +129,9 @@ namespace gamescope
 
 		constexpr const char *kPriorityKeys[] = { "low_latency", "smoothness" };
 		constexpr const char *kQualityKeys[] = { "quality", "performance" };
-		// Index 0-3 = fghost::Motion's values; 4 = "v3_hybrid", which is Motion::V3 plus a blend (no fifth enum value).
-		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3", "v3_hybrid" };
+		// Index 0-3 = fghost::Motion's values; 4 = "v3_hybrid", which is Motion::V3 plus a blend (no fifth enum value); 5 = "v3_5" and
+		// 6 = "v3_5_hybrid" (2026-11-25), Motion::V3 plus the library's v3Motion = 1 (and the blend for the Hybrid).
+		constexpr const char *kMotionKeys[]  = { "v1", "v2", "learned", "v3", "v3_hybrid", "v3_5", "v3_5_hybrid" };
 		constexpr const char *kSafetyKeys[]  = { "low", "default", "high", "off", "very_low" };
 		constexpr const char *kHudKeys[]     = { "off", "normal", "strong" };
 		constexpr const char *kGuardKeys[]   = { "off", "guard", "v2_motion" };
@@ -239,6 +240,7 @@ namespace gamescope
 				const fghost::MotionChoice m = fghost::MotionFromKeys( f.motion_version, f.v3_hybrid_variant );
 				c.motion = m.motion;
 				c.v3Blend = m.blend;
+				c.v3Motion = m.v3Motion;
 			}
 			c.learnedHalf = f.learned_half;
 			c.learnedZeroTest = f.learned_zero_test;
@@ -329,7 +331,15 @@ namespace gamescope
 			const config::Settings &st = s_Settings;
 			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
 			const std::string &s = bBlurOwn ? st.motion_blur.motion_version : st.framegen.motion_version;
-			return s == "v3" || s == "v3_hybrid";   // V3 Hybrid is V3 for every row rule
+			return s == "v3" || s == "v3_hybrid" || s == "v3_5" || s == "v3_5_hybrid";   // V3 Hybrid and V3.5 are V3 for every row rule
+		}
+
+		// V3.5 runs (Frame generation's own row, unless Motion blur has its own plain V3): V3's colour-weighted matching has no effect then.
+		bool V35InForce()
+		{
+			const config::Settings &st = s_Settings;
+			const bool bBlurOwn = st.motion_blur.enabled && !st.motion_blur.same_as_framegen;
+			return !bBlurOwn && ( st.framegen.motion_version == "v3_5" || st.framegen.motion_version == "v3_5_hybrid" );
 		}
 
 		// V3 Hybrid is the SELECTED Motion version (Frame generation's own row, whatever Motion blur runs): the variant
@@ -344,7 +354,7 @@ namespace gamescope
 		bool HybridSelected()
 		{
 			EnsureConfigLoaded();
-			return s_Settings.framegen.motion_version == "v3_hybrid";
+			return s_Settings.framegen.motion_version == "v3_hybrid" || s_Settings.framegen.motion_version == "v3_5_hybrid";
 		}
 
 		bool V3RowsUsable()
@@ -352,6 +362,12 @@ namespace gamescope
 			EnsureConfigLoaded();
 			const config::Settings &st = s_Settings;
 			return ( st.framegen.enabled || st.motion_blur.enabled ) && EffectiveMotionIsV3();
+		}
+
+		bool ColourWindowUsable()
+		{
+			EnsureConfigLoaded();
+			return V3RowsUsable() && !V35InForce();
 		}
 
 		// Expert reach rows: they matter while the interpolator runs (Frame generation or Motion blur on); the search
@@ -599,8 +615,8 @@ namespace gamescope
 
 		a.Choice( "framegen.motion_version", "Motion version",
 			ui::AnyBind::Of<int>(
-				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 5, 0 ); },
-				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 4 ) ]; PersistAndPush(); } ),
+				[]{ EnsureConfigLoaded(); return IndexOf( s_Settings.framegen.motion_version, kMotionKeys, 7, 0 ); },
+				[]( int n ) { EnsureConfigLoaded(); s_Settings.framegen.motion_version = kMotionKeys[ ClampIdx( n, 6 ) ]; PersistAndPush(); } ),
 			kMotionOptions, std::size( kMotionOptions ) )
 			.Help( "V2 is a newer, experimental way of making the in-between frames: it bends "
 			       "the picture along the motion and stretches it over gaps instead of falling "
@@ -612,6 +628,10 @@ namespace gamescope
 			       "switch; then, while Motion blur is on, its own two settings are used instead. "
 			       "V3: most fluid; smears where it is unsure; costs about three times V1. "
 			       "V3 Hybrid: Motion version 3 with a learned blend (experimental). "
+			       "V3.5 (experimental): V3 with improved motion detection: smoother, connected motion, "
+			       "fewer wrong vectors on flat surfaces, camera turns and zooms; about 0.5 ms more per "
+			       "frame pair at 1080p. V3.5 Hybrid: V3.5 with the learned blend. The first switch to either "
+			       "may stall for a moment. "
 			       "Learned is an experimental, opt-in estimator: a small neural network finds the "
 			       "motion instead of V1's search, then V1 makes the picture. It costs several "
 			       "times V1's GPU time (1080p 2x on an RX 7900 XTX: about 1.4 ms, "
@@ -621,7 +641,7 @@ namespace gamescope
 			       "identical frames are left alone. If it cannot run the Status line says why and "
 			       "V1 runs." )
 			.Default( 0 )
-			.Keywords( "frame generation motion version v1 v2 v3 hybrid learned neural network ml net morph interpolation algorithm experimental fluid smear" )
+			.Keywords( "frame generation motion version v1 v2 v3 v3.5 hybrid learned neural network ml net morph interpolation algorithm experimental fluid smear" )
 			.DisabledUnless( On, "frame generation is off" );
 
 		a.Choice( "framegen.v3_hybrid_variant", "Hybrid variant",
@@ -976,7 +996,7 @@ namespace gamescope
 			.Default( false )
 			.Keywords( "frame generation v3 colour color weighted matching window motion search experiment" )
 			.ShownWhen( ShowV3Rows )
-			.DisabledUnless( V3RowsUsable, "Motion version is not V3 (or nothing that uses it is on)" );
+			.DisabledUnless( ColourWindowUsable, "Not used by V3.5 (or Motion version is not V3, or nothing that uses it is on)" );
 
 		a.Switch( "framegen.v3_detail_split", "Detail from one frame",
 			ui::AnyBind::Of<bool>(

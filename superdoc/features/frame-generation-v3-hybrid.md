@@ -45,8 +45,8 @@ rule is subtle; `blend=Fluidity` in the status shows the blend really runs.
 
 | Key | Values | Meaning |
 |---|---|---|
-| `framegen.motion_version` | `v1` / `v2` / `learned` / `v3` / **`v3_hybrid`** | `v3_hybrid` is the fifth value, after `v3` |
-| `framegen.v3_hybrid_variant` | `"fluidity"` (default) / `"consistency"`; absent, wrong type or unknown loads `"fluidity"` (old strings: see above) | which variant (order as the table = index 0..1), read only while `motion_version` is `v3_hybrid` |
+| `framegen.motion_version` | `v1` / `v2` / `learned` / `v3` / **`v3_hybrid`** / `v3_5` / `v3_5_hybrid` | `v3_hybrid` is the fifth value, after `v3`; the two V3.5 values (2026-11-25) are on [their own page](frame-generation-v3-5.md) and use this variant key too |
+| `framegen.v3_hybrid_variant` | `"fluidity"` (default) / `"consistency"`; absent, wrong type or unknown loads `"fluidity"` (old strings: see above) | which variant (order as the table = index 0..1), read only while `motion_version` is `v3_hybrid` or `v3_5_hybrid` |
 
 An old file without the key and with `"v3"` loads as before (V3 stays V3, no blend).
 `motion_blur.motion_version` does **not** get the value: Motion blur's own list is unchanged and

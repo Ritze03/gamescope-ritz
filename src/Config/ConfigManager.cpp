@@ -357,7 +357,7 @@ namespace gamescope::config
                     f.ui_protection = sUi;
                 f.ui_box_height = std::clamp( JGetFloat( *pFrameGen, "ui_box_height", f.ui_box_height ), 0.5f, 20.0f );
                 const std::string sMotion = JGetString( *pFrameGen, "motion_version", f.motion_version );
-                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" || sMotion == "v3_hybrid" )
+                if ( sMotion == "v1" || sMotion == "v2" || sMotion == "learned" || sMotion == "v3" || sMotion == "v3_hybrid" || sMotion == "v3_5" || sMotion == "v3_5_hybrid" )
                     f.motion_version = sMotion;
                 f.learned_half = JGetBool( *pFrameGen, "learned_half", f.learned_half );
                 f.learned_zero_test = JGetBool( *pFrameGen, "learned_zero_test", f.learned_zero_test );
