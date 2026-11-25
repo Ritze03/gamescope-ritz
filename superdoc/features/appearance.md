@@ -36,6 +36,20 @@ Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
   on the atlas' *baked* scale, hence the `/ fonts::BuiltScale()` in `PushLiveTheme`). The
   re-bake itself is performed by `fonts::PumpRequestedRebuild()` at the start of the next
   frame, never mid-frame.
+- **Outside margin applies on release, like UI scale.** `OverlaySettings::outside_margin` is
+  copied into `palette::g_LiveTheme.flOutsideMargin` by `PushLiveTheme()` and at startup
+  (`Palette.cpp`); `Shell.cpp` passes `SlabFractionForMargin()` of it to `Slab::For()`. Its setter
+  stores at once but, while `ui::IsPointerDragActive()`, defers `QueueGeneralSave()` (live push and
+  write) with `DeferToRelease()`. `Why:` the slab is centred, so resizing it mid-drag moves the
+  row under the pointer, the same problem as UI scale. At the default the fraction is exactly
+  `shelltok::kSurfFrac` (0.85), so the default look is unchanged. Modals and dropdowns clamped to
+  the slab follow it; the Launcher keeps its own size. `Why:` the owner asked for "a slider for
+  the outside margin of the GUI (with the current one being the default). Only a single slider
+  that accepts %."
+- **Window transparency default 0.95 (2026-11-25).** `Why:` the owner: "Also make Window
+  transparency 0.95 the default." Stored values are not migrated: `global.json` always writes
+  `window_opacity` once anything saves it, so an existing setup keeps its value and only a new
+  or reset config starts at 0.95.
 - **Console-thread safety.** `PushLiveTheme()` only touches `ImGui::GetIO()` when a current
   context exists, because the row setters are also reachable from the `overlay_e2_set`
   console command, which has no ImGui context.
@@ -52,9 +66,10 @@ Code: `src/Overlay/PanelConfig.cpp` (`BuildAppearanceArea`, registered from
 | --- | --- | --- | --- |
 | `overlay.accent_hue` (Theme) | `accent_hue` | 218 | Hue-only accent picker, 0-360 deg; every accent token is regenerated from it. |
 | `overlay.display_scale` (Theme) | `display_scale` | 1.0 | Whole-overlay size, 0.5-2.0x, applied on release. |
+| `overlay.outside_margin` (Theme) | `outside_margin` | 7.5 | Space between the Shell window and the screen edge, per side, in % of the surface, 0-25 (step 0.5), applied on release. Slab fraction = 1 - 2 x margin / 100. |
 | `overlay.background_blur` (Backdrop) | `background_blur` | 1.0 | Blur of the game behind the open overlay. |
 | `overlay.background_darkening` (Backdrop) | `background_darkening` | 0.8 | Dimming of the game behind the overlay. |
-| `overlay.window_opacity` (Transparency) | `window_opacity` | 1.0 | See-through-ness of the Shell slab and Inspector, 0.3-1. Text is never dimmed. |
+| `overlay.window_opacity` (Transparency) | `window_opacity` | 0.95 | See-through-ness of the Shell slab and Inspector, 0.3-1. Text is never dimmed. |
 | `overlay.opacity_notifications` (Transparency) | `opacity_notifications` | 0.9 | Toast opacity, 0.3-1. |
 | `overlay.startup_announce` (Startup) | `startup_announce_enabled` | on | The launch toast; takes effect next start. |
 | `overlay.notification_scale` (Notifications) | `notification_scale` | 1.0 | Toast size, 0.5-2.0x. |

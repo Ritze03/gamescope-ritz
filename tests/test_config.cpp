@@ -4782,3 +4782,43 @@ TEST_CASE( "framegen: the effective debug_view is off while the master switch is
     f.debug = true;
     REQUIRE( FrameGenEffective( f ).debug_view == "ui_removed" );
 }
+
+// =========================================================================
+//  overlay.outside_margin / window_opacity defaults (2026-11-25)
+// =========================================================================
+TEST_CASE( "overlay.outside_margin: default 7.5, stored value, clamp, wrong type", "[config]" )
+{
+    REQUIRE( OverlaySettings{}.outside_margin == 7.5f );
+    REQUIRE( OverlaySettings{}.window_opacity == 0.95f );
+
+    auto loadWith = []( const std::string &sOverlay ) -> Settings
+    {
+        TempConfigHome home;
+        const std::filesystem::path pathGlobal = home.dir / "gamescope-ritz" / "global.json";
+        std::filesystem::create_directories( pathGlobal.parent_path() );
+        {
+            std::ofstream f( pathGlobal );
+            f << "{\"version\":1,\"overlay\":{" << sOverlay << "}}";
+        }
+        return LoadGlobal();
+    };
+
+    REQUIRE( loadWith( "" ).overlay.outside_margin == 7.5f );
+    REQUIRE( loadWith( "" ).overlay.window_opacity == 0.95f );
+    REQUIRE( loadWith( "\"outside_margin\": 12" ).overlay.outside_margin == 12.0f );
+    REQUIRE( loadWith( "\"outside_margin\": -3" ).overlay.outside_margin == 0.0f );
+    REQUIRE( loadWith( "\"outside_margin\": 99" ).overlay.outside_margin == 25.0f );
+    REQUIRE( loadWith( "\"outside_margin\": \"wide\"" ).overlay.outside_margin == 7.5f );
+    REQUIRE( loadWith( "\"outside_margin\": null" ).overlay.outside_margin == 7.5f );
+    // A stored window_opacity (even 1.0) is kept: no migration.
+    REQUIRE( loadWith( "\"window_opacity\": 1.0" ).overlay.window_opacity == 1.0f );
+}
+
+TEST_CASE( "overlay.outside_margin round-trips through SaveGlobal/LoadGlobal", "[config]" )
+{
+    TempConfigHome home;
+    Settings s;
+    s.overlay.outside_margin = 18.5f;
+    REQUIRE( SaveGlobal( s ) );
+    REQUIRE( LoadGlobal().overlay.outside_margin == 18.5f );
+}

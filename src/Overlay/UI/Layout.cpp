@@ -10,15 +10,16 @@ namespace gamescope::ui
 	// =====================================================================
 	//  The slab (SPEC §8.1)
 	// =====================================================================
-	Slab Slab::For( float flSurfaceWPx, float flSurfaceHPx, float flScale )
+	Slab Slab::For( float flSurfaceWPx, float flSurfaceHPx, float flScale, float flFrac )
 	{
 		Slab slab;
 		slab.flScale = flScale <= 0.0f ? 1.0f : flScale;
 
-		//   surfaceW x 0.85
-		//   surfaceH x 0.85
+		//   surfaceW x flFrac
+		//   surfaceH x flFrac
 		//
-		// 2026-09-02: flat 85% of the surface on both axes, no absolute pixel
+		// flFrac is 0.85 by default (Appearance's Outside margin, 7.5% per
+		// side, changes it). 2026-09-02: flat 85% of the surface on both axes, no absolute pixel
 		// cap. The former min(surfW x 0.90, max(1560, 1180)) x min(surfH x
 		// 0.86, 940) formula pinned the slab to a fixed design size once the
 		// surface was large enough to hit the cap, which is exactly what made
@@ -38,11 +39,11 @@ namespace gamescope::ui
 		// as it already does for a small surface -- the SAME overflow
 		// mechanism, now also driven by scale instead of only by surface
 		// size.
-		slab.flWidthPx  = flSurfaceWPx * shelltok::kSurfFrac;
-		slab.flHeightPx = flSurfaceHPx * shelltok::kSurfFrac;
+		slab.flWidthPx  = flSurfaceWPx * flFrac;
+		slab.flHeightPx = flSurfaceHPx * flFrac;
 
-		// Never wider or taller than the surface itself. 0.85 never exceeds
-		// it on its own, but this stays as the same defensive floor/ceiling
+		// Never wider or taller than the surface itself. The fraction never exceeds
+		// 1 on its own, but this stays as the same defensive floor/ceiling
 		// pass that always guarded the slab against a degenerate surface.
 		slab.flWidthPx  = std::min( slab.flWidthPx,  flSurfaceWPx );
 		slab.flHeightPx = std::min( slab.flHeightPx, flSurfaceHPx );

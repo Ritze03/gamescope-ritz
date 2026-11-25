@@ -2360,7 +2360,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 
 	// SPEC's own numbers, restated here rather than imported, so this test
 	// fails loudly if either the slab fraction or the slab bar height ever
-	// changes without someone re-checking this fits: rail height = 0.85 x
+	// changes without someone re-checking this fits: rail height = (by default) 0.85 x
 	// surface height, minus the 40px slab bar (Layout.h's shelltok::kSurfFrac
 	// and Shell.cpp's own slab bar height).
 	const float flSurfaceH        = 1080.0f;

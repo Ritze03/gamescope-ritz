@@ -29,6 +29,7 @@
 #include "Overlay/UI/Tokens.h"
 
 #include <algorithm>
+#include <cmath>
 
 using namespace gamescope;
 using Catch::Matchers::WithinAbs;
@@ -986,4 +987,60 @@ TEST_CASE( "PackBlocks without pins is the original greedy pack", "[overlay_shel
 	REQUIRE( ui::PackBlocks( lines, {}, 3 ) == expect );
 	REQUIRE( ui::PackBlocks( lines, std::vector<int>( lines.size(), -1 ), 3 ) == expect );
 	REQUIRE( ui::PackBlocks( { 5 }, {}, 1 ) == std::vector<int>{ 0 } );
+}
+
+// =========================================================================
+//  Outside margin (2026-11-25): the slab fraction is 1 - 2 x margin / 100
+// =========================================================================
+TEST_CASE( "outside margin -> slab fraction", "[overlay_shell]" )
+{
+	REQUIRE( ui::SlabFractionForMargin( 7.5f ) == ui::shelltok::kSurfFrac );
+	REQUIRE( ui::SlabFractionForMargin( 7.5f ) == 0.85f );
+	REQUIRE( ui::SlabFractionForMargin( 0.0f ) == 1.0f );
+	REQUIRE( ui::SlabFractionForMargin( 25.0f ) == 0.5f );
+	REQUIRE( ui::SlabFractionForMargin( -5.0f ) == 1.0f );
+	REQUIRE( ui::SlabFractionForMargin( 80.0f ) == 0.5f );
+}
+
+TEST_CASE( "Slab::For: default fraction is today's slab bit for bit, margin moves it", "[overlay_shell]" )
+{
+	for ( float s : { 0.5f, 1.0f, 2.0f } )
+	{
+		const ui::Slab a = ui::Slab::For( kSurfW, kSurfH, s );
+		const ui::Slab b = ui::Slab::For( kSurfW, kSurfH, s, ui::SlabFractionForMargin( 7.5f ) );
+		REQUIRE( a.flWidthPx  == kSurfW * 0.85f );
+		REQUIRE( a.flHeightPx == kSurfH * 0.85f );
+		REQUIRE( a.flWidthPx  == b.flWidthPx );
+		REQUIRE( a.flHeightPx == b.flHeightPx );
+		REQUIRE( a.flWidthBase == b.flWidthBase );
+	}
+	const ui::Slab full = ui::Slab::For( kSurfW, kSurfH, 1.0f, ui::SlabFractionForMargin( 0.0f ) );
+	REQUIRE( full.flWidthPx == kSurfW );
+	REQUIRE( full.flHeightPx == kSurfH );
+	const ui::Slab half = ui::Slab::For( kSurfW, kSurfH, 1.0f, ui::SlabFractionForMargin( 25.0f ) );
+	REQUIRE( half.flWidthPx == kSurfW * 0.5f );
+	REQUIRE( half.flHeightPx == kSurfH * 0.5f );
+}
+
+TEST_CASE( "the ladder stays valid at the maximum outside margin", "[overlay_shell]" )
+{
+	for ( auto surf : { std::pair<float, float>{ 1280.0f, 720.0f }, std::pair<float, float>{ 1920.0f, 1080.0f } } )
+	for ( float s : { 1.0f, 2.0f } )
+	for ( float flMargin : { 0.0f, 7.5f, 25.0f } )
+	for ( ui::InspectorHost ePref : { ui::InspectorHost::Column, ui::InspectorHost::Drawer, ui::InspectorHost::Hidden } )
+	{
+		INFO( "surface " << surf.first << "x" << surf.second << " scale " << s << " margin " << flMargin );
+		const ui::Slab slab = ui::Slab::For( surf.first, surf.second, s, ui::SlabFractionForMargin( flMargin ) );
+		REQUIRE( slab.flWidthPx > 0.0f );
+		REQUIRE( slab.flHeightPx > 0.0f );
+		const ui::LadderResult L = ui::Solve( slab, ePref, 13 );
+		REQUIRE( L.nColumns >= 1 );
+		const ui::Regions R = ui::Regions::For( slab, L );
+		REQUIRE( !R.rcSlabBar.Empty() );
+		REQUIRE( !R.rcRail.Empty() );
+		REQUIRE( !R.rcSheet.Empty() );
+		REQUIRE( !R.rcSheetHead.Empty() );
+		REQUIRE( !R.rcSheetBody.Empty() );
+		REQUIRE( R.rcSheet.x1 <= slab.flWidthPx + 0.01f );
+	}
 }

@@ -8113,7 +8113,8 @@ namespace gamescope::ui::shell
 		s_bLauncherOnlyPublished.store( s_bLauncherOnly, std::memory_order_release );
 		s_bPaletteOpenPublished.store( s_bPaletteOpen, std::memory_order_release );
 
-		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale() );
+		const Slab slab = Slab::For( io.DisplaySize.x, io.DisplaySize.y, Scale(),
+		                                SlabFractionForMargin( palette::g_LiveTheme.flOutsideMargin ) );
 		if ( slab.flWidthPx <= 0.0f || slab.flHeightPx <= 0.0f )
 			return;
 

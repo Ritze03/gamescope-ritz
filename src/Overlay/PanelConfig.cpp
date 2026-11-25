@@ -101,6 +101,7 @@ namespace gamescope
 			const auto &o = s_GeneralSettings.overlay;
 			live.flDisplayScale = o.display_scale;
 			live.flWindowOpacity = o.window_opacity;
+			live.flOutsideMargin = o.outside_margin;
 
 			// NOTE (2026-08-24, D27): this function no longer runs on every
 			// tick of a UI-scale drag. `overlay.display_scale`'s setter now
@@ -1621,6 +1622,35 @@ namespace gamescope
 				.Default( config::OverlaySettings{}.display_scale )
 				.Unit( "x" )
 				.Keywords( "scale ui size dpi zoom display_scale font atlas" );
+			// Outside margin (the user, 2026-11-25): the Shell slab's gap to the
+			// surface edge. Sits with UI scale because both size the window.
+			// It resizes the window this very row sits in, so it applies on
+			// release exactly like UI scale: the stored value (and so the
+			// readout) follows the pointer, the live push and the write wait
+			// (the slab is centred, so a live apply moves the track under
+			// the pointer).
+			a.Slider( "overlay.outside_margin", "Outside margin",
+				ui::AnyBind::Of<float>(
+					[]{ EnsureGeneralSettingsLoaded(); return s_GeneralSettings.overlay.outside_margin; },
+					[]( float flMargin )
+					{
+						EnsureGeneralSettingsLoaded();
+						s_GeneralSettings.overlay.outside_margin = flMargin;
+						if ( ui::IsPointerDragActive() )
+						{
+							ui::controls::DeferToRelease( []{ QueueGeneralSave(); } );
+							return;
+						}
+						QueueGeneralSave();
+					} ) )
+				.Help( "How much space is left between the settings window and the edge of the "
+				       "screen, on each side. 0% fills the screen." )
+				.Range( 0.0f, 25.0f )
+				.Step( 0.5f )        // 51 positions: 0%, 0.5%, ... 25%
+				.Default( config::OverlaySettings{}.outside_margin )
+				.Unit( "%" )
+				.Keywords( "margin border edge size window inset padding outside" );
+
 			// Notification scale used to hang off this row as a Param. It is
 			// now a row of its own in the Notifications group below (the
 			// user, 2026-08-24) -- it sizes the toasts, not the overlay, so
