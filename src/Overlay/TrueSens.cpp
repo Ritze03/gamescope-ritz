@@ -16,6 +16,9 @@
 #include "wlserver.hpp"
 #include "Config/ConfigManager.h"
 #include "Zoom.h"
+#include "Autoclicker.h"
+#include "SettingsOverlay.h"
+#include "UI/Shell.h"
 
 namespace gamescope
 {
@@ -35,7 +38,13 @@ namespace gamescope
 		// compositor thread, which never holds it, see TrueSens_StartRecording), so
 		// a reset or a read never interleaves with a half-done +=. The compositor
 		// thread reads the sums without the lock only for the live status.
+		//
+		// D24: s_eTarget is non-zero while a recording is armed, running or waiting for
+		// the tick; s_iPhase (a truesens::Phase as int) says which. The input thread
+		// advances Armed -> Recording -> Finished (TrueSens_OnMousePress); Start, Stop and
+		// the tick's finish move the others, all under the wlserver lock.
 		std::atomic<int>      s_eTarget{ 0 };
+		std::atomic<int>      s_iPhase{ 0 };
 		std::atomic<double>   s_dSumX{ 0.0 };
 		std::atomic<double>   s_dSumY{ 0.0 };
 		std::atomic<uint64_t> s_ulSamples{ 0 };
@@ -55,6 +64,8 @@ namespace gamescope
 		bool s_bKeyFinal = false; // the first tick has resolved it for good
 		config::TrueSensKey s_Key;
 		std::string s_sLastOutcome;
+		bool s_bLastWarns = false;       // the last outcome is a failure or a refusal (warning tone)
+		bool s_bPictureRequested = false; // the tick has asked for this recording's reference picture
 		// Bumped whenever the stored in-game value changes or a recording replaces
 		// the game's counts, so the area can drop a stale entry error.
 		uint64_t s_ulIngameGeneration = 0;
@@ -185,8 +196,9 @@ namespace gamescope
 				(double)gm.counts_360, (double)gm.ingame_sens, TrueSens_Multiplier(), TrueSens_MultiplierText().c_str(),
 				oCalc ? truesens::FormatFixed( *oCalc, 4 ).c_str() : "n/a",
 				TrueSens_LowText().c_str(), TrueSens_HighText().c_str() );
-			console_log.infof( "true_sens: recording=%s net=%.2f sum_y=%.2f samples=%llu zoom_spoiled=%d last_outcome='%s'",
-				truesens::TargetName( TrueSens_RecordingTarget() ), TrueSens_RecordingNet(),
+			static const char *const kPhaseNames[] = { "idle", "armed", "recording", "finished" };
+			console_log.infof( "true_sens: recording=%s phase=%s net=%.2f sum_y=%.2f samples=%llu zoom_spoiled=%d last_outcome='%s'",
+				truesens::TargetName( TrueSens_RecordingTarget() ), kPhaseNames[ (int)TrueSens_RecordingPhase() ], TrueSens_RecordingNet(),
 				s_dSumY.load( std::memory_order_relaxed ), (unsigned long long)s_ulSamples.load( std::memory_order_relaxed ),
 				s_bZoomSpoiled.load( std::memory_order_relaxed ) ? 1 : 0, s_sLastOutcome.c_str() );
 		}
@@ -200,13 +212,13 @@ namespace gamescope
 			{
 				Target t = a[ 1 ] == "low" ? Target::Low : a[ 1 ] == "high" ? Target::High : a[ 1 ] == "game" ? Target::Game : Target::Idle;
 				const truesens::OpResult st = TrueSens_StartRecording( t );
-				console_log.infof( "true_sens_record %s: %s", a[ 1 ].c_str(), st.ok ? "recording" : st.reason.c_str() );
+				console_log.infof( "true_sens_record %s: %s", a[ 1 ].c_str(), st.ok ? "armed (left click starts, left click ends)" : st.reason.c_str() );
 			}
 			else if ( a[ 0 ] == "stop" )
 			{
 				const truesens::RecordResult r = TrueSens_StopRecording();
-				console_log.infof( "true_sens_stop: ok=%d counts=%.2f sum_y=%.2f samples=%llu: %s", r.ok ? 1 : 0, r.counts, r.sum_y,
-					(unsigned long long)r.samples, TrueSens_LastOutcome().c_str() );
+				console_log.infof( "true_sens_stop: cancelled=%d: %s", r.target != Target::Idle ? 1 : 0,
+					r.target != Target::Idle ? TrueSens_LastOutcome().c_str() : r.reason.c_str() );
 			}
 			else if ( a[ 0 ] == "set" && a.size() >= 3 )
 			{
@@ -229,14 +241,14 @@ namespace gamescope
 
 		static ConCommand cc_true_sens_record(
 			"true_sens_record",
-			"Start a True Sens recording: true_sens_record <low|high|game>. Counts only sideways mouse "
-			"movement while the cursor is hidden, with the multiplier off. Run true_sens_stop to end it.",
+			"Arm a True Sens recording: true_sens_record <low|high|game>. The first left click while the "
+			"cursor is hidden starts it, the second ends and stores it (wlserver_debug_mouse_button 272 1/0 "
+			"is such a click). Leaves the settings window alone. true_sens_stop cancels it.",
 			[]( std::span<std::string_view> args ) { QueueCmd( "record", args ); } );
 
 		static ConCommand cc_true_sens_stop(
 			"true_sens_stop",
-			"Stop the True Sens recording and store its net movement (a failed one stores nothing and "
-			"logs why).",
+			"Cancel the armed or running True Sens recording; nothing is stored.",
 			[]( std::span<std::string_view> args ) { QueueCmd( "stop", args ); } );
 
 		static ConCommand cc_true_sens_set(
@@ -250,6 +262,79 @@ namespace gamescope
 			"Print every True Sens value on three log lines: this game's key and settings, the "
 			"derived multiplier and calculator result, and the recording state.",
 			[]( std::span<std::string_view> args ) { QueueCmd( "status", args ); } );
+
+		// ---- ending a recording (compositor thread) -----------------------------------
+
+		// Evaluates one finished recording and stores it: Low/High global inches plus the
+		// game's counts (D12), a game recording the counts only, `ingame_sens` cleared on a
+		// valid one. A failed one changes nothing but the outcome text (warning tone).
+		truesens::RecordResult ApplyResult( Target target, double dSumX, double dSumY, uint64_t ulSamples, bool bSpoiled )
+		{
+			EnsureLoaded();
+			truesens::RecordResult r = truesens::Evaluate( target, dSumX, dSumY, ulSamples, bSpoiled ? truesens::kReasonZoom : "" );
+			if ( !r.ok )
+			{
+				s_sLastOutcome = r.reason;
+				s_bLastWarns = true;
+				return r; // a failed recording changes nothing
+			}
+			s_bLastWarns = false;
+
+			// D12: Low/High also store the game's own value, it is the same measurement.
+			const config::TrueSensGlobal g = config::GetTrueSensGlobal();
+			config::GameTrueSens gm = Game();
+			gm.counts_360 = (float)r.counts;
+			// The typed in-game value belongs to the recording it was typed for: with a
+			// new counts_360 the old number would give a wrong result, so the calculator
+			// asks for it again (a failed recording returned above and changes nothing).
+			gm.ingame_sens = 0.0f;
+			s_ulIngameGeneration++;
+			if ( target == Target::Low || target == Target::High )
+			{
+				config::TrueSensGlobal ng = g;
+				const float flInches = (float)truesens::InchesFromCounts( r.counts, g.dpi );
+				( target == Target::Low ? ng.low_inches : ng.high_inches ) = flInches;
+				config::SetTrueSensGlobal( ng );
+				s_sLastOutcome = std::string( target == Target::Low ? "Low" : "High" ) + " stored: " +
+					truesens::FormatCmPer360( flInches ) + " (" + truesens::FormatFixed( r.counts, 0 ) + " counts at " +
+					std::to_string( g.dpi ) + " DPI). The game's value was stored too.";
+			}
+			else
+			{
+				s_sLastOutcome = "Game stored: " + truesens::FormatCounts360( r.counts ) + ".";
+			}
+			SetGame( gm ); // also refreshes the hook's atomics
+			return r;
+		}
+
+		// The second click ended the recording (phase Finished): read the sums under the
+		// lock, go idle, store, and open the Shell on the True Sens area so the player sees
+		// the result (also after a failed evaluation: the reason is in "Last recording").
+		void FinishByClicks()
+		{
+			Target target;
+			double dSumX, dSumY;
+			uint64_t ulSamples;
+			bool bSpoiled;
+			{
+				ScopedWlserverLock lock; // the hook is not mid-sum while we read
+				if ( s_iPhase.load( std::memory_order_acquire ) != (int)truesens::Phase::Finished )
+					return; // cancelled meanwhile
+				target = (Target)s_eTarget.load( std::memory_order_relaxed );
+				dSumX = s_dSumX.load( std::memory_order_relaxed );
+				dSumY = s_dSumY.load( std::memory_order_relaxed );
+				ulSamples = s_ulSamples.load( std::memory_order_relaxed );
+				bSpoiled = s_bZoomSpoiled.load( std::memory_order_relaxed );
+				s_eTarget.store( 0, std::memory_order_relaxed );
+				s_iPhase.store( (int)truesens::Phase::Idle, std::memory_order_release );
+			}
+			TrueSens_ReferenceClear();
+			ApplyResult( target, dSumX, dSumY, ulSamples, bSpoiled );
+			// Order as wlserver.cpp's Friends/Mixer keys: visible first, then the area request.
+			SettingsOverlay_SetVisible( true );
+			ui::shell::RequestArea( "system.true_sens" );
+			force_repaint();
+		}
 	}
 
 	// ---- the hook --------------------------------------------------------------------
@@ -258,18 +343,22 @@ namespace gamescope
 	{
 		if ( s_eTarget.load( std::memory_order_relaxed ) != 0 )
 		{
-			// A recording runs with the multiplier OFF and counts only movement
-			// while the cursor is hidden (D11); the carry is dropped so nothing
-			// stale leaks into play afterwards.
+			// An armed or running recording has the multiplier OFF (D11, D24); the
+			// carry is dropped so nothing stale leaks into play afterwards. Only the
+			// RECORDING phase (between the two clicks) sums, only while the cursor is
+			// hidden; while armed nothing is summed.
 			s_Carry.Reset();
 			if ( bCursorHidden )
 			{
 				if ( Zoom_IsActive() )
 					s_bZoomSpoiled.store( true, std::memory_order_relaxed ); // D15
-				// Single writer under the wlserver lock, so load+store is exact.
-				s_dSumX.store( s_dSumX.load( std::memory_order_relaxed ) + dx, std::memory_order_relaxed );
-				s_dSumY.store( s_dSumY.load( std::memory_order_relaxed ) + dy, std::memory_order_relaxed );
-				s_ulSamples.store( s_ulSamples.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed );
+				if ( s_iPhase.load( std::memory_order_acquire ) == (int)truesens::Phase::Recording )
+				{
+					// Single writer under the wlserver lock, so load+store is exact.
+					s_dSumX.store( s_dSumX.load( std::memory_order_relaxed ) + dx, std::memory_order_relaxed );
+					s_dSumY.store( s_dSumY.load( std::memory_order_relaxed ) + dy, std::memory_order_relaxed );
+					s_ulSamples.store( s_ulSamples.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed );
+				}
 			}
 			return false;
 		}
@@ -280,6 +369,28 @@ namespace gamescope
 		const double dMult = s_dMultiplier.load( std::memory_order_relaxed );
 		dx *= dMult;
 		dy *= dMult;
+		return true;
+	}
+
+	bool TrueSens_OnMousePress( bool bLeft, bool bCursorHidden )
+	{
+		const truesens::Phase phase = (truesens::Phase)s_iPhase.load( std::memory_order_acquire );
+		if ( phase == truesens::Phase::Idle )
+			return false; // the common case: one atomic load
+		const truesens::ClickStep st =
+			truesens::StepOnButton( phase, bLeft, true, bCursorHidden, Autoclicker_IsInjecting() );
+		if ( !st.swallow )
+			return false;
+		if ( st.started )
+		{
+			// This hook owns the sums while a recording is active, and the first click is
+			// where they start from zero (movement while armed was never summed).
+			s_dSumX.store( 0.0, std::memory_order_relaxed );
+			s_dSumY.store( 0.0, std::memory_order_relaxed );
+			s_ulSamples.store( 0, std::memory_order_relaxed );
+		}
+		s_iPhase.store( (int)st.next, std::memory_order_release );
+		force_repaint(); // the tick (picture, or evaluating) and the hint's new text must reach an idle client
 		return true;
 	}
 
@@ -311,10 +422,23 @@ namespace gamescope
 		for ( const std::string &c : cmds )
 			RunCommand( c );
 
-		// D15: Zoom on during a recording spoils it (the hook also notes this
-		// per motion event; this covers a chord pressed between two events).
+		// D15: Zoom on while a recording is armed or runs spoils it (the hook also
+		// notes this per motion event; this covers a chord pressed between two events).
 		if ( s_eTarget.load( std::memory_order_relaxed ) != 0 && Zoom_IsActive() )
 			s_bZoomSpoiled.store( true, std::memory_order_relaxed );
+
+		// D24: the input thread advanced the phase on a click; what needs the compositor
+		// thread happens here. Finished first: two clicks inside one frame skip the
+		// Recording phase as seen from here, so the picture is simply never taken.
+		const truesens::Phase phase = (truesens::Phase)s_iPhase.load( std::memory_order_acquire );
+		if ( phase == truesens::Phase::Finished )
+			FinishByClicks();
+		else if ( phase == truesens::Phase::Recording && !s_bPictureRequested )
+		{
+			s_bPictureRequested = true;
+			TrueSens_ReferenceRequest(); // the game picture at the moment of the first click
+			force_repaint();
+		}
 	}
 
 	// ---- recording -------------------------------------------------------------------
@@ -327,6 +451,11 @@ namespace gamescope
 	bool TrueSens_RecordingActive()
 	{
 		return s_eTarget.load( std::memory_order_relaxed ) != 0;
+	}
+
+	truesens::Phase TrueSens_RecordingPhase()
+	{
+		return (truesens::Phase)s_iPhase.load( std::memory_order_acquire );
 	}
 
 	truesens::Target TrueSens_RecordingTarget()
@@ -345,6 +474,11 @@ namespace gamescope
 		return s_sLastOutcome;
 	}
 
+	bool TrueSens_LastOutcomeWarns()
+	{
+		return s_bLastWarns;
+	}
+
 	truesens::OpResult TrueSens_StartRecording( truesens::Target t )
 	{
 		truesens::OpResult st;
@@ -356,7 +490,7 @@ namespace gamescope
 		else if ( TrueSens_RecordingActive() )
 		{
 			st.ok = false;
-			st.reason = "A recording is already running.";
+			st.reason = "A recording is already running. Stop recording cancels it.";
 		}
 		else if ( Zoom_IsActive() )
 		{
@@ -366,80 +500,52 @@ namespace gamescope
 		if ( !st.ok )
 		{
 			s_sLastOutcome = st.reason;
+			s_bLastWarns = true;
 			return st;
 		}
 
 		EnsureLoaded();
+		TrueSens_ReferenceClear(); // an old picture never shows under the new hint
+		s_bPictureRequested = false;
 		{
 			ScopedWlserverLock lock;
 			s_dSumX.store( 0.0, std::memory_order_relaxed );
 			s_dSumY.store( 0.0, std::memory_order_relaxed );
 			s_ulSamples.store( 0, std::memory_order_relaxed );
 			s_bZoomSpoiled.store( false, std::memory_order_relaxed );
+			s_Carry.Reset(); // the hook's carry: the lock is held, so this is exclusive
 			s_eTarget.store( (int)t, std::memory_order_relaxed );
+			s_iPhase.store( (int)truesens::Phase::Armed, std::memory_order_release );
 		}
-		s_sLastOutcome.clear();
-		TrueSens_ReferenceRequest();
-		force_repaint(); // the hint (and the picture) must appear on an idle client too
+		// "Last recording" keeps its text until this recording's result replaces it (D23).
+		force_repaint(); // the hint must appear on an idle client too
 		return st;
 	}
 
 	truesens::RecordResult TrueSens_StopRecording()
 	{
+		// D24: Stop is the CANCEL. Armed or running, it ends the recording and stores
+		// nothing; a result already completed by the second click is not touched here
+		// (the tick finishes it, or this wins the lock and cancels it).
 		Target target;
-		double dSumX, dSumY;
-		uint64_t ulSamples;
-		bool bSpoiled;
 		{
-			ScopedWlserverLock lock; // no motion event is half-summed while we read
+			ScopedWlserverLock lock; // the hook is not mid-click or mid-sum
 			target = (Target)s_eTarget.load( std::memory_order_relaxed );
-			dSumX = s_dSumX.load( std::memory_order_relaxed );
-			dSumY = s_dSumY.load( std::memory_order_relaxed );
-			ulSamples = s_ulSamples.load( std::memory_order_relaxed );
-			bSpoiled = s_bZoomSpoiled.load( std::memory_order_relaxed );
 			s_eTarget.store( 0, std::memory_order_relaxed );
+			s_iPhase.store( (int)truesens::Phase::Idle, std::memory_order_release );
 		}
-		TrueSens_ReferenceClear();
-
+		truesens::RecordResult r;
 		if ( target == Target::Idle )
 		{
-			truesens::RecordResult r;
 			r.reason = "No recording is running.";
 			return r; // leaves the last outcome alone
 		}
-
-		EnsureLoaded();
-		truesens::RecordResult r = truesens::Evaluate( target, dSumX, dSumY, ulSamples, bSpoiled ? truesens::kReasonZoom : "" );
-		if ( !r.ok )
-		{
-			s_sLastOutcome = r.reason;
-			return r; // a failed recording changes nothing
-		}
-
-		// D12: Low/High also store the game's own value, it is the same measurement.
-		const config::TrueSensGlobal g = config::GetTrueSensGlobal();
-		config::GameTrueSens gm = Game();
-		gm.counts_360 = (float)r.counts;
-		// The typed in-game value belongs to the recording it was typed for: with a
-		// new counts_360 the old number would give a wrong result, so the calculator
-		// asks for it again (a failed recording returned above and changes nothing).
-		gm.ingame_sens = 0.0f;
-		s_ulIngameGeneration++;
-		if ( target == Target::Low || target == Target::High )
-		{
-			config::TrueSensGlobal ng = g;
-			const float flInches = (float)truesens::InchesFromCounts( r.counts, g.dpi );
-			( target == Target::Low ? ng.low_inches : ng.high_inches ) = flInches;
-			config::SetTrueSensGlobal( ng );
-			s_sLastOutcome = std::string( target == Target::Low ? "Low" : "High" ) + " stored: " +
-				truesens::FormatCmPer360( flInches ) + " (" + truesens::FormatFixed( r.counts, 0 ) + " counts at " +
-				std::to_string( g.dpi ) + " DPI). The game's value was stored too.";
-		}
-		else
-		{
-			s_sLastOutcome = "Game stored: " + truesens::FormatCounts360( r.counts ) + ".";
-		}
-		SetGame( gm ); // also refreshes the hook's atomics
+		TrueSens_ReferenceClear();
+		r.target = target;
+		r.reason = "Recording cancelled. Nothing was stored.";
+		s_sLastOutcome = r.reason;
+		s_bLastWarns = false;
+		force_repaint();
 		return r;
 	}
 

@@ -502,24 +502,99 @@ TEST_CASE( "truesens: text helpers", "[truesens]" )
 
 TEST_CASE( "truesens: recording hint lines", "[truesens]" )
 {
-	const std::string kReserved = "Ctrl+Alt+Shift+O";
-	const std::string kAction = "Turn once around (360\xC2\xB0) to the same spot, then press ";
+	const std::string kArmed = "Aim at a spot you can find again, then left click";
+	const std::string kRunning = "Turn once around (360\xC2\xB0) to the same spot, then left click again";
 
-	HintText h = HintLines( Target::Low, "LCtrl+RShift", kReserved );
+	HintText h = HintLines( Target::Low, Phase::Armed );
 	CHECK( h.title == "Recording Low sensitivity" );
-	CHECK( h.action == kAction + "LCtrl+RShift and Stop recording" );
+	CHECK( h.action == kArmed );
+	h = HintLines( Target::Low, Phase::Recording );
+	CHECK( h.title == "Recording Low sensitivity" );
+	CHECK( h.action == kRunning );
+	// the one frame between the second click and the tick keeps the recording text
+	CHECK( HintLines( Target::Low, Phase::Finished ).action == kRunning );
 
-	CHECK( HintLines( Target::High, "F9", kReserved ).title == "Recording High sensitivity" );
-	CHECK( HintLines( Target::Game, "F9", kReserved ).title == "Recording game sensitivity" );
+	CHECK( HintLines( Target::High, Phase::Armed ).title == "Recording High sensitivity" );
+	CHECK( HintLines( Target::Game, Phase::Recording ).title == "Recording game sensitivity" );
 
-	// the shell action is unbound: the reserved chord is named instead
-	h = HintLines( Target::Game, "", kReserved );
-	CHECK( h.action == kAction + kReserved + " and Stop recording" );
-
-	// no recording: nothing to show
-	h = HintLines( Target::Idle, "F9", kReserved );
+	// no recording: nothing to show, whatever the other argument says
+	h = HintLines( Target::Idle, Phase::Armed );
 	CHECK( h.title.empty() );
 	CHECK( h.action.empty() );
+	h = HintLines( Target::Low, Phase::Idle );
+	CHECK( h.title.empty() );
+	CHECK( h.action.empty() );
+}
+
+TEST_CASE( "truesens: the Recording row always has a value", "[truesens]" )
+{
+	CHECK( RecordingStatusText( Target::Idle, Phase::Idle, 0 ) == "None" );
+	CHECK( RecordingStatusText( Target::Low, Phase::Idle, 5 ) == "None" );
+	CHECK( RecordingStatusText( Target::Low, Phase::Armed, 0 ) == "Low, waiting for the first click" );
+	CHECK( RecordingStatusText( Target::High, Phase::Armed, 99 ) == "High, waiting for the first click" );
+	CHECK( RecordingStatusText( Target::Low, Phase::Recording, 3120.4 ) == "Low, 3120 counts so far" );
+	CHECK( RecordingStatusText( Target::Game, Phase::Recording, 0 ) == "Game, 0 counts so far" );
+}
+
+TEST_CASE( "truesens: two left clicks advance a recording", "[truesens]" )
+{
+	// StepOnButton( phase, bLeft, bPressed, bCursorHidden, bSynthetic )
+	ClickStep s = StepOnButton( Phase::Armed, true, true, true, false );
+	CHECK( s.next == Phase::Recording );
+	CHECK( s.swallow );
+	CHECK( s.started );
+	CHECK_FALSE( s.finished );
+
+	s = StepOnButton( Phase::Recording, true, true, true, false );
+	CHECK( s.next == Phase::Finished );
+	CHECK( s.swallow );
+	CHECK_FALSE( s.started );
+	CHECK( s.finished );
+}
+
+TEST_CASE( "truesens: a click that does not count changes nothing and is not swallowed", "[truesens]" )
+{
+	for ( Phase p : { Phase::Idle, Phase::Armed, Phase::Recording, Phase::Finished } )
+	{
+		const bool bActive = p == Phase::Armed || p == Phase::Recording;
+		// cursor visible: a click in a menu
+		ClickStep s = StepOnButton( p, true, true, false, false );
+		CHECK( s.next == p );
+		CHECK_FALSE( s.swallow );
+		// right / middle button
+		s = StepOnButton( p, false, true, true, false );
+		CHECK( s.next == p );
+		CHECK_FALSE( s.swallow );
+		// a release is never the click
+		s = StepOnButton( p, true, false, true, false );
+		CHECK( s.next == p );
+		CHECK_FALSE( s.swallow );
+		// the Autoclicker's own press
+		s = StepOnButton( p, true, true, true, true );
+		CHECK( s.next == p );
+		CHECK_FALSE( s.swallow );
+		// and the counting click only does something while armed or running
+		s = StepOnButton( p, true, true, true, false );
+		CHECK( s.swallow == bActive );
+	}
+	// a press while idle or while the result is pending: no effect
+	CHECK( StepOnButton( Phase::Idle, true, true, true, false ).next == Phase::Idle );
+	CHECK( StepOnButton( Phase::Finished, true, true, true, false ).next == Phase::Finished );
+}
+
+TEST_CASE( "truesens: a full click sequence and a third click", "[truesens]" )
+{
+	Phase p = Phase::Armed;
+	int nSwallowed = 0;
+	for ( int i = 0; i < 3; i++ )
+	{
+		const ClickStep s = StepOnButton( p, true, true, true, false );
+		nSwallowed += s.swallow ? 1 : 0;
+		p = s.next;
+	}
+	// armed -> recording -> finished; the third click finds the result pending and goes to the game
+	CHECK( p == Phase::Finished );
+	CHECK( nSwallowed == 2 );
 }
 
 TEST_CASE( "truesens: reference picture crop", "[truesens]" )

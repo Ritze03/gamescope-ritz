@@ -1,7 +1,7 @@
 // True Sens: the lasting hint at the top of the screen while a recording runs (D16).
 // Drawn by FpsDisplay.cpp into the HUD layer's background draw list (the layer is drawn
 // over the game, under the Shell, and frame generation does not touch it), only while
-// TrueSens_RecordingActive(). The text itself is the pure gamescope::truesens::HintLines().
+// TrueSens_RecordingActive() (armed or recording). The text itself is the pure gamescope::truesens::HintLines().
 // superdoc/features/true-sens.md, "Recording hint".
 //
 // Runs on the compositor thread inside the HUD's ImGui frame (its own context, which carries
@@ -11,7 +11,6 @@
 
 #include "Fonts.h"
 #include "Palette.h"
-#include "../Keybinds.h"
 
 #include "log.hpp"
 #include "steamcompmgr.hpp"
@@ -148,9 +147,8 @@ namespace gamescope
 		if ( !pDrawList || !TrueSens_RecordingActive() )
 			return 0.0f;
 
-		// The chord that opens the Shell; the reserved chord when that action is unbound.
-		const truesens::HintText hint = truesens::HintLines(
-			TrueSens_RecordingTarget(), keybinds::ChordTextFor( keybinds::Action::Shell ), keybinds::ReservedChordText() );
+		// Two lines per phase (armed: aim and click; recording: turn and click again).
+		const truesens::HintText hint = truesens::HintLines( TrueSens_RecordingTarget(), TrueSens_RecordingPhase() );
 		if ( hint.title.empty() )
 			return 0.0f;
 
