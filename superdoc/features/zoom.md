@@ -162,6 +162,20 @@ else; absolute (windowed) motion is untouched. True Sens' multiplier
 ([true-sens.md](true-sens.md)) is applied just before this scale, so Zoom divides
 on top of it, and no True Sens recording is allowed while Zoom is active.
 
+**Whole counts, remainder carried (2026-11-25).** The scaled movement leaves
+`wlserver_mousemotion()` in whole counts, with the remainder carried into the next
+movement (`TrueSens_CarryWholeCounts()`, the last step of the scaling chain; the rule and
+its reasons are in [true-sens.md](true-sens.md#whole-counts-and-the-carry-d26-replaces-d19)).
+It runs whenever Zoom's scale is not exactly 1 (and when True Sens scaled the event), so a
+fade ramp that changes the factor every frame loses nothing: the carry is in output counts
+and needs no reset. `Why:` before, `1 / factor` of a one-count event was a fraction (0.25 at
+4x) delivered as such; a game that takes whole counts per event (Xwayland's raw valuators
+are doubles, but an engine or Wine path may cut them) got 0 for slow movement and moved only
+when the hand was fast enough. Measured with the test client before the change: 100 events of
+1 count at 4x gave 25.0 as doubles and 0 to an integer-reading consumer; after, 25 whole
+counts. When Zoom is inactive (or at 1.0x in the first part of the fade) and True Sens did not
+scale, the delta is untouched, so a host's fractional deltas are never rounded.
+
 `Why the RAMPED factor, not the configured one (2026-09-16):` with the fade on
 there are frames where the shape is on screen but the magnification is still
 1.0×, and more where it is part-way up. Dividing the mouse by the full factor

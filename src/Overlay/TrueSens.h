@@ -50,8 +50,8 @@ namespace gamescope::truesens
 	inline constexpr double kMaxMultiplier = 20.0;
 
 	// A multiplier this close to 1 is 1: a game recorded at the player's own
-	// sensitivity is passed through untouched instead of being quantised to the
-	// 1/256 wire grid for no gain.
+	// sensitivity is passed through untouched (no whole-count rounding for a
+	// factor that is 1 within rounding).
 	inline constexpr double kUnityBand = 0.001;
 
 	// The fewest net counts a recording may end on and still count. A real 360
@@ -64,10 +64,6 @@ namespace gamescope::truesens
 	inline constexpr double kMinRecordingCounts = 200.0;
 
 	inline constexpr double kCmPerInch = 2.54;
-
-	// The resolution of a wl_fixed value on the wire: relative motion leaves
-	// gamescope quantised to 1/256 (see the scout notes in true-sens.md).
-	inline constexpr double kWireQuantum = 1.0 / 256.0;
 
 	// ---- number plumbing ---------------------------------------------------------
 
@@ -277,15 +273,28 @@ namespace gamescope::truesens
 		std::string m_invalid;
 	};
 
-	// ---- the fraction carry (D19) ------------------------------------------------
+	// ---- the whole-count carry (D26) ----------------------------------------------
 
-	// Scaled movement keeps its fractions: the result is quantised to the 1/256
-	// wire resolution and what the quantising cuts off is carried into the next
-	// call, per axis. Over any run of calls the sum of outputs equals the sum of
-	// inputs times the multiplier to within one quantum per axis. Reset when the
-	// multiplier changes or the feature goes inactive, so a stale remainder never
-	// leaks into a different setting.
-	class FractionCarry
+	// Scaled mouse movement leaves in WHOLE counts, the remainder is carried into
+	// the next movement. `acc += scaled; out = trunc( acc ); acc -= out`, per axis.
+	// A game that reads whole counts (through Xwayland, Wine, an engine with
+	// integer deltas) cuts or rounds a fractional delta away: 100 events of 1 count
+	// at 0.3x arrive as 0.3 each and the game sees nothing. Handing on whole counts
+	// makes every scaled event deliver something the game keeps.
+	//
+	// The invariant, for any inputs, any factors and any number of calls:
+	// |sum(out) - sum(scaled in)| < 1 per axis (what is not yet delivered is the
+	// carry, and the carry is always under one count). Nothing is lost over time.
+	//
+	// Truncation toward zero, not rounding to nearest, because a count is only
+	// emitted once a FULL count has accrued: with rounding, a hand that wobbles
+	// +2 -2 at 0.3x emits +1 -1 every cycle (a jitter of the aim from movement
+	// that nets zero), with truncation nothing leaves until the movement adds up.
+	//
+	// The carry is in OUTPUT counts, so it needs no reset when the factor changes
+	// (Zoom's fade changes its factor every frame); it is dropped only when scaling
+	// stops, which is the caller's call to Reset().
+	class WholeCountCarry
 	{
 	public:
 		void Reset()
@@ -294,35 +303,35 @@ namespace gamescope::truesens
 			m_carryY = 0.0;
 		}
 
-		void Apply( double &dx, double &dy, double mult )
+		// `dx`, `dy`: movement already multiplied by every scale. On return they
+		// hold whole numbers. A non-finite input is dropped (yields 0, carries 0).
+		void Apply( double &dx, double &dy )
 		{
-			if ( mult != m_mult )
-			{
-				Reset();
-				m_mult = mult;
-			}
-			dx = Axis( dx, m_carryX, mult );
-			dy = Axis( dy, m_carryY, mult );
+			dx = Axis( dx, m_carryX );
+			dy = Axis( dy, m_carryY );
 		}
 
 		double CarryX() const { return m_carryX; }
 		double CarryY() const { return m_carryY; }
 
 	private:
-		static double Axis( double d, double &carry, double mult )
+		// A sum such as 100 x 0.3 lands a hair under 30 in binary floating point;
+		// without a tolerance that count would arrive one event late. 1e-9 of a
+		// count is far below anything a mouse produces and keeps |carry| < 1.
+		static constexpr double kTolerance = 1e-9;
+
+		static double Axis( double d, double &carry )
 		{
 			if ( !IsFinite( d ) )
 				return 0.0;
-			const double want = d * mult + carry;
-			// Round to the nearest quantum: floor(x + 1/2) on the 1/256 grid.
-			const double q = std::floor( want / kWireQuantum + 0.5 ) * kWireQuantum;
-			carry = want - q;
-			return q;
+			const double acc = d + carry;
+			const double out = std::trunc( acc + ( acc < 0.0 ? -kTolerance : kTolerance ) );
+			carry = acc - out;
+			return out;
 		}
 
 		double m_carryX = 0.0;
 		double m_carryY = 0.0;
-		double m_mult = 1.0;
 	};
 
 	// ---- text helpers ------------------------------------------------------------
@@ -473,9 +482,18 @@ namespace gamescope
 	// thread with wlserver_lock() held, after the settings overlay's capture gate
 	// and BEFORE Zoom's own mouse scaling. `bCursorHidden` is the hidden-cursor
 	// signal the Zoom already uses (no cursor image OR pointer locked), NOT
-	// wlserver.bCursorHidden. May modify dx, dy. Relaxed-atomic reads only: no
-	// config, no allocation, no locks.
-	void TrueSens_OnMotion( double &dx, double &dy, bool bCursorHidden );
+	// wlserver.bCursorHidden. May modify dx, dy (multiplies them by the game's
+	// multiplier, as doubles: no rounding here). Returns true when it scaled this
+	// event. Relaxed-atomic reads only: no config, no allocation, no locks.
+	bool TrueSens_OnMotion( double &dx, double &dy, bool bCursorHidden );
+
+	// The LAST step before wlserver_perform_rel_pointer_motion() (D26): hands the
+	// scaled movement on in whole counts and carries the remainder (the
+	// truesens::WholeCountCarry). `bScaled` = True Sens scaled this event (the
+	// return of TrueSens_OnMotion) OR Zoom_MouseScale() returned something other
+	// than 1; when false the delta is left untouched, bit for bit, and the carry
+	// is dropped. Same thread and lock as the hook; no config, no locks.
+	void TrueSens_CarryWholeCounts( double &dx, double &dy, bool bScaled );
 
 	// Once a frame from paint_all(), beside NullBinds_Tick(), on the compositor
 	// thread. Loads the values on the first call and keeps the hook's atomics

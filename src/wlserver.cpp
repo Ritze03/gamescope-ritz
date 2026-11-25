@@ -4244,11 +4244,18 @@ void wlserver_mousemotion( double dx, double dy, uint32_t time )
 	// wlserver.bCursorHidden. It sits AFTER --mouse-sensitivity and the overlay
 	// gate and BEFORE the Zoom scale, so the multiplier acts on what the game
 	// would otherwise receive and Zoom's "match mouse speed" divides on top.
-	gamescope::TrueSens_OnMotion( dx, dy, bCursorHidden );
+	const bool bTrueSensScaled = gamescope::TrueSens_OnMotion( dx, dy, bCursorHidden );
 
 	const float flZoom = gamescope::Zoom_MouseScale( bCursorHidden );
 	dx *= flZoom;
 	dy *= flZoom;
+
+	// The one whole-count carry, as the LAST step of the scaling chain: when True
+	// Sens or Zoom scaled this event the delta leaves in whole counts and the
+	// remainder is carried into the next one (a game that reads whole counts
+	// would lose every fraction below 1). Untouched when neither scaled: the
+	// host's own fractional deltas are not rounded.
+	gamescope::TrueSens_CarryWholeCounts( dx, dy, bTrueSensScaled || flZoom != 1.0f );
 
 	// Item 10: relative motion is now the freshest input, so the last absolute
 	// sample no longer says where the host pointer is (a grab hides and pins

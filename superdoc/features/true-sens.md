@@ -130,23 +130,28 @@ held. The order of everything that scales or gates a relative mouse delta:
    True Sens nor Zoom sees it)
 3. `bCursorHidden = !bCursorHasImage || wlserver_pointer_is_locked()` (already computed there
    for Zoom; True Sens shares it)
-4. **`TrueSens_OnMotion`** (this feature)
-5. `Zoom_MouseScale( bCursorHidden )` (Match mouse speed)
-6. `wlserver_perform_rel_pointer_motion( dx, dy )`
+4. **`TrueSens_OnMotion`** (this feature): multiplies by the game's multiplier as doubles and
+   returns whether it scaled
+5. `Zoom_MouseScale( bCursorHidden )` (Match mouse speed): multiplies by `1 / factor`
+6. **`TrueSens_CarryWholeCounts( dx, dy, scaled || zoom != 1 )`** (D26): the one whole-count
+   carry, the last step of the chain
+7. `wlserver_perform_rel_pointer_motion( dx, dy )`
 
 So the multiplier acts on what the game would otherwise receive and Zoom's own scaling
 divides on top (D15; `zoom.md`, "Match mouse speed").
 
-Inside: if a recording runs and the cursor is hidden, the unscaled delta is added to the
-accumulators and **not scaled** (D11); else if the feature is enabled for this game, a valid
-multiplier exists and the cursor is hidden, dx and dy are scaled by the cached multiplier
-through the fraction carry; otherwise the delta is left alone and the carry is reset.
+Inside step 4: if a recording runs and the cursor is hidden, the unscaled delta is added to the
+accumulators and **not scaled** (D11, and nothing is returned as scaled); else if the feature is
+enabled for this game, a valid multiplier exists and the cursor is hidden, dx and dy are
+multiplied by the cached multiplier; otherwise the delta is left alone.
 
 **Dead band.** `truesens::Multiplier()` returns exactly 1.0 when the result is within
 `kUnityBand` (0.001) of 1, so the hook's `s_bScale` stays off: a game recorded at the player's
-own sensitivity is passed through untouched (fractional deltas are not snapped to 1/256) and the
-multiplier row shows "1.00x". `Why:` quantising for a factor that is 1 within rounding gains
-nothing.
+own sensitivity is passed through untouched (no whole-count rounding, fractional deltas stay
+fractional) and the multiplier row shows "1.00x". With Zoom's scale also 1 the delta is
+byte-identical to True Sens off (checked headless: 50 fractional events 0.1234 / 0.0567 arrive
+the same with the switch on at 1.00x and off). `Why:` rounding for a factor that is 1 within
+rounding gains nothing.
 
 `Why bCursorHidden and not wlserver.bCursorHidden:` the latter is also set by gamescope's
 idle auto-hide, which would false-positive on a menu with a visible-but-idle cursor (the
@@ -156,18 +161,72 @@ Only `wlserver_mousemotion()` is hooked. The absolute path (`wlserver_mousewarp`
 `wlserver_touchmotion`) is untouched: while the cursor is visible in a window, motion
 arrives as absolute positions and is correctly never scaled.
 
-**Fractions (D19).** The scaled delta is quantised to 1/256 (the `wl_fixed` wire
-resolution) by `FractionCarry`; what the quantising cuts off is carried into the next
-movement per axis, and the carry is reset when the multiplier changes or the feature goes
-inactive. Over any run of moves the sum of outputs equals the sum of inputs times the
-multiplier within one quantum per axis, so a 0.05x multiplier loses no movement. Whether a
-game's own input stack (Wine raw input, for instance) keeps sub-integer deltas is not
-verified; an integer mode is a later option if a game proves to need it.
+### Whole counts and the carry (D26, replaces D19)
+
+The owner (2026-11-25): *"At some sensitivities, it takes a minimum speed to actually move
+the mouse ingame. See if you can fix that through accumulation or something."*
+
+**The mechanism (confirmed headless, 2026-11-25).** D19 kept the fractions: the scaled delta
+was quantised to the `wl_fixed` grid (1/256 count) and only that remainder was carried. So at
+a multiplier of 0.3 a hand moving one count per event delivered events of 0.3 (0.300781 on the
+wire). Xwayland passes them on as XInput2 raw-motion valuators, which are doubles, so a
+consumer that reads them as doubles (SDL3 does) keeps every fraction. A consumer that takes
+whole counts per event (an engine with integer deltas, Wine's raw input path, any code that
+casts) cuts or rounds each 0.3 to 0: **nothing moves until the hand is fast enough that one
+event carries a whole count after scaling**, the owner's "minimum speed". Measured with the
+test client (`tests/pointer_grab_client_x11.c`, `DRAW` / `SUMS` lines) on the build before the
+change, 0.3x, 100 events of 1 count: the raw doubles summed to 30.0, an integer consumer that
+truncates each event got **0**, one that rounds each event got **0**; 20 events of 100 gave 600
+for both (fast movement was fine). The same happened to Zoom's Match mouse speed (see
+`zoom.md`), and above 1 a rounding consumer got the wrong total (0.5x of 1 count rounds to 1:
+twice the movement). A game that reads the doubles was never affected; what real games do is
+not verified here (see "Limits").
+
+**The rule.** The scaled movement is handed on in **whole counts** and the remainder is carried
+into the next movement, per axis: `acc += scaled; out = trunc( acc ); acc -= out`
+(`truesens::WholeCountCarry`). For any inputs, any multiplier and any change of multiplier,
+`| sum(out) - sum(scaled in) | < 1` per axis at every point, so no movement is lost over time
+and a slow hand arrives: 100 events of 1 count give 30 at 0.3x and 5 at 0.05x. Above 1 the
+outputs are whole counts too (2.5x of 1 count alternates 2, 3, 2, 3).
+
+`Why truncation toward zero and not round-to-nearest:` a count leaves only once a full count
+has accrued, and a change of direction cannot emit one early. A wobble of +2 -2 at 0.3x nets
+zero: truncation emits nothing, rounding emits +1 -1 every cycle (a jitter of the aim from
+movement that cancels; a unit case counts 0 against 200 for 100 cycles). Both rules satisfy
+the sum invariant; only truncation has no jitter. The cost is up to one count of latency for
+the last fraction, which the carry returns with the next movement.
+
+`Why a 1e-9 tolerance:` 100 x 0.3 sums to a hair under 30 in binary floating point; without it
+the 30th count would arrive one event late. 1e-9 of a count is far below any real movement and
+keeps the carry strictly under one.
+
+**Where it sits: at the END of the chain, covering Zoom.** Zoom multiplies by `1 / factor`
+after True Sens, so whole counts out of True Sens would become fractions again while zoomed,
+and slow aiming while zoomed is where it matters most. So True Sens and Zoom scale as doubles
+and ONE carry runs as the last step before `wlserver_perform_rel_pointer_motion()`
+(`wlserver.cpp`, `wlserver_mousemotion()`). It is active when at least one of the two scaled
+this event (True Sens returned true, or `Zoom_MouseScale()` returned something other than
+1.0). When neither did, the delta passes through bit for bit: the host can deliver fractional
+deltas (the nested backend's unaccelerated motion is `wl_fixed`), and those are never rounded.
+The recorder sums its input before any of this, so recordings are unchanged.
+
+**Carry reset.** The carry is dropped whenever scaling is not active for an event (cursor
+visible, True Sens off or no multiplier and Zoom inactive or at 1.0x in its fade) and while a
+recording runs (it starts from nothing; a recording spoiled by Zoom stores nothing anyway); while scaling stays active it is kept
+across events. It is **not** reset when the factor changes: it is held in OUTPUT counts, so a
+different multiplier or Zoom's per-frame factor during its fade needs no reset and loses
+nothing (a unit case ramps 1.0 to 0.25 over 30 events: within one count of the exact total at
+every step). Resetting on every factor change would throw the remainder away every frame.
+
+**Limits of D26.** The first event after scaling starts can deliver nothing (the first count
+needs a full count to accrue); at 0.05x that is up to 20 events of 1 count. Input that is not
+finite is dropped for the event (0 out, carry untouched).
 
 ## Threading
 
 The hook runs on the input thread and reads/writes only atomics (`s_eTarget`, the sums,
-`s_dMultiplier`, `s_bScale`) plus its own `FractionCarry`: no config, no allocation, no
+`s_dMultiplier`, `s_bScale`) plus its own `WholeCountCarry` (touched by `TrueSens_OnMotion`'s
+recording branch and `TrueSens_CarryWholeCounts` only): no config, no allocation, no
 locks. `ConfigManager`'s mirror (`s_Assignments`) has no lock and belongs to the compositor
 thread, so it is never touched from the hook.
 
@@ -229,6 +288,10 @@ so corrections back and forth cancel. Y and the sample count are kept for diagno
 
 - Multiplier limited to **0.05x .. 20x** (D18); a Low/High never recorded, or a game with no
   `counts_360`, gives multiplier **1** (the game is untouched).
+- **Proof is the test client's integer view, not a game.** The whole-count behaviour (D26) is
+  verified with `tests/pointer_grab_client_x11.c`, which reports what an integer-reading
+  consumer would get from the same X events; no Wine or native engine was run. Whether a given
+  game reads whole counts or doubles is unknown here; whole counts are right for both.
 - **Games that hide the cursor without locking the mouse are not supported.** Run in a
   window (nested), relative counts reach the program only while the host pointer is locked;
   such a game gets absolute positions instead, so no counts arrive and a recording reports
@@ -522,9 +585,11 @@ the Record press.
 
 `tests/test_truesens.cpp` (`[truesens]`, header only): the multiplier (valid, every invalid
 input, both limits), the calculator, conversions, the recorder (net with back and forth, Y
-ignored, below the floor refused with a reason, spoiled by Zoom, restart), the fraction carry
-(sum property for 0.05, 0.37, 1, 2.5 and 20, no lost small moves, reset) and the text
-helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
+ignored, below the floor refused with a reason, spoiled by Zoom, restart), the whole-count
+carry (the sum invariant at every step and whole outputs for 0.05, 0.3, 0.37, 0.5, 1.25, 2.5 and
+20 over slow, burst, back-and-forth, diagonal, fractional and random sequences; slow movement
+arrives; 2.5x alternates 2, 3; truncation against rounding on a wobble; a ramping factor; reset
+and non-finite input) and the text helpers. `tests/test_config.cpp` (`true sens:`): round trip of the global values and a game
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
 unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
 

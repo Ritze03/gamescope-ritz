@@ -45,9 +45,10 @@ namespace gamescope
 		std::atomic<double> s_dMultiplier{ 1.0 };
 		std::atomic<bool>   s_bScale{ false };
 
-		// The fraction carry (D19). Touched only by the hook, i.e. under the
-		// wlserver lock on the input thread.
-		truesens::FractionCarry s_Carry;
+		// The whole-count carry (D26). Touched only by the hook and
+		// TrueSens_CarryWholeCounts(), i.e. under the wlserver lock on the input
+		// thread.
+		truesens::WholeCountCarry s_Carry;
 
 		// ---- compositor-thread state -----------------------------------------------
 		bool s_bLoaded = false;   // a key has been resolved (possibly provisionally)
@@ -253,7 +254,7 @@ namespace gamescope
 
 	// ---- the hook --------------------------------------------------------------------
 
-	void TrueSens_OnMotion( double &dx, double &dy, bool bCursorHidden )
+	bool TrueSens_OnMotion( double &dx, double &dy, bool bCursorHidden )
 	{
 		if ( s_eTarget.load( std::memory_order_relaxed ) != 0 )
 		{
@@ -270,16 +271,26 @@ namespace gamescope
 				s_dSumY.store( s_dSumY.load( std::memory_order_relaxed ) + dy, std::memory_order_relaxed );
 				s_ulSamples.store( s_ulSamples.load( std::memory_order_relaxed ) + 1, std::memory_order_relaxed );
 			}
-			return;
+			return false;
 		}
 
 		// D5: only while the cursor is not visible. Anything else is left alone.
 		if ( !bCursorHidden || !s_bScale.load( std::memory_order_relaxed ) )
+			return false;
+		const double dMult = s_dMultiplier.load( std::memory_order_relaxed );
+		dx *= dMult;
+		dy *= dMult;
+		return true;
+	}
+
+	void TrueSens_CarryWholeCounts( double &dx, double &dy, bool bScaled )
+	{
+		if ( !bScaled )
 		{
 			s_Carry.Reset();
 			return;
 		}
-		s_Carry.Apply( dx, dy, s_dMultiplier.load( std::memory_order_relaxed ) );
+		s_Carry.Apply( dx, dy );
 	}
 
 	// ---- the tick --------------------------------------------------------------------
