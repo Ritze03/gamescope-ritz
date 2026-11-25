@@ -418,3 +418,8 @@ namespace gamescope
 	const std::string &TrueSens_SessionKey();                     // the config key of this session's game entry
 	bool TrueSens_SessionKeyShared();                             // true = the shared unknown-game entry
 }
+
+// The settings area (TrueSensArea.cpp), declared outside the namespace like
+// NullBinds_RegisterArea so Shell.cpp's RegisterAll() names it plainly.
+namespace gamescope::ui { class Registry; }
+namespace gamescope { void TrueSens_RegisterArea( ui::Registry &reg ); }

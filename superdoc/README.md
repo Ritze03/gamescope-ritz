@@ -138,6 +138,7 @@ indented under it.
 - [Autoclicker](features/autoclicker.md) — the paced synthetic click train and its
   feedback-loop guard.
 - [Null binds](features/null-binds.md) — WASD SOCD cleaning with delay and jitter.
+- [True Sens](features/true-sens.md) — your own mouse sensitivity recorded once, the same hand distance per 360° turn in every game; core and the `system.true_sens` area.
 - [Input › General](features/input-general.md) — force grab cursor and keyboard.
 - [Input emulation](features/input-emulation.md) — synthetic input injection (libei).
 - [Input method / IME](features/input-method-ime.md) — input method editor support.
