@@ -39,6 +39,13 @@
 //   RAW dev=<id> src=<id> v0=<..> v1=<..>   every XI_RawMotion (raw_values)
 //   CORE x=<..> y=<..>                      every core MotionNotify
 //   MOTION x=<..> y=<..> xrel=<..> yrel=<..>  every SDL_EVENT_MOUSE_MOTION
+//   DRAW dev=<id> d0=<..> d1=<..> trunc0=<..> trunc1=<..> round0=<..> round1=<..>
+//                     the same raw event with 6 decimals, and what a consumer
+//                     that reads whole counts gets (cut toward zero / rounded)
+//   DMOTION xrel=<..> yrel=<..>               MOTION's deltas with 6 decimals
+//   SUMS events=<n> raw0=<..> raw1=<..> trunc0=.. trunc1=.. round0=.. round1=..
+//                     running sums over all RAW events, every 500 ms (the
+//                     difference of two lines is the total of what arrived)
 //   LOCKED                                   relative mode was just enabled
 //   STATS motions=<n> relative=<0|1>         every 500 ms
 //   DONE motions=<n>
@@ -60,6 +67,19 @@ static int s_nXiOpcode = -1;
 // Devices we have already described, so DEVICE prints once per id.
 static int s_nSeenDevices[64];
 static int s_nSeenDeviceCount = 0;
+
+// Round to the nearest whole count, halves away from zero (no libm needed).
+static long round_count( double v )
+{
+	return (long)( v < 0 ? v - 0.5 : v + 0.5 );
+}
+
+// Running sums over every XI_RawMotion seen: the raw doubles, and what an
+// integer-reading consumer gets (each event cut toward zero / rounded).
+static unsigned long s_ulRawEvents = 0;
+static double s_flRawSum[2] = { 0.0, 0.0 };
+static long s_lTruncSum[2] = { 0, 0 };
+static long s_lRoundSum[2] = { 0, 0 };
 
 static void describe_device( int nDeviceId )
 {
@@ -141,6 +161,19 @@ static bool x11_event_hook( void *pUserdata, XEvent *pEvent )
 			pRaw->deviceid, pRaw->sourceid,
 			bHave[0] ? "" : "(none)", flValues[0],
 			bHave[1] ? "" : "(none)", flValues[1] );
+
+		// The same event, unrounded, and what an integer-reading consumer
+		// would take from it (see the SUMS line in main()).
+		printf( "DRAW dev=%d d0=%.6f d1=%.6f trunc0=%ld trunc1=%ld round0=%ld round1=%ld\n",
+			pRaw->deviceid, flValues[0], flValues[1],
+			(long)flValues[0], (long)flValues[1], round_count( flValues[0] ), round_count( flValues[1] ) );
+		s_ulRawEvents++;
+		s_flRawSum[0] += flValues[0];
+		s_flRawSum[1] += flValues[1];
+		s_lTruncSum[0] += (long)flValues[0];
+		s_lTruncSum[1] += (long)flValues[1];
+		s_lRoundSum[0] += round_count( flValues[0] );
+		s_lRoundSum[1] += round_count( flValues[1] );
 	}
 	return true;
 }
@@ -230,6 +263,7 @@ int main( int argc, char **argv )
 					ulMotions++;
 					printf( "MOTION x=%.1f y=%.1f xrel=%.1f yrel=%.1f\n",
 						ev.motion.x, ev.motion.y, ev.motion.xrel, ev.motion.yrel );
+					printf( "DMOTION xrel=%.6f yrel=%.6f\n", ev.motion.xrel, ev.motion.yrel );
 					break;
 				case SDL_EVENT_WINDOW_FOCUS_GAINED:
 					printf( "FOCUS gained\n" );
@@ -261,6 +295,9 @@ int main( int argc, char **argv )
 		if ( uNow - uLastStats >= 500 )
 		{
 			printf( "STATS motions=%lu relative=%d\n", ulMotions, SDL_GetWindowRelativeMouseMode( pWindow ) ? 1 : 0 );
+			printf( "SUMS events=%lu raw0=%.6f raw1=%.6f trunc0=%ld trunc1=%ld round0=%ld round1=%ld\n",
+				s_ulRawEvents, s_flRawSum[0], s_flRawSum[1], s_lTruncSum[0], s_lTruncSum[1],
+				s_lRoundSum[0], s_lRoundSum[1] );
 			uLastStats = uNow;
 		}
 		if ( nSeconds > 0 && uNow - uStart >= (Uint64)nSeconds * 1000u )

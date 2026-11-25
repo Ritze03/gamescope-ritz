@@ -1,11 +1,12 @@
 // Unit tests for src/Overlay/TrueSens.h's pure half: the multiplier maths, the
-// calculator, the recorder and the fraction carry. No compositor, no config, no
+// calculator, the recorder and the whole-count carry. No compositor, no config, no
 // thread. The build is -ffast-math, so the invalid-input cases are the ones that
 // prove the range-based validation survives it.
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -257,76 +258,232 @@ TEST_CASE( "truesens: recorder ignores non-finite deltas", "[truesens]" )
 	CHECK_THAT( res.counts, WithinAbs( 1000.0, 1e-9 ) );
 }
 
-TEST_CASE( "truesens: fraction carry keeps every fraction", "[truesens]" )
+namespace
 {
-	for ( double mult : { 0.05, 0.37, 1.0, 2.5, 20.0 } )
+	// A small deterministic generator, so a failure repeats.
+	struct Lcg
+	{
+		uint64_t s = 0x9E3779B97F4A7C15ull;
+		uint32_t Next()
+		{
+			s = s * 6364136223846793005ull + 1442695040888963407ull;
+			return (uint32_t)( s >> 33 );
+		}
+		// uniform in [-1, 1]
+		double Unit() { return (double)Next() / (double)0x7FFFFFFFu * 2.0 - 1.0; }
+	};
+
+	bool IsWhole( double d )
+	{
+		return d == std::trunc( d );
+	}
+
+	// Running sums of one test sequence through a carry at a fixed factor.
+	struct Sums
+	{
+		double inX = 0, inY = 0, outX = 0, outY = 0;
+		bool bWhole = true;
+		double worst = 0.0; // largest |sum(out) - m * sum(in)| seen at any step, either axis
+	};
+
+	void Feed( WholeCountCarry &c, Sums &t, double dx, double dy, double mult )
+	{
+		t.inX += dx;
+		t.inY += dy;
+		double x = dx * mult, y = dy * mult;
+		c.Apply( x, y );
+		t.outX += x;
+		t.outY += y;
+		if ( !IsWhole( x ) || !IsWhole( y ) )
+			t.bWhole = false;
+		t.worst = std::max( t.worst, std::max( std::fabs( t.outX - t.inX * mult ), std::fabs( t.outY - t.inY * mult ) ) );
+	}
+}
+
+TEST_CASE( "truesens: whole-count carry invariant for long sequences", "[truesens]" )
+{
+	for ( double mult : { 0.05, 0.3, 0.37, 0.5, 1.25, 2.5, 20.0 } )
 	{
 		DYNAMIC_SECTION( "multiplier " << mult )
 		{
-			FractionCarry c;
-			double inX = 0, inY = 0, outX = 0, outY = 0;
-			bool bOffGrid = false;
-			// tiny and irregular deltas, both signs.
+			Lcg rng;
+			WholeCountCarry c;
+			Sums t;
+			// slow 1-count events
+			for ( int i = 0; i < 5000; i++ )
+				Feed( c, t, 1.0, 0.0, mult );
+			// bursts of random size, both signs
+			for ( int i = 0; i < 5000; i++ )
+				Feed( c, t, std::floor( rng.Unit() * 200.0 ), std::floor( rng.Unit() * 200.0 ), mult );
+			// back and forth, small and equal
+			for ( int i = 0; i < 5000; i++ )
+				Feed( c, t, i % 2 ? -1.0 : 1.0, i % 2 ? 1.0 : -1.0, mult );
+			for ( int i = 0; i < 5000; i++ )
+				Feed( c, t, ( i / 2 ) % 2 ? -2.0 : 2.0, 0.0, mult );
+			// diagonal
+			for ( int i = 0; i < 5000; i++ )
+				Feed( c, t, 1.0, 1.0, mult );
+			// fractional input, as the nested backend's unaccelerated motion delivers
 			for ( int i = 0; i < 20000; i++ )
-			{
-				double dx = ( ( i * 7 ) % 5 ) * 0.1 - 0.15; // -0.15 .. 0.25
-				double dy = ( ( i * 3 ) % 4 ) * 0.3 - 0.2;
-				inX += dx;
-				inY += dy;
-				c.Apply( dx, dy, mult );
-				outX += dx;
-				outY += dy;
-				// every output is on the 1/256 grid
-				if ( std::fmod( std::fabs( dx ) * 256.0, 1.0 ) != 0.0 ) bOffGrid = true;
-			}
-			CHECK_FALSE( bOffGrid );
-			// the sum property: within one quantum per axis.
-			CHECK( std::fabs( outX - inX * mult ) <= kWireQuantum );
-			CHECK( std::fabs( outY - inY * mult ) <= kWireQuantum );
+				Feed( c, t, rng.Unit() * 3.0, rng.Unit() * 0.7, mult );
+			// long mixed random walk
+			for ( int i = 0; i < 20000; i++ )
+				Feed( c, t, std::floor( rng.Unit() * 4.0 ), std::floor( rng.Unit() * 4.0 ), mult );
+			CHECK( t.bWhole );
+			CHECK( t.worst < 1.0 );
+			// what is not delivered is exactly the carry
+			CHECK_THAT( t.outX + c.CarryX(), WithinAbs( t.inX * mult, 1e-6 ) );
+			CHECK_THAT( t.outY + c.CarryY(), WithinAbs( t.inY * mult, 1e-6 ) );
+			CHECK( std::fabs( c.CarryX() ) < 1.0 );
+			CHECK( std::fabs( c.CarryY() ) < 1.0 );
 		}
 	}
 }
 
-TEST_CASE( "truesens: fraction carry does not lose small moves", "[truesens]" )
+TEST_CASE( "truesens: whole-count carry lets slow movement through", "[truesens]" )
 {
-	// 0.05x of a one-count move is 0.05: a plain rounding would give 0 forever.
-	FractionCarry c;
-	double sum = 0;
-	for ( int i = 0; i < 1000; i++ )
+	// The owner's report: at 0.3x a hand moving one count at a time moved nothing.
+	struct Case { double mult; int events; double expect; };
+	for ( const Case &k : { Case{ 0.3, 100, 30 }, Case{ 0.05, 100, 5 }, Case{ 0.37, 100, 37 },
+							Case{ 0.5, 100, 50 }, Case{ 2.5, 100, 250 }, Case{ 20.0, 100, 2000 },
+							Case{ 0.3, 1000, 300 } } )
 	{
-		double dx = 1.0, dy = 0.0;
-		c.Apply( dx, dy, 0.05 );
-		sum += dx;
+		WholeCountCarry c;
+		Sums t;
+		int nMoving = 0;
+		for ( int i = 0; i < k.events; i++ )
+		{
+			const double before = t.outX;
+			Feed( c, t, 1.0, 1.0, k.mult );
+			if ( t.outX != before )
+				nMoving++;
+		}
+		INFO( "multiplier " << k.mult );
+		CHECK( t.bWhole );
+		CHECK( t.outX == k.expect );
+		CHECK( t.outY == k.expect );
+		if ( k.mult < 1.0 )
+			CHECK( nMoving == (int)k.expect ); // one count per emission, never two
 	}
-	CHECK_THAT( sum, WithinAbs( 50.0, kWireQuantum ) );
 }
 
-TEST_CASE( "truesens: fraction carry resets", "[truesens]" )
+TEST_CASE( "truesens: whole-count carry above 1 alternates whole counts", "[truesens]" )
 {
-	FractionCarry c;
-	double dx = 0.001, dy = 0.001; // below one quantum: all carried
-	c.Apply( dx, dy, 1.0 );
+	WholeCountCarry c;
+	std::string seen;
+	for ( int i = 0; i < 6; i++ )
+	{
+		double x = 1.0 * 2.5, y = 0.0;
+		c.Apply( x, y );
+		seen += std::to_string( (int)x ) + ",";
+	}
+	CHECK( seen == "2,3,2,3,2,3," );
+}
+
+TEST_CASE( "truesens: whole-count carry truncates, rounding would jitter", "[truesens]" )
+{
+	// A wobble of +2 -2 at 0.3x nets zero. Truncation emits nothing; rounding to
+	// nearest emits +1 -1 every cycle (the aim jitters from movement that
+	// cancels). This is why the carry truncates.
+	WholeCountCarry c;
+	double accRound = 0.0;
+	int nEmitTrunc = 0, nEmitRound = 0;
+	for ( int cycle = 0; cycle < 100; cycle++ )
+		for ( double d : { 2.0, -2.0 } )
+		{
+			double x = d * 0.3, y = 0.0;
+			c.Apply( x, y );
+			if ( x != 0.0 )
+				nEmitTrunc++;
+			accRound += d * 0.3;
+			const double out = std::floor( accRound + 0.5 );
+			accRound -= out;
+			if ( out != 0.0 )
+				nEmitRound++;
+		}
+	CHECK( nEmitTrunc == 0 );
+	CHECK( nEmitRound == 200 );
+
+	// A direction change does not emit a count early either: 0.3x of +3 (0.9
+	// accrued) then -1 leaves nothing, where rounding would already have sent +1.
+	WholeCountCarry d;
+	double x = 3.0 * 0.3, y = 0.0;
+	d.Apply( x, y );
+	CHECK( x == 0.0 );
+	x = -1.0 * 0.3;
+	d.Apply( x, y );
+	CHECK( x == 0.0 );
+}
+
+TEST_CASE( "truesens: whole-count carry survives a changing factor", "[truesens]" )
+{
+	// Zoom's fade changes its factor every frame (1.0 -> 0.25). The carry is in
+	// output counts, so nothing needs resetting and nothing is thrown away.
+	WholeCountCarry c;
+	double out = 0.0, expect = 0.0;
+	for ( int i = 0; i < 30; i++ )
+	{
+		const double f = 1.0 - 0.75 * (double)i / 29.0;
+		double x = 1.0 * f, y = 0.0;
+		c.Apply( x, y );
+		expect += 1.0 * f;
+		out += x;
+		CHECK( IsWhole( x ) );
+		CHECK( std::fabs( out - expect ) < 1.0 );
+	}
+	CHECK_THAT( out + c.CarryX(), WithinAbs( expect, 1e-9 ) );
+
+	// then settled at 0.25: the remainder of the ramp is not lost.
+	for ( int i = 0; i < 400; i++ )
+	{
+		double x = 1.0 * 0.25, y = 0.0;
+		c.Apply( x, y );
+		expect += 0.25;
+		out += x;
+	}
+	CHECK( std::fabs( out - expect ) < 1.0 );
+}
+
+TEST_CASE( "truesens: whole-count carry resets and bad input", "[truesens]" )
+{
+	WholeCountCarry c;
+	double dx = 0.4, dy = -0.4;
+	c.Apply( dx, dy );
 	CHECK( dx == 0.0 );
-	CHECK( c.CarryX() > 0.0 );
+	CHECK( dy == 0.0 );
+	CHECK_THAT( c.CarryX(), WithinAbs( 0.4, 1e-12 ) );
+	CHECK_THAT( c.CarryY(), WithinAbs( -0.4, 1e-12 ) );
 
 	c.Reset();
 	CHECK( c.CarryX() == 0.0 );
 	CHECK( c.CarryY() == 0.0 );
 
-	// a changed multiplier drops the remainder too.
-	dx = 0.001; dy = 0.001;
-	c.Apply( dx, dy, 1.0 );
-	CHECK( c.CarryX() > 0.0 );
-	dx = 0.0; dy = 0.0;
-	c.Apply( dx, dy, 2.0 );
+	// after a reset the old remainder is gone: 0.4 + 0.4 + 0.4 accrues 1.2 and
+	// sends one count only on the third call.
+	dx = 0.4; dy = 0.0;
+	c.Apply( dx, dy );
+	dx = 0.4; dy = 0.0;
+	c.Apply( dx, dy );
 	CHECK( dx == 0.0 );
-	CHECK( c.CarryX() == 0.0 );
+	dx = 0.4; dy = 0.0;
+	c.Apply( dx, dy );
+	CHECK( dx == 1.0 );
 
-	// a non-finite input yields nothing and carries nothing.
+	// non-finite input yields nothing and does not touch the carry of that axis.
+	c.Reset();
+	dx = 0.5; dy = 0.5;
+	c.Apply( dx, dy );
 	dx = kNaN; dy = 1.0;
-	c.Apply( dx, dy, 1.0 );
+	c.Apply( dx, dy );
 	CHECK( dx == 0.0 );
-	CHECK( dy == 1.0 );
+	CHECK( dy == 1.0 ); // 1.0 + 0.5 carried
+	CHECK_THAT( c.CarryX(), WithinAbs( 0.5, 1e-12 ) );
+	CHECK_THAT( c.CarryY(), WithinAbs( 0.5, 1e-12 ) );
+	dx = kInf; dy = -kInf;
+	c.Apply( dx, dy );
+	CHECK( dx == 0.0 );
+	CHECK( dy == 0.0 );
+	CHECK_THAT( c.CarryX(), WithinAbs( 0.5, 1e-12 ) );
 }
 
 TEST_CASE( "truesens: text helpers", "[truesens]" )

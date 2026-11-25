@@ -17,6 +17,9 @@ All notable user-facing changes, newest first. Categories:
 - **True Sens**: new Input area that records your own mouse sensitivity once and gives
   you the same feel in every game, with a calculator for the in-game value.
 
+### Fixed
+- **Zoom**: slow mouse movement is no longer lost while Match mouse speed is on.
+
 ### Removed
 - **Learned motion**: the "Learned net" choice is gone; Learned always uses its default
   network.
