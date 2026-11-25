@@ -115,7 +115,8 @@ by its whole range in the palette.
 
 ## Regions, the ladder, and the Inspector
 
-The slab is a flat 85% of the surface on both axes (`Slab::For()`; `shelltok::kSurfFrac`), no
+The slab is by default 85% of the surface on both axes (`Slab::For()`; `shelltok::kSurfFrac`), set
+by Appearance's Outside margin (fraction = 1 - 2 x margin / 100, 0-25%, `SlabFractionForMargin()`), no
 absolute pixel cap, centred, and cannot be moved — there is exactly one window. `Why:` 39% of the
 old overlay's bug-fix commits were floating-window management, nine of sixteen of those being
 fixes to earlier fixes; a bug class is removed by deleting what produces it (the dock and its five

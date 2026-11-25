@@ -655,6 +655,7 @@ namespace gamescope::config
                 // here any more, same as opacity_background above. An old
                 // config's leftover keys are simply never looked up.
                 s.overlay.window_opacity = JGetFloat( *pOverlay, "window_opacity", s.overlay.window_opacity );
+                s.overlay.outside_margin = std::clamp( JGetFloat( *pOverlay, "outside_margin", s.overlay.outside_margin ), 0.0f, 25.0f );
                 s.overlay.opacity_notifications = JGetFloat( *pOverlay, "opacity_notifications", s.overlay.opacity_notifications );
                 s.overlay.accent_hue = JGetFloat( *pOverlay, "accent_hue", s.overlay.accent_hue );
                 s.overlay.background_blur = JGetFloat( *pOverlay, "background_blur", s.overlay.background_blur );
@@ -1090,6 +1091,7 @@ namespace gamescope::config
             // leftover keys are dropped the first time anything writes
             // global.json - accepted for a removed feature.
             jOverlay[ "window_opacity" ] = o.window_opacity;
+            jOverlay[ "outside_margin" ] = o.outside_margin;
             jOverlay[ "opacity_notifications" ] = o.opacity_notifications;
             jOverlay[ "accent_hue" ] = o.accent_hue;
             jOverlay[ "background_blur" ] = o.background_blur;

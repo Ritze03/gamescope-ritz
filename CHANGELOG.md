@@ -7,6 +7,16 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-25
+
+### Added
+- **Appearance**: new slider "Outside margin" sets how much space is left around the
+  settings window.
+
+### Info
+- **Appearance**: Window transparency now starts at 0.95; an existing setup keeps its
+  value.
+
 ## 2026-11-24
 
 ### Info

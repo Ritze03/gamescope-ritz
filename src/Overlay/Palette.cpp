@@ -213,6 +213,7 @@ namespace gamescope::palette
 		const config::Settings s = config::LoadGlobal();
 		g_LiveTheme.flDisplayScale         = s.overlay.display_scale;
 		g_LiveTheme.flWindowOpacity        = s.overlay.window_opacity;
+		g_LiveTheme.flOutsideMargin        = s.overlay.outside_margin;
 		g_LiveTheme.flAccentHue            = s.overlay.accent_hue;
 		ImGui::GetIO().FontGlobalScale     = s.overlay.display_scale;
 

@@ -8,7 +8,7 @@
 //
 // The three quantities that live here and nowhere else:
 //
-//   1. THE SLAB      -- surfW x 0.85 x surfH x 0.85, no absolute pixel cap
+//   1. THE SLAB      -- by default surfW x 0.85 x surfH x 0.85, no absolute pixel cap
 //                       (SPEC §8.1; superseded the old min(surfW x 0.90,
 //                       max(1560 x scale, 1180)) x min(surfH x 0.86, 940 x
 //                       scale) formula 2026-09-02)
@@ -65,11 +65,13 @@ namespace gamescope::ui
 		inline constexpr float kSheetMin   = 560.0f;
 		inline constexpr float kSpine      =  20.0f;   // SPEC §8.05's "20-base vertical spine"
 
-		// 2026-09-02: the slab is a flat 85% of the surface on both axes, no
+		// 2026-09-02: the slab is, by default, 85% of the surface on both axes, no
 		// absolute pixel cap. See Layout.cpp's Slab::For() for the rationale
 		// (the caps were making the UI feel too small on high-res outputs)
 		// and SPEC.md §8.3 for the superseded formula this replaces.
-		inline constexpr float kSurfFrac   =   0.85f;
+		inline constexpr float kSurfFrac   =   0.85f;   // the DEFAULT; Appearance's Outside margin changes it
+		inline constexpr float kMarginDefaultPct = 7.5f;  // OverlaySettings::outside_margin's default
+		inline constexpr float kMarginMaxPct     = 25.0f;
 
 		// ---- the command palette / launcher panel, base units ------------
 		// These are here rather than as literals inside DrawPalette()
@@ -124,9 +126,25 @@ namespace gamescope::ui
 		float flWidthPx  = 0.0f, flHeightPx = 0.0f;
 		float flWidthBase= 0.0f, flHeightBase = 0.0f;
 
-		// SPEC §8.1's slab formula, verbatim.
-		static Slab For( float flSurfaceWPx, float flSurfaceHPx, float flScale );
+		// SPEC §8.1's slab formula. flFrac is the share of the surface the slab
+		// takes on both axes; the default is the original 85%.
+		static Slab For( float flSurfaceWPx, float flSurfaceHPx, float flScale,
+		                 float flFrac = shelltok::kSurfFrac );
 	};
+
+	// Outside margin (percent of the surface, per side) -> slab fraction:
+	// 1 - 2 x margin / 100. Clamped to 0..kMarginMaxPct (the build uses fast-math, so no NaN
+	// branch; the config loader only ever delivers finite numbers).
+	// The default margin returns exactly shelltok::kSurfFrac, so nothing
+	// shifts by a pixel.
+	inline float SlabFractionForMargin( float flMarginPct )
+	{
+		if ( flMarginPct == shelltok::kMarginDefaultPct )
+			return shelltok::kSurfFrac;
+		if ( flMarginPct < 0.0f ) flMarginPct = 0.0f;
+		if ( flMarginPct > shelltok::kMarginMaxPct ) flMarginPct = shelltok::kMarginMaxPct;
+		return 1.0f - 2.0f * flMarginPct / 100.0f;
+	}
 
 	// The ladder's answer for one frame.
 	struct LadderResult

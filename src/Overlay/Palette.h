@@ -165,7 +165,8 @@ namespace gamescope::palette
 		// anything, the same dead-field shape as flDockScale above.
 		// flWindowOpacity replaces them: the E2 shell (Shell.cpp) is the
 		// one real reader now, via WindowOpacity() below.
-		float flWindowOpacity      = 1.0f;  // OverlaySettings::window_opacity
+		float flWindowOpacity      = 0.95f; // OverlaySettings::window_opacity
+		float flOutsideMargin      = 7.5f;  // OverlaySettings::outside_margin, percent per side; Shell.cpp turns it into the slab fraction
 		// OverlaySettings::accent_hue, degrees, OKLCH hue -- issue #37.
 		// Default 218 reproduces today's #36BDDD family exactly (see
 		// Palette.cpp's per-token L/C table). Setting this alone does
