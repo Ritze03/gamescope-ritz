@@ -11,8 +11,8 @@ Unit cases `tests/test_truesens.cpp` and the `true sens:` cases in
 `tests/test_config.cpp`.
 
 > **Status (2026-11-25):** maths, the two-click recorder, storage, the hooks, the tick, the interface, the
-> debug commands, the Shell area, the hint at the top of the screen and the frozen picture
-> under it exist and are tested.
+> debug commands, the Shell area, the hint at the top of the screen and the picture pair
+> under it (frozen left half, live right half) exist and are tested.
 
 ## Why this exists
 
@@ -605,25 +605,101 @@ is about 27 % of the width at 1080p, far from the centre the player aims at. If 
 anchored top-centre the plate starts below the readout's bottom edge (same formula as the stats
 block's top-left rule); at any other anchor the readout (default top-right) does not meet it.
 
-**The reference picture** is drawn by the same function into the same draw list, directly below
-the plate (see "Reference picture"). `TrueSens_DrawHud()` returns the plate's bottom edge in
-px (0 = nothing drawn).
+**The reference picture pair** is drawn by the same function into the same draw list, directly
+below the plate (see "Reference picture"). `TrueSens_DrawHud()` returns the plate's bottom edge
+in px (0 = nothing drawn).
 
 Not checked: a real HDR (PQ) client; a 10-bit SDR client was.
 
 ## Reference picture
 
-At the **first left click** (the recording starts, D24; not at Record: while armed the player
-is still aiming and there is no spot to mark yet) the middle of the game picture is captured
-once and shown, frozen, under the hint plate until the recording ends, so the player can
-compare it with what is in the middle of the screen now and find the spot again (D6, D16).
-The input thread only changes the phase; the **tick** sees Recording and calls
-`TrueSens_ReferenceRequest()` on the compositor thread, so the picture is the frame of the
-next paint after the click, not of the click itself. Where it cannot be taken the hint
-stays alone: no placeholder box, one `truesens:` log line with the reason. A missing picture
-never delays or breaks the recording.
+The owner's words: *"In the top, make sure that the "screenshot" is 2:1 ratio (width:height)
+and the left side shows a 2x zoomed view of the middle part."* and, correcting the first
+reading: *"Two square halves. Left is a screenshot of the captured starting point and right
+is a live preview of the middle at a zoomed view (more precise)"* (D25). `Why:` a frozen
+picture of the starting point alone leaves the player judging by memory; a live view of the
+same part beside it turns "find the spot again" into "turn until the right half matches the
+left", and 2x makes a small turn error visible.
 
-**Capture: an in-memory screenshot.** The tick (once the first click started the recording) calls
+**The picture is twice as wide as high, in two square halves of side S.** The left half is the
+frozen picture of the starting point, the right half is a live view of the middle of the
+screen; both show the same centre square of the game picture, 2x. It appears with the **first
+left click** (the recording starts, D24; not at Record: while armed the player is still aiming
+and nothing is held yet, so only the hint plate shows). If the frozen capture fails or has not
+arrived yet the hint stays alone: no live half without the frozen half (a lone live view has
+nothing to compare with). The live request starts in the same paint in which the frozen
+picture first appears.
+
+**Geometry: one pure helper, `truesens::ReferencePair( outW, outH, plateBottom, scale )`**
+(`TrueSens.h`, unit-tested), used by the HUD drawing AND by the live request, so the halves can
+never drift apart. All numbers are whole output pixels:
+- S = 25 % of the output height, rounded to an even number (1080p: 270; 720p: 180; 1440p: 360;
+  4K: 540). Picture = 2S x S, centred horizontally, top at the plate's bottom + 8 px x scale
+  (1080p: x 690..1229, y 98..367). Left half = columns `[x, x+S)`, right half = `[x+S, x+2S)`.
+- If the bottom would come closer than 8 % of the height to the screen centre, S shrinks (2:1
+  kept, even); wider than the output, S shrinks to fit; below 24 px nothing is drawn.
+- Drawn over it by the HUD layer: a border around the whole 2S x S (1 px accent at
+  `max( 1, scale )`, like the plate's), a divider of the same colour and width at the first
+  column of the right half, and the ring-with-dot centre mark on the centre of EACH half. The
+  border covers the outermost pixel row/column, the divider the first column of the right half.
+
+**What both halves show.** The centre square of the game picture whose side is 12.5 % of the
+picture's HEIGHT (`kReferenceHeightFraction`), shown at S = 25 % of the OUTPUT height: 2x when
+the game picture fills the output height, which is the normal case (same aspect for game and
+output, or a game pillarboxed to the full height). Letterboxed or otherwise smaller than the
+output, both halves still show the SAME part (the factor is then not exactly 2): the part is
+defined in game-picture terms, not output terms. `Why:` the live half had to match the frozen
+one by construction; defining both from the game picture's own height makes the frozen crop
+(`ReferenceCrop()`: side = captured height / 8, centred) and the live source part the same
+thing, with no relation to the output size to get out of step.
+
+**Two paths, and why the live half goes through the composite.**
+- *Frozen half:* an in-memory screenshot, below.
+- *Live half:* the composite's zoom request (`FrameInfo_t::zoom`, see `zoom.md`, "Where the
+  picture is made"), filled by `TrueSens_FillLiveRequest()` (`TrueSensHud.cpp`) in `paint_all()`
+  right after `Zoom_FillRequest()` and built by `vulkan_composite()` as layer 1: one dispatch of
+  `cs_zoom.comp` over an S x S rectangle, placed at the right half's whole-pixel origin, sampling
+  the graded base layer (bundled effects included) bilinearly. `Why not a per-frame screenshot
+  loop:` that is a capture and an upload every frame; the composite already has the graded
+  base layer and builds the zoom layer in a single dispatch, and the layer follows every repaint
+  of the game by itself, so nothing in the HUD hash changes per frame. The HUD layer is drawn
+  ABOVE this layer, so the right half is transparent in the HUD: only border, divider and mark.
+- The placed request (new `Zoom_t` fields `bPlaced`, `flPlaceX/Y/W/H`, `flSrcCenterX/Y`,
+  `flSrcHeightFrac`) names the projection rectangle in output pixels and the source part as
+  fractions of the base texture: centre = the frozen crop's centre (so the half-texel offset of
+  an odd-sized crop in an even picture is matched exactly), height = the crop's height fraction.
+  No outline ring (the HUD border and divider are the only edges: no doubled or mismatched edge),
+  no factor, no circle. `bNeedsDestinationBlend` is set only while the live half is requested,
+  exactly as Zoom does (the base must be IN the composite).
+- *Frame generation:* the projection is built after the frame-generation substitution, so
+  the live half shows the generated frame like the rest of the picture (the same as Zoom);
+  the frozen half is a real frame. Not checked with generation on.
+
+**It is not Zoom anywhere else.** The request reuses the composite's slot only; nothing of
+Zoom's own state is touched:
+1. `Zoom_IsActive()` (Zoom's `s_bActive`) stays false, so the recording never spoils itself
+   (`s_bZoomSpoiled`); measured `zoom_spoiled=0` through a whole recording.
+2. `Zoom_MouseScale()` and `Zoom_FillRequest()`'s `s_flLiveFactor` stay 1: the filler runs after
+   `Zoom_FillRequest()` and writes only `FrameInfo_t::zoom`, never a Zoom atomic, so recorded
+   counts and the (off while recording) multiplier are unchanged.
+3. The click and pointer remapping of `zoom.md` ("Clicks land on what the projector shows")
+   reads Zoom's geometry atomics (`s_bGeomValid` ...), written only by `Zoom_FillRequest()` when
+   Zoom is wanted; the live half writes none, so no click is remapped.
+4. Zoom's scroll-adjust (`s_flFactor`) and fade state (`s_flFadeProgress`) are never read or
+   written. The filler skips (guard) if `zoom.bActive` is already set: the two cannot meet, since
+   a recording refuses Zoom and Zoom pressed during one spoils it.
+
+**When the composite cannot build the projection** (base not SDR, YCbCr, no base, no free layer
+slot or no texture) the right half would be an empty hole. `vulkan_composite()` stores the
+outcome of every placed request in `g_nPlacedZoomFailure` (0 built; 1 no usable base or no
+texture; 2 no free layer slot) and calls `force_repaint()` when it changes. The HUD reads it each
+paint: non-zero means it draws ONLY the frozen square, centred (`ReferenceSingleX()`), with border
+and mark, no divider and no empty half, and the filler requests nothing, so the full composite is
+no longer forced. It starts optimistic (0, reset by every `TrueSens_ReferenceClear()`), so the
+normal case never flickers on the first frame; one `truesens: live view not built (<reason>)`
+line per recording. The fallback is sticky for the rest of the recording.
+
+**Capture (the frozen half): an in-memory screenshot.** The tick (once the first click started the recording) calls
 `TrueSens_ReferenceRequest()` (`TrueSensHud.cpp`), which queues one
 `CScreenshotManager::TakeScreenshot()` of type `BASE_PLANE_ONLY` with the new field
 `GamescopeScreenshotInfo::pfnMemory` set (`steamcompmgr_shared.hpp`). `paint_all()` serves it in
@@ -650,27 +726,23 @@ requested in the same frame as the first click is replaced by it (or the reverse
 is then never served and the hint stays alone). A request is also dropped silently if
 `paint_all()` returns early before the block.
 
-**Pixels to screen (all on the compositor thread):**
+**Pixels to screen (frozen half, all on the compositor thread):**
 1. `paint_all()` screenshot block: composite into a pooled linear texture, wait.
 2. `Deliver()` (`TrueSensHud.cpp`, the callback): accepts only the answer to the newest request
    while a recording runs (a request counter, bumped by every request and by `Clear`, drops stale
-   answers); crops with `truesens::ReferenceCrop()`; reduces by a whole factor with a box average
-   if the crop is wider than the 768 px texture (`ReferenceDownscale()`, 4K gives x2); converts to
+   answers); crops with `truesens::ReferenceCrop()` (the centre square, side = height / 8: 135 px
+   at 1080p, 270 at 4K, so no reduction is needed at the usual sizes); reduces by a whole factor with a box average
+   if the crop is wider than the 768 px texture (`ReferenceDownscale()`); converts to
    RGBA into the texture's CPU pixels (alpha 255; a G of 0 beside non-zero R/B becomes 1, because
-   the HUD's inverted colour mode reads G == 0 as its marker); bumps the generation and calls
+   the HUD's inverted colour mode reads G == 0 as its marker); repeats the last column and row
+   once (so the filter at the edge never blends in the unused rest of the texture and the picture
+   is sampled edge to edge, texel for texel against the live half); keeps the crop's centre and
+   height as fractions of the capture for the live request; bumps the generation and calls
    `force_repaint()` (an idle client would not paint again by itself).
 3. `TrueSens_DrawHud()` (HUD ImGui context): registers the texture in the current context once,
-   queues the upload rectangle (`ImTextureDataQueueUpload`), draws `AddImage`, border and mark.
+   queues the upload rectangle (`ImTextureDataQueueUpload`), draws `AddImage`, border, divider
+   and marks.
 4. `RenderAndSubmit()` in `FpsDisplay.cpp` uploads (the backend's own `vkQueueWaitIdle`).
-
-**Crop and placement.** Crop = the centre 25 % x 25 % of the captured picture. Drawn at 25 % x 25 %
-of the output (the same scale as the live middle of the screen), centred horizontally, top at the
-plate's bottom edge + 8 px x scale. At 1080p that is y 98..368 (34 % of the height). If the bottom
-would come closer than 8 % of the height to the screen centre it shrinks keeping the aspect
-(`truesens::ReferenceDisplay()`, below 24 px high nothing is drawn). A 1 px accent border
-(`max( 1, scale )`, like the plate's) and a ring with a dark halo and a centre dot in the accent
-colour mark the picture's centre: the spot the player aimed at. No caption of its own: the plate's
-second line already says "to the same spot". Verified at 1280x720, 1920x1080 and 2560x1440.
 
 **Lifetime.** One `ImTextureData` (768 x 768 RGBA, 2.25 MB CPU and GPU) for the whole process,
 created by the first picture and reused by every later one as a sub-rectangle upload; it is not
@@ -678,14 +750,18 @@ freed when a recording ends. `Why:` the backend only destroys a texture inside a
 and the HUD layer draws no frame once nothing is on, so a free would hang until the next
 recording; one fixed texture cannot grow with the number of recordings. What follows a recording
 is `TrueSens_ReferenceClear()` (from the cancel and from the finish, so also failed and Zoom-spoiled ones); arming clears the old one too:
-the picture stops being drawn and a capture still on its way is forgotten. A new recording clears
-first, so the old picture never shows under the new hint. 20 start/stop cycles headless: RSS
-92404 -> 92452 kB, fds 75 -> 75, threads 18 -> 17, 21 pictures delivered.
+the picture stops being drawn, no live request is made, and a capture still on its way is
+forgotten. A new recording clears first, so the old picture never shows under the new hint.
+(Checked with the single square before the pair: 20 start/stop cycles headless: RSS
+92404 -> 92452 kB, fds 75 -> 75, threads 18 -> 17, 21 pictures delivered; not repeated with the
+pair, which adds no allocation of its own beyond the composite's pooled zoom texture.)
 
 **Redraw.** The HUD layer is only re-rendered when `HashDrawData()` changes. `FpsDisplay.cpp`
 folds `TrueSens_ReferenceGeneration()` into the hash seed (xor with `Crosshair_RasterGeneration()`
 scaled by a large odd constant): a second picture under the same texture id adds no draw command,
-so without it the layer would keep the first picture.
+so without it the layer would keep the first picture. A change of layout (pair, single, none)
+changes the draw data (other rectangles, divider, marks) and so the hash by itself; the live half
+is in the composite and needs no hash.
 
 **Where there is no picture.**
 - No focused game window (also when the capture or a capture image is unavailable): hint only,
@@ -694,17 +770,46 @@ so without it the layer would keep the first picture.
   happens, so the debug command never runs.
 - HDR content: the capture goes through the same LUT path as a PNG screenshot (the SDR set, since
   the HDR set is chosen only for `.avif`), so it is tone-converted by the existing code and should
-  show; **not checked** with a real PQ client. 8-bit and 10-bit SDR were.
-- Frame generation: the repaint is of the game window alone (the real game frame, not a generated
-  one); checked with fixed 2x and an animated client: the picture shows a real frame.
+  show; the live half is not built for an HDR base (the composite's zoom block skips it), so the
+  frozen square is shown alone. **Not checked** with a real PQ client. 8-bit and 10-bit SDR were.
+- Frame generation: the frozen repaint is of the game window alone (the real game frame, not a
+  generated one); checked with fixed 2x and an animated client: the picture shows a real frame.
 
-**Cost** (headless, 1080p, warm shader cache): the capture inside the paint takes 0.7..1.8 ms
+**Cost** (headless, 1080p, warm shader cache): the frozen capture inside the paint takes 0.7..1.8 ms
 (measured around the screenshot block); the texture upload 0.9..1.4 ms. The first capture of a
 process took ~35 ms in two of the runs (pipeline and capture image created on first use) and
-~1.1 ms in the others. Once per recording, at the first click.
+~1.1 ms in the others. Once per recording. The live half adds one full composite per paint
+(`bNeedsDestinationBlend`) plus one S x S dispatch, only while it is shown; not measured.
+
+**Measured (headless, 1920x1080, a detailed client picture: hashed 3x3 colour blocks, a grid, a
+marker of known size):**
+- Rectangle measured from the pixels: x 690..1229, y 98..367 (540 x 270), the divider at column
+  960, exactly the helper's numbers (S = 270, 2:1). 1280x720: S = 180 at x 460, y 75 (the plate's real bottom
+  is 68.4 px there, so y = 75). 1280x380 (a short window that makes the shrink rule apply): S =
+  92 instead of 94, the halves still equal.
+- Static game picture, mean absolute difference between the two halves (border, divider and
+  marks excluded): **0.073** at 1080p (max 1 level out of 255, p99 0.7), 0.078 at 720p, 0.079
+  at 1280x400, 0.019 at the shrunk 1280x380. The best of the nine one-pixel shifts is 0 in x and y
+  at 1080p (a shift of one pixel gives 2.5..6.7), so the halves are aligned texel for texel and
+  the colours (bundled-effects path, graded base vs screenshot path) agree.
+- Zoom factor: a 70 px wide marker in the game appears 141 px wide in both halves (2.0x), and its
+  42 px red height 84 px.
+- Live: after moving the game's marker, the left half changed by 0.000 (mean absolute pixel
+  difference between the two screenshots) and the right half by 27.3.
+- A normal recording stores the right number (arm, click, +5000, click: `Low stored: 15.9 cm per
+  360° (5000 counts at 800 DPI)`); `zoom_spoiled=0` during it, also with Zoom enabled but not held.
+  Zoom pressed during a recording gives `zoom_spoiled=1` as before.
+- The user's Zoom alone is as before: held at 1080p, a 540 x 540 circle centred with the 1 px
+  ring at 2x; the released frame is pixel-identical to the frame before (max difference 0).
+- After finish and after cancel the pair is gone and the frame is identical across the next
+  screenshots (difference 0.000 in the former pair rectangle); while armed only the plate differs
+  from the idle frame (changed pixels inside x 806..1113, y 27..89).
+- The single-square fallback, forced by a temporary environment switch in the composite (removed):
+  the frozen square alone, centred, with border and mark, no divider; log `live view not built (...)`
+  once.
 
 **Not checked:** a real HDR client, a real "no focused window" state, a user screenshot racing
-the first click.
+the first click, frame generation on, the composite layer budget actually full.
 
 ## Tests
 
@@ -718,10 +823,13 @@ and non-finite input) and the text helpers. `tests/test_config.cpp` (`true sens:
 entry, an entry with only True Sens values is written and defaults are not, clamps and an
 unknown `profile` string, the shared key, and that no profile file contains `true_sens`.
 
-`truesens: reference picture crop` (even/odd sizes, centring, tiny pictures, every size stays
-inside, `ReferenceDownscale()`) and `truesens: reference picture display size` (1080p and 4K
-placement, shrinking when it would reach the centre, no room, wide aspect) cover the pure helpers;
-capture, upload and drawing are covered by the headless screenshots only.
+`truesens: reference picture crop` (the centre square with side = height / 8 at 1080p, 720p, 1440p,
+4K, 5:4 and ultrawide, odd sizes, tiny pictures, every size stays inside, `ReferenceDownscale()`)
+and `truesens: reference picture pair layout` (`ReferencePair()` at 1080p, 720p, 1440p and 4K, whole
+pixels and an even side over a sweep of outputs and plate heights, the pair 2:1 and inside the
+output, the shrink rule, the no-room rule, a narrow output, the single square's centring, 2x
+against the crop's fraction) cover the pure helpers; capture, upload, drawing and the live half
+are covered by the headless screenshots only.
 
 `truesens: recording hint lines` covers `HintLines()` (each target, armed and recording text,
 Idle in either argument), `truesens: the Recording row always has a value` covers

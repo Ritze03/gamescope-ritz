@@ -599,45 +599,53 @@ TEST_CASE( "truesens: a full click sequence and a third click", "[truesens]" )
 
 TEST_CASE( "truesens: reference picture crop", "[truesens]" )
 {
-	// 1080p: the centre 25 % x 25 %, centred exactly
+	// 1080p: the centre square, side 12.5 % of the HEIGHT, centred exactly
 	CropRect c = ReferenceCrop( 1920, 1080 );
 	REQUIRE( c.ok );
-	CHECK( c.w == 480 );
-	CHECK( c.h == 270 );
-	CHECK( c.x == 720 );
-	CHECK( c.y == 405 );
+	CHECK( c.w == 135 );
+	CHECK( c.h == 135 );
+	CHECK( c.x == 892 );
+	CHECK( c.y == 472 );
+
+	// side = height / 8 at every common size, and square
+	const int sizes[][2] = { { 1920, 1080 }, { 1280, 720 }, { 2560, 1440 }, { 3840, 2160 }, { 1280, 1024 }, { 2560, 1080 } };
+	for ( const auto &sz : sizes )
+	{
+		c = ReferenceCrop( sz[ 0 ], sz[ 1 ] );
+		REQUIRE( c.ok );
+		CHECK( c.w == c.h );
+		CHECK( c.h == sz[ 1 ] / 8 );
+		CHECK_THAT( (double)c.h / sz[ 1 ], Catch::Matchers::WithinAbs( kReferenceHeightFraction, 1.0 / sz[ 1 ] ) );
+		CHECK( std::abs( ( c.x + c.w / 2.0 ) - sz[ 0 ] / 2.0 ) <= 1.0 );
+		CHECK( std::abs( ( c.y + c.h / 2.0 ) - sz[ 1 ] / 2.0 ) <= 1.0 );
+	}
 
 	// odd sizes: integer division, centred to within one pixel, never outside the picture
 	c = ReferenceCrop( 1001, 777 );
 	REQUIRE( c.ok );
-	CHECK( c.w == 250 );
-	CHECK( c.h == 194 );
-	CHECK( c.x == 375 );
-	CHECK( c.y == 291 );
-	CHECK( c.x + c.w <= 1001 );
-	CHECK( c.y + c.h <= 777 );
-	CHECK( std::abs( ( c.x + c.w / 2 ) - 1001 / 2 ) <= 1 );
+	CHECK( c.w == 97 );
+	CHECK( c.h == 97 );
+	CHECK( c.x == 452 );
+	CHECK( c.y == 340 );
 
 	// tiny pictures: the smallest that works, then nothing
-	c = ReferenceCrop( 4, 4 );
+	c = ReferenceCrop( 8, 8 );
 	REQUIRE( c.ok );
 	CHECK( c.w == 1 );
 	CHECK( c.h == 1 );
-	CHECK( c.x == 1 );
-	CHECK( c.y == 1 );
-	CHECK( !ReferenceCrop( 3, 100 ).ok );
-	CHECK( !ReferenceCrop( 100, 3 ).ok );
+	CHECK( !ReferenceCrop( 100, 7 ).ok );
 	CHECK( !ReferenceCrop( 0, 0 ).ok );
 	CHECK( !ReferenceCrop( -5, 1080 ).ok );
+	CHECK( !ReferenceCrop( 2, 1080 ).ok ); // narrower than its own side
 
-	// every size from 4 up stays inside the picture
-	for ( int w = 4; w < 300; w += 7 )
-		for ( int h = 4; h < 300; h += 11 )
+	// every size stays inside the picture
+	for ( int w = 8; w < 300; w += 7 )
+		for ( int h = 8; h < 300; h += 11 )
 		{
 			const CropRect r = ReferenceCrop( w, h );
-			REQUIRE( r.ok );
+			if ( !r.ok )
+				continue;
 			REQUIRE( r.w >= 1 );
-			REQUIRE( r.h >= 1 );
 			REQUIRE( r.x >= 0 );
 			REQUIRE( r.y >= 0 );
 			REQUIRE( r.x + r.w <= w );
@@ -645,47 +653,91 @@ TEST_CASE( "truesens: reference picture crop", "[truesens]" )
 		}
 
 	// the texture reduction
-	CHECK( ReferenceDownscale( 480, 270, 768 ) == 1 );
+	CHECK( ReferenceDownscale( 135, 135, 768 ) == 1 );
+	CHECK( ReferenceDownscale( 270, 270, 768 ) == 1 ); // a 4K capture: no reduction
 	CHECK( ReferenceDownscale( 768, 10, 768 ) == 1 );
 	CHECK( ReferenceDownscale( 960, 540, 768 ) == 2 );
 	CHECK( ReferenceDownscale( 10, 1537, 768 ) == 3 );
 	CHECK( ReferenceDownscale( 100, 100, 0 ) == 1 );
 }
 
-TEST_CASE( "truesens: reference picture display size", "[truesens]" )
+TEST_CASE( "truesens: reference picture pair layout", "[truesens]" )
 {
-	// 1080p, plate bottom at 90 px (scale 1): 25 % of the output, centred, 8 px below the plate
-	DisplayRect d = ReferenceDisplay( 1920.0f, 1080.0f, 90.0f, 1.0f, 480.0f / 270.0f );
-	REQUIRE( d.ok );
-	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 480.0, 0.01 ) );
-	CHECK_THAT( d.h, Catch::Matchers::WithinAbs( 270.0, 0.01 ) );
-	CHECK_THAT( d.x, Catch::Matchers::WithinAbs( 720.0, 0.01 ) );
-	CHECK_THAT( d.y, Catch::Matchers::WithinAbs( 98.0, 0.01 ) );
-	CHECK( d.y + d.h < 1080.0f * 0.5f - 1080.0f * 0.08f ); // clear of the centre
+	// 1080p, plate bottom at 90 px (scale 1): each half a 270 px square (25 % of the height), 2:1 overall,
+	// centred, 8 px below the plate
+	PairRect p = ReferencePair( 1920, 1080, 90.0f, 1.0f );
+	REQUIRE( p.ok );
+	CHECK( p.side == 270 );
+	CHECK( p.y == 98 );
+	CHECK( p.x == 690 );
+	CHECK( p.x * 2 + 2 * p.side == 1920 );
+	CHECK( p.y + p.side < 1080 * 0.42 + 0.001 ); // clear of the centre
 
-	// 4K: the scale (and so the plate and the gap) is twice as large, same relative place
-	d = ReferenceDisplay( 3840.0f, 2160.0f, 180.0f, 2.0f, 16.0f / 9.0f );
-	REQUIRE( d.ok );
-	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 960.0, 0.01 ) );
-	CHECK_THAT( d.y, Catch::Matchers::WithinAbs( 196.0, 0.01 ) );
+	// 720p, 1440p, 4K: always 25 % of the height, same relative place (scale = height / 1080)
+	p = ReferencePair( 1280, 720, 60.0f, 0.8f ); // the scale is clamped to 0.8 under 864 px high: 0.8 * 8 = 6.4
+	REQUIRE( p.ok );
+	CHECK( p.side == 180 );
+	CHECK( p.y == 66 );
+	CHECK( p.x == 460 );
+	p = ReferencePair( 2560, 1440, 120.0f, 1.3333f );
+	REQUIRE( p.ok );
+	CHECK( p.side == 360 );
+	CHECK( p.y == 131 );
+	CHECK( p.x == 920 );
+	p = ReferencePair( 3840, 2160, 180.0f, 2.0f );
+	REQUIRE( p.ok );
+	CHECK( p.side == 540 );
+	CHECK( p.y == 196 );
+	CHECK( p.x == 1380 );
 
-	// a low plate (a readout above it pushed it down): the picture shrinks, keeping the aspect,
-	// and its bottom stops 8 % of the height short of the centre
-	d = ReferenceDisplay( 1920.0f, 1080.0f, 200.0f, 1.0f, 16.0f / 9.0f );
-	REQUIRE( d.ok );
-	CHECK_THAT( d.y + d.h, Catch::Matchers::WithinAbs( 1080.0 * 0.42, 0.01 ) );
-	CHECK_THAT( d.w / d.h, Catch::Matchers::WithinAbs( 16.0 / 9.0, 0.001 ) );
-	CHECK( d.w < 480.0f );
-	CHECK_THAT( d.x, Catch::Matchers::WithinAbs( ( 1920.0 - d.w ) * 0.5, 0.01 ) );
+	// whole pixels, an even side, the two halves equal squares, the pair 2:1 and inside the output
+	const int outs[][2] = { { 1920, 1080 }, { 1280, 720 }, { 2560, 1440 }, { 3840, 2160 }, { 1366, 768 }, { 1001, 777 }, { 2560, 1080 }, { 1600, 900 } };
+	for ( const auto &o : outs )
+		for ( float flBottom = 40.0f; flBottom < 600.0f; flBottom += 37.0f )
+		{
+			p = ReferencePair( o[ 0 ], o[ 1 ], flBottom, 1.0f );
+			if ( !p.ok )
+				continue;
+			REQUIRE( p.side % 2 == 0 );
+			REQUIRE( p.side >= 24 );
+			REQUIRE( p.x >= 0 );
+			REQUIRE( p.x + 2 * p.side <= o[ 0 ] );
+			REQUIRE( p.y + p.side <= o[ 1 ] * 0.42 + 0.001 );
+			REQUIRE( std::abs( ( o[ 0 ] - 2 * p.side ) / 2 - p.x ) == 0 );
+			REQUIRE( p.side <= (int)( 0.25 * o[ 1 ] + 0.5 ) );
+		}
 
-	// no room at all: nothing is drawn
-	CHECK( !ReferenceDisplay( 1920.0f, 1080.0f, 440.0f, 1.0f, 16.0f / 9.0f ).ok );
-	CHECK( !ReferenceDisplay( 1920.0f, 1080.0f, 90.0f, 1.0f, 0.0f ).ok );
-	CHECK( !ReferenceDisplay( 0.0f, 0.0f, 0.0f, 1.0f, 1.0f ).ok );
+	// a low plate (a readout above it pushed it down): the side shrinks (2:1 kept, even), its bottom
+	// stops 8 % of the height short of the centre
+	p = ReferencePair( 1920, 1080, 200.0f, 1.0f );
+	REQUIRE( p.ok );
+	CHECK( p.side == 244 ); // floor( 453.6 - 208 ) = 245 -> even
+	CHECK( p.y + p.side <= 1080 * 0.42 );
+	CHECK( p.side < 270 );
+	CHECK( p.x == ( 1920 - 2 * p.side ) / 2 );
 
-	// a wide picture is shorter at the same width, so it fits where a square one would shrink
-	d = ReferenceDisplay( 2560.0f, 1080.0f, 90.0f, 1.0f, 640.0f / 270.0f );
-	REQUIRE( d.ok );
-	CHECK_THAT( d.w, Catch::Matchers::WithinAbs( 640.0, 0.01 ) );
-	CHECK_THAT( d.h, Catch::Matchers::WithinAbs( 270.0, 0.01 ) );
+	// no room at all: nothing is drawn (below 24 px)
+	CHECK( !ReferencePair( 1920, 1080, 430.0f, 1.0f ).ok );
+	CHECK( !ReferencePair( 1920, 1080, 90.0f, 0.0f ).ok );
+	CHECK( !ReferencePair( 0, 0, 0.0f, 1.0f ).ok );
+	CHECK( !ReferencePair( 1920, 20, 0.0f, 1.0f ).ok );
+
+	// a narrow output: the pair shrinks to fit the width
+	p = ReferencePair( 400, 1080, 90.0f, 1.0f );
+	REQUIRE( p.ok );
+	CHECK( 2 * p.side <= 400 );
+	CHECK( p.x >= 0 );
+
+	// the lone frozen square is centred
+	CHECK( ReferenceSingleX( 1920, 270 ) == 825 );
+
+	// the live half shows what the frozen half shows: the on-screen part is side / 2 at 2x of the same
+	// 12.5 % of the height
+	for ( int h : { 720, 1080, 1440, 2160 } )
+	{
+		p = ReferencePair( h * 16 / 9, h, h * 0.083f, 1.0f );
+		REQUIRE( p.ok );
+		CHECK( p.side == ( (int)( 0.25 * h + 0.5 ) & ~1 ) );
+		CHECK_THAT( p.side / ( kReferenceHeightFraction * h ), Catch::Matchers::WithinAbs( 2.0, 0.03 ) ); // 2x
+	}
 }

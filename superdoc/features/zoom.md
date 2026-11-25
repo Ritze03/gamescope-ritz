@@ -99,6 +99,20 @@ before the FSR/NIS branches:
    decoded the same way. Above the game, beneath every overlay `paint_all()`
    pushed — Steam overlay, cursor, HUD and crosshair, toasts, Shell.
 
+**A second user of the block: True Sens' live half (2026-11-25).** The recording picture's
+right half (`true-sens.md`, "Reference picture") is built by this same block from the same
+`FrameInfo_t::zoom` request, filled by `TrueSens_FillLiveRequest()` right after
+`Zoom_FillRequest()` (and only when Zoom did not fill it). It sets `Zoom_t::bPlaced` with
+`flPlaceX/Y/W/H` (the projection's rectangle in output pixels instead of centred on layer 0) and
+`flSrcCenterX/Y` + `flSrcHeightFrac` (the source part as fractions of the base texture, instead of
+`scale / factor` around the on-screen centre). Placed requests have no outline ring (outline 0)
+and no circle; the block then reports whether it built the layer in `g_nPlacedZoomFailure`. With
+`bPlaced` false every expression is the one it was, so the user's Zoom is unchanged
+(a held zoom at 1080p, rectangle of 540 x 540 centred, 1 px ring, 2x, released frame identical to
+the one before: measured). It is not Zoom: it touches none of Zoom's atomics (`s_bActive`,
+`s_flLiveFactor`, the geometry mirror, the fade and scroll state), so the mouse is not scaled and
+clicks are not remapped. The two never run together (a recording refuses Zoom).
+
 `Why it forces a full composite.` `Zoom_FillRequest()` sets
 `bNeedsDestinationBlend` while zoomed, the same flag the HUD's Inverted mode
 uses for the same reason: DRM's partial-composition shortcut and the nested

@@ -3412,6 +3412,10 @@ paint_all( global_focus_t *pFocus, bool async )
 		// in there. Beneath everything pushed in this block by construction.
 		gamescope::Zoom_FillRequest( &frameInfo );
 
+		// True Sens' live half (Overlay/TrueSens.h): fills the same request when, and only when,
+		// the user's Zoom did not, so it is a second user of the composite's block and never Zoom.
+		gamescope::TrueSens_FillLiveRequest( &frameInfo );
+
 		// Null binds (Overlay/NullBinds.h): no layer of its own -- this is
 		// the once-a-frame tick that (a) loads/refreshes its config mirror
 		// the same way Zoom/Autoclicker do, so a profile with

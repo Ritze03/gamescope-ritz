@@ -468,7 +468,8 @@ namespace gamescope::truesens
 	}
 
 	// ---- the reference picture (TrueSensHud.cpp) -------------------------------
-	// A frozen crop of the middle of the game picture, shown under the hint plate.
+	// Two square halves under the hint plate: the left one a frozen crop of the middle of the
+	// game picture, the right one a live view of the same part (D25).
 
 	// A crop rectangle in picture pixels; !ok = nothing to crop (picture too small).
 	struct CropRect
@@ -477,18 +478,24 @@ namespace gamescope::truesens
 		bool ok = false;
 	};
 
-	// The centre 25 % x 25 % of a `w` x `h` picture (integer division, so an odd size
-	// loses at most one pixel and stays centred to within one pixel). Pictures under
-	// 4 px on a side have nothing sensible to show: !ok.
+	// Side of the shown part, as a fraction of the picture's HEIGHT: the centre square whose side
+	// is 12.5 % of the height. Drawn into a square of 25 % of the OUTPUT height, that is 2x.
+	constexpr double kReferenceHeightFraction = 0.125;
+
+	// The centre square of a `w` x `h` picture, side = h / 8 (integer division, so it is
+	// centred to within one pixel). Pictures under 8 px high have nothing sensible to show: !ok.
 	inline CropRect ReferenceCrop( int w, int h )
 	{
 		CropRect r;
-		if ( w < 4 || h < 4 )
+		if ( w < 1 || h < 8 )
 			return r;
-		r.w = w / 4;
-		r.h = h / 4;
-		r.x = ( w - r.w ) / 2;
-		r.y = ( h - r.h ) / 2;
+		const int side = h / 8;
+		if ( side > w )
+			return r;
+		r.w = side;
+		r.h = side;
+		r.x = ( w - side ) / 2;
+		r.y = ( h - side ) / 2;
 		r.ok = true;
 		return r;
 	}
@@ -502,39 +509,44 @@ namespace gamescope::truesens
 		return ( big + maxSide - 1 ) / maxSide;
 	}
 
-	// Where the picture is drawn, in output px; !ok = no room, draw nothing.
-	struct DisplayRect
+	// Where the pair is drawn, in WHOLE output px: the picture is 2 * side wide and `side` high, its
+	// left edge at x and its top at y; the left half is [x, x + side), the right [x + side, x + 2 * side).
+	// `side` is always even. !ok = no room, draw nothing.
+	struct PairRect
 	{
-		float x = 0, y = 0, w = 0, h = 0;
+		int x = 0, y = 0, side = 0;
 		bool ok = false;
 	};
 
-	// The picture is shown at 25 % x 25 % of the output (the scale of the live middle of the
-	// screen), horizontally centred, its top at `flPlateBottom + 8 * flScale`. If its bottom
-	// would come closer than 8 % of the height to the screen centre (the spot the player aims
-	// at) it shrinks, keeping the aspect `flAspect` (crop width / height); below 24 px high there
-	// is no room and nothing is drawn.
-	inline DisplayRect ReferenceDisplay( float flOutW, float flOutH, float flPlateBottom, float flScale, float flAspect )
+	// side = 25 % of the output height (so each half shows 12.5 % of it at 2x), horizontally centred,
+	// top at `flPlateBottom + 8 * flScale`. If the bottom would come closer than 8 % of the height to
+	// the screen centre (the spot the player aims at) the side shrinks (2:1 is kept); below 24 px
+	// nothing is drawn. One helper for the HUD drawing AND the live request, so the halves never drift.
+	inline PairRect ReferencePair( int nOutW, int nOutH, float flPlateBottom, float flScale )
 	{
-		DisplayRect d;
-		if ( !( flOutW > 0.0f ) || !( flOutH > 0.0f ) || !( flAspect > 0.0f ) || !( flScale > 0.0f ) )
-			return d;
-		float w = flOutW * 0.25f;
-		float h = w / flAspect;
-		d.y = flPlateBottom + 8.0f * flScale;
-		const float flMaxBottom = flOutH * 0.5f - flOutH * 0.08f;
-		if ( d.y + h > flMaxBottom )
-		{
-			h = flMaxBottom - d.y;
-			w = h * flAspect;
-		}
-		if ( h < 24.0f )
-			return d;
-		d.w = w;
-		d.h = h;
-		d.x = ( flOutW - w ) * 0.5f;
-		d.ok = true;
-		return d;
+		PairRect r;
+		if ( nOutW <= 0 || nOutH <= 0 || !( flScale > 0.0f ) )
+			return r;
+		int side = (int)( 0.25 * nOutH + 0.5 ) & ~1;
+		const int y = (int)( flPlateBottom + 8.0f * flScale + 0.5f );
+		const double flMaxBottom = nOutH * 0.5 - nOutH * 0.08;
+		if ( y + side > flMaxBottom )
+			side = (int)( flMaxBottom - y ) & ~1;
+		if ( side * 2 > nOutW )
+			side = ( nOutW / 2 ) & ~1;
+		if ( side < 24 )
+			return r;
+		r.side = side;
+		r.y = y;
+		r.x = ( nOutW - 2 * side ) / 2;
+		r.ok = true;
+		return r;
+	}
+
+	// The lone frozen square (the live half cannot be built): centred, same side and top.
+	inline int ReferenceSingleX( int nOutW, int side )
+	{
+		return ( nOutW - side ) / 2;
 	}
 }
 
@@ -636,6 +648,11 @@ namespace gamescope
 	// redraw hash (a new picture under the same texture id adds no draw command).
 	uint64_t TrueSens_ReferenceGeneration();
 }
+
+// The live half (TrueSensHud.cpp): filled into FrameInfo_t::zoom by paint_all(), right after
+// Zoom_FillRequest(); vulkan_composite() builds the projection. It is NOT Zoom (zoom.md).
+struct FrameInfo_t;
+namespace gamescope { void TrueSens_FillLiveRequest( FrameInfo_t *pFrameInfo ); }
 
 // The settings area (TrueSensArea.cpp), declared outside the namespace like
 // NullBinds_RegisterArea so Shell.cpp's RegisterAll() names it plainly.
