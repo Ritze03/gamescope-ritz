@@ -17,6 +17,12 @@ timespec nanos_to_timespec( uint64_t ulNanos );
 
 void steamcompmgr_main(int argc, char **argv);
 
+// The Steam overlay's dummy window (superdoc/features/steam-overlay.md). Start is a
+// no-op unless the dummy route is active; both are idempotent. Step I3 calls them
+// live from a settings switch.
+void StartSteamOverlayDummy();
+void StopSteamOverlayDummy();
+
 #include "rendervulkan.hpp"
 #include "wlserver.hpp"
 #include "vblankmanager.hpp"

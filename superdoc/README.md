@@ -157,6 +157,8 @@ indented under it.
 
 - [Steam friends you can join](features/steam-friends.md) — the joinable-friends list read
   from the running Steam client, and the privacy rule.
+- [Steam overlay and the dummy window](features/steam-overlay.md) — the helper process that
+  carries Steam's overlay out of the game and the compositor; env handling, test switch.
 
 ### External surfaces
 

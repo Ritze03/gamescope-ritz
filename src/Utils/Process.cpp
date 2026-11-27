@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <dirent.h>
 #include <limits.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <signal.h>
@@ -377,6 +378,135 @@ namespace gamescope::Process
 
         unsetenv( k_pszStashedOverlayPreload );
         return true;
+    }
+
+    bool SteamOverlayDummyRequested()
+    {
+        const char *psz = getenv( "GS_RITZ_STEAM_OVERLAY_DUMMY" );
+        return psz && *psz && strcmp( psz, "0" ) != 0;
+    }
+
+    static bool s_bSteamOverlayDummyActive = false;
+    void SetSteamOverlayDummyActive( bool bActive ) { s_bSteamOverlayDummyActive = bActive; }
+    bool SteamOverlayDummyActive() { return s_bSteamOverlayDummyActive; }
+
+    static bool IsOverlayEntry( std::string_view sv )
+    {
+        return sv.find( "gameoverlayrenderer.so" ) != std::string_view::npos;
+    }
+
+    static std::string JoinPreload( const std::vector<std::string_view> &v )
+    {
+        std::string s;
+        for ( std::string_view sv : v )
+        {
+            if ( !s.empty() )
+                s.append( ":" );
+            s.append( sv );
+        }
+        return s;
+    }
+
+    std::string StripOverlayFromPreloadList( std::string_view svPreload )
+    {
+        std::vector<std::string_view> v = Split( svPreload, " :" );
+        std::erase_if( v, IsOverlayEntry );
+        return JoinPreload( v );
+    }
+
+    std::string OverlayEntriesOfPreloadList( std::string_view svPreload )
+    {
+        std::vector<std::string_view> v = Split( svPreload, " :" );
+        std::erase_if( v, []( std::string_view sv ) { return !IsOverlayEntry( sv ); } );
+        return JoinPreload( v );
+    }
+
+    std::string FindSteamOverlayRenderer( const std::vector<std::string> &vecSteamRoots )
+    {
+        // Current clients keep it in steamrt64, older ones in ubuntu12_64.
+        for ( const std::string &sRoot : vecSteamRoots )
+            for ( const char *pszDir : { "steamrt64", "ubuntu12_64" } )
+            {
+                std::string sPath = sRoot + "/" + pszDir + "/gameoverlayrenderer.so";
+                if ( access( sPath.c_str(), R_OK ) == 0 )
+                    return sPath;
+            }
+        return "";
+    }
+
+    SteamOverlayEnv_t ComputeGameOverlayEnv( const std::optional<std::string> &oLdPreload )
+    {
+        SteamOverlayEnv_t env;
+        if ( oLdPreload )
+        {
+            std::string s = StripOverlayFromPreloadList( *oLdPreload );
+            if ( !s.empty() )
+                env.oLdPreload = s;
+        }
+        env.bVulkanLayer = false;
+        return env;
+    }
+
+    SteamOverlayEnv_t ComputeDummyOverlayEnv( const std::optional<std::string> &oLdPreload,
+        const std::optional<std::string> &oStash, const std::string &sFallbackRenderer )
+    {
+        SteamOverlayEnv_t env;
+        std::string s;
+        if ( oStash )
+            s = OverlayEntriesOfPreloadList( *oStash );
+        if ( s.empty() && oLdPreload )
+            s = OverlayEntriesOfPreloadList( *oLdPreload );
+        if ( s.empty() )
+            s = sFallbackRenderer;
+        if ( !s.empty() )
+            env.oLdPreload = s;
+        env.bVulkanLayer = true;
+        return env;
+    }
+
+    void ApplySteamOverlayEnv( const SteamOverlayEnv_t &env )
+    {
+        if ( env.oLdPreload )
+            setenv( "LD_PRELOAD", env.oLdPreload->c_str(), 1 );
+        else
+            unsetenv( "LD_PRELOAD" );
+
+        // The loader lets DISABLE win, so the off state sets DISABLE; the on state clears it.
+        if ( env.bVulkanLayer )
+        {
+            setenv( "ENABLE_VK_LAYER_VALVE_steam_overlay_1", "1", 1 );
+            unsetenv( "DISABLE_VK_LAYER_VALVE_steam_overlay_1" );
+        }
+        else
+        {
+            unsetenv( "ENABLE_VK_LAYER_VALVE_steam_overlay_1" );
+            setenv( "DISABLE_VK_LAYER_VALVE_steam_overlay_1", "1", 1 );
+        }
+    }
+
+    std::optional<std::string> TakeStashedOverlayPreload()
+    {
+        const char *psz = getenv( k_pszStashedOverlayPreload );
+        if ( !psz )
+            return std::nullopt;
+        std::string s = psz;
+        unsetenv( k_pszStashedOverlayPreload );
+        return s;
+    }
+
+    std::vector<std::string> SteamRootCandidates()
+    {
+        std::vector<std::string> v;
+        if ( const char *psz = getenv( "STEAM_COMPAT_CLIENT_INSTALL_PATH" ); psz && *psz )
+            v.push_back( psz );
+        if ( const char *pszHome = getenv( "HOME" ); pszHome && *pszHome )
+        {
+            std::string sHome = pszHome;
+            v.push_back( sHome + "/.steam/steam" );
+            v.push_back( sHome + "/.steam/root" );
+            v.push_back( sHome + "/.local/share/Steam" );
+        }
+        return v;
     }
 
     pid_t SpawnProcess( char **argv, std::function<void()> fnPreambleInChild, bool bDoubleFork, std::span<const int> nExtraKeepFds )
