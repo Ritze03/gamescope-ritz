@@ -507,6 +507,7 @@ src = [
   'Overlay/PanelChangelog.cpp',
   'Overlay/PanelDiagnostics.cpp',
   'Overlay/Diagnostics.cpp',
+  'Overlay/SteamOverlay.cpp',
   'Overlay/ChangelogParse.cpp',
   # E2 overlay kit (superdoc/planning/redesign/round-2/e2-inspector-plus).
   # Phase 1: foundation only -- nothing here is called by the running UI yet.

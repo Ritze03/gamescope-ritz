@@ -1271,6 +1271,14 @@ namespace gamescope::config
         // recommendation for the host desktop, written to nowhere.
         std::optional<bool> compress_output_images;
 
+        // Steam overlay area's two global switches (superdoc/features/steam-overlay.md).
+        // steam_overlay_control (default Off): the dummy-window route handles the Steam
+        // overlay instead of the game; read once at startup, so a change applies on the
+        // next launch. steam_overlay_enabled (default On, only meaningful while control
+        // was on at launch): whether the dummy window runs; applies live.
+        bool steam_overlay_control = false;
+        bool steam_overlay_enabled = true;
+
         // Keyboard-control toggles for the overlay's own input capture (M2)
         // while it is open - see wlserver.cpp's wlserver_dispatch_key() and
         // SettingsOverlay.cpp's SettingsOverlay_IsCapturingKeyboard(). Also

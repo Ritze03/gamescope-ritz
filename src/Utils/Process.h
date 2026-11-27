@@ -63,9 +63,10 @@ namespace gamescope::Process
     // ---- Steam overlay "dummy window" route (superdoc/features/steam-overlay.md) ----
     // Under it the overlay lives in a helper process, never in us and never in the game.
 
-    // THE one question "is the dummy route on?". Test-only for now: env
-    // GS_RITZ_STEAM_OVERLAY_DUMMY=1. ponytail: step I3 re-points this at a config key.
-    bool SteamOverlayDummyRequested();
+    // The env override of the "Steam overlay control" key: GS_RITZ_STEAM_OVERLAY_DUMMY
+    // 1 forces the route on for this launch, 0 forces it off, unset/empty = nullopt (the
+    // key decides: SteamOverlay_ControlAtLaunch(), Overlay/SteamOverlay.h).
+    std::optional<bool> SteamOverlayDummyOverride();
 
     // main() decides once, after the backend is known (the route only exists on
     // Wayland, SDL and Headless), and every later caller just asks.

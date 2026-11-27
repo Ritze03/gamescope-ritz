@@ -526,6 +526,45 @@ TEST_CASE( "overlay compatibility switches are unset unless written", "[config]"
     }
 }
 
+// The Steam overlay's two switches: global only, control Off and enabled On when absent.
+TEST_CASE( "steam overlay switches default and round-trip through global.json", "[config]" )
+{
+    {
+        TempConfigHome home;
+        std::filesystem::create_directories( ConfigRoot() );
+        std::ofstream( GlobalConfigPath() ) << "{ \"overlay\": {} }";
+        Settings s = LoadGlobal();
+        REQUIRE( s.overlay.steam_overlay_control == false );
+        REQUIRE( s.overlay.steam_overlay_enabled == true );
+    }
+    for ( bool bValue : { true, false } )
+    {
+        TempConfigHome home;
+        Settings s{};
+        s.overlay.steam_overlay_control = bValue;
+        s.overlay.steam_overlay_enabled = !bValue;
+        REQUIRE( SaveGlobal( s ) );
+        Settings r = LoadGlobal();
+        REQUIRE( r.overlay.steam_overlay_control == bValue );
+        REQUIRE( r.overlay.steam_overlay_enabled == !bValue );
+    }
+    {
+        // Global only: a profile file never carries them.
+        TempConfigHome home;
+        Settings s{};
+        s.overlay.steam_overlay_control = true;
+        REQUIRE( SaveGlobal( s ) );
+        std::ifstream f( GlobalConfigPath() );
+        const std::string sGlobal( ( std::istreambuf_iterator<char>( f ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( sGlobal.find( "steam_overlay_control" ) != std::string::npos );
+        REQUIRE( SaveSections( s ) );
+        std::ifstream pf( ProfilePath( "T" ) );
+        const std::string sProfile( ( std::istreambuf_iterator<char>( pf ) ), std::istreambuf_iterator<char>() );
+        REQUIRE( !sProfile.empty() );
+        REQUIRE( sProfile.find( "steam_overlay" ) == std::string::npos );
+    }
+}
+
 // The drop shadow the outline replaced (2026-09-03): an old config still
 // carrying shadow_strength must load cleanly and simply take
 // outline_strength's default, not error and not inherit the old value.

@@ -2,9 +2,10 @@
 
 Steam's in-game overlay (Shift+Tab: friends, chat, browser, achievements) is two pieces
 Steam loads into every process of a launch. gamescope-ritz is part of Steam's `%command%`,
-so it and everything it starts inherit both. This page is about who carries them. Step I1
-of the Steam-overlay work (2026-11-27): a **dummy window** behind a **test-only switch**.
-With the switch off nothing changes (last section).
+so it and everything it starts inherit both. This page is about who carries them: a
+**dummy window** behind the global switch **Steam overlay control** (default Off), with a
+second switch **Enable Steam Overlay** that starts and stops the window live (see "The two
+switches"). With control off nothing changes (last section).
 
 This replaces the fork's own Friends list (`system.friends`, removed 2026-11-27 at the
 user's request: "It isnt needed anymore, and its broken anyways"), whose default chord
@@ -51,10 +52,10 @@ not xcb and not SDL, or the overlay's hooks never see its window or its input ev
 
 ## Environment per process
 
-The route is on only on Wayland, SDL and Headless, and only with the switch set. DRM and
-OpenVR stay as "switch off" even with it set.
+The route is on only on Wayland, SDL and Headless, and only with Steam overlay control on at
+launch. DRM and OpenVR stay as "control off" even with it on.
 
-| process | switch off | switch on |
+| process | control off | control on |
 |---|---|---|
 | gamescope-ritz | Wayland/DRM/OpenVR/Headless: re-exec without the preload; SDL: keeps it. Vulkan layer: untouched | re-exec without the preload on every route backend (SDL too); `DISABLE_VK_LAYER_VALVE_steam_overlay_1=1`, `ENABLE_..` unset, set right after the re-exec point, before any Vulkan instance |
 | game, mangoapp, other children | non-SDL backends: preload restored from the stash (the game draws the overlay itself); SDL: gamescope-ritz keeps and draws it, so it is removed for the game; layer untouched | no overlay entry in `LD_PRELOAD` (other entries kept); layer off as above; the stash variable never reaches them |
@@ -83,8 +84,8 @@ environment wrappers (`ApplySteamOverlayEnv`, `TakeStashedOverlayPreload`), test
 `tests/test_process.cpp` (`[steam-overlay]`). `main()` (`src/main.cpp`, at the re-exec
 point) decides the route once; `StartSteamOverlayDummy()` / `StopSteamOverlayDummy()`
 (`src/steamcompmgr.cpp`) start and stop the helper. Start runs at the end of
-`LaunchNestedChildren`; stop has no caller yet (shutdown's `KillAllChildren` already takes
-the helper down, and the reaper's death signal covers a crash). The helper is started like
+`LaunchNestedChildren`; stop runs from the same reconcile step (shutdown's `KillAllChildren` takes the
+helper down too, and the reaper's death signal covers a crash). The helper is started like
 mangoapp, through `gamescopereaper` without `--respawn` (a helper that exits at once must
 not spin).
 
@@ -100,14 +101,64 @@ not `PATH`:* the installer links only the compositor, and the distribution's own
 `gamescopereaper` on `PATH` knows nothing of this fork's helper. `--remove` leaves
 `build/` alone (it only deletes links), so the copy goes with the clone.
 
-## The test switch and every knob
+## The two switches
 
-The switch is deliberately temporary: step I3 replaces it with a config key. (`GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` existed until 2026-11-27 and is gone: the real log proved `BOverlayNeedsPresent()` cannot tell open from closed.) The question
-"is the route on?" lives in one function, `Process::SteamOverlayDummyRequested()`.
+Both are keys of `global.json`'s `overlay` section, **global only** (a machine-wide setup; the
+Steam launch option and the Steam install are per machine). They are never in a profile file
+and never part of a settings export (`overlay.*` is excluded there). Model and setters:
+`src/Overlay/SteamOverlay.{h,cpp}` (UI-free; the settings tab binds to it).
+
+| key | default | meaning | when it applies |
+|---|---|---|---|
+| `overlay.steam_overlay_control` ("Steam overlay control") | Off | Off: the game carries the overlay exactly as before (everything in the "control off" column). On: the dummy-window route | **next launch** |
+| `overlay.steam_overlay_enabled` ("Enable Steam Overlay") | On | with control on at launch: whether the dummy window runs. With control off it is stored and does nothing | **live** |
+
+*Why control is read at launch:* the overlay library is loaded into a process when it starts, so
+what the game and gamescope-ritz get in their environment is fixed then. *Why enabled can be
+live:* with control on the game never has the overlay, only the helper does, so stopping or
+starting the helper is all it takes; the game is unaffected either way. The UI shows
+"Restart to apply" while `SteamOverlay_Control() != SteamOverlay_ControlAtLaunch()` (the same
+shape as Compatibility's "Compress output images").
+
+**Reading the key at launch.** `main()` asks `SteamOverlay_ControlAtLaunch()` at the re-exec
+point, before Vulkan and before the normal config load. The first call reads `global.json`
+lazily (`config::LoadGlobal()`, the same early read `Diagnostics.cpp` does for the
+compatibility switches) and latches the value; that is what the route runs on for the rest of
+the process, on both sides of the re-exec. Nothing in start-up is reordered.
+
+**Env override.** `GS_RITZ_STEAM_OVERLAY_DUMMY` is kept as an override of control for one
+launch: `1` forces it on, `0` forces it off, unset or empty = the key
+(`Process::SteamOverlayDummyOverride()`, `steamoverlay::ResolveControl()`). *Why:* an existing
+Steam launch option uses it, and it is the test hook. `SteamOverlay_ControlAtLaunch()` reports
+the effective value.
+
+**Live start/stop.** `SteamOverlay_SetEnabled()` stores the value, writes `global.json` and
+`nudge_steamcompmgr()`s. The steamcompmgr thread (the only one that forks, kills and touches
+the helper's pid) runs `ReconcileSteamOverlayDummy()` every loop pass and compares
+`steamoverlay::HelperShouldRun( controlAtLaunch, enabled )` with what it last applied: on a
+change it calls `StartSteamOverlayDummy()` or `StopSteamOverlayDummy()`. Edge-triggered on
+purpose: a helper that exits on its own is **not** restarted (no restart loop); flipping Off
+then On starts a fresh one. `LaunchNestedChildren` makes the first call, so Enabled Off at
+launch means no helper (the game still runs, its environment is already stripped). *Why no
+request mechanism of its own:* this is the cursor-policy shape (a value read on the
+steamcompmgr thread each pass, see `g_bCursorFallbackPolicyDirty`), minus the flag because the
+stored value is the flag. Without a tab: `gamescopectl ritz_steam_overlay_enabled 0|1` (a
+ConCommand in `SteamOverlay.cpp`; with no argument it just reports).
+
+**Stop.** `StopSteamOverlayDummy()` clears the pid, sends SIGTERM to the reaper (which forwards
+it to the helper and exits) and hands the pid to a detached thread that `waitpid()`s it, so no
+zombie is left and the main loop never blocks. The helper handles SIGTERM, leaves its main
+loop and closes its X connection; the server releases its keyboard grab and drops the window,
+so input returns to the game, also while the overlay is open.
+
+## Environment switches and every knob
+
+(`GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` existed until 2026-11-27 and is gone: the real log proved
+`BOverlayNeedsPresent()` cannot tell open from closed.)
 
 | env | default | meaning |
 |---|---|---|
-| `GS_RITZ_STEAM_OVERLAY_DUMMY` | off | `1` turns the route on (gamescope-ritz) |
+| `GS_RITZ_STEAM_OVERLAY_DUMMY` | unset (the key decides) | override of Steam overlay control for this launch: `1` on, `0` off |
 | `GS_RITZ_STEAM_OVERLAY_LOG` | stderr | file the dummy window appends its timestamped log to |
 | `GS_RITZ_STEAM_OVERLAY_IDLE_FPS` | `1` | presents per second while the overlay needs none |
 | `GS_RITZ_STEAM_OVERLAY_HOTKEY` | Steam's own | e.g. `Ctrl+Shift+Tab`; else `InGameOverlayShortcutKey` from the newest `localconfig.vdf`, else Shift+Tab |
@@ -478,10 +529,10 @@ gamescopectl screenshot "<path>.png 4"      # type 4 = screen_buffer
 (`gamescopesteamoverlay` and `gamescopereaper` must be on `PATH`; a system-wide implicit
 frame-generation Vulkan layer may need its own disable variable for the test client.) Result
 (2026-11-27): with `TEST_RECT`, pixels in the top-left quarter are (255, 76, 0) and the cube
-shows through elsewhere; without it the picture is byte-identical to a run with the switch
+shows through elsewhere; without it the picture is byte-identical to a run with control
 off.
 
-## What launch handling does with the switch off
+## What launch handling does with control off
 
 Steam preloads its overlay into gamescope-ritz, but only the SDL backend can draw it.
 `main()` resolves the backend (`Auto` via `auto_select_backend()`); on anything but SDL it

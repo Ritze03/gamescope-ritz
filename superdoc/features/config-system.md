@@ -14,7 +14,9 @@ the storage layer underneath it.
   `global.json`, `profiles/<Name>.json`, and `games/<AppId>.json` — the last is a schema-2
   leftover that only the 2 -> 3 migration reads and is never deleted.
 - **`global.json` versus a profile file.** `global.json` carries `overlay` (process-level
-  UI preferences: appearance, panel geometry, keybinds, toast placement) and `profiles`
+  UI preferences: appearance, panel geometry, keybinds, toast placement, the two Steam
+  overlay switches `steam_overlay_control` / `steam_overlay_enabled`, see
+  [steam-overlay.md](steam-overlay.md)) and `profiles`
   (the pointers: `last_general`, and per app id `selected` / `audio_node` / `game_volume`
   / `true_sens`), plus a top-level `true_sens` object (`dpi`, `low_inches`, `high_inches`)
   that no profile carries; both halves of True Sens are described in

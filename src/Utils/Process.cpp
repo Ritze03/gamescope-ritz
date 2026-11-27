@@ -380,10 +380,12 @@ namespace gamescope::Process
         return true;
     }
 
-    bool SteamOverlayDummyRequested()
+    std::optional<bool> SteamOverlayDummyOverride()
     {
         const char *psz = getenv( "GS_RITZ_STEAM_OVERLAY_DUMMY" );
-        return psz && *psz && strcmp( psz, "0" ) != 0;
+        if ( !psz || !*psz )
+            return std::nullopt;
+        return strcmp( psz, "0" ) != 0;
     }
 
     static bool s_bSteamOverlayDummyActive = false;
