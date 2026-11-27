@@ -195,6 +195,33 @@ overlay from the dummy window, for whoever picks it up:
   that process, and the calls act on the calling process's game. That is why none was built
   now; the user said *"i will then test it myself"* and decides afterwards what to add.
 
+## Known limits
+
+**A game that asks whether the overlay is enabled gets "no" (2026-11-27).** With control On
+the overlay library is deliberately not loaded into the game, so
+`ISteamUtils::IsOverlayEnabled()` answers false there. Seen by the user: a game's in-game
+store refused a purchase, saying it "requires the Steam Community Overlay" and that the
+in-game Steam Community should be enabled.
+
+*Why "no" (static finding; `steamclient.so` was inspected on disk, never loaded):* it contains
+the names `gameoverlayrenderer.so`, `IsOverlayEnabled`, `BOverlayNeedsPresent`,
+`SetNotificationPosition`, `SetNotificationInset` and imports `dlopen`/`dlsym`, i.e. it looks
+those functions up in the overlay library **inside the calling process**. The exact lookup (by
+library name or among loaded objects) was not traced. The dummy window's process has the
+library; the game's does not.
+
+**The way out today:** put `GS_RITZ_STEAM_OVERLAY_DUMMY=0` into that game's Steam launch
+option. That switches control off for the launch (see "Env override"), so the game gets the
+normal in-game overlay and its store works.
+
+**Not built: a stand-in library.** A small library preloaded into the game under the overlay
+library's name, answering "enabled", would probably satisfy the check. Unproven: whether the
+lookup accepts it, and whether Steam would then open the purchase page in the dummy window's
+overlay (it may address the overlay by the game's process). `Why` it was not built: it would
+put a custom library into games, anti-cheat-protected ones included, and change what the
+Steam API reports there. The user: *"I dont want custom libraries, because of anti cheats."*
+and, of the feature as it is: *"I guess it already does its job then."*
+
 ## Environment switches and every knob
 
 (`GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` existed until 2026-11-27 and is gone: the real log proved
