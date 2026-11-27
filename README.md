@@ -86,6 +86,8 @@ links to its page in the docs.
 - **[Runtime resolution and refresh](superdoc/features/resolution-and-refresh.md)**:
   change a game's resolution and refresh rate live.
 - **[Mixer](superdoc/features/audio-mixer.md)**: per-app PipeWire volume for the game.
+- **[Steam overlay](superdoc/features/steam-overlay.md)**: shown in its own window above
+  the game instead of inside it, which avoids the lag it can cause; off by default.
 - **[Clipboard sync](superdoc/features/clipboard-sync.md)** and an **About** page with
   the changelog and licences.
 
@@ -306,6 +308,7 @@ OTHER. Each is an accordion tab that opens to its areas.
 | **Native shader effects** | Saturation, Vibrancy, Shadow Control, Pre-Sharpen, Bloom, Adaptive Brightness, Adaptive Gamma and Adaptive Brightness V2, compiled into the binary as one compute pre-pass, with a Preview split. | [`features/shader-effects.md`](superdoc/features/shader-effects.md) |
 | **Zoom, Autoclicker, Null binds** | A magnifier, a paced click train and WASD SOCD cleaning. | [`features/zoom.md`](superdoc/features/zoom.md), [`features/autoclicker.md`](superdoc/features/autoclicker.md), [`features/null-binds.md`](superdoc/features/null-binds.md) |
 | **Clipboard sync** | One `CLIPBOARD` value kept in step across every Xwayland game, gamescope's own Wayland clients, and the host session when nested. | [`features/clipboard-sync.md`](superdoc/features/clipboard-sync.md) |
+| **Steam overlay** | Optional: the Steam overlay is shown in its own window above the game instead of inside it, with a switch to turn it off and on while the game runs. | [`features/steam-overlay.md`](superdoc/features/steam-overlay.md) |
 | **Runtime nested resolution & refresh** | Change a game's own resolution and paced refresh rate live from the Shell — nothing restarts, not even Xwayland. | [`features/resolution-and-refresh.md`](superdoc/features/resolution-and-refresh.md) |
 | **Ritz launcher extension** | A module for the user's own [Ritz](https://ritze03.github.io/ritz/extensions.html) launcher that drives `gamescope-ritz` — profile, resolution, scaler and more — from Ritz's own GUI. | [`features/ritz-extension.md`](superdoc/features/ritz-extension.md) |
 

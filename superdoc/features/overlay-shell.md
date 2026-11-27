@@ -268,14 +268,14 @@ since 2026-09-27, the I7 regroup):
 | **OVERLAY** | HUD, Crosshair, Zoom, Cursor |
 | **INPUT** | General, Autoclicker, Null binds |
 | **AUDIO** | Mixer, Effects |
-| **SETTINGS** | Profiles, System, Appearance, Keybinds |
+| **SETTINGS** | Profiles, System, Appearance, Keybinds, Steam Overlay |
 | **OTHER** | Log, About, Diagnostics |
 
 Area ids behind those names: `display.general`, `display.resolution`, `display.upscaling`,
 `display.frame_limiter`, `display.hdr`, `image.shaders`, `image.framegen`, `image.motionblur`,
 `system.hud`, `system.crosshair`, `system.zoom`, `setup.cursor`, `input.general`,
 `system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`,
-`setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `system.log`,
+`setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `setup.steam_overlay`, `system.log`,
 `system.changelog` (labelled "About"; the id was left alone because it keys rail grouping, the icon
 table, palette state and every settings-audit row, and no user sees it), `system.diagnostics`.
 `Nothing` (not `None`) is the accordion's own "all closed" value and is never an area's group.

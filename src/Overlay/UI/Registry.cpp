@@ -1232,6 +1232,7 @@ namespace gamescope::ui
 			{ "system.general",        RailGroup::Settings },
 			{ "setup.appearance",      RailGroup::Settings },
 			{ "setup.keybinds",        RailGroup::Settings },
+			{ "setup.steam_overlay",   RailGroup::Settings },
 			// ---- OTHER -- unchanged.
 			{ "system.diagnostics",    RailGroup::Other },   // "Compatibility" (2026-11-08)
 			{ "system.log",            RailGroup::Other },
