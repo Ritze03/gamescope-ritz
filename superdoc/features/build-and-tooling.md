@@ -101,6 +101,10 @@ build). Split out on 2026-11-07, each with its own page: [gentle-build.md](gentl
     hatch:* the layer runs inside the game's process, so a bad one cannot be worked
     around from in there — the only place to turn it off is in the environment, before
     the game starts.
+  - `DISABLE_GAMESCOPE_RITZ_WSI=1` keeps the layer out for one game (the manifest's
+    `disable_environment`; verified with stand-ins that it wins over the enable variable);
+    the game then presents through Xwayland. It is also the way to get the normal Steam
+    in-game overlay working, see "Known limits" in `steam-overlay.md`.
 - **The embedded version can go stale, and the scripts are what prevent it.**
   `src/meson.build` derives `k_szRitzCommit` / `k_szRitzPatchDate` with `run_command()`
   feeding a `configure_file()`; both run at *configure* time, and meson re-runs configure

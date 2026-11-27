@@ -5,7 +5,8 @@ Steam loads into every process of a launch. gamescope-ritz is part of Steam's `%
 so it and everything it starts inherit both. This page is about who carries them: a
 **dummy window** behind the global switch **Steam overlay control** (default Off), with a
 second switch **Enable Steam Overlay** that starts and stops the window live (see "The two
-switches"). With control off nothing changes (last section).
+switches"). With control off nothing changes (last section), but the in-game overlay then takes no
+input under gamescope-ritz (see "Known limits").
 
 This replaces the fork's own Friends list (`system.friends`, removed 2026-11-27 at the
 user's request: "It isnt needed anymore, and its broken anyways"), whose default chord
@@ -110,7 +111,7 @@ and never part of a settings export (`overlay.*` is excluded there). Model and s
 
 | key | default | meaning | when it applies |
 |---|---|---|---|
-| `overlay.steam_overlay_control` ("Steam overlay control") | Off | Off: the game carries the overlay exactly as before (everything in the "control off" column). On: the dummy-window route | **next launch** |
+| `overlay.steam_overlay_control` ("Steam overlay control") | Off | Off: the game carries the overlay exactly as before (everything in the "control off" column), but it takes no input, see "Known limits". On: the dummy-window route | **next launch** |
 | `overlay.steam_overlay_enabled` ("Enable Steam Overlay") | On | with control on at launch: whether the dummy window runs. With control off it is stored and does nothing | **live** |
 
 *Why control is read at launch:* the overlay library is loaded into a process when it starts, so
@@ -221,6 +222,60 @@ overlay (it may address the overlay by the game's process). `Why` it was not bui
 put a custom library into games, anti-cheat-protected ones included, and change what the
 Steam API reports there. The user: *"I dont want custom libraries, because of anti cheats."*
 and, of the feature as it is: *"I guess it already does its job then."*
+
+**The normal in-game overlay takes no input under gamescope-ritz (2026-11-27, not fixed).**
+With control Off (Steam's library and Vulkan layer inside the game) the overlay opens, is
+drawn and its hotkey works, but mouse clicks and typed text do not reach it. Seen
+(user-observed) in a native Vulkan game and in a Proton game; the same native game without
+gamescope-ritz works.
+
+*Evidence (measured).* The overlay library's own log (`STEAM_OVERLAY_LOGGING=1` plus
+`STEAM_OVERLAY_LOGGING_FLUSH=1`; `gameoverlayrenderer.<pid>.log` in the system temp
+directory) shows in a working run, right after "Enabling overlay": "First swap of overlay
+on <display> <window>", "using display ... window ... key input win ...", "Game process
+locale ...". Under gamescope-ritz these lines never appear: the overlay never associates a
+presented frame with the game's X window, so it sets up no keyboard or mouse input. With
+the fork's WSI layer off for the game (`DISABLE_GAMESCOPE_RITZ_WSI=1`) the lines appear and
+input works (user-confirmed).
+
+*Cause, as far as established (read statically from Steam's layer, never loaded).* The
+fork's WSI layer replaces the game's X11 Vulkan surface with a Wayland surface on
+gamescope's own socket (it calls down `vkCreateWaylandSurfaceKHR`, with a fallback
+`vkCreateXcbSurfaceKHR`; the swapchain lives on the Wayland surface). Steam's layer
+remembers the X window of a surface only when it sees the X11 surface creation for the
+surface the swapchain is built on. A Steam layer **below** the WSI layer sees only the
+Wayland surface and skips its input set-up while still drawing.
+
+*Not settled: whether it is only a layer-order problem.* Measured with stand-in layers: the
+Vulkan loader does not sort manifests, the first-found implicit layer is closest to the
+application, and within one directory the order is `readdir` order. Read from its source:
+the Steam Runtime container (pressure-vessel) enumerates host layers along the search path
+and sorts file names byte-wise per directory, so with both manifests in the user's data dir
+the fork's (`VkLayer_RITZ...`) comes before Steam's (`steamoverlay...`), i.e. the fork's
+layer above Steam's. But forcing the distribution's layer from `/usr/share` with
+`GAMESCOPE_RITZ_USE_SYSTEM_WSI=1` did not help either (user test), which order alone does
+not predict. The real layer order of a real launch was never captured (the
+`VK_LOADER_DEBUG=layer` log is missing).
+
+*A fix candidate that was not built:* the manifest in a directory of its own
+(`<data>/gamescope-ritz/vulkan/implicit_layer.d/`) and the compositor appending
+`<data>/gamescope-ritz` to the end of `XDG_DATA_DIRS` for the game, so the loader and
+pressure-vessel find the layer last. Verified only on the bare loader with stand-ins, not
+inside the container, and useless if the overlay fails with any gamescope WSI layer
+regardless of order.
+
+**Decision: not fixed.** `Why:` the user: *"Lets scrap the compatibility part.
+gamescope-ritz only offers the DUMMY window steam overlay."* The supported usable Steam
+overlay under gamescope-ritz is the dummy window (control On). Per-game way out for the
+in-game overlay anyway: `DISABLE_GAMESCOPE_RITZ_WSI=1` in the launch options; the cost is
+that the game presents through Xwayland instead of the layer's direct path, so everything
+that depends on the layer is off for it (see the WSI layer entry in `build-and-tooling.md`).
+
+*Not gamescope-ritz defects, found on the way.* A Proton game launched with
+`--expose-wayland` and Proton's Wayland driver is a Wayland-native client, and Steam's
+overlay library has no Wayland keyboard input (read statically). The suspicion that the
+fork's pointer-lock gate in `wlserver_mousewarp` blocks overlay clicks was refuted:
+`wlserver_pointer_stats` showed no lock and nothing suppressed.
 
 ## Environment switches and every knob
 
