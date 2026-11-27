@@ -609,6 +609,97 @@ static const char *EventName( int t )
 	}
 }
 
+// ---------------------------------------------------------------- input hand-over
+
+// GS_RITZ_STEAM_OVERLAY_INPUT: "grab" (default) or "focus".
+//  focus: STEAM_INPUT_FOCUS=1 while open. gamescope then calls XSetInputFocus on THIS window, so
+//         the game gets FocusOut/NotifyNormal and a game that pauses on focus loss pauses.
+//  grab : STEAM_INPUT_FOCUS=2 while open (pointer to this window, X focus and the Wayland
+//         keyboard stay on the game) plus an active XGrabKeyboard on this window, so X delivers
+//         the keys here. The game sees at most FocusOut/NotifyGrab.
+// The overlay library exports XGrabKeyboard/XUngrabKeyboard itself (it tracks and suspends the
+// game's own grabs), so a plain call from this process would go through ITS hook and might be
+// recorded and deferred while the overlay is active. We therefore resolve libX11's own
+// functions from libX11's handle (dlsym on a handle does not see the preloaded interposer).
+// The passive hotkey grab stays as it is; its activation produces FocusOut/NotifyGrab and
+// FocusOut+FocusIn/NotifyUngrab events on this window (observed headless), which are not focus
+// changes by gamescope.
+static bool g_bGrabInput = true;
+static bool g_bKbGrabbed = false;
+static int ( *g_pfnGrabKeyboard )( Display *, Window, Bool, int, int, Time ) = XGrabKeyboard;
+static int ( *g_pfnUngrabKeyboard )( Display *, Time ) = XUngrabKeyboard;
+static const char *g_pszGrabPath = "plain Xlib call (through the overlay's hook if it is loaded)";
+
+static void ResolveRealGrabFunctions()
+{
+	// ponytail: RTLD_NOLOAD only finds libX11 when it is already mapped (it is: we link it);
+	// ceiling: a static libX11 would fall back to the plain call, which is logged.
+	if ( void *pX11 = dlopen( "libX11.so.6", RTLD_LAZY | RTLD_NOLOAD ) )
+	{
+		auto pfnGrab = (int ( * )( Display *, Window, Bool, int, int, Time ))dlsym( pX11, "XGrabKeyboard" );
+		auto pfnUngrab = (int ( * )( Display *, Time ))dlsym( pX11, "XUngrabKeyboard" );
+		if ( pfnGrab && pfnUngrab )
+		{
+			g_pfnGrabKeyboard = pfnGrab;
+			g_pfnUngrabKeyboard = pfnUngrab;
+			g_pszGrabPath = "libX11's own function (past the overlay's hook)";
+		}
+	}
+}
+
+static const char *GrabStatusName( int n )
+{
+	switch ( n )
+	{
+		case GrabSuccess: return "GrabSuccess";
+		case AlreadyGrabbed: return "AlreadyGrabbed";
+		case GrabInvalidTime: return "GrabInvalidTime";
+		case GrabNotViewable: return "GrabNotViewable";
+		case GrabFrozen: return "GrabFrozen";
+		default: return "?";
+	}
+}
+
+static void ReleaseKeyboardGrab( Display *dpy )
+{
+	if ( !g_bKbGrabbed )
+		return;
+	g_pfnUngrabKeyboard( dpy, CurrentTime );
+	XFlush( dpy );
+	g_bKbGrabbed = false;
+	Log( "XUngrabKeyboard done (%s)", g_pszGrabPath );
+}
+
+// The input hand-over for one open/close transition. A failed grab falls back to
+// STEAM_INPUT_FOCUS=1 for that open, so the overlay is never left without keys.
+static void ApplyInput( Display *dpy, Window win, bool bOpen )
+{
+	if ( !bOpen )
+	{
+		ReleaseKeyboardGrab( dpy ); // ungrab first, then give the input back
+		SetCard( dpy, win, g_atomInputFocus, 0 );
+		XFlush( dpy );
+		Log( "STEAM_INPUT_FOCUS -> 0" );
+		return;
+	}
+	unsigned long ulMode = 1;
+	if ( g_bGrabInput )
+	{
+		const int nRes = g_pfnGrabKeyboard( dpy, win, False, GrabModeAsync, GrabModeAsync, CurrentTime );
+		Log( "XGrabKeyboard (%s) -> %s (%d)", g_pszGrabPath, GrabStatusName( nRes ), nRes );
+		if ( nRes == GrabSuccess )
+		{
+			g_bKbGrabbed = true;
+			ulMode = 2;
+		}
+		else
+			Log( "keyboard grab failed, falling back to STEAM_INPUT_FOCUS=1 for this open" );
+	}
+	SetCard( dpy, win, g_atomInputFocus, ulMode );
+	XFlush( dpy );
+	Log( "STEAM_INPUT_FOCUS -> %lu", ulMode );
+}
+
 // ---------------------------------------------------------------- Steam callbacks
 
 // Steam posts GameOverlayActivated_t (callback id 331 = k_iSteamFriendsCallbacks 300 + 31,
@@ -802,6 +893,18 @@ int main()
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_FPS" ) )
 		flIdleFps = std::max( 0.05, atof( p ) );
 	const bool bTestRect = EnvFlag( "GS_RITZ_STEAM_OVERLAY_TEST_RECT" );
+	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_INPUT" ) )
+	{
+		if ( strcmp( p, "focus" ) == 0 )
+			g_bGrabInput = false;
+		else if ( strcmp( p, "grab" ) != 0 )
+			Log( "unknown GS_RITZ_STEAM_OVERLAY_INPUT=\"%s\", using grab", p );
+	}
+	ResolveRealGrabFunctions();
+	Log( "input mode: %s (while open: %s)", g_bGrabInput ? "grab" : "focus",
+		g_bGrabInput ? "STEAM_INPUT_FOCUS=2 + active keyboard grab" : "STEAM_INPUT_FOCUS=1, the game loses X focus" );
+	if ( g_bGrabInput )
+		Log( "keyboard grab will use: %s", g_pszGrabPath );
 
 	XSetErrorHandler( OnXError );
 	XSetIOErrorHandler( OnXIOError );
@@ -920,8 +1023,8 @@ int main()
 					static const char *const k_apszDetail[] = { "NotifyAncestor", "NotifyVirtual", "NotifyInferior", "NotifyNonlinear",
 						"NotifyNonlinearVirtual", "NotifyPointer", "NotifyPointerRoot", "NotifyDetailNone" };
 					const int m = ev.xfocus.mode, d = ev.xfocus.detail;
-					Log( "%s window 0x%lx mode %s detail %s", EventName( ev.type ), ev.xfocus.window,
-						m >= 0 && m < 4 ? k_apszMode[m] : "?", d >= 0 && d < 8 ? k_apszDetail[d] : "?" );
+					Log( "%s window 0x%lx mode %s detail %s (own keyboard grab: %s)", EventName( ev.type ), ev.xfocus.window,
+						m >= 0 && m < 4 ? k_apszMode[m] : "?", d >= 0 && d < 8 ? k_apszDetail[d] : "?", g_bKbGrabbed ? "yes" : "no" );
 					break;
 				}
 				case KeyPress:
@@ -957,6 +1060,13 @@ int main()
 								Log( "swapchain recreate failed, no more presents" );
 							bRedraw = true;
 						}
+					}
+					break;
+				case DestroyNotify:
+					if ( ev.xdestroywindow.window == win && g_bKbGrabbed )
+					{
+						g_bKbGrabbed = false; // X dropped the grab with the window
+						Log( "window destroyed, keyboard grab is gone" );
 					}
 					break;
 				case Expose:
@@ -1019,9 +1129,7 @@ int main()
 		bPrevOpen = open.bOpen;
 		if ( open.bOpen != bWasOpen )
 		{
-			SetCard( dpy, win, g_atomInputFocus, open.bOpen ? 1 : 0 );
-			XFlush( dpy );
-			Log( "STEAM_INPUT_FOCUS -> %d", open.bOpen ? 1 : 0 );
+			ApplyInput( dpy, win, open.bOpen );
 			bRedraw = true;
 		}
 
@@ -1071,6 +1179,7 @@ int main()
 	}
 	if ( bVk )
 		DestroySwapchain( vk );
+	ReleaseKeyboardGrab( dpy );
 	XCloseDisplay( dpy );
 	return 0;
 }

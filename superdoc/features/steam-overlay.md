@@ -108,6 +108,7 @@ The switch is deliberately temporary: step I3 replaces it with a config key. (`G
 | `GS_RITZ_STEAM_OVERLAY_IDLE_FPS` | `1` | presents per second while the overlay needs none |
 | `GS_RITZ_STEAM_OVERLAY_HOTKEY` | Steam's own | e.g. `Ctrl+Shift+Tab`; else `InGameOverlayShortcutKey` from the newest `localconfig.vdf`, else Shift+Tab |
 | `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK` | off | `1`: never load `steamclient.so`; open/closed is the plain hotkey toggle (for comparing) |
+| `GS_RITZ_STEAM_OVERLAY_INPUT` | `grab` | how the helper takes input while the overlay is open: `grab` (`STEAM_INPUT_FOCUS=2` plus an active keyboard grab, the game keeps its X focus) or `focus` (`STEAM_INPUT_FOCUS=1`, the game loses X focus); see "Input modes" |
 | `GS_RITZ_STEAMCLIENT` | search `<steam root>/linux64/steamclient.so` | full path of the `steamclient.so` the helper loads for the open/closed callback (same override as the main program) |
 | `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter |
 
@@ -156,8 +157,8 @@ grabbed combination no longer reaches the game at all while the dummy window run
 
 There is no "overlay is open" export, so the helper has to learn it from Steam. The one
 function `DecideOpen()` holds the whole rule (every transition and every ignored press is
-logged). Opening sets `STEAM_INPUT_FOCUS=1` on the window (gamescope then routes mouse and
-keyboard to it), closing sets it back to 0. It must be cleared, not just the window hidden:
+logged). Opening hands the input to the window (how: "Input modes" below), closing gives it
+back and sets `STEAM_INPUT_FOCUS` to 0. It must be cleared, not just the window hidden:
 a window with it set takes input even at opacity 0 (`planning/steam-friends-window.md`).
 
 **Authority rule.** Steam posts the Steamworks callback `GameOverlayActivated_t` (callback id
@@ -239,58 +240,89 @@ A hotkey press seen while open produced `FocusOut ... NotifyGrab` and
 `FocusOut/FocusIn ... NotifyUngrab` on the dummy window: those are the passive grab
 activating, not focus changes by gamescope.
 
-### Open: the game may pause while the overlay has input
+### Input modes: `grab` (default) and `focus`
 
-The user's "freezes the game" may also be the game pausing itself: Unity pauses on focus loss
-unless "run in background" is set. With Steam's own in-game overlay the game keeps its focus.
-What gamescope does when the dummy window has `STEAM_INPUT_FOCUS=1` (read from the code, not
-yet observed on a real game):
+**The problem.** The user's first real test said "it works, but it freezes the game". Besides
+the stuck-open state (fixed by the callback above), a game that pauses on focus loss (Unity
+unless "run in background" is set) pauses for as long as the overlay is open, because of what
+gamescope does with `STEAM_INPUT_FOCUS=1` (read from `steamcompmgr.cpp`):
 
-- `xwayland_ctx_t::DetermineAndApplyFocus` (`steamcompmgr.cpp`, ~4578) picks the overlay
-  window (`isOverlay`, `inputFocusMode`) as `inputFocus` (~4619); `keyboardFocusWin = inputFocus`
-  (~4673), and only `inputFocusMode == 2` swaps it back to `focus.focusWindow` (~4677).
-- With mode 1 it then calls `XSetInputFocus(ctx->dpy, <overlay window>, ...)` (~4764): the
-  game's window, on the **same** Xwayland server, receives `FocusOut` with mode `NotifyNormal`.
-  It also writes `_NET_ACTIVE_WINDOW` = the overlay window (~4767-4769), hides the cursor
-  (~4788) and, in the global pass, `wlserver_keyboardfocus(<overlay surface>)` (~5271), so the
-  Wayland keyboard leaves the game's surface. Not done: no unmap, no `WM_STATE` change
-  (`set_wm_state` only runs for the *focus* window, ~4658). So the game observes a plain
-  focus loss, which is what makes a "pause on focus loss" game pause.
-- Mode 2 (`STEAM_INPUT_FOCUS=2`, `planning/steam-friends-window.md`) keeps the keyboard on the
-  game (~4677, ~5248, ~6441): mouse to the overlay, `XSetInputFocus` stays on the game.
-- Upstream's Deck setup avoids it by construction: with `--xwayland-count 2`, the Steam UI
-  window lives on one Xwayland server and the game on another (`get_index() != 0` gives the
-  `SteamControlled` strategy, ~4629); `XSetInputFocus` is per server connection, so the game's
-  server never sees its window lose X focus. (The Wayland keyboard still moves between the
-  two Xwayland surfaces; whether that makes the game's Xwayland emit a focus loss is
-  unmeasured.) The Deck's quick-access menu uses mode 2 for the same reason, and Steam's
-  overlay proper runs inside the game process.
+- `xwayland_ctx_t::DetermineAndApplyFocus` (~4578) picks the overlay window (`isOverlay`,
+  `inputFocusMode`) as `inputFocus` (~4619); `keyboardFocusWin = inputFocus` (~4673), and
+  only `inputFocusMode == 2` swaps it back to `focus.focusWindow` (~4677).
+- With mode 1 it calls `XSetInputFocus(ctx->dpy, <overlay window>, ...)` (~4764): the game's
+  window, on the **same** Xwayland server, receives `FocusOut` with mode `NotifyNormal`. It
+  also writes `_NET_ACTIVE_WINDOW` = the overlay window (~4767-4769), hides the cursor (~4788)
+  and, in the global pass, `wlserver_keyboardfocus(<overlay surface>)` (~5271), so the
+  Wayland keyboard leaves the game's surface. No unmap and no `WM_STATE` change
+  (`set_wm_state` only runs for the *focus* window, ~4658).
+- Steam's own in-game overlay never takes focus from the game; upstream's Deck setup avoids
+  it by construction (`--xwayland-count 2`: Steam's UI and the game on different Xwayland
+  servers, `get_index() != 0` gives the `SteamControlled` strategy ~4629, and
+  `XSetInputFocus` is per server connection).
 
-Ways to keep the game believing it is focused, with the cost of each:
+**`GS_RITZ_STEAM_OVERLAY_INPUT=grab` (default).** On open the helper takes an active
+`XGrabKeyboard` on its window (`owner_events` False, `GrabModeAsync` both) and writes
+`STEAM_INPUT_FOCUS=2`. Mode 2 means "pointer to the overlay, keyboard stays with the game"
+(the Deck's quick-access menu uses it; `steamcompmgr.cpp` ~4677, ~5248-5253, ~6441): no
+`XSetInputFocus` on the helper, no Wayland keyboard move, so the game keeps its X focus.
+The keys reach the helper because X delivers them to the grabbing client. On close it
+ungrabs, then writes `STEAM_INPUT_FOCUS=0`; it also ungrabs on exit, and X drops the grab
+with the window. Every grab logs its return code (`GrabSuccess`, `AlreadyGrabbed`, ...); a
+failed grab logs it and falls back to `STEAM_INPUT_FOCUS=1` for that open, so the overlay
+is never left without keys.
 
-- **(a) Dummy window on a second Xwayland server.** Needs the helper to start on another
-  `DISPLAY`, and gamescope-ritz to run two servers (`--xwayland-count 2`, game placement on
-  the second: reshapes launch, focus selection and `DISPLAY` handling for everything). The
-  passive `XGrabKey` only works on the game's own server, so the hotkey would have to be
-  injected by gamescope itself (`wlserver_process_hotkeys`) into the helper's stream. Largest
-  change, most risk; the Wayland keyboard-leave question remains.
-- **(b) Route at the Wayland level, X focus stays on the game, the helper takes an active
-  grab.** The helper holds `XGrabKeyboard` / `XGrabPointer` on its window while open. X then
-  delivers all key and pointer events to it, and the game sees at most `FocusOut` with mode
-  `NotifyGrab` (SDL ignores those; other toolkits unknown, Unity unmeasured), never a
-  `NotifyNormal` loss. The cost is in the helper alone (grab on open, ungrab on close, handle
-  a refused grab), gamescope untouched if combined with (c). Risk: the overlay's own hooks may
-  grab as well, and the game still gets the `NotifyGrab` events.
-- **(c) Simplest, found while reading: use `STEAM_INPUT_FOCUS=2` instead of 1, plus (b)'s
-  `XGrabKeyboard`.** Mode 2 already means "pointer to the overlay, `XSetInputFocus` stays on
-  the game" (~4677), so no gamescope change: the helper writes 2 instead of 1 and, while
-  open, grabs the keyboard (the Wayland keyboard stays on the game's surface, but an X grab
-  inside Xwayland redirects the events to the grabber). One-line property change, a dozen
-  lines of grab code, `XUngrabKeyboard` on close.
-- **Recommendation:** (c), measured first with a log-only run (set 2 and watch whether the
-  helper still receives key events with and without the grab, and whether the game's window
-  logs a focus loss), then keep (a) in reserve. Do not implement (a) before (c) is shown to
-  fail on a real game.
+**`focus`** is the old behaviour (`STEAM_INPUT_FOCUS=1`, no grab), kept so one test session
+can compare.
+
+**Why the real libX11 functions.** The overlay library exports `XGrabKeyboard` and
+`XUngrabKeyboard` itself (it tracks and suspends the game's own grabs while its UI is up).
+A plain call from the helper would go through that hook and might be recorded and deferred
+instead of executed. The helper therefore resolves both from libX11's own handle
+(`dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD)` + `dlsym`, which does not see the
+preloaded interposer) and logs which path it uses (`keyboard grab will use: ...`); if that
+lookup fails it falls back to the plain call.
+
+**The passive hotkey grab** is unchanged. Its activation already produces `FocusOut ...
+NotifyGrab` and `FocusOut`/`FocusIn ... NotifyUngrab` on the dummy window (seen headless
+without any helper keyboard grab), so such lines are not gamescope focus changes. The game's own window sees the same pair at each hotkey press (`FocusOut NotifyGrab`, then `FocusIn NotifyUngrab`), in either mode, since the grab is on the root window. Every
+`FocusIn`/`FocusOut` log line ends with `(own keyboard grab: yes|no)`.
+
+**Headless proof** (stand-in overlay library and `steamclient.so`; the "game" is a small Xlib
+window printing the focus and key events it receives; open and close driven only by the
+stub's 331):
+
+| | `grab` | `focus` |
+|---|---|---|
+| game on open | `FocusOut mode NotifyGrab` only | `FocusOut mode NotifyNormal` |
+| game on close | `FocusIn mode NotifyUngrab` | `FocusIn mode NotifyNormal` |
+| keys sent while open | reach the helper, none reach the game | reach the helper, none reach the game |
+| pointer motion while open | reaches the helper, not the game | reaches the helper, not the game |
+| keys after close | reach the game again, not the helper | the same |
+
+The `focus` column confirms the diagnosis (the game sees a plain focus loss); `grab` shows
+no `NotifyNormal` event at all. Without the stand-in overlay library, `grab` mode ignores
+the hotkey exactly as before and takes no grab.
+
+**Unproven until the next real test:**
+- whether the overlay's own hooks accept key events delivered through the helper's active
+  grab (they see them in the helper's Xlib event stream, as for any key, but the stand-in
+  cannot say what the real library does with them);
+- whether a Unity game treats `FocusOut mode NotifyGrab` as a focus loss (SDL ignores it);
+- pointer behaviour for a game holding a pointer lock: the cursor constraint is applied to
+  the **keyboard** focus surface (`wlserver_keyboardfocus` with `bConstrain`,
+  `wlserver.cpp` ~3633), so under mode 2 the game's lock stays active while the pointer
+  focus moves to the overlay window. The cursor image comes from the same Xwayland context
+  (`steamcompmgr.cpp` ~5226), and the cursor is hidden on the focus change (~4788). Whether
+  the overlay's mouse is usable then is unmeasured; `focus` mode is the comparison.
+
+**Reserve: (a) the dummy window on a second Xwayland server.** Needs the helper on another
+`DISPLAY` and gamescope-ritz running two servers (`--xwayland-count 2`, the game on the second:
+reshapes launch, focus selection and `DISPLAY` handling for everything). The passive
+`XGrabKey` only works on the game's own server, so gamescope would have to inject the hotkey
+(`wlserver_process_hotkeys`) into the helper's stream. Largest change, most risk; whether the
+Wayland keyboard moving between two Xwayland surfaces makes the game's Xwayland emit a focus
+loss is unmeasured. Only worth doing if `grab` fails on a real game.
 
 ## Layering (read from the paint code, nothing changed)
 
