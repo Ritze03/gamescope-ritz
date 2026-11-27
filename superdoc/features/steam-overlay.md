@@ -6,6 +6,10 @@ so it and everything it starts inherit both. This page is about who carries them
 of the Steam-overlay work (2026-11-27): a **dummy window** behind a **test-only switch**.
 With the switch off nothing changes (last section).
 
+This replaces the fork's own Friends list (`system.friends`, removed 2026-11-27 at the
+user's request: "It isnt needed anymore, and its broken anyways"), whose default chord
+`Ctrl+Shift+Tab` was also the user's Steam overlay hotkey.
+
 ## The two pieces
 
 - `gameoverlayrenderer.so`, through `LD_PRELOAD` (Steam passes a 32-bit and a 64-bit path,
@@ -159,7 +163,7 @@ There is no "overlay is open" export, so the helper has to learn it from Steam. 
 function `DecideOpen()` holds the whole rule (every transition and every ignored press is
 logged). Opening hands the input to the window (how: "Input modes" below), closing gives it
 back and sets `STEAM_INPUT_FOCUS` to 0. It must be cleared, not just the window hidden:
-a window with it set takes input even at opacity 0 (`planning/steam-friends-window.md`).
+a window with it set takes input even at opacity 0 ("The window mechanism" below).
 
 **Authority rule.** Steam posts the Steamworks callback `GameOverlayActivated_t` (callback id
 **331** = friends callbacks base 300 + 31, first payload byte `m_bActive`, 1 = opened,
@@ -179,11 +183,11 @@ button, Steam opening it itself).
 `<steam root>/linux64/` over the same roots as the hotkey lookup), requires the symbols
 `Steam_CreateSteamPipe`, `Steam_ConnectToGlobalUser`, `Steam_BGetCallback`,
 `Steam_FreeLastCallback`, `Steam_ReleaseUser`, `Steam_BReleaseSteamPipe` (flat C exports,
-same signatures and `CallbackMsg_t` layout as `tests/steam_friends_live_probe.cpp`), creates
+signatures and `CallbackMsg_t` layout under "Callback facts" below), creates
 its own pipe, connects the global user and drains `Steam_BGetCallback` /
 `Steam_FreeLastCallback` in the existing 16 ms main-loop wake-up, in the helper's own
 thread (no new one). The queues are per pipe, so this cannot take a callback from the game's
-pipe (`steam-friends.md`, "Callbacks are not the blocker"). The pipe and user are released
+pipe ("Callback facts" below). The pipe and user are released
 on exit; the library is never `dlclose()`d (it starts threads). Without an overlay library
 there is nothing to give input to, so no pipe is created. `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK=1`
 skips all of it.
@@ -378,9 +382,61 @@ there is no stash and the backend presents with a Vulkan swapchain (SDL) the ove
 removed from `LD_PRELOAD` instead (the game must not draw it twice). mangoapp always has it
 removed. The Vulkan layer variables are untouched, so whatever Steam set stays.
 
+## Callback facts
+
+Measured against a live Steam client for the (since removed) Friends list, kept here because
+the helper's callback pipe relies on them:
+
+- `steamclient.so` exports `Steam_BGetCallback` and `Steam_FreeLastCallback` as **flat C
+  symbols with published signatures**, so pumping callbacks needs no interface vtable slot,
+  no app id and no `SteamAPI_Init`. The six functions the helper uses:
+
+  ```
+  int32_t Steam_CreateSteamPipe();
+  int32_t Steam_ConnectToGlobalUser( int32_t hPipe );
+  bool    Steam_BGetCallback( int32_t hPipe, CallbackMsg_t *pMsg );
+  void    Steam_FreeLastCallback( int32_t hPipe );
+  void    Steam_ReleaseUser( int32_t hPipe, int32_t hUser );
+  bool    Steam_BReleaseSteamPipe( int32_t hPipe );
+
+  struct CallbackMsg_t { int32_t m_hSteamUser; int m_iCallback; uint8_t *m_pubParam; int m_cubParam; };
+  ```
+
+- Callback queues are **per pipe**: a pump on our own pipe cannot take anything from the
+  game's.
+- A 300 s pump on a pipe with no app id delivered 16512 callbacks, among them ids 304
+  (`PersonaStateChange_t`, 499 times) and 336 (`FriendRichPresenceUpdate_t`, 368 times), both
+  at exactly their published payload size (12 bytes), which is what shows they really are
+  Steamworks callback ids.
+
+## The window mechanism
+
+gamescope already promotes an X11 window on its own Xwayland to a fullscreen interactive
+overlay when it carries the right properties (the way Steam does on the Deck; not
+restricted to Steam):
+
+| property | value | effect |
+|---|---|---|
+| `STEAM_OVERLAY` | `1` | the window becomes `ctx->focus.overlayWindow`, painted on top of the game |
+| `STEAM_INPUT_FOCUS` | `1` | mouse and keyboard both go to it |
+| `STEAM_INPUT_FOCUS` | `2` | mouse to the overlay, keyboard stays with the game |
+| `_NET_WM_WINDOW_OPACITY` | `0` / `0xFFFFFFFF` | hide / show |
+
+(`GAMESCOPE_EXTERNAL_OVERLAY` is the paint-only sibling; input is never routed to it.)
+Proved in 2026-09 with a browser window given these properties: it composited fullscreen over
+a nested game, mouse and keyboard worked, opacity 0 showed the game again. **The trap:** with
+opacity 0 but `STEAM_INPUT_FOCUS` still 1 the *invisible* window kept swallowing every
+keystroke, because `DetermineAndApplyFocus` does not look at opacity. The hide path must
+clear `STEAM_INPUT_FOCUS` as well.
+
+## A launcher wrapper that clears `LD_PRELOAD`
+
+Steam's overlay reaches a game only through `LD_PRELOAD` (`gameoverlayrenderer.so`). A
+launcher wrapper that sets `LD_PRELOAD=""` (a "clear LD_PRELOAD" option) therefore turns the
+Steam overlay off for the game, whatever gamescope-ritz does. The dummy window is the way
+around it: it carries the overlay itself (the stash and fallback lookup above).
+
 ## Related
 
 - [process-management](process-management.md) - the reaper the helper runs under.
-- [steam-friends](steam-friends.md), `planning/steam-friends-window.md` - the
-  `STEAM_OVERLAY` / `STEAM_INPUT_FOCUS` window mechanism this builds on.
 - [unit-tests](unit-tests.md) - the `[steam-overlay]` cases.

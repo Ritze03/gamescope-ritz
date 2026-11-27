@@ -306,7 +306,7 @@ sees the phase: **Recording** (first time) -> `TrueSens_ReferenceRequest()` (the
 be queued from the compositor thread); **Finished** -> `FinishByClicks()`: under the lock read
 the sums and go Idle, `TrueSens_ReferenceClear()`, evaluate and store (`ApplyResult()`), then
 `SettingsOverlay_SetVisible( true )` and `ui::shell::RequestArea( "system.true_sens" )` (the
-order of the Friends/Mixer keys in `wlserver.cpp`: visible first, then the request). A second
+order of the Mixer key in `wlserver.cpp`: visible first, then the request). A second
 click inside the same frame as the first leaves the tick seeing Finished straight away: the
 picture is never requested and the recording ends with "too little movement" (whatever
 moved in that frame). A Stop that wins the lock between the click and the tick cancels the
@@ -500,7 +500,7 @@ about.
 
 **Record arms and closes the window (D6, D24).** A record Action calls
 `TrueSens_StartRecording( target )` and, only when that succeeds,
-`SettingsOverlay_SetVisible( false )` (the precedent of the Friends area's Join). The player
+`SettingsOverlay_SetVisible( false )`. The player
 aims, left clicks, turns, left clicks again, and the window opens again by itself on this
 area with the result (see "The recorder"). A refusal (Zoom active, already recording) keeps
 the window open: the core has already put its reason into `TrueSens_LastOutcome()`, so the

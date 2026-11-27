@@ -172,9 +172,6 @@ steamcompmgr loop described below.
 - **Launch-option lock** — `src/LaunchOptions.{h,cpp}` (`MarkGiven`, `Given`): a row whose
   setting a `gamescope` flag pinned goes read-only. See
   [launch-option-lock](../features/launch-option-lock.md).
-- **Friends** — `src/SteamFriends.{h,cpp}` (background poller, `Snapshot`, `Join`),
-  `SteamFriendsCmd.h`, panel `src/Overlay/PanelFriends.cpp`. See
-  [steam-friends](../features/steam-friends.md).
 - **Diagnostics** — `src/Overlay/Diagnostics.{h,cpp}` (launch-environment snapshot taken
   first in `main()`, a worker thread running `hyprctl`), `DiagnosticsLogic.h` (pure
   parsing and state decisions), `PanelDiagnostics.cpp`; `Diagnostics_Tick()` is called
@@ -235,10 +232,9 @@ Further threads, independent of the two above:
 - **Game audio capture** — its own `pw_thread_loop` (`gamescope-audio`), with a realtime
   playback callback that also runs Dynamics. See [audio-capture](../features/audio-capture.md)
   and [audio-dynamics](../features/audio-dynamics.md).
-- **Autoclicker worker, Friends poller, Diagnostics worker** — small background threads
-  that keep clicks, Steam reads and `hyprctl` off the frame path
-  ([autoclicker](../features/autoclicker.md), [steam-friends](../features/steam-friends.md),
-  [diagnostics](../features/diagnostics.md)).
+- **Autoclicker worker, Diagnostics worker** — small background threads
+  that keep clicks and `hyprctl` off the frame path
+  ([autoclicker](../features/autoclicker.md), [diagnostics](../features/diagnostics.md)).
 
 ## Frame data flow, end to end
 
@@ -410,8 +406,6 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 
 **Steam**
 
-- **Friends list / joining a friend** — [steam-friends](../features/steam-friends.md):
-  `src/SteamFriends.cpp` (`Snapshot`, `Join`), `src/Overlay/PanelFriends.cpp`.
 - **Steam overlay (dummy window)** — [steam-overlay](../features/steam-overlay.md): helper
   executable `src/Apps/gamescopesteamoverlay.cpp`, launch/env handling in
   `src/Utils/Process.cpp` (`ComputeGameOverlayEnv`, `ComputeDummyOverlayEnv`), the re-exec

@@ -6,6 +6,8 @@ shell's **Keybinds** area (`setup.keybinds`). Three actions at the rework; a
 fourth (`friends`) landed the same day with the friends-you-can-join list. A
 fifth (`companion`), for a Steam chat overlay that landed alongside it, was
 removed 2026-09-09 — see [History: `companion`](#history-companion) below.
+`friends` was removed 2026-11-27 with the Friends list, so six actions remain — see
+[History: `friends`](#history-friends) below.
 
 Code: `src/Keybinds.{h,cpp}` (grammar, store, gesture engine, capture),
 `src/Overlay/PanelKeybinds.cpp` (the rows), `src/wlserver.cpp`'s
@@ -50,13 +52,11 @@ larger job with a different risk profile.
 | `shell` | Open settings | `RShift` |
 | `shell_alt` | Open settings (alternate) | `Ctrl+Shift+O` |
 | `launcher` | Open launcher | `LCtrl+RShift` |
-| `friends` | Open friends list | `Ctrl+Shift+Tab` |
 | `mixer` | Open mixer | `Ctrl+Shift+M` |
 | `zoom` | Zoom | `RMB` |
 | `autoclicker` | Autoclicker | `Mouse4` |
 
-`friends` was added 2026-09-08 with the join list
-([steam-friends.md](steam-friends.md)). `zoom` was added 2026-09-14 with the
+`zoom` was added 2026-09-14 with the
 magnifier ([zoom.md](zoom.md)); it is one of the two **held** actions — see
 [Held actions](#held-actions-and-mouse-buttons) below — and it is inert until
 the Zoom area's own switch is on. `autoclicker` was added 2026-09-18 with the
@@ -66,32 +66,21 @@ click train, the other held action ([autoclicker.md](autoclicker.md)).
 'Mixer' tab."* — `Ctrl+Shift+M` was picked because it collides with none of
 the existing defaults or the reserved chord.
 
-`mixer` opens the settings shell directly on `audio.mixer`, mirroring
-`friends` (below) rather than `launcher`'s palette-only behaviour — the
+`mixer` opens the settings shell directly on `audio.mixer`, rather than
+`launcher`'s palette-only behaviour — the
 Mixer is an ordinary settings area, not something meant to float alone over
 the game. Pressed again while the shell is already showing Mixer, it closes
-the overlay, the same toggle rule `friends` uses; pressed while the shell is
+the overlay (a toggle on its own area); pressed while the shell is
 open on something else, it just switches the shell to Mixer (`RequestArea()`
 is read on the shell's very next frame regardless of what is currently
-open). Unlike `friends` it has no Steam/app-id gate — the Mixer area is
+open). It has no Steam/app-id gate — the Mixer area is
 always available, so this chord always does something.
 
-**`Ctrl+Shift+Tab` belongs to `friends`.** That chord is Steam's own overlay
-chord for the friends list, so the muscle memory is already right — and for
-part of 2026-09-08 it was held by a `companion` action (a browser that
-explicitly *could not* join anybody — see [History: `companion`](#history-companion)
-below) before that action gave it up. Using it here is not a conflict with
-Steam: gamescope swallows the key before anything downstream sees it, so
-neither the game nor Steam's own overlay can be reached by it. The chord is
-not reserved or special — it is a row like the other three, and rebinding it
-means moving whatever else uses it first, because the conflict rule refuses
-two actions on one chord.
-
-`Why the friends binding is a toggle rather than an opener:` pressed again
-while the friends area is the one on screen, it closes the overlay instead of
+`Why the mixer binding is a toggle rather than an opener:` pressed again
+while the Mixer area is the one on screen, it closes the overlay instead of
 re-selecting what is already selected. A key that can only open would leave the
 user hunting for a second key to get their game back. `wlserver.cpp` asks
-`ui::shell::AreaActive( "system.friends" )` to tell the two cases apart.
+`ui::shell::AreaActive( "audio.mixer" )` to tell the two cases apart.
 
 `Why two shell actions rather than one action with two chords:` the settings
 grammar is one row per value. A list-valued row would need a row per element
@@ -104,16 +93,26 @@ conflict rule a plain comparison rather than a set intersection.
 From 2026-09-08 to 2026-09-09 there was a fifth action, `companion` (Open
 Steam chat, default `Ctrl+Shift+C`), for a browser window gamescope launched
 on its own Xwayland pointed at Steam's web chat. It briefly held
-`Ctrl+Shift+Tab` before giving that chord up to `friends` the same day, since
-`friends` is the feature that can actually use Steam's own friends-list
-muscle memory — the companion could talk but, unlike the friends list, could
-never join anybody. It was removed entirely on 2026-09-09 once the friends
-list proved it could join a friend for real; see `CHANGELOG.md`'s 2026-09-09
-entry and [steam-friends.md](steam-friends.md)'s *"History: the browser
-companion it replaced"*. A `global.json` left over from before the removal may
+`Ctrl+Shift+Tab` before giving that chord up to `friends` the same day. It was removed
+entirely on 2026-09-09 once the friends list proved it could join a friend for real; see
+`CHANGELOG.md`'s 2026-09-09 entry. A `global.json` left over from before the removal may
 still carry `overlay.keybinds.companion`: it is simply ignored on load (the
 action no longer exists to look it up) and dropped from the file the next time
 settings are saved.
+
+## History: `friends`
+
+The action `friends` (Open friends list, default `Ctrl+Shift+Tab`) opened the Friends
+list (`system.friends`, 2026-09-08), a toggle on its own area that did nothing outside a Steam
+game. It was removed 2026-11-27 together with the Friends list, at the user's request: *"It
+isnt needed anymore, and its broken anyways"*; Steam's own overlay, carried by the dummy window
+([steam-overlay.md](steam-overlay.md)), replaces it, and its default chord was the same as the
+Steam overlay hotkey. A `global.json` left over from before may still carry
+`overlay.keybinds.friends`: loading ignores it quietly (`ApplyFromConfig()` only looks up the
+actions that exist; pinned by `test_config.cpp`'s "a global.json still carrying the removed
+friends keybind loads and keeps the other six"), the other six keep their chords, and the
+stale entry stays in the file (the config layer carries unknown keybind names along on a plain
+write) until the Keybinds module next writes its own map, which holds only known actions.
 
 ## The chord grammar
 
@@ -334,7 +333,7 @@ scriptable and documented fallback rather than as the interface.
 ### Two groups, and a copy in the feature's own area (2026-09-22)
 
 The Keybinds area lists its rows in two groups: **Global hotkeys** (`shell`,
-`shell_alt`, `launcher`, `friends`, `mixer` — the chords that open this
+`shell_alt`, `launcher`, `mixer` — the chords that open this
 fork's own surfaces) and **In-game hotkeys** (`zoom`, `autoclicker` — the
 chords that do something *to* the game while you play). The user's words: *"one for global
 hotkeys and one for game-specific hotkeys or something like that ... a zoom and
@@ -451,5 +450,5 @@ that ConCommand's own comment in `wlserver.cpp`.
 
 - **Held action** (glossary detail): a keybind action flagged `bHeld` (`zoom`, `autoclicker`). Mouse buttons (`LMB`, `RMB`, `MMB`, `Mouse4`, `Mouse5`) became chord terms with it. See `superdoc/features/keybinds.md`'s "Held actions and mouse buttons".
 - **Chord** (glossary detail): **Chord** — a keybind, in this project's own grammar: an unordered set of keys that must be held together, written `+`-separated (`RShift`, `Ctrl+Shift+O`, `LCtrl+RShift`). `Ctrl`/`Alt`/`Shift`/`Super` take either hand; `LCtrl`/`RShift`/... name one. A chord of only modifiers is a **tap** (fires on release, only if nothing else was pressed while it was held, and is never swallowed); any other chord fires on the press that completes it and is swallowed. `src/Keybinds.{h,cpp}`, added 2026-09-08 — see `superdoc/features/keybinds.md`.
-- **Keybind action** (glossary detail): **Keybind action** — one thing a **chord** can be bound to. There are seven, each carrying exactly one chord, in two groups of the Keybinds area (2026-09-22). **Global hotkeys**: `shell` (Open settings, default `RShift`), `shell_alt` (Open settings (alternate), default `Ctrl+Shift+O`), `launcher` (Open launcher, default `LCtrl+RShift`), `friends` (Open friends list, default `Ctrl+Shift+Tab`, added 2026-09-08 with the **Friends list**) and `mixer` (Open mixer, default `Ctrl+Shift+M`, added 2026-09-27 from the user's *"Add a keybind for the 'Mixer' tab."*, opening the Shell on `audio.mixer` — switching it there if the Shell is open elsewhere, closing the Shell if it is already showing Mixer, the same toggle `friends` uses, but with no Steam/app-id gate). **In-game hotkeys**: `zoom` (default `RMB`) and `autoclicker` (default `Mouse4`), the two **held actions**, whose rows also appear in their own areas (`zoom.bind`, `autoclicker.bind`) as the same chord. A discontinued action, `companion` (Open Steam chat), existed from 2026-09-08 to 2026-09-09 for the now-removed Steam chat companion — see the **Friends list** entry's history note. Stored in `global.json`'s `overlay.keybinds` — global, never per profile — and edited in the **Shell**'s Keybinds area (`setup.keybinds`). Distinct from a `gamescope_action_binding` trigger, which is upstream's client-registered binding table and is not editable here.
+- **Keybind action** (glossary detail): **Keybind action** — one thing a **chord** can be bound to. There are six, each carrying exactly one chord, in two groups of the Keybinds area (2026-09-22). **Global hotkeys**: `shell` (Open settings, default `RShift`), `shell_alt` (Open settings (alternate), default `Ctrl+Shift+O`), `launcher` (Open launcher, default `LCtrl+RShift`), and `mixer` (Open mixer, default `Ctrl+Shift+M`, added 2026-09-27 from the user's *"Add a keybind for the 'Mixer' tab."*, opening the Shell on `audio.mixer` — switching it there if the Shell is open elsewhere, closing the Shell if it is already showing Mixer). **In-game hotkeys**: `zoom` (default `RMB`) and `autoclicker` (default `Mouse4`), the two **held actions**, whose rows also appear in their own areas (`zoom.bind`, `autoclicker.bind`) as the same chord. Two discontinued actions: `companion` (Open Steam chat, 2026-09-08 to 2026-09-09) and `friends` (Open friends list, removed 2026-11-27 with the Friends list); see the History sections above. Stored in `global.json`'s `overlay.keybinds` — global, never per profile — and edited in the **Shell**'s Keybinds area (`setup.keybinds`). Distinct from a `gamescope_action_binding` trigger, which is upstream's client-registered binding table and is not editable here.
 - **Reserved chord** (glossary detail): `Ctrl+Alt+Shift+O`. It always toggles the **Shell**, is not a **keybind action**, cannot be rebound, and is refused as a value for any action. It exists so that a shell chord the user can no longer type does not take the settings UI — and with it the way to fix the binding — with it. `gamescopectl ritz_keybinds_reset` is the other, independent way back.

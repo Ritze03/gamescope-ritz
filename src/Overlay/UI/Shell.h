@@ -134,7 +134,7 @@ namespace gamescope::ui::shell
 	// two threads never race on anything but a bool.
 	void RequestLauncherClosePreservingQuery();
 
-	// Phase 4 of the friends list: put the shell on ONE named rail area,
+	// Phase 4: put the shell on ONE named rail area,
 	// asked for from another thread.
 	//
 	// `pszAreaId` must have static lifetime -- it is stored as a bare pointer

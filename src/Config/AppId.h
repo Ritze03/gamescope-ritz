@@ -79,7 +79,7 @@ namespace gamescope::config
     //      or restored and the slider is session-only.
     // Pure (no env, no globals) so the choice is unit-tested. It is used for the
     // volume ONLY: the fallback key must never make a non-Steam game count as a
-    // "game" for profile assignment or the Friends list, which keep asking
+    // "game" for profile assignment, which keeps asking
     // ResolveAppId()/SessionAppId() directly.
     std::optional<std::string> ChooseGameVolumeKey( const std::optional<std::string> &oAppId,
                                                     std::string_view svPrimaryArgv0 );

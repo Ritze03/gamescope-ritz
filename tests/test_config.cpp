@@ -17,6 +17,7 @@
 #include "Config/ConfigManager.h"
 #include "Overlay/FpsDisplay.h"
 #include "Overlay/Zoom.h"
+#include "Keybinds.h"
 #include "Overlay/Autoclicker.h"
 #include "Overlay/NullBinds.h"
 #include "Overlay/TrueSens.h"
@@ -548,7 +549,7 @@ TEST_CASE( "a config carrying the removed shadow_strength falls back to the outl
 // 2026-09-09 removed backdrop_opacity/backdrop_padding the same way when
 // the backdrop itself went -- a config that still has any of those keys on
 // disk must load cleanly, simply ignoring them, exactly like any other
-// removed field this project has dropped (friends_lookup_names, dock_scale,
+// removed field this project has dropped (dock_scale,
 // opacity_background, ...).
 TEST_CASE( "a config carrying the removed backdrop keys loads and drops them", "[config]" )
 {
@@ -5047,4 +5048,44 @@ TEST_CASE( "gamescope.nested_sync_window round-trips, defaults to off, absent ke
         "gamescope": { "nested_width": 1280, "nested_height": 720 }
     })";
     REQUIRE_FALSE( LoadSections().gamescope.nested_sync_window );
+}
+
+// The Friends list and its `friends` keybind action were removed 2026-11-27.
+// A global.json that still names it must load without trouble, and the six
+// actions that remain keep their chords. The stale entry is carried along
+// by the config layer until the Keybinds module next persists its own map
+// (which only ever writes the actions this build knows).
+TEST_CASE( "a global.json still carrying the removed friends keybind loads and keeps the other six",
+           "[config][keybinds]" )
+{
+    namespace kb = gamescope::keybinds;
+    TempConfigHome home;
+    std::filesystem::create_directories( ConfigRoot() );
+    std::ofstream( GlobalConfigPath() ) << R"({
+        "overlay": { "keybinds": {
+            "friends": "Ctrl+Shift+Tab",
+            "shell": "F9",
+            "shell_alt": "Ctrl+Shift+K",
+            "launcher": "LCtrl+LAlt",
+            "mixer": "Ctrl+Shift+Z",
+            "zoom": "MMB",
+            "autoclicker": "Mouse5"
+        } }
+    })";
+
+    Settings loaded = LoadGlobal();
+    REQUIRE( loaded.overlay.keybinds.size() == 7 );
+    kb::ApplyFromConfig( loaded.overlay );
+
+    CHECK( kb::ChordTextFor( kb::Action::Shell )       == "F9" );
+    CHECK( kb::ChordTextFor( kb::Action::ShellAlt )    == "Ctrl+Shift+K" );
+    CHECK( kb::ChordTextFor( kb::Action::Launcher )    == "LCtrl+LAlt" );
+    CHECK( kb::ChordTextFor( kb::Action::Mixer )       == "Ctrl+Shift+Z" );
+    CHECK( kb::ChordTextFor( kb::Action::Zoom )        == "MMB" );
+    CHECK( kb::ChordTextFor( kb::Action::Autoclicker ) == "Mouse5" );
+    CHECK_FALSE( kb::ActionFromId( "friends" ).has_value() );
+    REQUIRE( (size_t)kb::Action::Count == 6 );
+
+    // Put the process-wide chords back on their defaults for later tests.
+    kb::ApplyFromConfig( Settings{}.overlay );
 }

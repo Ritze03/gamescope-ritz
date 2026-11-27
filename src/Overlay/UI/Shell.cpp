@@ -51,7 +51,6 @@
 #include "Overlay/PanelDiagnostics.h"
 #include "Overlay/PanelLog.h"
 #include "Overlay/PanelShaders.h"
-#include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
 #include "Overlay/PanelInput.h"
@@ -494,7 +493,7 @@ namespace gamescope::ui::shell
 		// spelled out separately because it means the opposite thing.
 		std::atomic<bool> s_bPaletteCloseRequested{ false };
 
-		// Phase 4 of the friends list: "put the shell on this rail area",
+		// Phase 4: "put the shell on this rail area",
 		// asked for from the wlserver thread. A bare const char* because every
 		// caller passes a string literal (Shell.h's RequestArea contract) --
 		// storing a std::string would need a lock the hotkey path must not
@@ -895,13 +894,6 @@ namespace gamescope::ui::shell
 			// buried after the section's more specific tabs. Phase A: just
 			// the clipboard sync switch. See PanelSystem.h.
 			PanelSystem_RegisterArea( reg );
-			// The friends you can join (2026-09-08). Next to the Steam chat
-			// rows PanelSystem.cpp registers, because they are the two halves
-			// of "gamescope talking to Steam" and a user looking for one will
-			// look where the other is -- but its own file and its own area,
-			// because this one has a background poller, a list and a join
-			// action, and none of that belongs beside a clipboard switch.
-			PanelFriends_RegisterArea( reg );
 			// Mixer follows, ahead of Monitor and Log -- SPEC §8.1's
 			// amendment is explicit that the fold keeps the original
 			// relative order.
@@ -1002,7 +994,7 @@ namespace gamescope::ui::shell
 		// Every call site that changes the selected area -- a rail click, a
 		// palette/launcher jump, StepArea() (Up/Down in the rail and
 		// Ctrl+Left/Right both), the overlay_e2_select console command, and
-		// wlserver's area-request path (the friends binding) -- routes
+		// wlserver's area-request path (the mixer binding) -- routes
 		// through this, so "the group holding the current area opens by
 		// itself" (closing whatever else was open) cannot be forgotten at a
 		// seventh call site later. The registry's own first-selection
@@ -3877,10 +3869,10 @@ namespace gamescope::ui::shell
 					// A genuine double-click ALSO fires whichever one verb (at most
 					// one, by convention -- see ListVerb's own comment) opted into it
 					// via bOnDoubleClick, gated by the same disabled-reason rule the
-					// strip below uses. Added 2026-09-14 for the Friends list: a
-					// single click only selects (the Set() above), a double-click
-					// also acts -- and no List composite that never sets the flag is
-					// affected, Profiles' Create/Copy/Edit/Delete included.
+					// strip below uses. A single click only selects (the Set()
+					// above), a double-click also acts -- and no List composite
+					// that never sets the flag is affected, Profiles'
+					// Create/Copy/Edit/Delete included.
 					if ( res.bDoubleClicked )
 					{
 						for ( size_t i = 0; i < entry.ListActionCount(); ++i )
@@ -8190,7 +8182,7 @@ namespace gamescope::ui::shell
 			OpenPalette();
 			s_bLauncherOnly = true;
 		}
-		// Phase 4's friends binding. Selected through Select( nullptr ) --
+		// Phase 4's area binding (the mixer). Selected through Select( nullptr ) --
 		// never by assigning s_sSelectedEntry by hand -- for exactly the
 		// reason SelectById() gives: a selection made any other way skips the
 		// Inspector reset and the destructive-action disarm, and every test
@@ -8202,11 +8194,7 @@ namespace gamescope::ui::shell
 		// belt-and-braces: SelectedArea() falls back to the first available
 		// area when the selected one is hidden, so honouring a request for a
 		// hidden area would silently drop the user on Display instead of
-		// telling them anything. The `system.friends` binding is the case that
-		// makes it concrete -- it hides itself when this is not a Steam game
-		// (PanelFriends.cpp's AvailableWhen) -- and wlserver.cpp declines to
-		// send the request at all in that state, so this is the second of two
-		// guards rather than the only one.
+		// telling them anything.
 		if ( const char *pszArea = s_pszAreaRequested.exchange( nullptr, std::memory_order_acq_rel ) )
 		{
 			const Area *pRequested = Reg().FindArea( pszArea );
@@ -8416,11 +8404,6 @@ namespace gamescope::ui::shell
 		// pass: a click that flips a ShownWhen predicate takes effect next frame
 		// (Area::EntryCount()).
 		Reg().SnapshotShown();
-
-		// The friends panel's deferred join. Run here, once per frame on the
-		// thread that owns the overlay, because a click (or a ConCommand on
-		// the console thread) only RECORDS a join -- see PanelFriends.h.
-		PanelFriends_Tick();
 
 		// An armed destructive action disarms itself. Left armed, it would
 		// be one press from deleting a file for as long as the overlay

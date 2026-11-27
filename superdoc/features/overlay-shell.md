@@ -245,7 +245,7 @@ OTHER category and the Diagnostics tab name, to tell the user, to look there."* 
 the rail deliberately hides is the "reachable but not present" state. If the selected area becomes
 unavailable the shell falls back to the first available one, so honouring a request for it would
 silently drop the user elsewhere; `wlserver.cpp` declines to send the request in that state too
-(two guards, not one). Friends uses it (no Steam app id, no area).
+(two guards, not one).
 
 ## Rail groups
 
@@ -257,7 +257,8 @@ pin it with no ImGui context (`test_overlay_ui.cpp`, the "rail:" cases). An area
 not name falls back to **Other**; `RailAreas()` skips a slot whose id `FindArea()` cannot resolve
 instead of crashing, which let the table and a new area land in separate commits.
 
-**Eight groups** (AUDIO added 2026-10-22, between INPUT and MISC; seven since 2026-10-04, MOTION; six
+**Seven groups** (MISC, left holding only the Friends list, was removed 2026-11-27 together with
+it; AUDIO added 2026-10-22, between INPUT and SETTINGS; seven before that since 2026-10-04, MOTION; six
 since 2026-09-27, the I7 regroup):
 
 | Group | Areas (rail order) |
@@ -267,14 +268,13 @@ since 2026-09-27, the I7 regroup):
 | **OVERLAY** | HUD, Crosshair, Zoom, Cursor |
 | **INPUT** | General, Autoclicker, Null binds |
 | **AUDIO** | Mixer, Effects |
-| **MISC** | Friends |
 | **SETTINGS** | Profiles, System, Appearance, Keybinds |
 | **OTHER** | Log, About, Diagnostics |
 
 Area ids behind those names: `display.general`, `display.resolution`, `display.upscaling`,
 `display.frame_limiter`, `display.hdr`, `image.shaders`, `image.framegen`, `image.motionblur`,
 `system.hud`, `system.crosshair`, `system.zoom`, `setup.cursor`, `input.general`,
-`system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`, `system.friends`,
+`system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`,
 `setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `system.log`,
 `system.changelog` (labelled "About"; the id was left alone because it keys rail grouping, the icon
 table, palette state and every settings-audit row, and no user sees it), `system.diagnostics`.
@@ -290,10 +290,10 @@ History and rationale, kept in full because the tabs' membership is the user's o
 - **I7 regroup to six (2026-09-27).** `Why:` the user's own table (lightly reflowed from its
   bulleted form): *"lets reorder some of the categories: Display: General, Resolution, Upscaling.
   Overlay: HUD, Crosshair, Zoom, Cursor. Input: General (Force grab cursor [remove from Display >
-  General], Force grab keyboard), Autoclicker, Null binds. Misc: Friends, Mixer."* MISC had grown to
+  General], Force grab keyboard), Autoclicker, Null binds. Misc: Friends, Mixer."* MISC (removed again 2026-11-27, see below) had grown to
   seven areas spanning three unrelated concerns: things drawn over the game
   (HUD/Crosshair/Zoom/Cursor), things that intercept or rewrite input (Autoclicker/Null binds, soon
-  General's grab toggles) and one unrelated social feature (Friends). OVERLAY and INPUT split the
+  General's grab toggles) and one unrelated social feature (the Friends list). OVERLAY and INPUT split the
   first two out, leaving MISC as the true two-item leftover. `input.general` was a new area a sibling
   task added after this one reserved its rail slot; until it landed INPUT showed two areas, which is
   what the skip-unresolved-slot tolerance above is for.
@@ -307,9 +307,13 @@ History and rationale, kept in full because the tabs' membership is the user's o
 - **AUDIO (2026-10-22).** `Why:` the user: *"We should have a seperate audio category. 1. Mixer
   (Volume Only) 2. Effects (Compressor Only for now) 3. Visualizer"*. Mixer keeps the volume rows;
   the compressor ("Dynamics") moved out of it into Effects; a Visualizer is a later task with no
-  area yet. AUDIO sits between INPUT and MISC (both about the game's I/O, ahead of the leftovers);
-  MISC is Friends alone since the Mixer left. Group icon: a speaker (`railgroup.audio`); Effects'
+  area yet. AUDIO sits between INPUT and the leftovers (both about the game's I/O); MISC was the Friends
+  list alone since the Mixer left. Group icon: a speaker (`railgroup.audio`); Effects'
   area icon: a waveform squeezed between two lines.
+- **MISC removed (2026-11-27).** The Friends list was the group's only area; it was removed at
+  the user's request (*"It isnt needed anymore, and its broken anyways"*) and the empty group
+  went with it (enum value, name, icon, tests), leaving seven groups. The rail would not have
+  shown an empty heading anyway, but a group nothing can ever be in is dead code.
 - **Diagnostics (2026-11-05)** joined OTHER as its last area (see [diagnostics.md](diagnostics.md)).
 
 ## The rail accordion
@@ -410,7 +414,7 @@ group's rows, however many areas pile up elsewhere.
   are not areas, and mixing them in would break the "every registered area has exactly one icon"
   bijection test. Group glyphs: monitor on a stand (DISPLAY), a keycap with a small legend mark
   (INPUT), a square frame with a small plain "+" reticle inside (OVERLAY, unconnected to the frame
-  edges so it differs from `system.crosshair`'s own glyph), a speaker (AUDIO), plus MOTION, MISC,
+  edges so it differs from `system.crosshair`'s own glyph), a speaker (AUDIO), plus MOTION,
   SETTINGS, OTHER. A missing area icon falls back to the area's initial, never a blank rail.
 
 ## Dialog parts: wide modal, panes, checkbox, multi-line text, clipboard, second strip

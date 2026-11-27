@@ -337,7 +337,7 @@ namespace gamescope
 			}
 			TrueSens_ReferenceClear();
 			ApplyResult( target, dSumX, dSumY, ulSamples, bSpoiled );
-			// Order as wlserver.cpp's Friends/Mixer keys: visible first, then the area request.
+			// Order as wlserver.cpp's Mixer key: visible first, then the area request.
 			SettingsOverlay_SetVisible( true );
 			ui::shell::RequestArea( "system.true_sens" );
 			force_repaint();

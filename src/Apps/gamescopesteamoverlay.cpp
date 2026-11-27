@@ -704,9 +704,11 @@ static void ApplyInput( Display *dpy, Window win, bool bOpen )
 
 // Steam posts GameOverlayActivated_t (callback id 331 = k_iSteamFriendsCallbacks 300 + 31,
 // first payload byte m_bActive) whenever the overlay opens or closes, however that happened.
-// We read it from our own pipe on steamclient.so, with the same flat functions and the same
-// CallbackMsg_t layout that the probe tests/steam_friends_live_probe.cpp (namespace
-// callbacks) uses. Callback queues are per pipe, so this cannot eat anybody else's.
+// We read it from our own pipe on steamclient.so, through its flat C exports
+// (Steam_CreateSteamPipe, Steam_ConnectToGlobalUser, Steam_BGetCallback, Steam_FreeLastCallback,
+// Steam_ReleaseUser, Steam_BReleaseSteamPipe) and this CallbackMsg_t layout; none of them is a
+// vtable slot. Callback queues are per pipe, so this cannot eat anybody else's. See
+// superdoc/features/steam-overlay.md.
 struct CallbackMsg_t
 {
 	int32_t m_hSteamUser;
@@ -727,7 +729,7 @@ struct SteamCb_t
 static const int k_iGameOverlayActivated = 331;
 
 // ponytail: the library is never dlclose()d (steamclient.so starts threads and atexit
-// handlers, same rule as src/SteamFriends.cpp); the process exits right after the release.
+// handlers); the process exits right after the release.
 // Every failure is logged once and returns false: the hotkey toggle then stays in charge.
 static bool ConnectSteamCallbacks( SteamCb_t &c )
 {
@@ -940,7 +942,7 @@ int main()
 	g_atomInputFocus = XInternAtom( dpy, "STEAM_INPUT_FOCUS", False );
 	// STEAM_OVERLAY makes gamescope composite us above the game and never treat us as the
 	// game. STEAM_INPUT_FOCUS stays 0 until the overlay opens: a window that keeps it set
-	// swallows input even when invisible (superdoc/planning/steam-friends-window.md).
+	// swallows input even when invisible (superdoc/features/steam-overlay.md).
 	SetCard( dpy, win, g_atomOverlay, 1 );
 	SetCard( dpy, win, g_atomInputFocus, 0 );
 	XStoreName( dpy, win, "gamescope steam overlay" );

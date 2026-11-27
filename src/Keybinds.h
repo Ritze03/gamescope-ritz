@@ -59,7 +59,6 @@ namespace gamescope::keybinds
 		Shell = 0,      // toggle the settings shell
 		ShellAlt,       // ... and its alternate chord; same effect
 		Launcher,       // the command palette alone over the game
-		Friends,        // the friends-you-can-join list (src/SteamFriends.h)
 		Mixer,          // opens the Shell on the Mixer area (audio.mixer)
 		Zoom,           // the magnifier (src/Overlay/Zoom.h) -- a HELD action, see ActionInfo::bHeld
 		Autoclicker,    // the click train (src/Overlay/Autoclicker.h) -- also HELD

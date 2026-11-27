@@ -42,8 +42,8 @@ dropdown, a "Filter game profiles" switch and one Status row -- see
   two games use the same profile, it has to somehow differentiate between them"*. Its
   key is the app id, else (no app id) the launched executable's basename
   (`config::ChooseGameVolumeKey()`) -- such a fallback entry carries only `game_volume`,
-  has an empty `selected`, and so is never read as a profile assignment; assignment and
-  the Friends gate still ask only `SessionAppId()`/`ResolveAppId()`, so a non-Steam game
+  has an empty `selected`, and so is never read as a profile assignment; assignment
+  stays keyed on `SessionAppId()`/`ResolveAppId()` only, so a non-Steam game
   does not become a "game" by having a volume saved. See audio-capture.md.
 
 ## Files
@@ -131,12 +131,8 @@ reverse-DNS-style id (`com.example.Game`) are all legal. The Create/Edit modal's
 `GameID` field (`CheckProfileForm()`, `Overlay/PanelConfig.h`) holds every game
 profile to this same rule, inline, before the id ever reaches `ConfigManager`.
 
-**Numeric-only consumers degrade cleanly, not incorrectly.** The one place a string
-app id cannot be used as-is is the Friends list, which matches against Steam's own
-numeric friend/game data (`FriendGameInfo_t`) -- see
-[`steam-friends.md`](steam-friends.md)'s app-id gate. A non-numeric session app id
-there degrades to "not a Steam game" (the area hides), exactly as no app id at all
-does; it is never misread as some other game's id. Auto-detection
+**Numeric-only consumers degrade cleanly, not incorrectly.** The one such consumer, the
+Friends list (matched Steam's numeric friend/game data), was removed 2026-11-27. Auto-detection
 (`STEAM_COMPAT_APP_ID`, `SteamAppId`, the `STEAM_COMPAT_DATA_PATH` basename) stays
 numeric-validated as always -- those are Steam's own signals and are only ever
 going to be numeric; the string-id path is for the explicit override and the GUI
@@ -622,4 +618,4 @@ action.
 - **Inherits** (glossary detail): **Inherits** — a game profile's link to one general profile: it stores only the values that differ (`ponytail:` a value set equal to the parent's reads as inherited) and follows the parent live for the rest. Two levels, no chains; a parent with children cannot become a game profile; deleting a parent bakes its children.
 - **Selected profile** (glossary detail): **Selected profile** — the outlined line in the Profiles list (`profiles.list`, the **Shell**'s Setup > Profiles area); clicking a line (Enter while hovering, or Left/Right on the band) loads it *and* is the assignment the current game remembers (`games.<AppId>.selected`), while a general pick also becomes `last_general`, what a never-seen game starts on. There is no load or save button: selecting is loading, and every edit is saved as it happens.
 - **Session profile** (glossary detail): **Session profile** — the profile this session edits (`config::SessionProfile()`): the `--profile <name>` / `GS_RITZ_PROFILE` / `ritz_profile` override if given (session-only, and **created EMPTY when missing** — schema version and metadata only, so every setting is its compiled-in default; naming a profile at launch is a deliberate fresh start, and seeding it from another profile made it arrive looking already configured. Until 2026-09-17 a missing one was instead created from what the session would have used), else the selected profile, else `last_general`, else `Default`. Shown as every area's header badge (`[Game] Rust`, or `Casual (launch)` under an override; Appearance alone keeps `global only`) and as the Profiles area's Status row. While it is a game profile with a parent, every row of every area is *inherited* (nothing drawn) or *overridden* (a small accent dot after the label; the Inspector offers **Reset to inherited**).
-- **App id** (glossary detail): **App id** — a game profile's identity key (`ProfileMeta::app_id`, the `games.<AppId>` map key in `global.json`), resolved once at startup by `config::ResolveAppId()` (`src/Config/AppId.h`). An **opaque string, not necessarily a Steam app id** (2026-09-15, "Make it fully compatible with string based IDs ... for setting the ID manually"): the one rule it is held to everywhere it crosses from UI into config is `SanitizeAppId()` — trim whitespace, reject empty, reject `/`, `\`, or a control character, accept everything else, digits included. Resolution order: the `RITZ_GS_APPID` env var override (always wins when set; renamed 2026-09-15 from `GS_RITZ_APPID`, which is still accepted as a fallback for one release, with one warning logged when only the old name is set), then `STEAM_COMPAT_APP_ID`, then a nonzero `SteamAppId`, then the basename of `STEAM_COMPAT_DATA_PATH`. A consumer that can only ever be numeric — the **Friends list**'s app-id gate — degrades a non-numeric app id to "not a Steam game" (`steamfriends::AppIdGateFromString()`) rather than misreading it. See `superdoc/features/profiles.md`'s "App id" section.
+- **App id** (glossary detail): **App id** — a game profile's identity key (`ProfileMeta::app_id`, the `games.<AppId>` map key in `global.json`), resolved once at startup by `config::ResolveAppId()` (`src/Config/AppId.h`). An **opaque string, not necessarily a Steam app id** (2026-09-15, "Make it fully compatible with string based IDs ... for setting the ID manually"): the one rule it is held to everywhere it crosses from UI into config is `SanitizeAppId()` — trim whitespace, reject empty, reject `/`, `\`, or a control character, accept everything else, digits included. Resolution order: the `RITZ_GS_APPID` env var override (always wins when set; renamed 2026-09-15 from `GS_RITZ_APPID`, which is still accepted as a fallback for one release, with one warning logged when only the old name is set), then `STEAM_COMPAT_APP_ID`, then a nonzero `SteamAppId`, then the basename of `STEAM_COMPAT_DATA_PATH`. See `superdoc/features/profiles.md`'s "App id" section.
