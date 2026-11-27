@@ -2079,10 +2079,10 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 {
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Audio, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	const size_t nGroups = sizeof( eGroups ) / sizeof( eGroups[ 0 ] );
 
-	const ui::Icon *pIcons[ 7 ];
+	const ui::Icon *pIcons[ 8 ];
 	for ( size_t i = 0; i < nGroups; ++i )
 	{
 		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
@@ -2147,7 +2147,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // Changelog)." The user's I7 table, verbatim: "Display: General,
 // Resolution, Upscaling [+ the pre-existing three, kept in order --
 // 'reorder SOME of the categories']. Overlay: HUD, Crosshair, Zoom, Cursor.
-// Input: General [new], Autoclicker, Null binds. Misc: Mixer.
+// Input: General [new], Autoclicker, Null binds. Misc: Friends, Mixer.
 // Settings: Profiles, System, Appearance, Keybinds [Cursor left]." A pinned
 // list, the same shape as the icon census above: written out rather than
 // walked off RegisterAll() (which this test binary does not link -- see
@@ -2163,7 +2163,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // RailGroup enum and Registry::RailAreas() for the "a slot with no
 // registered area is skipped, not a crash" contract that makes landing the
 // table and the area in separate commits safe.
-TEST_CASE( "rail: the seven groups are in the order the request named", "[overlay_ui]" )
+TEST_CASE( "rail: the eight groups are in the order the request named", "[overlay_ui]" )
 {
 	struct Expected { const char *pszId; ui::RailGroup eGroup; };
 	const Expected expected[] = {
@@ -2187,15 +2187,15 @@ TEST_CASE( "rail: the seven groups are in the order the request named", "[overla
 		{ "system.null_binds",     ui::RailGroup::Input },
 		{ "system.true_sens",      ui::RailGroup::Input },
 		// AUDIO (2026-10-22): Mixer (volume only) and Effects (the compressor),
-		// between INPUT and SETTINGS (MISC, the removed Friends list's group, is
-		// gone, 2026-11-27).
+		// between INPUT and MISC. MISC holds the Steam Overlay area (removed
+		// with the Friends list 2026-11-27, restored the same day for it).
 		{ "audio.mixer",           ui::RailGroup::Audio },
 		{ "audio.effects",         ui::RailGroup::Audio },
+		{ "setup.steam_overlay",   ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },
-		{ "setup.steam_overlay",   ui::RailGroup::Settings },
 		{ "system.diagnostics",    ui::RailGroup::Other },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
@@ -2229,6 +2229,7 @@ TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" 
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Overlay ) )  == "OVERLAY" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Input ) )    == "INPUT" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Audio ) )    == "AUDIO" );
+	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Settings ) ) == "SETTINGS" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Other ) )    == "OTHER" );
 }
@@ -2365,7 +2366,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Audio, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
 	for ( RailGroup eGroup : eGroups )
 	{
 		INFO( "group " << ui::RailGroupName( eGroup ) );

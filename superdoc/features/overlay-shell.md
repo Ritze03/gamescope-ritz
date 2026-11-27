@@ -257,9 +257,9 @@ pin it with no ImGui context (`test_overlay_ui.cpp`, the "rail:" cases). An area
 not name falls back to **Other**; `RailAreas()` skips a slot whose id `FindArea()` cannot resolve
 instead of crashing, which let the table and a new area land in separate commits.
 
-**Seven groups** (MISC, left holding only the Friends list, was removed 2026-11-27 together with
-it; AUDIO added 2026-10-22, between INPUT and SETTINGS; seven before that since 2026-10-04, MOTION; six
-since 2026-09-27, the I7 regroup):
+**Eight groups** (MISC was removed 2026-11-27 with the Friends list and restored the same day for
+the Steam Overlay area; AUDIO added 2026-10-22, between INPUT and MISC; seven before that since
+2026-10-04, MOTION; six since 2026-09-27, the I7 regroup):
 
 | Group | Areas (rail order) |
 | --- | --- |
@@ -268,14 +268,15 @@ since 2026-09-27, the I7 regroup):
 | **OVERLAY** | HUD, Crosshair, Zoom, Cursor |
 | **INPUT** | General, Autoclicker, Null binds |
 | **AUDIO** | Mixer, Effects |
-| **SETTINGS** | Profiles, System, Appearance, Keybinds, Steam Overlay |
+| **MISC** | Steam Overlay |
+| **SETTINGS** | Profiles, System, Appearance, Keybinds |
 | **OTHER** | Log, About, Diagnostics |
 
 Area ids behind those names: `display.general`, `display.resolution`, `display.upscaling`,
 `display.frame_limiter`, `display.hdr`, `image.shaders`, `image.framegen`, `image.motionblur`,
 `system.hud`, `system.crosshair`, `system.zoom`, `setup.cursor`, `input.general`,
-`system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`,
-`setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `setup.steam_overlay`, `system.log`,
+`system.autoclicker`, `system.null_binds`, `audio.mixer`, `audio.effects`, `setup.steam_overlay`,
+`setup.profiles`, `system.general`, `setup.appearance`, `setup.keybinds`, `system.log`,
 `system.changelog` (labelled "About"; the id was left alone because it keys rail grouping, the icon
 table, palette state and every settings-audit row, and no user sees it), `system.diagnostics`.
 `Nothing` (not `None`) is the accordion's own "all closed" value and is never an area's group.
@@ -310,10 +311,13 @@ History and rationale, kept in full because the tabs' membership is the user's o
   area yet. AUDIO sits between INPUT and the leftovers (both about the game's I/O); MISC was the Friends
   list alone since the Mixer left. Group icon: a speaker (`railgroup.audio`); Effects'
   area icon: a waveform squeezed between two lines.
-- **MISC removed (2026-11-27).** The Friends list was the group's only area; it was removed at
-  the user's request (*"It isnt needed anymore, and its broken anyways"*) and the empty group
-  went with it (enum value, name, icon, tests), leaving seven groups. The rail would not have
-  shown an empty heading anyway, but a group nothing can ever be in is dead code.
+- **MISC removed and restored (2026-11-27).** The Friends list was the group's only area; it was
+  removed at the user's request (*"It isnt needed anymore, and its broken anyways"*) and the empty
+  group went with it (enum value, name, icon, tests), leaving seven groups. The same day the new
+  Steam Overlay area (`setup.steam_overlay`) first landed last in SETTINGS, and MISC was brought
+  back for it, exactly as it was (enum value, name, `railgroup.misc` icon, tests). `Why:` the
+  user: *"Put it into the "Misc" tab, instead of "Settings""*. The area id was left alone (ids
+  are independent of the group).
 - **Diagnostics (2026-11-05)** joined OTHER as its last area (see [diagnostics.md](diagnostics.md)).
 
 ## The rail accordion

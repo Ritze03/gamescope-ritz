@@ -153,8 +153,10 @@ so input returns to the game, also while the overlay is open.
 
 ## The Steam Overlay tab (2026-11-27)
 
-Area `setup.steam_overlay` ("Steam Overlay"), **last in the SETTINGS group** (after Keybinds);
-`src/Overlay/PanelSteamOverlay.{h,cpp}`, registered from `Shell.cpp`. It holds only these two
+Area `setup.steam_overlay` ("Steam Overlay"), the one area of the **MISC** rail group;
+`src/Overlay/PanelSteamOverlay.{h,cpp}`, registered from `Shell.cpp`. `Why` MISC: the user, after
+it first landed in SETTINGS: *"Put it into the "Misc" tab, instead of "Settings""* (the group,
+removed earlier that day with the Friends list, was restored for it; the id is unchanged). It holds only these two
 switches: no overlay-control rows were built (see "Controlling the overlay (not built)").
 
 | row | binds | applies | shown |

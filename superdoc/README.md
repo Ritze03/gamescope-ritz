@@ -156,7 +156,7 @@ indented under it.
 ### Steam surfaces
 
 - [Steam overlay and the dummy window](features/steam-overlay.md) — the helper process that
-  carries Steam's overlay out of the game and the compositor; env handling, test switch.
+  carries Steam's overlay out of the game and the compositor; the two switches (Steam overlay control, Enable Steam Overlay), the Misc > Steam Overlay tab, env override.
 
 ### External surfaces
 

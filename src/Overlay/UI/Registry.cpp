@@ -1171,6 +1171,7 @@ namespace gamescope::ui
 			case RailGroup::Overlay:  return "OVERLAY";
 			case RailGroup::Input:    return "INPUT";
 			case RailGroup::Audio:    return "AUDIO";
+			case RailGroup::Misc:     return "MISC";
 			case RailGroup::Settings: return "SETTINGS";
 			case RailGroup::Other:    return "OTHER";
 			// RailGroupForId() never returns this -- it is the accordion's
@@ -1183,7 +1184,8 @@ namespace gamescope::ui
 
 	namespace
 	{
-		// Eight groups since 2026-10-22 (AUDIO; seven since 2026-10-04, MOTION; six since 2026-09-27, I7) -- see the section comment above
+		// Eight groups since 2026-10-22 (AUDIO; seven since 2026-10-04, MOTION; six since 2026-09-27, I7;
+		// MISC briefly gone 2026-11-27) -- see the section comment above
 		// the RailGroup enum in Registry.h for the user's own table and the
 		// reasoning behind the split. input.general is not a registered
 		// Area yet (a sibling task adds it); its slot sits here anyway --
@@ -1227,12 +1229,15 @@ namespace gamescope::ui
 			// used to be a group inside the Mixer. A Visualizer joins later.
 			{ "audio.mixer",           RailGroup::Audio },
 			{ "audio.effects",         RailGroup::Audio },
+			// ---- MISC -- removed 2026-11-27 with the Friends list, restored
+			// the same day at the user's request to hold the Steam Overlay
+			// area ("Put it into the "Misc" tab, instead of "Settings"").
+			{ "setup.steam_overlay",   RailGroup::Misc },
 			// ---- SETTINGS -- unchanged by I7 except Cursor's departure.
 			{ "setup.profiles",        RailGroup::Settings },
 			{ "system.general",        RailGroup::Settings },
 			{ "setup.appearance",      RailGroup::Settings },
 			{ "setup.keybinds",        RailGroup::Settings },
-			{ "setup.steam_overlay",   RailGroup::Settings },
 			// ---- OTHER -- unchanged.
 			{ "system.diagnostics",    RailGroup::Other },   // "Compatibility" (2026-11-08)
 			{ "system.log",            RailGroup::Other },
