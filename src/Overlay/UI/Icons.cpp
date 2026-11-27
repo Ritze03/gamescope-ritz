@@ -227,6 +227,15 @@ namespace gamescope::ui
 			Bar( 16.0f, 9.0f, 19.0f, 11.5f ),
 			Bar( 7.0f, 13.5f, 17.0f, 15.5f ) } },
 
+		{ "setup.steam_overlay", 3, {
+			// A window above a window: the game's frame, with a smaller frame and a
+			// filled title bar drawn over its lower right -- Steam's overlay on top of
+			// the game. Distinct from setup.profiles' two equal offset rectangles: here
+			// the back one is wide and plain and only the front one carries a bar.
+			Rect( 2.5f, 4.5f, 17.5f, 15.5f ),
+			Rect( 9.5f, 9.5f, 21.5f, 19.5f ),
+			Bar( 9.5f, 9.5f, 21.5f, 12.0f ) } },
+
 		{ "audio.mixer", 6, {
 			// Two faders: a track above and below each cap. The cap is a
 			// stroked rectangle, NOT a filled one, which is the single

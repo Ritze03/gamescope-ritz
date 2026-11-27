@@ -151,6 +151,48 @@ zombie is left and the main loop never blocks. The helper handles SIGTERM, leave
 loop and closes its X connection; the server releases its keyboard grab and drops the window,
 so input returns to the game, also while the overlay is open.
 
+## The Steam Overlay tab (2026-11-27)
+
+Area `setup.steam_overlay` ("Steam Overlay"), **last in the SETTINGS group** (after Keybinds);
+`src/Overlay/PanelSteamOverlay.{h,cpp}`, registered from `Shell.cpp`. It holds only these two
+switches: no overlay-control rows were built (see "Controlling the overlay (not built)").
+
+| row | binds | applies | shown |
+|---|---|---|---|
+| Steam overlay control | `SteamOverlay_Control()` / `SteamOverlay_SetControl()`, key `overlay.steam_overlay_control`, default Off | next launch; status "Restart to apply" (`Entry::StatusWhen`, orange) while `Control() != ControlAtLaunch()`, the Compatibility rows' mechanism | always |
+| Enable Steam Overlay | `SteamOverlay_Enabled()` / `SteamOverlay_SetEnabled()`, key `overlay.steam_overlay_enabled`, default On | live | only while the **stored** control value is On (`Entry::ShownWhen`) |
+
+Both rows carry `.Key( "overlay.…" )` like the Compatibility switches, so they are global: no
+per-profile dot, no "Reset to inherited", not in a settings export. A `ShownWhen` row is hidden
+from the Shell and also leaves the command palette while hidden (the palette indexes the shown
+set). The row appears the moment control is switched On, even though the dummy window only runs
+after the next launch: with control Off at launch "Enable Steam Overlay" is stored and does
+nothing, which the control row's status already explains.
+
+Why: the user's words: *"Lets call the main toggle 'Steam overlay control'. This enables
+general steam overlay handling, so current setups stay unaffected. If that is enabled, the
+toggle for enabling the steam overlay should be shown. Steam overlay control should be off by
+default."* and, once control is On, "Enable Steam Overlay" defaults to On.
+
+## Controlling the overlay (not built)
+
+The user decided the tab holds only the two switches. What was found about controlling the
+overlay from the dummy window, for whoever picks it up:
+
+- **What `gameoverlayrenderer.so` exports** and could be called from the dummy window:
+  `IsOverlayEnabled`, `BOverlayNeedsPresent`, `SetNotificationPosition`,
+  `SetNotificationInset`. None says "the overlay is open"; `BOverlayNeedsPresent` only says it
+  has something to draw.
+- **Open or closed** comes from Steam callback 331 (`GameOverlayActivated_t`, see "Open and
+  closed"), not from the library.
+- **Opening it from outside** would go through the Steamworks friends interface
+  (`ActivateGameOverlay` and its variants, `ISteamUtils::SetOverlayNotificationPosition` /
+  `SetOverlayNotificationInset` for the corner) or by sending the hotkey; `steam://open/...`
+  URLs were not checked for whether they open the in-game overlay or the desktop client.
+- **Every such call needs the dummy window to exist first**: the library is only loaded in
+  that process, and the calls act on the calling process's game. That is why none was built
+  now; the user said *"i will then test it myself"* and decides afterwards what to add.
+
 ## Environment switches and every knob
 
 (`GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` existed until 2026-11-27 and is gone: the real log proved

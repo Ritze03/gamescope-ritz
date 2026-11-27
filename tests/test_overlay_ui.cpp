@@ -1956,6 +1956,8 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		// The twenty-sixth (2026-11-05): Diagnostics, last in OTHER. See
 		// PanelDiagnostics.cpp and Icons.cpp.
 		"system.diagnostics",
+		// The twenty-seventh (2026-11-27): Steam Overlay, last in SETTINGS.
+		"setup.steam_overlay",
 	};
 	const size_t nAreas = sizeof( pszAreas ) / sizeof( pszAreas[ 0 ] );
 
@@ -2193,6 +2195,7 @@ TEST_CASE( "rail: the seven groups are in the order the request named", "[overla
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
 		{ "setup.keybinds",        ui::RailGroup::Settings },
+		{ "setup.steam_overlay",   ui::RailGroup::Settings },
 		{ "system.diagnostics",    ui::RailGroup::Other },
 		{ "system.log",            ui::RailGroup::Other },
 		{ "system.changelog",      ui::RailGroup::Other },
@@ -2342,7 +2345,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"input.general", "system.autoclicker", "system.null_binds", "system.true_sens",
 		"audio.mixer", "audio.effects",
 		"setup.profiles", "system.general", "setup.appearance",
-		"setup.keybinds",
+		"setup.keybinds", "setup.steam_overlay",
 		"system.diagnostics", "system.log", "system.changelog",
 	};
 	for ( const char *pszId : pszAllAreas )
@@ -4323,4 +4326,33 @@ TEST_CASE( "note wrap: multi-byte characters are never cut in the middle", "[ove
 	};
 	const ui::NoteWrap w = ui::WrapNote( "\xC3\xA4\xC3\xA4\xC3\xA4\xC3\xA4", 2.0f, fnCp, 5 );
 	REQUIRE( w.lines == std::vector<std::string>{ "\xC3\xA4\xC3\xA4", "\xC3\xA4\xC3\xA4" } );
+}
+
+// The Steam Overlay area's pattern (PanelSteamOverlay.cpp, not linked into this binary): a
+// switch shown only while the control switch is On, and a "Restart to apply" status while
+// the stored value differs from the launch value. SteamOverlay.cpp is not linked either,
+// so the launch value is a local here.
+TEST_CASE( "steam overlay tab pattern: gated row and restart status", "[overlay_ui][steam_overlay]" )
+{
+	bool bControl = false, bAtLaunch = false, bEnabled = true;
+	ui::Registry reg;
+	ui::Area &a = reg.Add( "setup.steam_overlay", "Steam Overlay", ui::Section::Setup );
+	a.Switch( "overlay.steam_overlay_control", "Steam overlay control", ui::Bind( &bControl ) )
+		.StatusWhen( [ & ] { return bControl != bAtLaunch ? std::string( "Restart to apply" ) : std::string(); } );
+	a.Switch( "overlay.steam_overlay_enabled", "Enable Steam Overlay", ui::Bind( &bEnabled ) )
+		.ShownWhen( [ & ] { return bControl; } );
+
+	reg.SnapshotShown();
+	REQUIRE( a.EntryCount() == 1 );
+	REQUIRE( a.EntryAt( 0 ).Title() == "Steam overlay control" );
+	REQUIRE( a.EntryAt( 0 ).StatusText().empty() );
+
+	bControl = true;
+	reg.SnapshotShown();
+	REQUIRE( a.EntryCount() == 2 );
+	REQUIRE( a.EntryAt( 1 ).Title() == "Enable Steam Overlay" );
+	REQUIRE( a.EntryAt( 0 ).StatusText() == "Restart to apply" );
+
+	bAtLaunch = true;   // a restart with control On
+	REQUIRE( a.EntryAt( 0 ).StatusText().empty() );
 }

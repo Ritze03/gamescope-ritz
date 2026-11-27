@@ -114,6 +114,9 @@ steamcompmgr loop described below.
 - **Keybinds** — `src/Keybinds.{h,cpp}` (chord grammar, `ProcessKey`, held actions,
   capture), hooked from `wlserver.cpp` (`wlserver_ritz_mouse_hotkey`, the key handlers);
   editor `src/Overlay/PanelKeybinds.cpp`. See [keybinds](../features/keybinds.md).
+- **Steam overlay** — model `src/Overlay/SteamOverlay.{h,cpp}`, helper `src/Apps/gamescopesteamoverlay.cpp`,
+  settings tab `src/Overlay/PanelSteamOverlay.cpp` (area `setup.steam_overlay`). See
+  [steam-overlay](../features/steam-overlay.md).
 - **HUD (FPS display)** — `src/Overlay/FpsDisplay.{h,cpp}` (`DrawReadout`,
   `FpsDisplay_AddLayer`), area `system.hud`. See
   [fps-display](../features/fps-display.md).

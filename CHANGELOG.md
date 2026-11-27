@@ -9,6 +9,10 @@ All notable user-facing changes, newest first. Categories:
 
 ## 2026-11-27
 
+### Added
+- **Steam overlay**: new Settings > Steam Overlay tab; with "Steam overlay control" on,
+  the Steam overlay is shown in its own window instead of inside the game.
+
 ### Removed
 - **Friends list**: removed the Steam friends list and its keybind.
 

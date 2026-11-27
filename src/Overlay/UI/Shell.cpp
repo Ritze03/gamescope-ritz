@@ -63,6 +63,7 @@
 #include "Overlay/PanelFrameGen.h"
 #include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelLagBuffer.h"
+#include "Overlay/PanelSteamOverlay.h"
 
 #include "Config/ConfigManager.h"   // IsSettingsKey(), for overlay_e2_dump_keys
 #include "Overlay/UiBoxPreview.h"       // the Inspector's UI-protection box picture
@@ -962,6 +963,9 @@ namespace gamescope::ui::shell
 			// player's keyboard, not about the game. See
 			// superdoc/features/keybinds.md.
 			PanelKeybinds_RegisterArea( reg );
+			// The Steam Overlay area (2026-11-27), last in SETTINGS: the two global
+			// switches of the dummy-window route. See superdoc/features/steam-overlay.md.
+			PanelSteamOverlay_RegisterArea( reg );
 		}
 
 		Registry &Reg()

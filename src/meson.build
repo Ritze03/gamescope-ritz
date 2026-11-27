@@ -506,6 +506,7 @@ src = [
   'Overlay/PanelLog.cpp',
   'Overlay/PanelChangelog.cpp',
   'Overlay/PanelDiagnostics.cpp',
+  'Overlay/PanelSteamOverlay.cpp',
   'Overlay/Diagnostics.cpp',
   'Overlay/SteamOverlay.cpp',
   'Overlay/ChangelogParse.cpp',
