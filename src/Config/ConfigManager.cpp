@@ -660,6 +660,8 @@ namespace gamescope::config
                     s.overlay.diagnostics_block_scanout = it->get<bool>();
                 if ( auto it = pOverlay->find( "compress_output_images" ); it != pOverlay->end() && it->is_boolean() )
                     s.overlay.compress_output_images = it->get<bool>();
+                s.overlay.steam_overlay_control = JGetBool( *pOverlay, "steam_overlay_control", s.overlay.steam_overlay_control );
+                s.overlay.steam_overlay_enabled = JGetBool( *pOverlay, "steam_overlay_enabled", s.overlay.steam_overlay_enabled );
                 s.overlay.capture_all_keyboard_input = JGetBool( *pOverlay, "capture_all_keyboard_input", s.overlay.capture_all_keyboard_input );
                 s.overlay.keyboard_navigation_enabled = JGetBool( *pOverlay, "keyboard_navigation_enabled", s.overlay.keyboard_navigation_enabled );
                 s.overlay.profiles_filter_other_games = JGetBool( *pOverlay, "profiles_filter_other_games", s.overlay.profiles_filter_other_games );
@@ -1090,6 +1092,8 @@ namespace gamescope::config
                 jOverlay[ "diagnostics_block_scanout" ] = *o.diagnostics_block_scanout;
             if ( o.compress_output_images )
                 jOverlay[ "compress_output_images" ] = *o.compress_output_images;
+            jOverlay[ "steam_overlay_control" ] = o.steam_overlay_control;
+            jOverlay[ "steam_overlay_enabled" ] = o.steam_overlay_enabled;
             jOverlay[ "capture_all_keyboard_input" ] = o.capture_all_keyboard_input;
             jOverlay[ "keyboard_navigation_enabled" ] = o.keyboard_navigation_enabled;
             jOverlay[ "profiles_filter_other_games" ] = o.profiles_filter_other_games;

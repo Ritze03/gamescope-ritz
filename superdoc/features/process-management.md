@@ -12,7 +12,9 @@ performance-overlay message bridge.
   (`WaitForChild`, `WaitForAllChildren`), fd hygiene (`CloseFd`, `CloseAllFds`,
   `RaiseFdLimit`/`RestoreFdLimit`), Steam-overlay `LD_PRELOAD` stashing/restoring
   (`RemoveSteamOverlayFromPreload`, `RestartWithoutSteamOverlay`,
-  `RestoreSteamOverlayPreload`), spawning (`SpawnProcess`, `SpawnProcessInWatchdog`), and
+  `RestoreSteamOverlayPreload`; whether the dummy-window route is on is decided in
+  `Overlay/SteamOverlay.cpp`, `SteamOverlayDummyOverride()` only reads the env override,
+  see [steam-overlay.md](steam-overlay.md)), spawning (`SpawnProcess`, `SpawnProcessInWatchdog`), and
   realtime/nice priority control (`HasCapSysNice`, `SetNice`/`RestoreNice`,
   `SetRealtime`/`RestoreRealtime`).
 - `GamescopeReaperProcess(argc, argv)` (`src/Apps/gamescopereaper.cpp`) is a standalone

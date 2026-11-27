@@ -2,9 +2,11 @@
 
 #include <stdlib.h>
 
+#include <optional>
 #include <string>
 
 #include "Utils/Process.h"
+#include "Overlay/SteamOverlay.h"
 
 // Keep in sync with k_pszStashedOverlayPreload in Process.cpp.
 static constexpr const char *k_pszStashedOverlayPreload = "GAMESCOPE_STEAM_OVERLAY_LD_PRELOAD";
@@ -154,14 +156,38 @@ TEST_CASE("Steam overlay dummy route: the stash is consumed", "[process][steam-o
 	unsetenv( "LD_PRELOAD" );
 }
 
-TEST_CASE("Steam overlay dummy route: switch", "[process][steam-overlay]") {
+TEST_CASE("Steam overlay dummy route: env override", "[process][steam-overlay]") {
 	unsetenv( "GS_RITZ_STEAM_OVERLAY_DUMMY" );
-	REQUIRE( gamescope::Process::SteamOverlayDummyRequested() == false );
+	REQUIRE( !gamescope::Process::SteamOverlayDummyOverride().has_value() );
+	setenv( "GS_RITZ_STEAM_OVERLAY_DUMMY", "", 1 );
+	REQUIRE( !gamescope::Process::SteamOverlayDummyOverride().has_value() );
 	setenv( "GS_RITZ_STEAM_OVERLAY_DUMMY", "1", 1 );
-	REQUIRE( gamescope::Process::SteamOverlayDummyRequested() == true );
+	REQUIRE( gamescope::Process::SteamOverlayDummyOverride() == std::optional<bool>( true ) );
 	setenv( "GS_RITZ_STEAM_OVERLAY_DUMMY", "0", 1 );
-	REQUIRE( gamescope::Process::SteamOverlayDummyRequested() == false );
+	REQUIRE( gamescope::Process::SteamOverlayDummyOverride() == std::optional<bool>( false ) );
 	unsetenv( "GS_RITZ_STEAM_OVERLAY_DUMMY" );
+}
+
+// The override matrix: env unset / 1 / 0 against the stored key off / on.
+TEST_CASE("Steam overlay control: override beats the key", "[process][steam-overlay]") {
+	using gamescope::steamoverlay::ResolveControl;
+	REQUIRE( ResolveControl( std::nullopt, false ) == false );
+	REQUIRE( ResolveControl( std::nullopt, true ) == true );
+	REQUIRE( ResolveControl( true, false ) == true );
+	REQUIRE( ResolveControl( true, true ) == true );
+	REQUIRE( ResolveControl( false, false ) == false );
+	REQUIRE( ResolveControl( false, true ) == false );
+}
+
+// Control Off leaves the game exactly as it was: the route is not active, so the game's
+// environment comes from the non-dummy path (the existing cases above pin it), and the
+// helper never runs whatever "Enable" says.
+TEST_CASE("Steam overlay control: the helper runs only with control at launch AND enabled", "[process][steam-overlay]") {
+	using gamescope::steamoverlay::HelperShouldRun;
+	REQUIRE( HelperShouldRun( false, false ) == false );
+	REQUIRE( HelperShouldRun( false, true ) == false );
+	REQUIRE( HelperShouldRun( true, false ) == false );
+	REQUIRE( HelperShouldRun( true, true ) == true );
 }
 
 TEST_CASE("Steam overlay dummy route: install lookup fallback", "[process][steam-overlay]") {

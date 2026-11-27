@@ -110,6 +110,7 @@
 #include "Overlay/NullBinds.h"
 #include "Overlay/TrueSens.h"
 #include "Overlay/Notifications.h"
+#include "Overlay/SteamOverlay.h"
 #include "FrameGen/AtRefreshExtra.h"
 #include "FrameGen/FrameGenCapture.h"
 #include "FrameGen/FrameGenHost.h"
@@ -10787,9 +10788,44 @@ void StopSteamOverlayDummy()
 {
 	if ( s_nSteamOverlayDummyPid <= 0 )
 		return;
-	// The reaper forwards SIGTERM to the helper, then exits.
-	kill( s_nSteamOverlayDummyPid, SIGTERM );
+	// The reaper forwards SIGTERM to the helper, then exits. Nobody else waits for it
+	// (no SIGCHLD reaping here), so a detached thread collects it: no zombie, and the
+	// main loop never blocks. A reaper that already exited (the helper died on its own)
+	// is only a zombie until this wait.
+	const pid_t nPid = s_nSteamOverlayDummyPid;
 	s_nSteamOverlayDummyPid = 0;
+	kill( nPid, SIGTERM );
+	std::thread( [ nPid ]()
+	{
+		pthread_setname_np( pthread_self(), "gamescope-ovrly" );
+		gamescope::Process::WaitForChild( nPid );
+		s_SteamOverlayLog.infof( "The Steam overlay dummy window (pid %d) is gone.", (int)nPid );
+	}).detach();
+}
+
+// Called once from LaunchNestedChildren and then every steamcompmgr loop pass: starts or
+// stops the helper when "Enable Steam Overlay" (any thread, SteamOverlay_SetEnabled()
+// nudges us) no longer matches what runs. Edge-triggered on purpose: a helper that exited
+// by itself is NOT restarted (no loop), a later Off -> On starts a fresh one. Only this
+// thread forks, kills and touches s_nSteamOverlayDummyPid.
+static bool s_bSteamOverlayDummyLaunched = false;
+static bool s_bSteamOverlayDummyApplied = false;
+static void ReconcileSteamOverlayDummy( bool bLaunched )
+{
+	if ( bLaunched )
+		s_bSteamOverlayDummyLaunched = true;
+	if ( !s_bSteamOverlayDummyLaunched || !gamescope::Process::SteamOverlayDummyActive() )
+		return;
+
+	const bool bWant = gamescope::steamoverlay::HelperShouldRun(
+		gamescope::SteamOverlay_ControlAtLaunch(), gamescope::SteamOverlay_Enabled() );
+	if ( bWant == s_bSteamOverlayDummyApplied )
+		return;
+	s_bSteamOverlayDummyApplied = bWant;
+	if ( bWant )
+		StartSteamOverlayDummy();
+	else
+		StopSteamOverlayDummy();
 }
 
 void LaunchNestedChildren( char **ppPrimaryChildArgv )
@@ -10936,7 +10972,7 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 	}
 
 	// Not at shutdown: KillAllChildren() in main() already takes it down with the rest.
-	StartSteamOverlayDummy();
+	ReconcileSteamOverlayDummy( true );
 }
 
 static gamescope::CTimerFunction g_FPSLimitVRRTimer{ []
@@ -11972,6 +12008,7 @@ steamcompmgr_main(int argc, char **argv)
 		// the steamcompmgr thread that's guaranteed to run every frame
 		// regardless of which ctx (if any) currently has focus.
 		ProcessPendingCursorFallbackPolicy();
+		ReconcileSteamOverlayDummy( false );
 
 		if (GetCurrentFocus() && GetCurrentFocus()->cursor)
 		{

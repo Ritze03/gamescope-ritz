@@ -50,6 +50,7 @@
 #include "Overlay/PanelAudio.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
+#include "Overlay/SteamOverlay.h"
 
 #include "backends.h"
 #include "refresh_rate.h"
@@ -1365,7 +1366,7 @@ int main(int argc, char **argv)
 	// The dummy-window route (superdoc/features/steam-overlay.md): the overlay is drawn
 	// by a helper, so we carry neither the preload nor the Vulkan layer, SDL included.
 	// Only the nested backends and Headless have it; DRM and OpenVR stay as below.
-	const bool bSteamOverlayDummy = gamescope::Process::SteamOverlayDummyRequested() &&
+	const bool bSteamOverlayDummy = gamescope::SteamOverlay_ControlAtLaunch() &&
 		( eLaunchBackend == gamescope::GamescopeBackend::Wayland ||
 		  eLaunchBackend == gamescope::GamescopeBackend::SDL ||
 		  eLaunchBackend == gamescope::GamescopeBackend::Headless );
