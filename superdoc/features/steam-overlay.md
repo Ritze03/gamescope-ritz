@@ -296,7 +296,12 @@ should be about the screen's refresh rate.
 The game has the keyboard, so the dummy window would never see Steam's hotkey. It takes a
 passive `XGrabKey` on the **root** window for the hotkey, with the NumLock and CapsLock
 modifier variants, so the press is delivered to the dummy window's own Xlib event stream,
-where the overlay's hooks look. Source order: env, then `InGameOverlayShortcutKey` in the
+where the overlay's hooks look. A `BadAccess` on the grab is retried from the main loop every
+250 ms for 5 s (logs a `WARNING ... retrying` once, then `hotkey grab succeeded after N
+retries`, or the `ERROR: XGrabKey failed` line after the last try; every variant is ungrabbed
+before a retry). `Why:` a quick Off-then-On starts the new helper while the old one, only sent
+SIGTERM, may still hold the grab; without the retry the hotkey stayed dead until the next
+toggle. Source order: env, then `InGameOverlayShortcutKey` in the
 newest `<steam root>/userdata/<id>/config/localconfig.vdf` (a tab-separated line such as
 `Ctrl<TAB>Shift<TAB>KEY_TAB`), then Shift+Tab. Tokens it maps: `Ctrl`, `Shift`, `Alt`,
 `Super`, `KEY_` names via X keysym names (letters, digits, `Tab`, `F1`..`F24`, `Space`,
@@ -385,8 +390,12 @@ line at start. `callback 331 GameOverlayActivated_t: 8 bytes [..] -> active=0|1`
 `callback -> OPEN|CLOSED`. `a hotkey press was not followed by a 331 within 1 s` means the
 callback is not reaching this pipe (the hotkey path stays in charge until a first 331).
 `FocusIn|FocusOut window .. mode NotifyNormal|NotifyGrab|NotifyUngrab|NotifyWhileGrabbed
-detail ..` (one line each); `KeyPress reached the helper while open: keycode N state 0x..`
-(at most 20 per second) shows which presses the overlay lets through.
+detail ..` (one line each); the per-second `events: KeyPress=N KeyRelease=N` counts show how
+many presses reached the helper's own window (the overlay lets them through while open).
+The log never records which keys were pressed, only how many (the one exception is the
+configured hotkey's own line `hotkey press delivered`). `Why:` the overlay is typed into
+(Steam chat, search) and this log is the file a user hands over with a bug report, so a
+per-key line would be a key log of private typing.
 
 **Settled headless** (stand-ins: a `gameoverlayrenderer.so` whose `BOverlayNeedsPresent()`
 follows a flag file, and a `steamclient.so` whose `Steam_BGetCallback` delivers a 331 when a
@@ -425,8 +434,9 @@ target then stays). `XSelectInput` on a foreign window goes through **libX11's o
 (same `dlopen`/`dlsym` as the grab; the overlay's hook may do anything with a foreign
 window) and selects only the two key masks (a second client selecting `ButtonPress` gets
 `BadAccess`). An X error handler swallows `BadWindow`/`BadMatch`/`BadAccess` from
-`X_ChangeWindowAttributes`, logged once per window, so a destroyed game window cannot kill
-the helper. The passive hotkey grab on the root stays (it keeps the hotkey from the game).
+`X_ChangeWindowAttributes` and only when the error's resource is a foreign window (never the
+helper's own window or the root, so a real failure of its own `XSelectInput` still logs as an
+`X error` line), logged once per window, so a destroyed game window cannot kill the helper. The passive hotkey grab on the root stays (it keeps the hotkey from the game).
 
 **Why** (second real test, hotkey `Ctrl+Shift+Tab`): the first press of each launch reached
 the helper through the passive grab but the overlay did not open; it opened only when the

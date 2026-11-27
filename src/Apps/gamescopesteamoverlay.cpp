@@ -581,18 +581,24 @@ static void SetCard( Display *dpy, Window w, Atom a, unsigned long v )
 }
 
 static bool g_bGrabFailed = false;
+static const int k_nGrabRetryMs = 250, k_nGrabRetryMax = 20; // hotkey grab retries: 250 ms, 5 s in all
 
 // Key mirroring (see "Key mirroring" below): the foreign window whose key events we copy.
 static Window g_winMirror = None;
 static std::set<unsigned long> g_setMirrorErrWindows;
 
+static Window g_winOwn = None, g_winRoot = None; // set once created; errors on these are never swallowed
+
 static int OnXError( Display *, XErrorEvent *e )
 {
 	if ( e->request_code == 33 /* X_GrabKey */ && e->error_code == BadAccess )
-		g_bGrabFailed = true;
+	{
+		g_bGrabFailed = true; // not logged here: the retry loop reports it (one X error per grab variant)
+		return 0;
+	}
 	// XSelectInput is X_ChangeWindowAttributes. A game window can vanish between our query and
 	// our request; that must never be fatal, and it is logged once per window.
-	if ( e->request_code == 2 /* X_ChangeWindowAttributes */ &&
+	if ( e->request_code == 2 /* X_ChangeWindowAttributes */ && e->resourceid != g_winOwn && e->resourceid != g_winRoot &&
 		 ( e->error_code == BadWindow || e->error_code == BadMatch || e->error_code == BadAccess ) )
 	{
 		if ( e->resourceid == g_winMirror )
@@ -1147,6 +1153,8 @@ int main()
 	XMapWindow( dpy, win );
 	XFlush( dpy );
 	Log( "window 0x%lx %ux%u, visual depth %d", win, uW, uH, vi.depth );
+	g_winOwn = win;
+	g_winRoot = root;
 	Log( "window opacity starts %s; key mirroring %s", g_bOpaque ? "opaque (test rectangle)" : "0 (nothing to show)",
 		bMirrorKeys ? "on" : "off (GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS=0)" );
 
@@ -1160,14 +1168,28 @@ int main()
 	// CapsLock (Lock) variants, or the grab would miss with either on.
 	const Hotkey_t hk = ChooseHotkey();
 	const KeyCode kc = XKeysymToKeycode( dpy, hk.sym );
-	if ( kc )
-	{
+	// A BadAccess is retried from the main loop (see k_nGrabRetryMs): a helper that was just
+	// stopped may still hold the grab for a moment. Before a retry we ungrab every variant this
+	// client took, so none is grabbed twice.
+	int nGrabRetries = 0;
+	double flNextGrabRetry = 0;
+	auto TryGrabHotkey = [&]() {
+		g_bGrabFailed = false;
 		for ( unsigned int uExtra : { 0u, (unsigned)Mod2Mask, (unsigned)LockMask, (unsigned)( Mod2Mask | LockMask ) } )
 			XGrabKey( dpy, kc, hk.uMods | uExtra, root, False, GrabModeAsync, GrabModeAsync );
 		XSync( dpy, False );
-		if ( g_bGrabFailed )
-			Log( "ERROR: XGrabKey failed with BadAccess (another client holds the grab on \"%s\"): the overlay CANNOT be opened by hotkey", hk.sText.c_str() );
-		Log( "grabbed hotkey \"%s\" (keycode %u, modifiers 0x%x + NumLock/CapsLock variants)", hk.sText.c_str(), kc, hk.uMods );
+		return !g_bGrabFailed;
+	};
+	if ( kc )
+	{
+		if ( TryGrabHotkey() )
+			Log( "grabbed hotkey \"%s\" (keycode %u, modifiers 0x%x + NumLock/CapsLock variants)", hk.sText.c_str(), kc, hk.uMods );
+		else
+		{
+			Log( "WARNING: XGrabKey failed with BadAccess on \"%s\" (another client holds the grab, maybe a helper that is still exiting): retrying every %d ms for up to %d s",
+				hk.sText.c_str(), k_nGrabRetryMs, k_nGrabRetryMs * k_nGrabRetryMax / 1000 );
+			flNextGrabRetry = NowSeconds() + k_nGrabRetryMs / 1000.0;
+		}
 	}
 	else
 		Log( "no keycode for hotkey \"%s\", nothing grabbed", hk.sText.c_str() );
@@ -1196,7 +1218,6 @@ int main()
 	std::map<int, int> mapCbCounts;
 	double flHotkeyAt = 0; // a hotkey press waiting to see whether a 331 follows
 	double flLast331 = 0;
-	int nKeyLogsThisSecond = 0;
 	int nLastEnabled = -1;
 	double flNextHeartbeat = 0;
 	bool bRedraw = true;
@@ -1217,6 +1238,24 @@ int main()
 			poll( &pfd, 1, opacity.bActive && pfnNeeds ? ( bLastNeeds ? g_nActivePendingMs : g_nActiveIdleMs ) : nPollMs );
 
 		const double flNow = NowSeconds();
+		if ( flNextGrabRetry && flNow >= flNextGrabRetry )
+		{
+			for ( unsigned int uExtra : { 0u, (unsigned)Mod2Mask, (unsigned)LockMask, (unsigned)( Mod2Mask | LockMask ) } )
+				XUngrabKey( dpy, kc, hk.uMods | uExtra, root );
+			nGrabRetries++;
+			if ( TryGrabHotkey() )
+			{
+				Log( "hotkey grab succeeded after %d retries (\"%s\", keycode %u)", nGrabRetries, hk.sText.c_str(), kc );
+				flNextGrabRetry = 0;
+			}
+			else if ( nGrabRetries >= k_nGrabRetryMax )
+			{
+				Log( "ERROR: XGrabKey failed with BadAccess (another client holds the grab on \"%s\"): the overlay CANNOT be opened by hotkey", hk.sText.c_str() );
+				flNextGrabRetry = 0;
+			}
+			else
+				flNextGrabRetry = flNow + k_nGrabRetryMs / 1000.0;
+		}
 		bool bHotkeyFired = false;
 		while ( XPending( dpy ) )
 		{
@@ -1244,11 +1283,7 @@ int main()
 					break;
 				}
 				case KeyPress:
-					if ( InputHeld( open ) && nKeyLogsThisSecond < 20 )
-					{
-						nKeyLogsThisSecond++;
-						Log( "KeyPress reached the helper while open: keycode %u state 0x%x", ev.xkey.keycode, ev.xkey.state );
-					}
+					// Never log which key (privacy): the per-second line counts them in events:.
 					if ( ev.xkey.keycode == kc && ( ev.xkey.state & ~( Mod2Mask | LockMask ) ) == hk.uMods )
 					{
 						bHotkeyFired = true;
@@ -1261,7 +1296,7 @@ int main()
 						UpdateMirrorTarget( dpy, root, win );
 					break;
 				case ConfigureNotify:
-					if ( ev.xconfigure.window == root ||ev.xconfigure.window == win )
+					if ( ev.xconfigure.window == root || ev.xconfigure.window == win )
 					{
 						XGetWindowAttributes( dpy, root, &rootAttr );
 						if ( (unsigned)rootAttr.width != uW || (unsigned)rootAttr.height != uH )
@@ -1407,7 +1442,6 @@ int main()
 			mapCounts.clear();
 			mapCbCounts.clear();
 			uNeedsTrue = 0;
-			nKeyLogsThisSecond = 0;
 			uPresentsThisSecond = 0;
 			flSecondStart = flNow;
 		}
