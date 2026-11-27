@@ -53,5 +53,6 @@ overlay.
 
 ## Related links
 
+- [steam-overlay](steam-overlay.md) — the `gamescopesteamoverlay` helper (started like mangoapp, under the reaper) and who carries Steam's overlay preload.
 - [build-and-tooling](build-and-tooling.md) — Meson build that produces the `gamescopereaper` binary alongside the main executable.
 - [scripting-convars](scripting-convars.md) — `cv_mangoapp_use_output_timing` is a `ConVar<bool>` consumed by `mangoapp_output_update`.

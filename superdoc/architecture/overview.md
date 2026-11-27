@@ -412,6 +412,10 @@ in `src/Backends/OpenVRBackend.cpp` now takes focus on the visible edge) and
 
 - **Friends list / joining a friend** — [steam-friends](../features/steam-friends.md):
   `src/SteamFriends.cpp` (`Snapshot`, `Join`), `src/Overlay/PanelFriends.cpp`.
+- **Steam overlay (dummy window)** — [steam-overlay](../features/steam-overlay.md): helper
+  executable `src/Apps/gamescopesteamoverlay.cpp`, launch/env handling in
+  `src/Utils/Process.cpp` (`ComputeGameOverlayEnv`, `ComputeDummyOverlayEnv`), the re-exec
+  point in `src/main.cpp`, `StartSteamOverlayDummy()` in `src/steamcompmgr.cpp`.
 
 New to the codebase: read this page, then
 [compositing-vulkan](../features/compositing-vulkan.md) (the render core),

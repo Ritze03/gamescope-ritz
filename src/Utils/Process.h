@@ -4,6 +4,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sys/types.h>
@@ -58,6 +59,45 @@ namespace gamescope::Process
     // Puts a stashed Steam overlay back into LD_PRELOAD for our children to inherit.
     // Returns whether there was anything stashed to put back.
     bool RestoreSteamOverlayPreload();
+
+    // ---- Steam overlay "dummy window" route (superdoc/features/steam-overlay.md) ----
+    // Under it the overlay lives in a helper process, never in us and never in the game.
+
+    // THE one question "is the dummy route on?". Test-only for now: env
+    // GS_RITZ_STEAM_OVERLAY_DUMMY=1. ponytail: step I3 re-points this at a config key.
+    bool SteamOverlayDummyRequested();
+
+    // main() decides once, after the backend is known (the route only exists on
+    // Wayland, SDL and Headless), and every later caller just asks.
+    void SetSteamOverlayDummyActive( bool bActive );
+    bool SteamOverlayDummyActive();
+
+    // What one process should see of the overlay: its LD_PRELOAD (nullopt = unset)
+    // and whether the Vulkan layer VK_LAYER_VALVE_steam_overlay is on for it.
+    struct SteamOverlayEnv_t
+    {
+        std::optional<std::string> oLdPreload;
+        bool bVulkanLayer = false;
+    };
+
+    // Pure helpers, no environment access (tests drive them directly).
+    std::string StripOverlayFromPreloadList( std::string_view svPreload );
+    std::string OverlayEntriesOfPreloadList( std::string_view svPreload );
+    // First existing <root>/steamrt64|ubuntu12_64/gameoverlayrenderer.so, or "".
+    std::string FindSteamOverlayRenderer( const std::vector<std::string> &vecSteamRoots );
+    // The game and every other child: no overlay preload entry, layer off.
+    SteamOverlayEnv_t ComputeGameOverlayEnv( const std::optional<std::string> &oLdPreload );
+    // The dummy window: only the overlay entries (from the stash, else LD_PRELOAD, else
+    // sFallbackRenderer if non-empty), layer on.
+    SteamOverlayEnv_t ComputeDummyOverlayEnv( const std::optional<std::string> &oLdPreload,
+        const std::optional<std::string> &oStash, const std::string &sFallbackRenderer );
+
+    // Environment-touching wrappers around the above.
+    void ApplySteamOverlayEnv( const SteamOverlayEnv_t &env );
+    // Reads and consumes the stash (unlike RestoreSteamOverlayPreload it leaves LD_PRELOAD alone).
+    std::optional<std::string> TakeStashedOverlayPreload();
+    // Where this machine's Steam installs usually are (under $HOME, plus the Steam-set override).
+    std::vector<std::string> SteamRootCandidates();
 
     // nExtraKeepFds: issue #39 -- fds (e.g. a log-capture pipe's write end)
     // that must survive CloseAllFds() in the forked child so fnPreambleInChild

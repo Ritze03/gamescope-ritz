@@ -802,6 +802,9 @@ endif
 
 executable('gamescopereaper', ['Apps/gamescopereaper.cpp', gamescope_core_src], gamescope_version, dependencies: [cap_dep], install:true )
 
+# The Steam overlay's dummy window (superdoc/features/steam-overlay.md): plain Xlib + Vulkan, nothing of ours.
+executable('gamescopesteamoverlay', ['Apps/gamescopesteamoverlay.cpp'], dependencies: [dep_x11, vulkan_dep], install: true )
+
 benchmark_dep = dependency('benchmark', required: get_option('benchmark'), disabler: true)
 executable('gamescope_color_microbench', ['color_bench.cpp', 'color_helpers.cpp'], gamescope_core_src, gamescope_version, dependencies:[benchmark_dep, glm_dep, cap_dep])
 

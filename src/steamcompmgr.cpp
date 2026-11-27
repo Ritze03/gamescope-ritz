@@ -10715,14 +10715,78 @@ static gamescope::ConVar<std::string> cv_mouse_relative_filter_appids( "mouse_re
 	s_uRelativeMouseFilteredAppids = std::move( uFilterAppids );
 }, true);
 
+// The dummy window's start/stop. The overlay preload we were launched with is taken
+// from its stash once, in LaunchNestedChildren, and kept here for later (re)starts.
+static std::optional<std::string> s_oDummyOverlayStash;
+static pid_t s_nSteamOverlayDummyPid = 0;
+static LogScope s_SteamOverlayLog( "steam_overlay" );
+
+void StartSteamOverlayDummy()
+{
+	if ( !gamescope::Process::SteamOverlayDummyActive() || s_nSteamOverlayDummyPid > 0 )
+		return;
+
+	static const char *k_pszDummyExe = "gamescopesteamoverlay";
+	if ( !gamescope::Process::ExecutableExists( k_pszDummyExe ) )
+	{
+		s_SteamOverlayLog.warnf( "\"%s\" not found in PATH, the Steam overlay dummy window is not started.", k_pszDummyExe );
+		return;
+	}
+
+	// Gamescope's own environment is the game's (no overlay); only the dummy window
+	// gets the overlay entries back. The fallback lookup covers a launcher wrapper
+	// that cleared LD_PRELOAD.
+	const char *pszPreload = getenv( "LD_PRELOAD" );
+	gamescope::Process::SteamOverlayEnv_t env = gamescope::Process::ComputeDummyOverlayEnv(
+		pszPreload ? std::optional<std::string>( pszPreload ) : std::nullopt, s_oDummyOverlayStash,
+		gamescope::Process::FindSteamOverlayRenderer( gamescope::Process::SteamRootCandidates() ) );
+
+	// The overlay values go to the helper in private variables, NOT in LD_PRELOAD and the
+	// Vulkan-layer pair: gamescopereaper sits between us and the helper and would otherwise
+	// load the overlay too (a second hooked process of the same game). The helper moves
+	// them into place and re-execs itself once. Our own environment, inherited by the
+	// reaper, stays the game's (no overlay). The fork's WSI layer is not enabled for the
+	// helper: plain Xwayland is the one measured path.
+	char *ppArgv[] = { (char *)k_pszDummyExe, NULL };
+	s_nSteamOverlayDummyPid = gamescope::Process::SpawnProcessInWatchdog( ppArgv, false, [ env ]()
+	{
+		setenv( "GS_RITZ_STEAM_OVERLAY_HANDOVER", "1", 1 );
+		if ( env.oLdPreload )
+			setenv( "GS_RITZ_STEAM_OVERLAY_PRELOAD", env.oLdPreload->c_str(), 1 );
+		else
+			unsetenv( "GS_RITZ_STEAM_OVERLAY_PRELOAD" );
+#ifdef GAMESCOPE_RITZ_WSI_LAYER_JSON
+		unsetenv( GAMESCOPE_RITZ_WSI_ENABLE_ENV );
+#endif
+		unsetenv( "ENABLE_GAMESCOPE_WSI" );
+	});
+	s_SteamOverlayLog.infof( "Started the Steam overlay dummy window (pid %d, overlay preload %s).",
+		(int)s_nSteamOverlayDummyPid, env.oLdPreload ? env.oLdPreload->c_str() : "none" );
+}
+
+void StopSteamOverlayDummy()
+{
+	if ( s_nSteamOverlayDummyPid <= 0 )
+		return;
+	// The reaper forwards SIGTERM to the helper, then exits.
+	kill( s_nSteamOverlayDummyPid, SIGTERM );
+	s_nSteamOverlayDummyPid = 0;
+}
+
 void LaunchNestedChildren( char **ppPrimaryChildArgv )
 {
 	// We could just run this inside the child process,
 	// but we might as well just run it here at this point.
 	// and affect all future child processes.
 	{
+		if ( gamescope::Process::SteamOverlayDummyActive() )
+		{
+			// The dummy route (main() already stripped our environment, which is the
+			// game's): the stash is for the dummy window alone, never the game.
+			s_oDummyOverlayStash = gamescope::Process::TakeStashedOverlayPreload();
+		}
 		// We draw the overlay ourselves when we present with a swapchain, otherwise the game does.
-		if ( !gamescope::Process::RestoreSteamOverlayPreload() && GetBackend()->UsesVulkanSwapchain() )
+		else if ( !gamescope::Process::RestoreSteamOverlayPreload() && GetBackend()->UsesVulkanSwapchain() )
 			gamescope::Process::RemoveSteamOverlayFromPreload();
 
 		unsetenv( "ENABLE_VKBASALT" );
@@ -10851,6 +10915,9 @@ void LaunchNestedChildren( char **ppPrimaryChildArgv )
 		// The Steam overlay would latch onto mangoapp's own swapchain as if it were the game.
 		gamescope::Process::SpawnProcessInWatchdog( ppMangoappArgv, true, gamescope::Process::RemoveSteamOverlayFromPreload );
 	}
+
+	// Not at shutdown: KillAllChildren() in main() already takes it down with the rest.
+	StartSteamOverlayDummy();
 }
 
 static gamescope::CTimerFunction g_FPSLimitVRRTimer{ []

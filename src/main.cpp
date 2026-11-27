@@ -1370,8 +1370,24 @@ int main(int argc, char **argv)
 	gamescope::GamescopeBackend eLaunchBackend = eCurrentBackend;
 	if ( eLaunchBackend == gamescope::GamescopeBackend::Auto )
 		eLaunchBackend = auto_select_backend();
-	if ( eLaunchBackend != gamescope::GamescopeBackend::SDL )
+
+	// The dummy-window route (superdoc/features/steam-overlay.md): the overlay is drawn
+	// by a helper, so we carry neither the preload nor the Vulkan layer, SDL included.
+	// Only the nested backends and Headless have it; DRM and OpenVR stay as below.
+	const bool bSteamOverlayDummy = gamescope::Process::SteamOverlayDummyRequested() &&
+		( eLaunchBackend == gamescope::GamescopeBackend::Wayland ||
+		  eLaunchBackend == gamescope::GamescopeBackend::SDL ||
+		  eLaunchBackend == gamescope::GamescopeBackend::Headless );
+	gamescope::Process::SetSteamOverlayDummyActive( bSteamOverlayDummy );
+
+	if ( bSteamOverlayDummy || eLaunchBackend != gamescope::GamescopeBackend::SDL )
 		gamescope::Process::RestartWithoutSteamOverlay( argv );
+
+	// Before any Vulkan instance exists (vulkan_init is later). Runs on both sides of
+	// the re-exec; the stash, not LD_PRELOAD, is what the dummy window is later fed from.
+	if ( bSteamOverlayDummy )
+		gamescope::Process::ApplySteamOverlayEnv( gamescope::Process::ComputeGameOverlayEnv(
+			getenv( "LD_PRELOAD" ) ? std::optional<std::string>( getenv( "LD_PRELOAD" ) ) : std::nullopt ) );
 
 	// Print this after the re-exec, so we only announce ourselves once.
 	gamescope::PrintVersion();
