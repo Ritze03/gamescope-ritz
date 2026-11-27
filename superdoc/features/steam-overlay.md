@@ -114,15 +114,16 @@ The switch is deliberately temporary: step I3 replaces it with a config key. (`G
 | `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK` | off | `1`: never load `steamclient.so`; open/closed is the plain hotkey toggle (for comparing) |
 | `GS_RITZ_STEAM_OVERLAY_INPUT` | `grab` | how the helper takes input while the overlay is open: `grab` (`STEAM_INPUT_FOCUS=2` plus an active keyboard grab, the game keeps its X focus) or `focus` (`STEAM_INPUT_FOCUS=1`, the game loses X focus); see "Input modes" |
 | `GS_RITZ_STEAMCLIENT` | search `<steam root>/linux64/steamclient.so` | full path of the `steamclient.so` the helper loads for the open/closed callback (same override as the main program) |
-| `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter |
+| `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter; counts as "something to show", so the window stays opaque the whole time |
+| `GS_RITZ_STEAM_OVERLAY_ACTIVE_POLL_MS` | `1` | main-loop wait in ms while the overlay is active and a frame is pending (4 ms, or this if larger, when none is); `16` reproduces the old ~60 fps limit; see "Overlay frame rate" |
+| `GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS` | on | `0`: no key mirroring (behaviour as before it existed: no root property selection, no foreign-window selection); see "Key mirroring" |
 
 ## How the window works
 
 - One 32-bit ARGB window covering the root window, follows root size changes. Properties
   `STEAM_OVERLAY=1` (gamescope composites it above the game and never treats it as the game
-  or focus window, `DetermineAndApplyFocus`) and `STEAM_INPUT_FOCUS=0`; opacity is left at
-  the default (opaque), because notifications (achievement toasts) show with the overlay
-  closed.
+  or focus window, `DetermineAndApplyFocus`) and `STEAM_INPUT_FOCUS=0`;
+  `_NET_WM_WINDOW_OPACITY` follows the "Window opacity" rule below (0 while nothing shows).
 - Vulkan swapchain: `B8G8R8A8_UNORM`, FIFO, composite alpha PRE_MULTIPLIED (Mesa offers it
   for a 32-bit-visual window), cleared to RGBA 0,0,0,0 each present.
   **Measured (headless, RADV): the game shows through everywhere nothing is drawn, both with
@@ -139,8 +140,61 @@ The switch is deliberately temporary: step I3 replaces it with a config key. (`G
 - Idle cost measured headless with a stand-in library: 1 present/s, ~63 wake-ups/s (the
   16 ms poll), CPU below the 1% tick resolution, ~44 MB RSS.
 - Test drawing: `TEST_RECT=1` clears the top-left quarter to (255, 76, 0), opaque
-  (`vkCmdClearAttachments`).
+  (`vkCmdClearAttachments`); the window starts and stays opaque then.
+
+### Window opacity (2026-11-27)
+
+The window writes `_NET_WM_WINDOW_OPACITY` (CARDINAL 32) itself: **0 while it has nothing to
+show, `0xffffffff` while it has.** It starts at 0, set before the window is mapped
+(gamescope reads the property at map), so the game is never held back at launch.
+"Has something to show" = the input is held (open, confirmed or provisional), or the test
+rectangle is on, or the overlay asks for frames *continuously* (a notification toast):
+`BOverlayNeedsPresent()` true on at least 4 polls within 250 ms. The idle pattern (one
+needs-present about every 2 s) does not count, or tearing would switch off and on every 2 s.
+It is lowered 500 ms after the last moment any of that held (the closing animation is still
+presented). Constants `k_nBusyPolls`, `k_flBusyWindow`, `k_flLowerAfter`
+(`OpacityPolicy_t`). Raised before the input is taken and before the first visible frame. Each
+change logs `window opacity -> opaque (open | test rectangle | overlay wants frames)` or
+`-> 0 (nothing to show)`. A toast loses its first ~50 ms of fade-in; accepted.
+
+*Why:* `steamcompmgr.cpp` `bHasOverlay` ("HACK: Disable tearing if we have an overlay", reads
+`overlayWindow->opacity`) forces sync flips, switches off frame generation's above-refresh
+pacing and counts for Auto V-Sync. The always-opaque window made that true for the whole
+session: with tearing or frame generation above the refresh in use, the game would have been
+held to the refresh for no reason. (This was first read as the user's "capped to 60 fps"
+report; the user then clarified that the *game* is fine and the *overlay* is capped, which is
+"Overlay frame rate" below.) What gamescope does with an
+opacity-0 overlay window (read from the code): the property is read at map and on
+`PropertyNotify` (`handle_property_notify`), the window is still picked as `overlayWindow`
+(`opacity >= maxOpacity` with 0 >= 0) and still takes `STEAM_INPUT_FOCUS` (focus ignores
+opacity), but `paint_all` skips it (`overlay->opacity` test) and the capture path too, so no
+layer is composited; its commits no longer force a repaint (`w->opacity != TRANSLUCENT`
+guard); a live change sets `hasRepaintNonBasePlane` when a game is focused. Whether the cap
+really lifts on a tearing-capable host is **unproven** (headless has no tearing).
 - Exits when the X connection goes away (IO error handler) or on SIGTERM.
+
+### Overlay frame rate (2026-11-27)
+
+The user: "Not the game is capped, thats fine. The overlay is capped" (to 60 fps). The log
+showed `presents=58 needsTrue=58` per second while open or while a toast animated, and
+`BOverlayNeedsPresent` flipping true again within 2 ms of every present: the overlay always
+had the next frame ready and the only limit was the helper's own loop, one present per 16 ms
+poll turn. **Rule:** while *active* (input held, or the overlay wants frames continuously, the
+same state that raises the opacity) the loop waits 1 ms when a frame is pending and 4 ms
+otherwise (`g_nActivePendingMs`, `g_nActiveIdleMs`; knob `GS_RITZ_STEAM_OVERLAY_ACTIVE_POLL_MS`
+sets the first, the second is `max(it, 4)`), and **the FIFO swapchain does the pacing**: with
+a frame ready every turn, the next acquire blocks until the compositor has released an image,
+so presents follow gamescope's refresh. Idle and closed it stays the 16 ms poll, one present
+when asked. Measured headless (stand-in library reporting needs-present continuously, RADV):
+`-r 60` gave 60 presents/s, `-r 144` gave 144 (16 ms wait at `-r 144`: 90 to 94), about 2
+wake-ups per present, helper CPU about 1%; idle unchanged (1 present/s). So no time cap and
+no refresh lookup was needed. The compositor side: a commit on the overlay window sets
+`hasRepaintNonBasePlane` (`steamcompmgr.cpp`, commit handling for `overlayWindow` when
+`opacity != TRANSLUCENT`, ~9013-9016) and the paint scheduler paints on it (~11838), so the
+overlay animates over an idle or paused game by itself. Note that an opacity-0 window's commits
+do not (that is why raising the opacity first matters). Whether it really reaches the user's
+refresh rate is for the user to read: the `presents=N` of the per-second line while open
+should be about the screen's refresh rate.
 
 ### Hotkey
 
@@ -170,13 +224,26 @@ a window with it set takes input even at opacity 0 ("The window mechanism" below
 0 = closed) whenever the overlay opens or closes, by whatever means (hotkey, Esc, its close
 button, Steam opening it itself).
 
-- Until the first 331 of the session has arrived, the **hotkey toggles** (press: closed to
-  open, next press: open to closed). Ignored, with one log line, when there is nothing to
-  give input to: no overlay library loaded, or `IsOverlayEnabled()` returns false.
-- From the first 331 on, **callbacks are the only thing that changes the state**; hotkey
-  presses are only logged ("hotkey press ignored, callbacks decide").
-- So a failed connection (no library, missing symbol, pipe 0, user 0: each logged once)
-  degrades to the plain hotkey toggle, and the helper never exits because of Steam.
+- A 331 always decides: active=1 is OPEN (it confirms a provisional take-over), active=0 is
+  CLOSED.
+- **Callbacks connected: provisional input.** A hotkey press that *reaches* the helper means
+  the overlay library did not recognise it (it swallows the ones it does; in the second real
+  test not one recognised press ever arrived after the first 331). While CLOSED such a press
+  takes the input **provisionally** (grab or focus per input mode, exactly as OPEN) and starts
+  a 3 s deadline (`k_flProvisionalSecs`, no knob). A 331 active=1 before it confirms; if none
+  comes the helper gives the input back (ungrab first, then `STEAM_INPUT_FOCUS` 0) and logs
+  `provisional input released: no GameOverlayActivated_t within 3 s`. A press while
+  provisional releases at once. A press while OPEN is only logged. This holds before and
+  after the first 331. *Why provisional and not "do nothing":* in both launches of the second
+  test the overlay opened exactly when Ctrl, Shift and Tab then reached it through the active
+  grab, so taking the input is the working fallback if key mirroring does not fix the first
+  press; *why a deadline:* the first version left the input on the helper from the press to
+  the 331 (about 2 s) with no overlay, and would have kept it forever had the overlay not
+  opened (the user: "the input is on the steam overlay, but it isnt open").
+- **No callbacks** (no library, missing symbol, pipe 0, user 0, `NO_CALLBACK=1`; each logged
+  once): the plain hotkey toggle (press: closed to open, next press: open to closed; ignored
+  with one log line when no overlay library is loaded or `IsOverlayEnabled()` is false). The
+  helper never exits because of Steam.
 
 **The callback pipe.** After startup, with an overlay library loaded, the helper `dlopen`s
 `steamclient.so` (`RTLD_LAZY | RTLD_LOCAL`; path `GS_RITZ_STEAMCLIENT`, else
@@ -244,6 +311,42 @@ A hotkey press seen while open produced `FocusOut ... NotifyGrab` and
 `FocusOut/FocusIn ... NotifyUngrab` on the dummy window: those are the passive grab
 activating, not focus changes by gamescope.
 
+### Key mirroring (2026-11-27)
+
+**What.** While closed the helper selects `KeyPress|KeyRelease` on the window that has the X
+input focus (the game's; gamescope sets it with `XSetInputFocus`, `steamcompmgr.cpp`
+~4764, and writes `_NET_ACTIVE_WINDOW` on the root right after). X delivers a copy of every
+key event of the game to the helper's normal event loop, so the overlay library's Xlib hooks
+see them; the game still gets its own. No grab, no synthetic event, no added latency. The
+helper itself ignores them (event window neither its own nor the root) and only counts them:
+per-second line `mirrored: KeyPress=N KeyRelease=N`, never a keycode (that would be a key log
+of the user's typing). Target changes log `key mirroring: now on window 0x...`.
+
+**How the target is tracked.** `PropertyChangeMask` on the root, re-query `XGetInputFocus` on
+a `_NET_ACTIVE_WINDOW` change, plus a once-per-second re-query as a safety net (and for a game
+window that does not exist yet at start). On a change the old window is deselected and the
+new one selected; never None, PointerRoot, the root or the helper's own window (the old
+target then stays). `XSelectInput` on a foreign window goes through **libX11's own function**
+(same `dlopen`/`dlsym` as the grab; the overlay's hook may do anything with a foreign
+window) and selects only the two key masks (a second client selecting `ButtonPress` gets
+`BadAccess`). An X error handler swallows `BadWindow`/`BadMatch`/`BadAccess` from
+`X_ChangeWindowAttributes`, logged once per window, so a destroyed game window cannot kill
+the helper. The passive hotkey grab on the root stays (it keeps the hotkey from the game).
+
+**Why** (second real test, hotkey `Ctrl+Shift+Tab`): the first press of each launch reached
+the helper through the passive grab but the overlay did not open; it opened only when the
+next press arrived as Ctrl, Shift, Tab through the active grab. Every later press was
+swallowed by the overlay's hook before the helper saw it. **Hypothesis (unproven; only real
+Steam can show it):** the library keeps its own key state from the events in its hooks and
+ignores the event's `state` field; while closed the helper only ever got the Tab press, so
+it never saw Ctrl and Shift go down. (An alternative that fits too: it ignores the hotkey
+until its window has had any keyboard or focus activity. Mirroring covers both.)
+
+**Known limit (unproven).** X stops propagating a key event at the first window where some
+client selected it. A game that selected key events only on an *ancestor* of the focus window
+would lose them to our selection. In gamescope's Xwayland a client toplevel's only ancestor
+is the root, so it should not happen; `GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS=0` is the way out.
+
 ### Input modes: `grab` (default) and `focus`
 
 **The problem.** The user's first real test said "it works, but it freezes the game". Besides
@@ -308,10 +411,22 @@ The `focus` column confirms the diagnosis (the game sees a plain focus loss); `g
 no `NotifyNormal` event at all. Without the stand-in overlay library, `grab` mode ignores
 the hotkey exactly as before and takes no grab.
 
+**Proven by the second real test (2026-11-27):** 331 is delivered to the helper's own pipe;
+the overlay accepts keys delivered through the helper's active grab (it opened and closed
+about 30 times, every cycle driven by a 331); input returns to the game on every close;
+notifications (toasts) do not take input.
+
 **Unproven until the next real test:**
-- whether the overlay's own hooks accept key events delivered through the helper's active
-  grab (they see them in the helper's Xlib event stream, as for any key, but the stand-in
-  cannot say what the real library does with them);
+- that key mirroring makes the very first hotkey press open the overlay (the hypothesis
+  above), and that the provisional-input fallback works against the real library;
+- that the opacity-0 window lets a tearing or frame-generation game run above the refresh
+  again, and that no toast or first open frame is visibly lost;
+- that the overlay itself now moves at the screen's refresh (`presents=N` while open);
+- what to read in the log: first press: `key mirroring: now on window ...`, per-second
+  `mirrored: KeyPress=N`, then `callback 331 ... active=1` right after the press (worked), or
+  `input taken PROVISIONALLY` then `provisional input released: no GameOverlayActivated_t
+  within 3 s` (fallback, nothing opened); opacity lines `window opacity -> opaque (...)` /
+  `-> 0 (nothing to show)`;
 - whether a Unity game treats `FocusOut mode NotifyGrab` as a focus loss (SDL ignores it);
 - pointer behaviour for a game holding a pointer lock: the cursor constraint is applied to
   the **keyboard** focus surface (`wlserver_keyboardfocus` with `bConstrain`,
@@ -338,18 +453,14 @@ FPS HUD (6), toasts (7) and the settings overlay. Frame generation only substitu
 window's layer is never smeared. The alpha mode for overlay windows is premultiplied
 (`cv_overlay_unmultiplied_alpha` is only set on some DRM paths).
 
-**Cost of the always-visible window (measured by reading the code at this commit; the
-planned cure is not implemented).** While the overlay window has non-zero opacity,
+**Cost of a visible window (read from the code; the cure is "Window opacity" above, since
+2026-11-27, so this holds only while the window is opaque).** While the overlay window has non-zero opacity,
 `steamcompmgr.cpp` `bHasOverlay` (~11679) is true. That forces `FlipType::Normal` (no
 tearing, ~11739-11740), skips frame generation's async-flip path (~11727), and its tear
 present / the auto-V-sync async path (~11793-11808, ~11881, ~11890). Each heartbeat commit
 also forces a compose (`hasRepaintNonBasePlane`, ~9020-9038). An extra full-screen layer is
-composited. The dummy window is always mapped and opaque, so all of this holds for the whole
-session, and the first real test runs that way on purpose, to keep variables out of it.
-**Planned cure for the next step:** the helper writes `_NET_WM_WINDOW_OPACITY = 0` while
-idle and closed and restores it when `BOverlayNeedsPresent()` is true or the overlay is open
-(every gate tests `->opacity`; input focus does not depend on opacity; toasts need the
-`BOverlayNeedsPresent()` branch). Line numbers will drift; search the symbols.
+composited. Until 2026-11-27 the window was always opaque, so all of this held for the whole
+session. Line numbers will drift; search the symbols.
 
 ## Testing without Steam
 

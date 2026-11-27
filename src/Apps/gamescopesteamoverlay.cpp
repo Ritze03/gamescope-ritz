@@ -33,7 +33,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <deque>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -571,7 +573,7 @@ static bool PresentFrame( Vk_t &v, bool bTestRect, bool *pbRecreate )
 
 // ---------------------------------------------------------------- X helpers
 
-static Atom g_atomInputFocus, g_atomOverlay;
+static Atom g_atomInputFocus, g_atomOverlay, g_atomOpacity, g_atomActiveWindow;
 
 static void SetCard( Display *dpy, Window w, Atom a, unsigned long v )
 {
@@ -580,10 +582,25 @@ static void SetCard( Display *dpy, Window w, Atom a, unsigned long v )
 
 static bool g_bGrabFailed = false;
 
+// Key mirroring (see "Key mirroring" below): the foreign window whose key events we copy.
+static Window g_winMirror = None;
+static std::set<unsigned long> g_setMirrorErrWindows;
+
 static int OnXError( Display *, XErrorEvent *e )
 {
 	if ( e->request_code == 33 /* X_GrabKey */ && e->error_code == BadAccess )
 		g_bGrabFailed = true;
+	// XSelectInput is X_ChangeWindowAttributes. A game window can vanish between our query and
+	// our request; that must never be fatal, and it is logged once per window.
+	if ( e->request_code == 2 /* X_ChangeWindowAttributes */ &&
+		 ( e->error_code == BadWindow || e->error_code == BadMatch || e->error_code == BadAccess ) )
+	{
+		if ( e->resourceid == g_winMirror )
+			g_winMirror = None;
+		if ( g_setMirrorErrWindows.insert( e->resourceid ).second )
+			Log( "key mirroring: X error %d on window 0x%lx (swallowed, logged once per window)", e->error_code, e->resourceid );
+		return 0;
+	}
 	Log( "X error: request %d.%d code %d", e->request_code, e->minor_code, e->error_code );
 	return 0;
 }
@@ -629,6 +646,7 @@ static bool g_bKbGrabbed = false;
 static int ( *g_pfnGrabKeyboard )( Display *, Window, Bool, int, int, Time ) = XGrabKeyboard;
 static int ( *g_pfnUngrabKeyboard )( Display *, Time ) = XUngrabKeyboard;
 static const char *g_pszGrabPath = "plain Xlib call (through the overlay's hook if it is loaded)";
+static int ( *g_pfnSelectInput )( Display *, Window, long ) = XSelectInput;
 
 static void ResolveRealGrabFunctions()
 {
@@ -644,6 +662,10 @@ static void ResolveRealGrabFunctions()
 			g_pfnUngrabKeyboard = pfnUngrab;
 			g_pszGrabPath = "libX11's own function (past the overlay's hook)";
 		}
+		// Same reason for XSelectInput on a foreign window: we do not know what the overlay's hook
+		// does with a window that is not ours.
+		if ( auto pfnSelect = (int ( * )( Display *, Window, long ))dlsym( pX11, "XSelectInput" ) )
+			g_pfnSelectInput = pfnSelect;
 	}
 }
 
@@ -699,6 +721,129 @@ static void ApplyInput( Display *dpy, Window win, bool bOpen )
 	XFlush( dpy );
 	Log( "STEAM_INPUT_FOCUS -> %lu", ulMode );
 }
+
+// ---------------------------------------------------------------- key mirroring
+
+// While the overlay is closed the helper only ever receives the hotkey's last key (the passive
+// grab covers just that), so the overlay library, which keeps its own key state from the events
+// in its Xlib hooks, never sees the modifiers go down. We therefore also select
+// KeyPress|KeyRelease on the window that has the X input focus (the game's): X delivers a copy
+// of every key event there to us as well, the game still gets its own, nothing is grabbed or
+// synthesised. Several clients may select key events on one window; we never select anything
+// else (a second client selecting ButtonPress would get BadAccess).
+// Known limit: X stops propagating a key event at the first window where some client selected
+// it. A game that selected keys only on an ANCESTOR of the focus window would lose them to our
+// selection; a client toplevel's only ancestor here is the root, so this should not happen.
+// GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS=0 is the way out.
+static const long k_lMirrorMask = KeyPressMask | KeyReleaseMask;
+
+static void UpdateMirrorTarget( Display *dpy, Window root, Window win )
+{
+	Window f = None;
+	int nRevert = 0;
+	XGetInputFocus( dpy, &f, &nRevert );
+	// Never None/PointerRoot, the root or our own window; the old target then simply stays.
+	if ( f == None || f == PointerRoot )
+	{
+		// No X focus right now (a vanished game window reverts it to None): the window gamescope
+		// last named in _NET_ACTIVE_WINDOW is the next best guess.
+		Atom type;
+		int nFmt;
+		unsigned long nItems, nAfter;
+		unsigned char *pData = nullptr;
+		if ( XGetWindowProperty( dpy, root, g_atomActiveWindow, 0, 1, False, XA_WINDOW, &type, &nFmt, &nItems, &nAfter, &pData ) == Success && pData )
+		{
+			if ( type == XA_WINDOW && nItems == 1 )
+				f = *(Window *)pData;
+			XFree( pData );
+		}
+	}
+	static Window s_fLogged = ~0ul;
+	if ( f == None || f == PointerRoot || f == root || f == win )
+	{
+		if ( f != s_fLogged )
+			Log( "key mirroring: X focus is on %s, target stays 0x%lx", f == None ? "None" : f == PointerRoot ? "PointerRoot" : f == root ? "the root" : "our own window", g_winMirror );
+		s_fLogged = f;
+		return;
+	}
+	s_fLogged = f;
+	if ( f == g_winMirror )
+	{
+		// Same id: select again anyway. Idempotent, and an X client slot (so the id) is reused
+		// when a game exits and another starts, which would otherwise leave the new window
+		// without our selection.
+		g_pfnSelectInput( dpy, f, k_lMirrorMask );
+		XFlush( dpy );
+		return;
+	}
+	if ( g_winMirror != None )
+		g_pfnSelectInput( dpy, g_winMirror, 0 ); // errors (window gone) are swallowed by OnXError
+	g_pfnSelectInput( dpy, f, k_lMirrorMask );
+	XFlush( dpy );
+	g_winMirror = f;
+	Log( "key mirroring: now on window 0x%lx", f );
+}
+
+// ---------------------------------------------------------------- window opacity
+
+// bHasOverlay in steamcompmgr.cpp ("Disable tearing if we have an overlay") counts a Steam-overlay
+// window with non-zero opacity: it forces sync flips and switches off frame generation's
+// above-refresh pacing. We are always there, so the window's _NET_WM_WINDOW_OPACITY is 0 while
+// it has nothing to show and OPAQUE (0xffffffff) while it has. An opacity-0 overlay window is
+// still tracked (and still takes STEAM_INPUT_FOCUS), but not painted.
+static const unsigned long k_ulOpaque = 0xffffffffUL;
+static bool g_bOpaque = false;
+
+static void SetOpacity( Display *dpy, Window win, bool bOpaque, const char *pszWhy )
+{
+	if ( bOpaque == g_bOpaque )
+		return;
+	SetCard( dpy, win, g_atomOpacity, bOpaque ? k_ulOpaque : 0 );
+	XFlush( dpy );
+	g_bOpaque = bOpaque;
+	Log( "window opacity -> %s (%s)", bOpaque ? "opaque" : "0", pszWhy );
+}
+
+// "Overlay wants frames continuously" (a notification toast): BOverlayNeedsPresent() true on at
+// least k_nBusyPolls polls within k_flBusyWindow. The idle pattern is ONE true about every 2 s,
+// which must not count (tearing would switch off and on every 2 s). Lowering waits
+// k_flLowerAfter after the last busy moment / last open state.
+static const int k_nBusyPolls = 4;
+static const double k_flBusyWindow = 0.25;
+static const double k_flLowerAfter = 0.5;
+
+// Main-loop wait while the overlay is active (see OpacityPolicy_t::bActive): with a frame pending / not.
+static int g_nActivePendingMs = 1;
+static int g_nActiveIdleMs = 4;
+
+struct OpacityPolicy_t
+{
+	std::deque<double> dqNeeds; // poll times with needs-present true, within k_flBusyWindow
+	double flLastWanted = 0;
+	bool bWantedEver = false;
+	bool bActive = false;
+
+	// Returns whether the window should be opaque now. pszWhy is set when it should.
+	bool Update( double flNow, bool bNeeds, bool bHeld, bool bTestRect, bool bCurrentlyOpaque, const char **ppszWhy )
+	{
+		if ( bNeeds )
+			dqNeeds.push_back( flNow );
+		while ( !dqNeeds.empty() && flNow - dqNeeds.front() > k_flBusyWindow )
+			dqNeeds.pop_front();
+		const bool bBusy = (int)dqNeeds.size() >= k_nBusyPolls;
+		bActive = bHeld || bBusy; // the overlay is animating or open: the main loop runs fast
+		const char *pszWhy = bHeld ? "open" : bTestRect ? "test rectangle" : bBusy ? "overlay wants frames" : nullptr;
+		if ( pszWhy )
+		{
+			flLastWanted = flNow;
+			bWantedEver = true;
+			*ppszWhy = pszWhy;
+			return true;
+		}
+		*ppszWhy = "overlay wants frames";
+		return bCurrentlyOpaque && bWantedEver && flNow - flLastWanted < k_flLowerAfter;
+	}
+};
 
 // ---------------------------------------------------------------- Steam callbacks
 
@@ -788,56 +933,94 @@ static bool ConnectSteamCallbacks( SteamCb_t &c )
 
 // ---------------------------------------------------------------- open / closed
 
-// Authority rule: until the first GameOverlayActivated_t (331) of the session has arrived the
-// hotkey toggles, exactly as before (so a failed connection degrades to that). From the first
-// 331 on, callbacks are the ONLY thing that changes the state; hotkey presses are only logged.
-// Why the hotkey cannot be trusted: while the overlay is open its hooks swallow the key
-// presses, so the press that closes it never reaches us (measured on real Steam).
+// The rule, one place (every transition and every ignored press is logged):
+//  * A 331 (GameOverlayActivated_t) always decides: active=1 is OPEN (it confirms a provisional
+//    take-over), active=0 is CLOSED.
+//  * Callbacks connected (bCallbacks): a hotkey press that REACHES the helper means the overlay
+//    library did not recognise it (it swallows the ones it does). While CLOSED it takes the input
+//    PROVISIONALLY and starts a k_flProvisionalSecs deadline; a 331 active=1 before it confirms,
+//    otherwise the input is given back. A press while provisional gives it back at once. A press
+//    while OPEN is only logged (the overlay's hook swallows the closing press; callbacks decide).
+//  * No callbacks: the plain hotkey toggle.
+// Why provisional and not "do nothing": taking the input made the overlay accept Ctrl and Shift
+// (through the active grab) and open, in both launches of the second real test.
 // Why BOverlayNeedsPresent() cannot be used: it is true almost always with the overlay closed.
 struct OpenState_t
 {
-	bool bOpen = false;
-	bool bAuthority = false; // true once a 331 has been seen
+	bool bOpen = false;        // open: confirmed by a 331, or toggled by the hotkey without callbacks
+	bool bProvisional = false; // input taken after an unrecognised hotkey press, waiting for a 331
+	double flDeadline = 0;
+	bool bAuthority = false;   // a 331 has been seen (only for the log line)
 };
 
-// Returns the new open state. Every transition and every ignored press is logged.
-// iCallback: -1 = not a callback, else m_bActive.
-static bool DecideOpen( OpenState_t &s, bool bHotkey, int iCallback, bool bHaveLib, bool bEnabled )
+static const double k_flProvisionalSecs = 3.0;
+
+// The input is on the dummy window while this is true.
+static bool InputHeld( const OpenState_t &s ) { return s.bOpen || s.bProvisional; }
+
+// Returns InputHeld() after the transition.
+// iCallback: -1 = not a callback, else m_bActive. bHotkey false and iCallback -1 = a clock tick
+// (the provisional deadline).
+static bool DecideOpen( OpenState_t &s, bool bHotkey, int iCallback, bool bHaveLib, bool bEnabled, bool bCallbacks, double flNow )
 {
 	if ( iCallback >= 0 )
 	{
 		if ( !s.bAuthority )
 		{
 			s.bAuthority = true;
-			Log( "open/closed: first GameOverlayActivated_t, callbacks are now the only authority (hotkey presses only logged)" );
+			Log( "open/closed: first GameOverlayActivated_t, callbacks decide from here (an unrecognised hotkey press takes the input provisionally)" );
+		}
+		if ( s.bProvisional )
+		{
+			s.bProvisional = false;
+			Log( "open/closed: provisional input %s by the callback", iCallback ? "confirmed" : "ended" );
 		}
 		if ( s.bOpen != ( iCallback != 0 ) )
 		{
 			s.bOpen = iCallback != 0;
 			Log( "open/closed: callback -> %s", s.bOpen ? "OPEN" : "CLOSED" );
 		}
-		return s.bOpen;
+		return InputHeld( s );
 	}
 	if ( !bHotkey )
-		return s.bOpen;
-	if ( s.bAuthority )
 	{
-		Log( "open/closed: hotkey press ignored, callbacks decide (state stays %s)", s.bOpen ? "OPEN" : "CLOSED" );
-		return s.bOpen;
+		if ( s.bProvisional && flNow >= s.flDeadline )
+		{
+			s.bProvisional = false;
+			Log( "provisional input released: no GameOverlayActivated_t within %.0f s", k_flProvisionalSecs );
+		}
+		return InputHeld( s );
 	}
-	if ( !s.bOpen && !bHaveLib )
+	if ( !s.bOpen && !s.bProvisional && !bHaveLib )
 	{
 		Log( "open/closed: hotkey ignored, no overlay library loaded (nothing to give input to)" );
-		return s.bOpen;
+		return InputHeld( s );
 	}
-	if ( !s.bOpen && !bEnabled )
+	if ( !s.bOpen && !s.bProvisional && !bEnabled )
 	{
 		Log( "open/closed: hotkey ignored, IsOverlayEnabled() is false" );
-		return s.bOpen;
+		return InputHeld( s );
 	}
-	s.bOpen = !s.bOpen;
-	Log( "open/closed: hotkey -> %s", s.bOpen ? "OPEN" : "CLOSED" );
-	return s.bOpen;
+	if ( !bCallbacks )
+	{
+		s.bOpen = !s.bOpen;
+		Log( "open/closed: hotkey -> %s", s.bOpen ? "OPEN" : "CLOSED" );
+		return InputHeld( s );
+	}
+	if ( s.bProvisional )
+	{
+		s.bProvisional = false;
+		Log( "open/closed: hotkey press while provisional, input released (state CLOSED)" );
+	}
+	else if ( s.bOpen )
+		Log( "open/closed: hotkey press ignored, callbacks decide (state stays OPEN)" );
+	else
+	{
+		s.bProvisional = true;
+		s.flDeadline = flNow + k_flProvisionalSecs;
+		Log( "open/closed: hotkey press reached the helper while CLOSED -> input taken PROVISIONALLY (%.0f s to get a 331 active=1)", k_flProvisionalSecs );
+	}
+	return InputHeld( s );
 }
 
 // ---------------------------------------------------------------- main
@@ -895,6 +1078,11 @@ int main()
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_FPS" ) )
 		flIdleFps = std::max( 0.05, atof( p ) );
 	const bool bTestRect = EnvFlag( "GS_RITZ_STEAM_OVERLAY_TEST_RECT" );
+	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_ACTIVE_POLL_MS" ) )
+	{
+		g_nActivePendingMs = std::clamp( atoi( p ), 0, 100 );
+		g_nActiveIdleMs = std::max( g_nActivePendingMs, 4 );
+	}
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_INPUT" ) )
 	{
 		if ( strcmp( p, "focus" ) == 0 )
@@ -946,10 +1134,21 @@ int main()
 	SetCard( dpy, win, g_atomOverlay, 1 );
 	SetCard( dpy, win, g_atomInputFocus, 0 );
 	XStoreName( dpy, win, "gamescope steam overlay" );
-	XSelectInput( dpy, root, StructureNotifyMask );
+	// Opacity 0 BEFORE the window is mapped (gamescope reads it at map), so the game is never
+	// held back at launch. The test rectangle counts as "something to show".
+	g_atomOpacity = XInternAtom( dpy, "_NET_WM_WINDOW_OPACITY", False );
+	g_atomActiveWindow = XInternAtom( dpy, "_NET_ACTIVE_WINDOW", False );
+	SetCard( dpy, win, g_atomOpacity, bTestRect ? k_ulOpaque : 0 );
+	g_bOpaque = bTestRect;
+	const bool bMirrorKeys = !Env( "GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS" ) || EnvFlag( "GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS" );
+	// PropertyChangeMask on the root: gamescope rewrites _NET_ACTIVE_WINDOW whenever it moves the
+	// X focus, which is our cue to re-target the key mirroring.
+	XSelectInput( dpy, root, StructureNotifyMask | ( bMirrorKeys ? PropertyChangeMask : 0 ) );
 	XMapWindow( dpy, win );
 	XFlush( dpy );
 	Log( "window 0x%lx %ux%u, visual depth %d", win, uW, uH, vi.depth );
+	Log( "window opacity starts %s; key mirroring %s", g_bOpaque ? "opaque (test rectangle)" : "0 (nothing to show)",
+		bMirrorKeys ? "on" : "off (GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS=0)" );
 
 	Vk_t vk;
 	bool bVk = InitVulkan( vk, dpy, win ) && CreateSwapchain( vk, uW, uH );
@@ -985,7 +1184,12 @@ int main()
 		bCb = ConnectSteamCallbacks( cb );
 
 	OpenState_t open;
-	bool bPrevOpen = false;
+	bool bPrevHeld = false;
+	OpacityPolicy_t opacity;
+	unsigned int uMirrorPress = 0, uMirrorRelease = 0;
+	double flNextMirrorPoll = 0;
+	if ( bMirrorKeys )
+		UpdateMirrorTarget( dpy, root, win );
 	bool bLastNeeds = false;
 	double flNeedsChangedAt = 0;
 	unsigned int uNeedsTrue = 0;
@@ -1007,7 +1211,10 @@ int main()
 	{
 		pollfd pfd{ ConnectionNumber( dpy ), POLLIN, 0 };
 		if ( !XPending( dpy ) )
-			poll( &pfd, 1, nPollMs );
+			// Idle: 16 ms (about a frame). Active (open, or a toast animating): the overlay has a new
+			// frame ready as soon as one was presented, so a 16 ms wait capped it to ~60 per second.
+			// Wait 1 ms when a frame is pending, else 4 ms; the FIFO present/acquire does the pacing.
+			poll( &pfd, 1, opacity.bActive && pfnNeeds ? ( bLastNeeds ? g_nActivePendingMs : g_nActiveIdleMs ) : nPollMs );
 
 		const double flNow = NowSeconds();
 		bool bHotkeyFired = false;
@@ -1015,6 +1222,13 @@ int main()
 		{
 			XEvent ev;
 			XNextEvent( dpy, &ev );
+			// A key event on a window that is neither ours nor the root is a mirrored copy of the
+			// game's own: counted (never its keycode), otherwise ignored.
+			if ( ( ev.type == KeyPress || ev.type == KeyRelease ) && ev.xkey.window != win && ev.xkey.window != root )
+			{
+				( ev.type == KeyPress ? uMirrorPress : uMirrorRelease )++;
+				continue;
+			}
 			mapCounts[EventName( ev.type )]++;
 			switch ( ev.type )
 			{
@@ -1030,7 +1244,7 @@ int main()
 					break;
 				}
 				case KeyPress:
-					if ( open.bOpen && nKeyLogsThisSecond < 20 )
+					if ( InputHeld( open ) && nKeyLogsThisSecond < 20 )
 					{
 						nKeyLogsThisSecond++;
 						Log( "KeyPress reached the helper while open: keycode %u state 0x%x", ev.xkey.keycode, ev.xkey.state );
@@ -1042,8 +1256,12 @@ int main()
 						Log( "hotkey press delivered (window 0x%lx, state 0x%x)", ev.xkey.window, ev.xkey.state );
 					}
 					break;
+				case PropertyNotify:
+					if ( bMirrorKeys && ev.xproperty.window == root && ev.xproperty.atom == g_atomActiveWindow )
+						UpdateMirrorTarget( dpy, root, win );
+					break;
 				case ConfigureNotify:
-					if ( ev.xconfigure.window == root || ev.xconfigure.window == win )
+					if ( ev.xconfigure.window == root ||ev.xconfigure.window == win )
 					{
 						XGetWindowAttributes( dpy, root, &rootAttr );
 						if ( (unsigned)rootAttr.width != uW || (unsigned)rootAttr.height != uH )
@@ -1113,7 +1331,7 @@ int main()
 					const int iActive = msg.m_cubParam >= 1 && msg.m_pubParam && msg.m_pubParam[0] ? 1 : 0;
 					flLast331 = flNow;
 					Log( "callback 331 GameOverlayActivated_t: %d bytes [%s] -> active=%d", msg.m_cubParam, szBytes, iActive );
-					DecideOpen( open, false, iActive, pfnNeeds != nullptr, nLastEnabled != 0 );
+					DecideOpen( open, false, iActive, pfnNeeds != nullptr, nLastEnabled != 0, bCb, flNow );
 				}
 				cb.pfnFree( cb.hPipe );
 				memset( &msg, 0, sizeof( msg ) );
@@ -1125,13 +1343,21 @@ int main()
 				flHotkeyAt = 0;
 			}
 		}
-		const bool bWasOpen = bPrevOpen;
 		if ( bHotkeyFired )
-			DecideOpen( open, true, -1, pfnNeeds != nullptr, nLastEnabled != 0 );
-		bPrevOpen = open.bOpen;
-		if ( open.bOpen != bWasOpen )
+			DecideOpen( open, true, -1, pfnNeeds != nullptr, nLastEnabled != 0, bCb, flNow );
+		DecideOpen( open, false, -1, pfnNeeds != nullptr, nLastEnabled != 0, bCb, flNow ); // the deadline
+		const bool bHeld = InputHeld( open );
+		// Opacity first: raised BEFORE the input is taken and the first visible frame, lowered
+		// only after the hold time past the last one.
 		{
-			ApplyInput( dpy, win, open.bOpen );
+			const char *pszWhy = "";
+			const bool bWant = opacity.Update( flNow, bNeeds, bHeld, bTestRect, g_bOpaque, &pszWhy );
+			SetOpacity( dpy, win, bWant, bWant ? pszWhy : "nothing to show" );
+		}
+		if ( bHeld != bPrevHeld )
+		{
+			bPrevHeld = bHeld;
+			ApplyInput( dpy, win, bHeld );
 			bRedraw = true;
 		}
 
@@ -1154,6 +1380,14 @@ int main()
 			flNextHeartbeat = NowSeconds() + 1.0 / flIdleFps;
 		}
 
+		// Safety net for a missed _NET_ACTIVE_WINDOW change (also: the game window may not exist yet
+		// when we start).
+		if ( bMirrorKeys && flNow >= flNextMirrorPoll )
+		{
+			UpdateMirrorTarget( dpy, root, win );
+			flNextMirrorPoll = flNow + 1.0;
+		}
+
 		if ( flNow - flSecondStart >= 1.0 )
 		{
 			std::string s, sCb;
@@ -1162,8 +1396,14 @@ int main()
 			for ( auto &kv : mapCbCounts )
 				sCb += " " + std::to_string( kv.first ) + "=" + std::to_string( kv.second );
 			if ( !s.empty() || uPresentsThisSecond || !sCb.empty() )
-				Log( "last %.1fs: presents=%u needsTrue=%u events:%s callbacks:%s", flNow - flSecondStart, uPresentsThisSecond,
-					uNeedsTrue, s.empty() ? " none" : s.c_str(), sCb.empty() ? " none" : sCb.c_str() );
+			{
+				char szMirror[96] = "";
+				if ( bMirrorKeys )
+					snprintf( szMirror, sizeof( szMirror ), " mirrored: KeyPress=%u KeyRelease=%u", uMirrorPress, uMirrorRelease );
+				Log( "last %.1fs: presents=%u needsTrue=%u events:%s callbacks:%s%s", flNow - flSecondStart, uPresentsThisSecond,
+					uNeedsTrue, s.empty() ? " none" : s.c_str(), sCb.empty() ? " none" : sCb.c_str(), szMirror );
+			}
+			uMirrorPress = uMirrorRelease = 0;
 			mapCounts.clear();
 			mapCbCounts.clear();
 			uNeedsTrue = 0;
