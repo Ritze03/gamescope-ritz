@@ -609,59 +609,141 @@ static const char *EventName( int t )
 	}
 }
 
+// ---------------------------------------------------------------- Steam callbacks
+
+// Steam posts GameOverlayActivated_t (callback id 331 = k_iSteamFriendsCallbacks 300 + 31,
+// first payload byte m_bActive) whenever the overlay opens or closes, however that happened.
+// We read it from our own pipe on steamclient.so, with the same flat functions and the same
+// CallbackMsg_t layout that the probe tests/steam_friends_live_probe.cpp (namespace
+// callbacks) uses. Callback queues are per pipe, so this cannot eat anybody else's.
+struct CallbackMsg_t
+{
+	int32_t m_hSteamUser;
+	int m_iCallback;
+	uint8_t *m_pubParam;
+	int m_cubParam;
+};
+
+struct SteamCb_t
+{
+	int32_t hPipe = 0, hUser = 0;
+	bool ( *pfnGet )( int32_t, CallbackMsg_t * ) = nullptr;
+	void ( *pfnFree )( int32_t ) = nullptr;
+	void ( *pfnReleaseUser )( int32_t, int32_t ) = nullptr;
+	bool ( *pfnReleasePipe )( int32_t ) = nullptr;
+};
+
+static const int k_iGameOverlayActivated = 331;
+
+// ponytail: the library is never dlclose()d (steamclient.so starts threads and atexit
+// handlers, same rule as src/SteamFriends.cpp); the process exits right after the release.
+// Every failure is logged once and returns false: the hotkey toggle then stays in charge.
+static bool ConnectSteamCallbacks( SteamCb_t &c )
+{
+	std::vector<std::string> vecPaths;
+	if ( const char *p = Env( "GS_RITZ_STEAMCLIENT" ) )
+		vecPaths.push_back( p );
+	else
+		for ( const std::string &sRoot : SteamRoots() )
+			vecPaths.push_back( sRoot + "/linux64/steamclient.so" );
+
+	void *pLib = nullptr;
+	std::string sUsed;
+	for ( const std::string &sPath : vecPaths )
+	{
+		pLib = dlopen( sPath.c_str(), RTLD_LAZY | RTLD_LOCAL );
+		if ( pLib )
+		{
+			sUsed = sPath;
+			break;
+		}
+	}
+	if ( !pLib )
+	{
+		Log( "callbacks: steamclient.so not found or not loadable (%zu path(s) tried), hotkey toggle only", vecPaths.size() );
+		return false;
+	}
+
+	auto pfnCreate = (int32_t ( * )())dlsym( pLib, "Steam_CreateSteamPipe" );
+	auto pfnConnect = (int32_t ( * )( int32_t ))dlsym( pLib, "Steam_ConnectToGlobalUser" );
+	c.pfnGet = (bool ( * )( int32_t, CallbackMsg_t * ))dlsym( pLib, "Steam_BGetCallback" );
+	c.pfnFree = (void ( * )( int32_t ))dlsym( pLib, "Steam_FreeLastCallback" );
+	c.pfnReleaseUser = (void ( * )( int32_t, int32_t ))dlsym( pLib, "Steam_ReleaseUser" );
+	c.pfnReleasePipe = (bool ( * )( int32_t ))dlsym( pLib, "Steam_BReleaseSteamPipe" );
+	if ( !pfnCreate || !pfnConnect || !c.pfnGet || !c.pfnFree || !c.pfnReleaseUser || !c.pfnReleasePipe )
+	{
+		Log( "callbacks: %s lacks a required Steam_* symbol, not used, hotkey toggle only", sUsed.c_str() );
+		return false;
+	}
+	c.hPipe = pfnCreate();
+	if ( !c.hPipe )
+	{
+		Log( "callbacks: Steam_CreateSteamPipe returned 0 (Steam not running?), hotkey toggle only" );
+		return false;
+	}
+	c.hUser = pfnConnect( c.hPipe );
+	if ( !c.hUser )
+	{
+		Log( "callbacks: Steam_ConnectToGlobalUser returned 0 (signed out?), hotkey toggle only" );
+		c.pfnReleasePipe( c.hPipe );
+		c.hPipe = 0;
+		return false;
+	}
+	Log( "callbacks: connected (%s), pipe %d, user %d", sUsed.c_str(), c.hPipe, c.hUser );
+	return true;
+}
+
 // ---------------------------------------------------------------- open / closed
 
-// THE ASSUMPTION-HEAVY PART -- the one function the user's first real test decides on.
-// There is no export that says "the overlay is open" (the official signal is Steam's
-// GameOverlayActivated_t callback; see the docs page). So this is a plain hotkey toggle:
-//   closed --hotkey--> open   : the overlay's own hooks see the same press in our event
-//                               stream and open; we take input focus. Ignored (logged)
-//                               when there is nothing to give input to: no overlay library
-//                               loaded, or IsOverlayEnabled() currently false.
-//   open   --hotkey--> closed : the same press closes it again (always honoured).
-//   open   --BOverlayNeedsPresent() false for IDLE_CLOSE_MS--> closed, only when
-//                               IDLE_CLOSE_MS > 0 (default 0 = off), and only with a library.
-// ASSUMPTIONS: the overlay is opened and closed ONLY with the hotkey. Closing it with Esc or
-// its own button leaves input on this window until the hotkey is pressed again, and from
-// then on the helper's toggle and Steam's are inverted until the helper is restarted.
-// Accepted for the spike; the cure is the GameOverlayActivated_t callback.
-// Returns the new open state. Every transition and every ignored press is logged.
+// Authority rule: until the first GameOverlayActivated_t (331) of the session has arrived the
+// hotkey toggles, exactly as before (so a failed connection degrades to that). From the first
+// 331 on, callbacks are the ONLY thing that changes the state; hotkey presses are only logged.
+// Why the hotkey cannot be trusted: while the overlay is open its hooks swallow the key
+// presses, so the press that closes it never reaches us (measured on real Steam).
+// Why BOverlayNeedsPresent() cannot be used: it is true almost always with the overlay closed.
 struct OpenState_t
 {
 	bool bOpen = false;
-	double flOpenedAt = 0;
-	double flLastNeeded = 0;
+	bool bAuthority = false; // true once a 331 has been seen
 };
 
-static bool DecideOpen( OpenState_t &s, double flNow, bool bHotkey, bool bNeeds, bool bHaveLib, bool bEnabled, double flIdleCloseSec )
+// Returns the new open state. Every transition and every ignored press is logged.
+// iCallback: -1 = not a callback, else m_bActive.
+static bool DecideOpen( OpenState_t &s, bool bHotkey, int iCallback, bool bHaveLib, bool bEnabled )
 {
-	if ( bNeeds )
-		s.flLastNeeded = flNow;
-	if ( bHotkey )
+	if ( iCallback >= 0 )
 	{
-		if ( !s.bOpen && !bHaveLib )
+		if ( !s.bAuthority )
 		{
-			Log( "open/closed: hotkey ignored, no overlay library loaded (nothing to give input to)" );
-			return s.bOpen;
+			s.bAuthority = true;
+			Log( "open/closed: first GameOverlayActivated_t, callbacks are now the only authority (hotkey presses only logged)" );
 		}
-		if ( !s.bOpen && !bEnabled )
+		if ( s.bOpen != ( iCallback != 0 ) )
 		{
-			Log( "open/closed: hotkey ignored, IsOverlayEnabled() is false" );
-			return s.bOpen;
+			s.bOpen = iCallback != 0;
+			Log( "open/closed: callback -> %s", s.bOpen ? "OPEN" : "CLOSED" );
 		}
-		s.bOpen = !s.bOpen;
-		s.flOpenedAt = s.flLastNeeded = flNow;
-		Log( "open/closed: hotkey -> %s", s.bOpen ? "OPEN" : "CLOSED" );
 		return s.bOpen;
 	}
-	if ( !s.bOpen || !bHaveLib || flIdleCloseSec <= 0 )
+	if ( !bHotkey )
 		return s.bOpen;
-	const double flQuiet = flNow - s.flLastNeeded;
-	if ( flNow - s.flOpenedAt > 0.5 && flQuiet > flIdleCloseSec )
+	if ( s.bAuthority )
 	{
-		s.bOpen = false;
-		Log( "open/closed: BOverlayNeedsPresent false for %.2fs -> CLOSED", flQuiet );
+		Log( "open/closed: hotkey press ignored, callbacks decide (state stays %s)", s.bOpen ? "OPEN" : "CLOSED" );
+		return s.bOpen;
 	}
+	if ( !s.bOpen && !bHaveLib )
+	{
+		Log( "open/closed: hotkey ignored, no overlay library loaded (nothing to give input to)" );
+		return s.bOpen;
+	}
+	if ( !s.bOpen && !bEnabled )
+	{
+		Log( "open/closed: hotkey ignored, IsOverlayEnabled() is false" );
+		return s.bOpen;
+	}
+	s.bOpen = !s.bOpen;
+	Log( "open/closed: hotkey -> %s", s.bOpen ? "OPEN" : "CLOSED" );
 	return s.bOpen;
 }
 
@@ -719,9 +801,6 @@ int main()
 	double flIdleFps = 1.0;
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_FPS" ) )
 		flIdleFps = std::max( 0.05, atof( p ) );
-	double flIdleCloseSec = 0.0; // 0 = off
-	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS" ) )
-		flIdleCloseSec = std::max( 0.0, atof( p ) / 1000.0 );
 	const bool bTestRect = EnvFlag( "GS_RITZ_STEAM_OVERLAY_TEST_RECT" );
 
 	XSetErrorHandler( OnXError );
@@ -789,8 +868,26 @@ int main()
 	else
 		Log( "no keycode for hotkey \"%s\", nothing grabbed", hk.sText.c_str() );
 
+	// Steam's open/closed callback. Only with an overlay library loaded: without one there is
+	// nothing to give input to and the hotkey stays ignored, so no pipe is needed either.
+	SteamCb_t cb;
+	bool bCb = false;
+	if ( EnvFlag( "GS_RITZ_STEAM_OVERLAY_NO_CALLBACK" ) )
+		Log( "callbacks: disabled by GS_RITZ_STEAM_OVERLAY_NO_CALLBACK, pure hotkey toggle" );
+	else if ( !pfnNeeds )
+		Log( "callbacks: not connected, no overlay library loaded" );
+	else
+		bCb = ConnectSteamCallbacks( cb );
+
 	OpenState_t open;
+	bool bPrevOpen = false;
 	bool bLastNeeds = false;
+	double flNeedsChangedAt = 0;
+	unsigned int uNeedsTrue = 0;
+	std::map<int, int> mapCbCounts;
+	double flHotkeyAt = 0; // a hotkey press waiting to see whether a 331 follows
+	double flLast331 = 0;
+	int nKeyLogsThisSecond = 0;
 	int nLastEnabled = -1;
 	double flNextHeartbeat = 0;
 	bool bRedraw = true;
@@ -816,10 +913,27 @@ int main()
 			mapCounts[EventName( ev.type )]++;
 			switch ( ev.type )
 			{
+				case FocusIn:
+				case FocusOut:
+				{
+					static const char *const k_apszMode[] = { "NotifyNormal", "NotifyGrab", "NotifyUngrab", "NotifyWhileGrabbed" };
+					static const char *const k_apszDetail[] = { "NotifyAncestor", "NotifyVirtual", "NotifyInferior", "NotifyNonlinear",
+						"NotifyNonlinearVirtual", "NotifyPointer", "NotifyPointerRoot", "NotifyDetailNone" };
+					const int m = ev.xfocus.mode, d = ev.xfocus.detail;
+					Log( "%s window 0x%lx mode %s detail %s", EventName( ev.type ), ev.xfocus.window,
+						m >= 0 && m < 4 ? k_apszMode[m] : "?", d >= 0 && d < 8 ? k_apszDetail[d] : "?" );
+					break;
+				}
 				case KeyPress:
+					if ( open.bOpen && nKeyLogsThisSecond < 20 )
+					{
+						nKeyLogsThisSecond++;
+						Log( "KeyPress reached the helper while open: keycode %u state 0x%x", ev.xkey.keycode, ev.xkey.state );
+					}
 					if ( ev.xkey.keycode == kc && ( ev.xkey.state & ~( Mod2Mask | LockMask ) ) == hk.uMods )
 					{
 						bHotkeyFired = true;
+						flHotkeyAt = flNow;
 						Log( "hotkey press delivered (window 0x%lx, state 0x%x)", ev.xkey.window, ev.xkey.state );
 					}
 					break;
@@ -852,10 +966,15 @@ int main()
 		}
 
 		const bool bNeeds = pfnNeeds ? pfnNeeds() : false;
+		if ( bNeeds )
+			uNeedsTrue++;
 		if ( pfnNeeds && bNeeds != bLastNeeds )
 		{
-			Log( "BOverlayNeedsPresent -> %s", bNeeds ? "true" : "false" );
+			// Only a change after >= 0.5 s of stability is logged (it flickers constantly).
+			if ( flNow - flNeedsChangedAt >= 0.5 )
+				Log( "BOverlayNeedsPresent -> %s", bNeeds ? "true" : "false" );
 			bLastNeeds = bNeeds;
+			flNeedsChangedAt = flNow;
 		}
 		if ( pfnEnabled )
 		{
@@ -868,8 +987,36 @@ int main()
 		}
 
 		// Open / closed and the input hand-over.
-		const bool bWasOpen = open.bOpen;
-		DecideOpen( open, flNow, bHotkeyFired, bNeeds, pfnNeeds != nullptr, nLastEnabled != 0, flIdleCloseSec );
+		if ( bCb )
+		{
+			CallbackMsg_t msg{};
+			while ( cb.pfnGet( cb.hPipe, &msg ) )
+			{
+				mapCbCounts[msg.m_iCallback]++;
+				if ( msg.m_iCallback == k_iGameOverlayActivated )
+				{
+					char szBytes[3 * 16 + 1] = "";
+					for ( int i = 0; i < msg.m_cubParam && i < 16 && msg.m_pubParam; i++ )
+						snprintf( szBytes + strlen( szBytes ), 4, "%s%02x", i ? " " : "", msg.m_pubParam[i] );
+					const int iActive = msg.m_cubParam >= 1 && msg.m_pubParam && msg.m_pubParam[0] ? 1 : 0;
+					flLast331 = flNow;
+					Log( "callback 331 GameOverlayActivated_t: %d bytes [%s] -> active=%d", msg.m_cubParam, szBytes, iActive );
+					DecideOpen( open, false, iActive, pfnNeeds != nullptr, nLastEnabled != 0 );
+				}
+				cb.pfnFree( cb.hPipe );
+				memset( &msg, 0, sizeof( msg ) );
+			}
+			if ( flHotkeyAt > 0 && flNow - flHotkeyAt > 1.0 )
+			{
+				if ( flLast331 < flHotkeyAt )
+					Log( "a hotkey press was not followed by a 331 within 1 s (callback not delivered to this pipe?)" );
+				flHotkeyAt = 0;
+			}
+		}
+		const bool bWasOpen = bPrevOpen;
+		if ( bHotkeyFired )
+			DecideOpen( open, true, -1, pfnNeeds != nullptr, nLastEnabled != 0 );
+		bPrevOpen = open.bOpen;
 		if ( open.bOpen != bWasOpen )
 		{
 			SetCard( dpy, win, g_atomInputFocus, open.bOpen ? 1 : 0 );
@@ -899,18 +1046,29 @@ int main()
 
 		if ( flNow - flSecondStart >= 1.0 )
 		{
-			std::string s;
+			std::string s, sCb;
 			for ( auto &kv : mapCounts )
 				s += " " + kv.first + "=" + std::to_string( kv.second );
-			if ( !s.empty() || uPresentsThisSecond )
-				Log( "last %.1fs: presents=%u events:%s", flNow - flSecondStart, uPresentsThisSecond, s.empty() ? " none" : s.c_str() );
+			for ( auto &kv : mapCbCounts )
+				sCb += " " + std::to_string( kv.first ) + "=" + std::to_string( kv.second );
+			if ( !s.empty() || uPresentsThisSecond || !sCb.empty() )
+				Log( "last %.1fs: presents=%u needsTrue=%u events:%s callbacks:%s", flNow - flSecondStart, uPresentsThisSecond,
+					uNeedsTrue, s.empty() ? " none" : s.c_str(), sCb.empty() ? " none" : sCb.c_str() );
 			mapCounts.clear();
+			mapCbCounts.clear();
+			uNeedsTrue = 0;
+			nKeyLogsThisSecond = 0;
 			uPresentsThisSecond = 0;
 			flSecondStart = flNow;
 		}
 	}
 
 	Log( "exiting (%u presents in total)", uPresents );
+	if ( bCb )
+	{
+		cb.pfnReleaseUser( cb.hPipe, cb.hUser );
+		cb.pfnReleasePipe( cb.hPipe );
+	}
 	if ( bVk )
 		DestroySwapchain( vk );
 	XCloseDisplay( dpy );
