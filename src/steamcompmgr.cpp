@@ -10741,22 +10741,24 @@ void StartSteamOverlayDummy()
 		pszPreload ? std::optional<std::string>( pszPreload ) : std::nullopt, s_oDummyOverlayStash,
 		gamescope::Process::FindSteamOverlayRenderer( gamescope::Process::SteamRootCandidates() ) );
 
-	// Whether the fork's WSI layer helps or hurts the dummy window is decided in
-	// the helper's page of the docs; GS_RITZ_STEAM_OVERLAY_DUMMY_WSI=1 keeps it on.
-	const char *pszKeepWsi = getenv( "GS_RITZ_STEAM_OVERLAY_DUMMY_WSI" );
-	const bool bKeepWsi = pszKeepWsi && *pszKeepWsi && strcmp( pszKeepWsi, "0" ) != 0;
-
+	// The overlay values go to the helper in private variables, NOT in LD_PRELOAD and the
+	// Vulkan-layer pair: gamescopereaper sits between us and the helper and would otherwise
+	// load the overlay too (a second hooked process of the same game). The helper moves
+	// them into place and re-execs itself once. Our own environment, inherited by the
+	// reaper, stays the game's (no overlay). The fork's WSI layer is not enabled for the
+	// helper: plain Xwayland is the one measured path.
 	char *ppArgv[] = { (char *)k_pszDummyExe, NULL };
-	s_nSteamOverlayDummyPid = gamescope::Process::SpawnProcessInWatchdog( ppArgv, false, [ env, bKeepWsi ]()
+	s_nSteamOverlayDummyPid = gamescope::Process::SpawnProcessInWatchdog( ppArgv, false, [ env ]()
 	{
-		gamescope::Process::ApplySteamOverlayEnv( env );
-		if ( !bKeepWsi )
-		{
+		setenv( "GS_RITZ_STEAM_OVERLAY_HANDOVER", "1", 1 );
+		if ( env.oLdPreload )
+			setenv( "GS_RITZ_STEAM_OVERLAY_PRELOAD", env.oLdPreload->c_str(), 1 );
+		else
+			unsetenv( "GS_RITZ_STEAM_OVERLAY_PRELOAD" );
 #ifdef GAMESCOPE_RITZ_WSI_LAYER_JSON
-			unsetenv( GAMESCOPE_RITZ_WSI_ENABLE_ENV );
+		unsetenv( GAMESCOPE_RITZ_WSI_ENABLE_ENV );
 #endif
-			unsetenv( "ENABLE_GAMESCOPE_WSI" );
-		}
+		unsetenv( "ENABLE_GAMESCOPE_WSI" );
 	});
 	s_SteamOverlayLog.infof( "Started the Steam overlay dummy window (pid %d, overlay preload %s).",
 		(int)s_nSteamOverlayDummyPid, env.oLdPreload ? env.oLdPreload->c_str() : "none" );

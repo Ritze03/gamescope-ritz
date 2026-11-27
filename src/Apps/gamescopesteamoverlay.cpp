@@ -299,12 +299,16 @@ static bool CreateSwapchain( Vk_t &v, uint32_t w, uint32_t h )
 	VkSurfaceCapabilitiesKHR caps;
 	VK_CHECK( vkGetPhysicalDeviceSurfaceCapabilitiesKHR( v.phys, v.surf, &caps ) );
 
-	// Prefer a mode that keeps our alpha. Mesa's X11 WSI offers PRE_MULTIPLIED for a
-	// window with a 32-bit visual like ours; what gamescope does with it is in the docs.
-	VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	for ( VkCompositeAlphaFlagBitsKHR a : { VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
-											VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR } )
-		if ( caps.supportedCompositeAlpha & a ) { alpha = a; break; }
+	// Only PRE_MULTIPLIED is verified to be see-through inside gamescope (Mesa's X11 WSI
+	// offers it for a window with a 32-bit visual like ours). Anything else would paint the
+	// whole game black, so without it we exit: no overlay is better than a black screen.
+	const VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+	if ( !( caps.supportedCompositeAlpha & alpha ) )
+	{
+		Log( "ERROR: the surface offers no pre-multiplied alpha composite mode (supported mask 0x%x); "
+			 "presenting would cover the game with an opaque window. Exiting, no overlay.", (unsigned)caps.supportedCompositeAlpha );
+		exit( 1 );
+	}
 
 	uint32_t nFmt = 0;
 	vkGetPhysicalDeviceSurfaceFormatsKHR( v.phys, v.surf, &nFmt, nullptr );
@@ -574,8 +578,12 @@ static void SetCard( Display *dpy, Window w, Atom a, unsigned long v )
 	XChangeProperty( dpy, w, a, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&v, 1 );
 }
 
+static bool g_bGrabFailed = false;
+
 static int OnXError( Display *, XErrorEvent *e )
 {
+	if ( e->request_code == 33 /* X_GrabKey */ && e->error_code == BadAccess )
+		g_bGrabFailed = true;
 	Log( "X error: request %d.%d code %d", e->request_code, e->minor_code, e->error_code );
 	return 0;
 }
@@ -601,27 +609,23 @@ static const char *EventName( int t )
 	}
 }
 
-static bool IsInputEvent( int t )
-{
-	return t == KeyPress || t == KeyRelease || t == ButtonPress || t == ButtonRelease || t == MotionNotify;
-}
-
 // ---------------------------------------------------------------- open / closed
 
 // THE ASSUMPTION-HEAVY PART -- the one function the user's first real test decides on.
 // There is no export that says "the overlay is open" (the official signal is Steam's
-// GameOverlayActivated_t callback; see the docs page). So we guess:
-//   closed --hotkey press--> open     : the overlay's own hooks see the same press in our
-//                                       event stream and open; we take input focus.
-//   open   --hotkey press--> closed   : the same press closes it again.
-//   open   --BOverlayNeedsPresent() false for IDLE_CLOSE_MS--> closed
-//                                       (Esc / the close button inside the overlay; assumes an
-//                                       open overlay keeps asking for presents, which only
-//                                       the log of a real run can confirm).
-//   open   --an input event the overlay did not swallow reaches our loop while
-//            BOverlayNeedsPresent() has been false for 0.3 s--> closed.
-// Without the overlay library (no BOverlayNeedsPresent) only the hotkey toggles.
-// Returns the new open state. Every transition is logged.
+// GameOverlayActivated_t callback; see the docs page). So this is a plain hotkey toggle:
+//   closed --hotkey--> open   : the overlay's own hooks see the same press in our event
+//                               stream and open; we take input focus. Ignored (logged)
+//                               when there is nothing to give input to: no overlay library
+//                               loaded, or IsOverlayEnabled() currently false.
+//   open   --hotkey--> closed : the same press closes it again (always honoured).
+//   open   --BOverlayNeedsPresent() false for IDLE_CLOSE_MS--> closed, only when
+//                               IDLE_CLOSE_MS > 0 (default 0 = off), and only with a library.
+// ASSUMPTIONS: the overlay is opened and closed ONLY with the hotkey. Closing it with Esc or
+// its own button leaves input on this window until the hotkey is pressed again, and from
+// then on the helper's toggle and Steam's are inverted until the helper is restarted.
+// Accepted for the spike; the cure is the GameOverlayActivated_t callback.
+// Returns the new open state. Every transition and every ignored press is logged.
 struct OpenState_t
 {
 	bool bOpen = false;
@@ -629,29 +633,34 @@ struct OpenState_t
 	double flLastNeeded = 0;
 };
 
-static bool DecideOpen( OpenState_t &s, double flNow, bool bHotkey, bool bInputEvent, bool bNeeds, bool bHaveLib, double flIdleCloseSec )
+static bool DecideOpen( OpenState_t &s, double flNow, bool bHotkey, bool bNeeds, bool bHaveLib, bool bEnabled, double flIdleCloseSec )
 {
 	if ( bNeeds )
 		s.flLastNeeded = flNow;
 	if ( bHotkey )
 	{
+		if ( !s.bOpen && !bHaveLib )
+		{
+			Log( "open/closed: hotkey ignored, no overlay library loaded (nothing to give input to)" );
+			return s.bOpen;
+		}
+		if ( !s.bOpen && !bEnabled )
+		{
+			Log( "open/closed: hotkey ignored, IsOverlayEnabled() is false" );
+			return s.bOpen;
+		}
 		s.bOpen = !s.bOpen;
 		s.flOpenedAt = s.flLastNeeded = flNow;
 		Log( "open/closed: hotkey -> %s", s.bOpen ? "OPEN" : "CLOSED" );
 		return s.bOpen;
 	}
-	if ( !s.bOpen || !bHaveLib )
+	if ( !s.bOpen || !bHaveLib || flIdleCloseSec <= 0 )
 		return s.bOpen;
 	const double flQuiet = flNow - s.flLastNeeded;
 	if ( flNow - s.flOpenedAt > 0.5 && flQuiet > flIdleCloseSec )
 	{
 		s.bOpen = false;
 		Log( "open/closed: BOverlayNeedsPresent false for %.2fs -> CLOSED", flQuiet );
-	}
-	else if ( bInputEvent && flNow - s.flOpenedAt > 0.5 && flQuiet > 0.3 )
-	{
-		s.bOpen = false;
-		Log( "open/closed: input reached us unswallowed while idle for %.2fs -> CLOSED", flQuiet );
 	}
 	return s.bOpen;
 }
@@ -660,6 +669,26 @@ static bool DecideOpen( OpenState_t &s, double flNow, bool bHotkey, bool bInputE
 
 int main()
 {
+	// Hand-over: gamescope-ritz starts us under gamescopereaper, and nothing in between may
+	// carry the overlay (it would register as a second hooked process of the game). So it
+	// passes the overlay's values in private variables; we put them in place and re-exec
+	// once, so the library loads into THIS process only.
+	if ( Env( "GS_RITZ_STEAM_OVERLAY_HANDOVER" ) )
+	{
+		if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_PRELOAD" ) )
+			setenv( "LD_PRELOAD", p, 1 );
+		else
+			unsetenv( "LD_PRELOAD" );
+		setenv( "ENABLE_VK_LAYER_VALVE_steam_overlay_1", "1", 1 );
+		unsetenv( "DISABLE_VK_LAYER_VALVE_steam_overlay_1" );
+		unsetenv( "GS_RITZ_STEAM_OVERLAY_PRELOAD" );
+		unsetenv( "GS_RITZ_STEAM_OVERLAY_HANDOVER" );
+		char *apszArgv[] = { (char *)"gamescopesteamoverlay", nullptr };
+		execv( "/proc/self/exe", apszArgv );
+		fprintf( stderr, "steam-overlay: re-exec for the overlay hand-over failed, exiting\n" );
+		return 1;
+	}
+
 	const char *pszLogPath = Env( "GS_RITZ_STEAM_OVERLAY_LOG" );
 	g_pLog = pszLogPath ? fopen( pszLogPath, "a" ) : nullptr;
 	if ( !g_pLog )
@@ -690,9 +719,9 @@ int main()
 	double flIdleFps = 1.0;
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_FPS" ) )
 		flIdleFps = std::max( 0.05, atof( p ) );
-	double flIdleCloseSec = 2.0;
+	double flIdleCloseSec = 0.0; // 0 = off
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS" ) )
-		flIdleCloseSec = std::max( 0.1, atof( p ) / 1000.0 );
+		flIdleCloseSec = std::max( 0.0, atof( p ) / 1000.0 );
 	const bool bTestRect = EnvFlag( "GS_RITZ_STEAM_OVERLAY_TEST_RECT" );
 
 	XSetErrorHandler( OnXError );
@@ -753,6 +782,8 @@ int main()
 		for ( unsigned int uExtra : { 0u, (unsigned)Mod2Mask, (unsigned)LockMask, (unsigned)( Mod2Mask | LockMask ) } )
 			XGrabKey( dpy, kc, hk.uMods | uExtra, root, False, GrabModeAsync, GrabModeAsync );
 		XSync( dpy, False );
+		if ( g_bGrabFailed )
+			Log( "ERROR: XGrabKey failed with BadAccess (another client holds the grab on \"%s\"): the overlay CANNOT be opened by hotkey", hk.sText.c_str() );
 		Log( "grabbed hotkey \"%s\" (keycode %u, modifiers 0x%x + NumLock/CapsLock variants)", hk.sText.c_str(), kc, hk.uMods );
 	}
 	else
@@ -777,14 +808,12 @@ int main()
 			poll( &pfd, 1, nPollMs );
 
 		const double flNow = NowSeconds();
-		bool bHotkeyFired = false, bInput = false;
+		bool bHotkeyFired = false;
 		while ( XPending( dpy ) )
 		{
 			XEvent ev;
 			XNextEvent( dpy, &ev );
 			mapCounts[EventName( ev.type )]++;
-			if ( IsInputEvent( ev.type ) )
-				bInput = true;
 			switch ( ev.type )
 			{
 				case KeyPress:
@@ -809,7 +838,9 @@ int main()
 								  ( (unsigned)ev.xconfigure.width != vk.ext.width || (unsigned)ev.xconfigure.height != vk.ext.height ) )
 						{
 							Log( "window size %dx%d", ev.xconfigure.width, ev.xconfigure.height );
-							CreateSwapchain( vk, ev.xconfigure.width, ev.xconfigure.height );
+							bVk = CreateSwapchain( vk, ev.xconfigure.width, ev.xconfigure.height );
+							if ( !bVk )
+								Log( "swapchain recreate failed, no more presents" );
 							bRedraw = true;
 						}
 					}
@@ -838,7 +869,7 @@ int main()
 
 		// Open / closed and the input hand-over.
 		const bool bWasOpen = open.bOpen;
-		DecideOpen( open, flNow, bHotkeyFired, bInput, bNeeds, pfnNeeds != nullptr, flIdleCloseSec );
+		DecideOpen( open, flNow, bHotkeyFired, bNeeds, pfnNeeds != nullptr, nLastEnabled != 0, flIdleCloseSec );
 		if ( open.bOpen != bWasOpen )
 		{
 			SetCard( dpy, win, g_atomInputFocus, open.bOpen ? 1 : 0 );
@@ -857,7 +888,11 @@ int main()
 				uPresentsThisSecond++;
 			}
 			if ( bRecreate )
-				CreateSwapchain( vk, uW, uH );
+			{
+				bVk = CreateSwapchain( vk, uW, uH );
+				if ( !bVk )
+					Log( "swapchain recreate failed, no more presents" );
+			}
 			bRedraw = false;
 			flNextHeartbeat = NowSeconds() + 1.0 / flIdleFps;
 		}

@@ -54,7 +54,17 @@ OpenVR stay as "switch off" even with it set.
 |---|---|---|
 | gamescope-ritz | Wayland/DRM/OpenVR/Headless: re-exec without the preload; SDL: keeps it. Vulkan layer: untouched | re-exec without the preload on every route backend (SDL too); `DISABLE_VK_LAYER_VALVE_steam_overlay_1=1`, `ENABLE_..` unset, set right after the re-exec point, before any Vulkan instance |
 | game, mangoapp, other children | non-SDL backends: preload restored from the stash (the game draws the overlay itself); SDL: gamescope-ritz keeps and draws it, so it is removed for the game; layer untouched | no overlay entry in `LD_PRELOAD` (other entries kept); layer off as above; the stash variable never reaches them |
-| dummy window | does not exist | `LD_PRELOAD` = the overlay entries from the stash (both paths, passed through unchanged), `ENABLE_VK_LAYER_VALVE_steam_overlay_1=1`, `DISABLE_..` unset |
+| dummy window's `gamescopereaper` | does not exist | the game's environment: no overlay preload, layer off, plus two private variables `GS_RITZ_STEAM_OVERLAY_HANDOVER=1` and `GS_RITZ_STEAM_OVERLAY_PRELOAD` (the overlay entries) that load nothing |
+| dummy window (after its hand-over re-exec) | does not exist | `LD_PRELOAD` = the overlay entries from the stash (both paths, passed through unchanged), `ENABLE_VK_LAYER_VALVE_steam_overlay_1=1`, `DISABLE_..` unset, private variables removed |
+
+**Only the dummy window carries the overlay, not the reaper.** The helper runs under
+`gamescopereaper`; if the reaper had the overlay in its environment, the real library would
+load into the reaper too and register with Steam as a second hooked process of the game.
+So gamescope-ritz hands the values over in the private variables and the helper, at startup,
+moves them into `LD_PRELOAD` / the layer pair and `execv`s itself once. (Alternative not
+taken: starting the helper without the reaper needs its own death-signal, shutdown and
+no-respawn handling; the hand-over is smaller.) Checked in `/proc/<pid>/environ` of the
+game, its reaper, the helper's reaper and the helper.
 
 If neither `LD_PRELOAD` nor the stash holds an overlay entry (a launcher wrapper clears
 `LD_PRELOAD`), the dummy window gets a 64-bit `gameoverlayrenderer.so` found in the Steam
@@ -85,9 +95,8 @@ The switch is deliberately temporary: step I3 replaces it with a config key. The
 | `GS_RITZ_STEAM_OVERLAY_LOG` | stderr | file the dummy window appends its timestamped log to |
 | `GS_RITZ_STEAM_OVERLAY_IDLE_FPS` | `1` | presents per second while the overlay needs none |
 | `GS_RITZ_STEAM_OVERLAY_HOTKEY` | Steam's own | e.g. `Ctrl+Shift+Tab`; else `InGameOverlayShortcutKey` from the newest `localconfig.vdf`, else Shift+Tab |
-| `GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` | `2000` | see "Open and closed" |
+| `GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` | `0` (off) | a positive value closes the overlay state after `BOverlayNeedsPresent()` stayed false that long; see "Open and closed" |
 | `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter |
-| `GS_RITZ_STEAM_OVERLAY_DUMMY_WSI` | off | `1` keeps this fork's WSI layer enabled for the dummy window (gamescope-ritz) |
 
 ## How the window works
 
@@ -96,12 +105,14 @@ The switch is deliberately temporary: step I3 replaces it with a config key. The
   or focus window, `DetermineAndApplyFocus`) and `STEAM_INPUT_FOCUS=0`; opacity is left at
   the default (opaque), because notifications (achievement toasts) show with the overlay
   closed.
-- Vulkan swapchain: `B8G8R8A8_UNORM`, FIFO, composite alpha preferring PRE_MULTIPLIED (Mesa
-  offers it for a 32-bit-visual window), cleared to RGBA 0,0,0,0 each present.
-  **Measured (headless, RADV): the swapchain gets PRE_MULTIPLIED and the game shows through
-  everywhere nothing is drawn, both with and without this fork's WSI layer.** The dummy
-  window therefore does not get the WSI layer by default (plain Xwayland, fewer moving
-  parts); `GS_RITZ_STEAM_OVERLAY_DUMMY_WSI=1` keeps it for comparison.
+- Vulkan swapchain: `B8G8R8A8_UNORM`, FIFO, composite alpha PRE_MULTIPLIED (Mesa offers it
+  for a 32-bit-visual window), cleared to RGBA 0,0,0,0 each present.
+  **Measured (headless, RADV): the game shows through everywhere nothing is drawn, both with
+  and without this fork's WSI layer.** The dummy window therefore does not get the WSI layer
+  (plain Xwayland is the one path). **No alpha, no window:** if the surface does not offer
+  PRE_MULTIPLIED, the helper logs an error and exits instead of presenting (an opaque window
+  would cover the game); it is not respawned, so that means no overlay. A failed swapchain
+  recreate (resize) is logged and stops presenting.
 - Presents only when needed: `BOverlayNeedsPresent()` (found with `dlsym(RTLD_DEFAULT, ..)`,
   there only when the overlay library is preloaded) is polled every 16 ms and a present
   follows when it is true; plus an idle heartbeat (`IDLE_FPS`, default 1/s) so the overlay
@@ -130,26 +141,33 @@ grabbed combination no longer reaches the game at all while the dummy window run
 
 ### Open and closed, and the input hand-over
 
-There is no "overlay is open" export, so `DecideOpen()` in the helper guesses (one small
-clearly marked function; every transition is logged):
+There is no "overlay is open" export, so `DecideOpen()` in the helper is a plain hotkey
+toggle (one small clearly marked function; every transition and ignored press is logged):
 
 - hotkey press, closed to open: set `STEAM_INPUT_FOCUS=1` on the window (gamescope then
-  routes mouse and keyboard to it); second press: open to closed, set it back to 0;
-- open and `BOverlayNeedsPresent()` false for `IDLE_CLOSE_MS` (2 s): closed (Esc or the
-  overlay's own close button);
-- open, an input event reaches our loop while `BOverlayNeedsPresent()` has been false for
-  0.3 s (the overlay did not swallow it): closed.
+  routes mouse and keyboard to it). **Ignored, with one log line, when there is nothing to
+  give input to:** no overlay library loaded (`BOverlayNeedsPresent` did not resolve), or
+  `IsOverlayEnabled()` resolved and returns false;
+- hotkey press, open to closed: set it back to 0 (always honoured);
+- optional: with `IDLE_CLOSE_MS` > 0, `BOverlayNeedsPresent()` false that long closes it.
+  Off by default: a static overlay may legitimately not ask for presents.
 
-Without the library only the hotkey toggles. **Assumptions the first real test decides:** an
-open overlay keeps asking for presents; the same hotkey closes it; events the overlay
-consumes are swallowed by its `XNextEvent` hook. `STEAM_INPUT_FOCUS` must be cleared again,
-not just the window hidden: a window with it set takes input even at opacity 0
-(`planning/steam-friends-window.md`). **Settled headless** (a stand-in library whose
+**Accepted limit of the spike:** the overlay is assumed to be opened and closed only with
+the hotkey. Closing it with Esc or its own button leaves input on the dummy window until the
+hotkey is pressed again, and from then on the helper's toggle and Steam's are inverted until
+the helper is restarted. The cure is the `GameOverlayActivated_t` callback below. The first
+real test is meant to show how `BOverlayNeedsPresent()` and `IsOverlayEnabled()` behave while
+the overlay is open, static, closed and showing a toast (both are logged on every change,
+with per-second event and present counts). `STEAM_INPUT_FOCUS` must be cleared again, not
+just the window hidden: a window with it set takes input even at opacity 0
+(`planning/steam-friends-window.md`). Also assumed: events the overlay consumes are swallowed
+by its `XNextEvent` hook. **Settled headless** (a stand-in library whose
 `BOverlayNeedsPresent()` follows a flag file; keys and pointer motion sent through
 gamescope's own seat with `gamescopectl wlserver_debug_key` / `wlserver_debug_mouse_motion`):
 while open, `KeyPress`/`MotionNotify` reach the dummy window; after the second hotkey
-press or the idle close, they no longer do (they go back to the game); the idle-close fired
-2.01 s after the flag dropped.
+press they no longer do (they go back to the game); with the flag dropped for 3.5 s while
+open it stays open (no auto-close at the default); without any library the hotkey is logged
+as ignored and `STEAM_INPUT_FOCUS` never becomes 1.
 
 ### The upgrade path: `GameOverlayActivated_t`
 
@@ -170,12 +188,18 @@ FPS HUD (6), toasts (7) and the settings overlay. Frame generation only substitu
 window's layer is never smeared. The alpha mode for overlay windows is premultiplied
 (`cv_overlay_unmultiplied_alpha` is only set on some DRM paths).
 
-**Cost to know about:** while an overlay window is mapped with non-zero opacity, the
-main loop's `bHasOverlay` is true (the "disable tearing if we have an overlay to avoid
-stutters" hack, `steamcompmgr.cpp`, search `bHasOverlay`) and an extra full-screen layer is
-composited. The dummy window is
-always mapped and opaque, so this holds for the whole session. Step I3 should decide whether
-to drop the opacity to 0 when nothing is shown (the notification case needs it visible).
+**Cost of the always-visible window (measured by reading the code at this commit; the
+planned cure is not implemented).** While the overlay window has non-zero opacity,
+`steamcompmgr.cpp` `bHasOverlay` (~11679) is true. That forces `FlipType::Normal` (no
+tearing, ~11739-11740), skips frame generation's async-flip path (~11727), and its tear
+present / the auto-V-sync async path (~11793-11808, ~11881, ~11890). Each heartbeat commit
+also forces a compose (`hasRepaintNonBasePlane`, ~9020-9038). An extra full-screen layer is
+composited. The dummy window is always mapped and opaque, so all of this holds for the whole
+session, and the first real test runs that way on purpose, to keep variables out of it.
+**Planned cure for the next step:** the helper writes `_NET_WM_WINDOW_OPACITY = 0` while
+idle and closed and restores it when `BOverlayNeedsPresent()` is true or the overlay is open
+(every gate tests `->opacity`; input focus does not depend on opacity; toasts need the
+`BOverlayNeedsPresent()` branch). Line numbers will drift; search the symbols.
 
 ## Testing without Steam
 
