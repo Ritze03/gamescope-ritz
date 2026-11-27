@@ -23,7 +23,8 @@ ROOT_LINK=yes                   # also link /usr/local/bin/NAME (root once, firs
 
 # gamescope-ritz is a C++/meson project. The meson build tree lives in build/meson (git-ignored) and
 # is reused by every later run, so an update only runs ninja. The compositor is built as
-# src/gamescope and copied to build/NAME; this fork's Vulkan WSI layer is copied to build/ too.
+# src/gamescope and copied to build/NAME; this fork's Vulkan WSI layer and the Steam overlay helper
+# (src/gamescopesteamoverlay) are copied to build/ too.
 # Submodules (src/reshade, thirdparty/SPIRV-Headers, subprojects/*) are checked out by ritz-get.
 LAYER=VkLayer_RITZ_gamescope_wsi
 layerdir=$data/vulkan/implicit_layer.d
@@ -128,9 +129,12 @@ build() {
 	lt=$(ninja -C build/meson -t targets all 2>/dev/null | sed -n 's|^\(layer/lib[A-Za-z0-9_]*gamescope_wsi[A-Za-z0-9_]*\.so\):.*|\1|p' | head -n 1)
 	[ -n "$lt" ] || echo "note: WSI layer target not found, layer not rebuilt"
 	echo "building with ninja"
-	if have nice; then nice -n 10 ninja -C build/meson src/gamescope $lt; else ninja -C build/meson src/gamescope $lt; fi
+	if have nice; then nice -n 10 ninja -C build/meson src/gamescope src/gamescopesteamoverlay $lt; else ninja -C build/meson src/gamescope src/gamescopesteamoverlay $lt; fi
 	cp build/meson/src/gamescope "build/.$NAME.new"
 	mv -f "build/.$NAME.new" "build/$NAME"
+	# the Steam overlay helper: the compositor looks for it next to its own (resolved) executable
+	cp build/meson/src/gamescopesteamoverlay build/.gamescopesteamoverlay.new
+	mv -f build/.gamescopesteamoverlay.new build/gamescopesteamoverlay
 	if [ -n "$lt" ]; then
 		cp "build/meson/$lt" build/.layer.new
 		mv -f build/.layer.new "build/$(basename "$lt")"

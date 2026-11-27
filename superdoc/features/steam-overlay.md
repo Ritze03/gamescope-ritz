@@ -25,7 +25,7 @@ separate process, `gameoverlayui`, rendering into shared textures.
 ## What the dummy window is, and why
 
 The **dummy window** (`src/Apps/gamescopesteamoverlay.cpp`, executable
-`gamescopesteamoverlay`, installed beside `gamescopereaper`) is a tiny helper process
+`gamescopesteamoverlay`) is a tiny helper process
 gamescope-ritz starts inside its own Xwayland. It is one full-screen, see-through X window
 that presents with Vulkan. It carries the overlay; the game and gamescope-ritz carry
 neither piece. gamescope composites the window above the game as its own layer.
@@ -82,7 +82,19 @@ point) decides the route once; `StartSteamOverlayDummy()` / `StopSteamOverlayDum
 `LaunchNestedChildren`; stop has no caller yet (shutdown's `KillAllChildren` already takes
 the helper down, and the reaper's death signal covers a crash). The helper is started like
 mangoapp, through `gamescopereaper` without `--respawn` (a helper that exits at once must
-not spin), found through `PATH`.
+not spin).
+
+**Finding the helper** (`FindSteamOverlayHelper()`): first `gamescopesteamoverlay` in the
+directory of the running executable (`readlink /proc/self/exe`, so the symlink
+`$HOME/.local/bin/gamescope-ritz` resolves to `<clone>/build/`, and a build tree resolves
+to `build-agent/src/`), spawned by that absolute path; else the bare name, searched in
+`PATH`. Missing in both places: one warning, no dummy window, the session carries on. The
+start line logs the path used. `install.sh` builds the helper with the compositor and
+copies it to `<clone>/build/gamescopesteamoverlay` (temp file, then `mv -f`, like the
+compositor), so no link in `$HOME/.local/bin` is needed. *Why next to the executable and
+not `PATH`:* the installer links only the compositor, and the distribution's own
+`gamescopereaper` on `PATH` knows nothing of this fork's helper. `--remove` leaves
+`build/` alone (it only deletes links), so the copy goes with the clone.
 
 ## The test switch and every knob
 

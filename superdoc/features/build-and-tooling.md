@@ -30,7 +30,9 @@ build). Split out on 2026-11-07, each with its own page: [gentle-build.md](gentl
   --yes` is what `ritz-get` runs on every install and update, and it never runs git
   itself: `ritz-get` has already checked out the clone and its submodules.
   - **Build.** `meson setup build/meson` (release, `-Doptimization=3 -Db_lto=true`,
-    `-Denable_tests=false`), then `ninja` for `src/gamescope` and the WSI layer. The binary
+    `-Denable_tests=false`), then `ninja` for `src/gamescope`, `src/gamescopesteamoverlay`
+    (the Steam overlay helper, copied the same way to `build/gamescopesteamoverlay`, found
+    next to the executable, see `steam-overlay.md`) and the WSI layer. The binary
     is copied to `build/gamescope-ritz` under a temporary name and `mv`ed into place, so a
     failed build leaves the old one working. A second run reconfigures (`meson setup
     --reconfigure`, which re-reads git for the embedded version, see below) and ninja only
