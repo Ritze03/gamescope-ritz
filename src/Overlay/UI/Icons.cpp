@@ -500,7 +500,7 @@ namespace gamescope::ui
 		// =================================================================
 		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3; regrouped to six, I7)
 		// =================================================================
-		// Seven glyphs, one per RailGroup (Display/Motion/Overlay/Input/Audio/
+		// Eight glyphs, one per RailGroup (Display/Motion/Overlay/Input/Audio/Misc/
 		// Settings/Other, in that order -- see the switch in
 		// IconForRailGroup() below, which is what actually binds each entry
 		// to its group rather than array position). Freehand, like every
@@ -540,8 +540,9 @@ namespace gamescope::ui
 		//            screen") with a short plain "+" (two crossing lines,
 		//            not a ring) sitting inside it, unconnected to the
 		//            frame's own edges. Read against system.crosshair's own
-		//            AREA icon (a ring with four arms crossing ITS edge):
-		//            this is the only glyph in
+		//            AREA icon (a ring with four arms crossing ITS edge)
+		//            and against Misc's asterisk below (three DIAGONAL
+		//            lines with no frame at all): this is the only glyph in
 		//            either table that draws a rectangle enclosing a
 		//            separate crossing mark -- "something drawn ON TOP of
 		//            the screen" is exactly the Overlay group's own
@@ -553,6 +554,16 @@ namespace gamescope::ui
 		//            system.null_binds' AREA icon (TWO separate square
 		//            keycaps joined by a priority chevron, four shapes): no
 		//            other glyph in either table is a single keycap shape.
+		//   Misc     a six-ray asterisk (three lines crossing through one
+		//            centre point) -- the plain "extras/sparkle" mark. No
+		//            other glyph in either table draws crossing diameters
+		//            with no enclosing frame (Overlay's "+" above always
+		//            sits inside its own rect); three SEPARATE same-size
+		//            dots (the I2 shape) is the standard overflow-menu
+		//            glyph almost everywhere else, which is exactly the
+		//            wrong association for a group that opens INLINE, not
+		//            into a hidden menu. (Removed 2026-11-27 with the Friends
+		//            list, restored the same day for the Steam Overlay area.)
 		//   Settings a hex-nut: a six-sided outline with a round hole at
 		//            its centre -- the bolt-head/mechanism read "settings"
 		//            already carries elsewhere in this app's own iconography
@@ -603,6 +614,11 @@ namespace gamescope::ui
 					{ 13.0f, 18.5f }, { 8.5f, 14.5f }, { 4.0f, 14.5f } } },
 				Poly( { 16.5f, 8.5f }, { 18.5f, 12.0f }, { 16.5f, 15.5f } ) } },
 
+			{ "railgroup.misc", 3, {
+				Line( { 5.0f, 12.0f }, { 19.0f, 12.0f } ),
+				Line( { 8.5f, 5.9f },  { 15.5f, 18.1f } ),
+				Line( { 15.5f, 5.9f }, { 8.5f, 18.1f } ) } },
+
 			{ "railgroup.settings", 2, {
 				IconShape{ IconOp::Loop, 6, 0.0f, {
 					{ 12.0f, 3.0f }, { 19.8f, 7.5f }, { 19.8f, 16.5f },
@@ -637,8 +653,9 @@ namespace gamescope::ui
 			case RailGroup::Overlay:  return &kGroupIcons[ 2 ];
 			case RailGroup::Input:    return &kGroupIcons[ 3 ];
 			case RailGroup::Audio:    return &kGroupIcons[ 4 ];
-			case RailGroup::Settings: return &kGroupIcons[ 5 ];
-			case RailGroup::Other:    return &kGroupIcons[ 6 ];
+			case RailGroup::Misc:     return &kGroupIcons[ 5 ];
+			case RailGroup::Settings: return &kGroupIcons[ 6 ];
+			case RailGroup::Other:    return &kGroupIcons[ 7 ];
 			case RailGroup::Nothing:     return nullptr;
 		}
 		return nullptr;

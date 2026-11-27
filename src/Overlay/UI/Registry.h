@@ -1418,7 +1418,7 @@ namespace gamescope::ui
 	// input (Autoclicker/Null binds, soon General's grab toggles too) and
 	// one unrelated social feature -- so OVERLAY and INPUT split
 	// those two concerns out into their own tabs, leaving MISC as the true
-	// leftover (since removed, see below).
+	// leftover (see below).
 	//
 	// Deliberately NOT Section above (see that enum's own comment) and NOT
 	// derived from registration order -- this is its own fixed, hand-
@@ -1458,13 +1458,14 @@ namespace gamescope::ui
 	// kind of separate, but they can all be turned on at the same time"), so they
 	// are one group of their own rather than two more rows in DISPLAY.
 	//
-	// AUDIO (2026-10-22) is a group between INPUT and SETTINGS: Mixer (volume
+	// AUDIO (2026-10-22) is a group between INPUT and MISC: Mixer (volume
 	// only) and Effects (the compressor/limiter, "Dynamics"). The user: "We should
 	// have a seperate audio category. 1. Mixer (Volume Only) 2. Effects (Compressor
 	// Only for now) 3. Visualizer ..." (the Visualizer is a later task). Mixer left
-	// MISC; MISC, left holding only the social feature, was removed together with
-	// it (2026-11-27), so the rail has seven groups.
-	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Audio, Settings, Other, Nothing };
+	// MISC. MISC, left holding only the Friends list, was removed with it on
+	// 2026-11-27 and restored the same day to hold the Steam Overlay area, at the
+	// user's request: "Put it into the "Misc" tab, instead of "Settings"".
+	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Audio, Misc, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 

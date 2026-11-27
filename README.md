@@ -290,7 +290,7 @@ instructions, which `install.sh` still follows underneath.
 
 ## The settings Shell and its other additions
 
-The Shell's rail has seven groups: DISPLAY, MOTION, OVERLAY, INPUT, MISC, SETTINGS and
+The Shell's rail has eight groups: DISPLAY, MOTION, OVERLAY, INPUT, AUDIO, MISC, SETTINGS and
 OTHER. Each is an accordion tab that opens to its areas.
 
 <p align="center">
