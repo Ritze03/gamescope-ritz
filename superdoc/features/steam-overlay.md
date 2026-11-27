@@ -98,7 +98,7 @@ not `PATH`:* the installer links only the compositor, and the distribution's own
 
 ## The test switch and every knob
 
-The switch is deliberately temporary: step I3 replaces it with a config key. The question
+The switch is deliberately temporary: step I3 replaces it with a config key. (`GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` existed until 2026-11-27 and is gone: the real log proved `BOverlayNeedsPresent()` cannot tell open from closed.) The question
 "is the route on?" lives in one function, `Process::SteamOverlayDummyRequested()`.
 
 | env | default | meaning |
@@ -107,7 +107,9 @@ The switch is deliberately temporary: step I3 replaces it with a config key. The
 | `GS_RITZ_STEAM_OVERLAY_LOG` | stderr | file the dummy window appends its timestamped log to |
 | `GS_RITZ_STEAM_OVERLAY_IDLE_FPS` | `1` | presents per second while the overlay needs none |
 | `GS_RITZ_STEAM_OVERLAY_HOTKEY` | Steam's own | e.g. `Ctrl+Shift+Tab`; else `InGameOverlayShortcutKey` from the newest `localconfig.vdf`, else Shift+Tab |
-| `GS_RITZ_STEAM_OVERLAY_IDLE_CLOSE_MS` | `0` (off) | a positive value closes the overlay state after `BOverlayNeedsPresent()` stayed false that long; see "Open and closed" |
+| `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK` | off | `1`: never load `steamclient.so`; open/closed is the plain hotkey toggle (for comparing) |
+| `GS_RITZ_STEAM_OVERLAY_INPUT` | `grab` | how the helper takes input while the overlay is open: `grab` (`STEAM_INPUT_FOCUS=2` plus an active keyboard grab, the game keeps its X focus) or `focus` (`STEAM_INPUT_FOCUS=1`, the game loses X focus); see "Input modes" |
+| `GS_RITZ_STEAMCLIENT` | search `<steam root>/linux64/steamclient.so` | full path of the `steamclient.so` the helper loads for the open/closed callback (same override as the main program) |
 | `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter |
 
 ## How the window works
@@ -153,42 +155,174 @@ grabbed combination no longer reaches the game at all while the dummy window run
 
 ### Open and closed, and the input hand-over
 
-There is no "overlay is open" export, so `DecideOpen()` in the helper is a plain hotkey
-toggle (one small clearly marked function; every transition and ignored press is logged):
+There is no "overlay is open" export, so the helper has to learn it from Steam. The one
+function `DecideOpen()` holds the whole rule (every transition and every ignored press is
+logged). Opening hands the input to the window (how: "Input modes" below), closing gives it
+back and sets `STEAM_INPUT_FOCUS` to 0. It must be cleared, not just the window hidden:
+a window with it set takes input even at opacity 0 (`planning/steam-friends-window.md`).
 
-- hotkey press, closed to open: set `STEAM_INPUT_FOCUS=1` on the window (gamescope then
-  routes mouse and keyboard to it). **Ignored, with one log line, when there is nothing to
-  give input to:** no overlay library loaded (`BOverlayNeedsPresent` did not resolve), or
-  `IsOverlayEnabled()` resolved and returns false;
-- hotkey press, open to closed: set it back to 0 (always honoured);
-- optional: with `IDLE_CLOSE_MS` > 0, `BOverlayNeedsPresent()` false that long closes it.
-  Off by default: a static overlay may legitimately not ask for presents.
+**Authority rule.** Steam posts the Steamworks callback `GameOverlayActivated_t` (callback id
+**331** = friends callbacks base 300 + 31, first payload byte `m_bActive`, 1 = opened,
+0 = closed) whenever the overlay opens or closes, by whatever means (hotkey, Esc, its close
+button, Steam opening it itself).
 
-**Accepted limit of the spike:** the overlay is assumed to be opened and closed only with
-the hotkey. Closing it with Esc or its own button leaves input on the dummy window until the
-hotkey is pressed again, and from then on the helper's toggle and Steam's are inverted until
-the helper is restarted. The cure is the `GameOverlayActivated_t` callback below. The first
-real test is meant to show how `BOverlayNeedsPresent()` and `IsOverlayEnabled()` behave while
-the overlay is open, static, closed and showing a toast (both are logged on every change,
-with per-second event and present counts). `STEAM_INPUT_FOCUS` must be cleared again, not
-just the window hidden: a window with it set takes input even at opacity 0
-(`planning/steam-friends-window.md`). Also assumed: events the overlay consumes are swallowed
-by its `XNextEvent` hook. **Settled headless** (a stand-in library whose
-`BOverlayNeedsPresent()` follows a flag file; keys and pointer motion sent through
-gamescope's own seat with `gamescopectl wlserver_debug_key` / `wlserver_debug_mouse_motion`):
-while open, `KeyPress`/`MotionNotify` reach the dummy window; after the second hotkey
-press they no longer do (they go back to the game); with the flag dropped for 3.5 s while
-open it stays open (no auto-close at the default); without any library the hotkey is logged
-as ignored and `STEAM_INPUT_FOCUS` never becomes 1.
+- Until the first 331 of the session has arrived, the **hotkey toggles** (press: closed to
+  open, next press: open to closed). Ignored, with one log line, when there is nothing to
+  give input to: no overlay library loaded, or `IsOverlayEnabled()` returns false.
+- From the first 331 on, **callbacks are the only thing that changes the state**; hotkey
+  presses are only logged ("hotkey press ignored, callbacks decide").
+- So a failed connection (no library, missing symbol, pipe 0, user 0: each logged once)
+  degrades to the plain hotkey toggle, and the helper never exits because of Steam.
 
-### The upgrade path: `GameOverlayActivated_t`
+**The callback pipe.** After startup, with an overlay library loaded, the helper `dlopen`s
+`steamclient.so` (`RTLD_LAZY | RTLD_LOCAL`; path `GS_RITZ_STEAMCLIENT`, else
+`<steam root>/linux64/` over the same roots as the hotkey lookup), requires the symbols
+`Steam_CreateSteamPipe`, `Steam_ConnectToGlobalUser`, `Steam_BGetCallback`,
+`Steam_FreeLastCallback`, `Steam_ReleaseUser`, `Steam_BReleaseSteamPipe` (flat C exports,
+same signatures and `CallbackMsg_t` layout as `tests/steam_friends_live_probe.cpp`), creates
+its own pipe, connects the global user and drains `Steam_BGetCallback` /
+`Steam_FreeLastCallback` in the existing 16 ms main-loop wake-up, in the helper's own
+thread (no new one). The queues are per pipe, so this cannot take a callback from the game's
+pipe (`steam-friends.md`, "Callbacks are not the blocker"). The pipe and user are released
+on exit; the library is never `dlclose()`d (it starts threads). Without an overlay library
+there is nothing to give input to, so no pipe is created. `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK=1`
+skips all of it.
 
-The official signal is Steam's `GameOverlayActivated_t` callback (callback id 331, first
-byte `m_bActive`). It would take a Steam pipe from `steamclient.so` (`CreateSteamPipe`,
-`ConnectToGlobalUser`), then polling `Steam_BGetCallback` / `Steam_FreeLastCallback` from a
-thread of the dummy window, the way `src/SteamFriends.cpp` already talks to
-`steamclient.so`. That replaces `DecideOpen()` with a true signal. Not built: it needs the
-real client to test and this step may not touch one.
+**Why the hotkey toggle cannot work** (first real Steam test, Unity game from Steam, 2026-11-27):
+
+- The hotkey (`Ctrl+Shift+Tab` from Steam's config, grabbed as keycode 23, modifiers 0x5 plus
+  the NumLock/CapsLock variants) opened the overlay: `hotkey press delivered` then
+  `open/closed: hotkey -> OPEN`, `STEAM_INPUT_FOCUS -> 1`; mouse, clicks and keys reached the
+  helper for about 40 s.
+- That was the only hotkey press the helper ever saw. While the overlay is open its hooks
+  swallow key presses (per-second counts show `KeyRelease` without `KeyPress`), so the press
+  that closes it never arrives. The helper stayed "open", `STEAM_INPUT_FOCUS` stayed 1, and
+  after the overlay was closed (presents dropped from ~130/s to 1 to 2/s) mouse and keyboard
+  still went to the helper and the game got nothing: "it works, but it freezes the game".
+- `BOverlayNeedsPresent()` is no substitute: it was true on nearly every 16 ms poll for the
+  first 146 s with the overlay **closed** (about 58 presents/s the whole time), stayed busy
+  while open, and only dropped to one every ~2 s after the first open/close cycle. It says "a
+  frame is wanted", not "the overlay is open". (Its transition lines are throttled to those
+  that follow >= 0.5 s of stability, the per-second line carries the count of true polls.)
+
+**What that first real test established:** the real overlay attaches to the helper
+(`IsOverlayEnabled -> 1` 0.8 s after start, swapchain 1920x1080 format 44 alpha mode
+PRE_MULTIPLIED), the hotkey read from Steam's config and grabbed with a passive `XGrabKey`
+does open it, and the see-through window works on RADV. **Not yet known:** whether 331 is
+delivered to the helper's own pipe (look for `callback 331` in the log), and what the
+`FocusIn`/`FocusOut` bursts while open are (they are now logged with mode and detail).
+
+**Log lines for the next real test.** Per second: `presents=N needsTrue=N events: ... callbacks: ID=N ...`
+(counts of every callback id seen on the pipe). `callbacks: connected (...)` or one failure
+line at start. `callback 331 GameOverlayActivated_t: 8 bytes [..] -> active=0|1`, then
+`first GameOverlayActivated_t, callbacks are now the only authority`, then
+`callback -> OPEN|CLOSED`. `a hotkey press was not followed by a 331 within 1 s` means the
+callback is not reaching this pipe (the hotkey path stays in charge until a first 331).
+`FocusIn|FocusOut window .. mode NotifyNormal|NotifyGrab|NotifyUngrab|NotifyWhileGrabbed
+detail ..` (one line each); `KeyPress reached the helper while open: keycode N state 0x..`
+(at most 20 per second) shows which presses the overlay lets through.
+
+**Settled headless** (stand-ins: a `gameoverlayrenderer.so` whose `BOverlayNeedsPresent()`
+follows a flag file, and a `steamclient.so` whose `Steam_BGetCallback` delivers a 331 when a
+flag file changes, plus noise ids 304 and 336; input through gamescope's own seat with
+`gamescopectl wlserver_debug_key`):
+hotkey opens and sets `STEAM_INPUT_FOCUS=1`; then a 331 with active=1 switches the authority;
+a 331 with active=0 and **no** second hotkey closes it and clears the focus, and input sent
+afterwards no longer reaches the helper; a 331 alone (no hotkey ever) opens and closes;
+after the switch a hotkey press alone changes nothing; `NO_CALLBACK=1` never maps
+`steamclient.so`; a missing library path and a library without the symbols each give one
+log line and keep the hotkey toggle; without an overlay library the hotkey is ignored
+and no `steamclient.so` is loaded.
+**Careful with `gamescopectl` in tests:** it reads `GAMESCOPE_WAYLAND_DISPLAY` (default
+`gamescope-0`), not `WAYLAND_DISPLAY`, so an unset variable talks to whatever session owns
+`gamescope-0`.
+A hotkey press seen while open produced `FocusOut ... NotifyGrab` and
+`FocusOut/FocusIn ... NotifyUngrab` on the dummy window: those are the passive grab
+activating, not focus changes by gamescope.
+
+### Input modes: `grab` (default) and `focus`
+
+**The problem.** The user's first real test said "it works, but it freezes the game". Besides
+the stuck-open state (fixed by the callback above), a game that pauses on focus loss (Unity
+unless "run in background" is set) pauses for as long as the overlay is open, because of what
+gamescope does with `STEAM_INPUT_FOCUS=1` (read from `steamcompmgr.cpp`):
+
+- `xwayland_ctx_t::DetermineAndApplyFocus` (~4578) picks the overlay window (`isOverlay`,
+  `inputFocusMode`) as `inputFocus` (~4619); `keyboardFocusWin = inputFocus` (~4673), and
+  only `inputFocusMode == 2` swaps it back to `focus.focusWindow` (~4677).
+- With mode 1 it calls `XSetInputFocus(ctx->dpy, <overlay window>, ...)` (~4764): the game's
+  window, on the **same** Xwayland server, receives `FocusOut` with mode `NotifyNormal`. It
+  also writes `_NET_ACTIVE_WINDOW` = the overlay window (~4767-4769), hides the cursor (~4788)
+  and, in the global pass, `wlserver_keyboardfocus(<overlay surface>)` (~5271), so the
+  Wayland keyboard leaves the game's surface. No unmap and no `WM_STATE` change
+  (`set_wm_state` only runs for the *focus* window, ~4658).
+- Steam's own in-game overlay never takes focus from the game; upstream's Deck setup avoids
+  it by construction (`--xwayland-count 2`: Steam's UI and the game on different Xwayland
+  servers, `get_index() != 0` gives the `SteamControlled` strategy ~4629, and
+  `XSetInputFocus` is per server connection).
+
+**`GS_RITZ_STEAM_OVERLAY_INPUT=grab` (default).** On open the helper takes an active
+`XGrabKeyboard` on its window (`owner_events` False, `GrabModeAsync` both) and writes
+`STEAM_INPUT_FOCUS=2`. Mode 2 means "pointer to the overlay, keyboard stays with the game"
+(the Deck's quick-access menu uses it; `steamcompmgr.cpp` ~4677, ~5248-5253, ~6441): no
+`XSetInputFocus` on the helper, no Wayland keyboard move, so the game keeps its X focus.
+The keys reach the helper because X delivers them to the grabbing client. On close it
+ungrabs, then writes `STEAM_INPUT_FOCUS=0`; it also ungrabs on exit, and X drops the grab
+with the window. Every grab logs its return code (`GrabSuccess`, `AlreadyGrabbed`, ...); a
+failed grab logs it and falls back to `STEAM_INPUT_FOCUS=1` for that open, so the overlay
+is never left without keys.
+
+**`focus`** is the old behaviour (`STEAM_INPUT_FOCUS=1`, no grab), kept so one test session
+can compare.
+
+**Why the real libX11 functions.** The overlay library exports `XGrabKeyboard` and
+`XUngrabKeyboard` itself (it tracks and suspends the game's own grabs while its UI is up).
+A plain call from the helper would go through that hook and might be recorded and deferred
+instead of executed. The helper therefore resolves both from libX11's own handle
+(`dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD)` + `dlsym`, which does not see the
+preloaded interposer) and logs which path it uses (`keyboard grab will use: ...`); if that
+lookup fails it falls back to the plain call.
+
+**The passive hotkey grab** is unchanged. Its activation already produces `FocusOut ...
+NotifyGrab` and `FocusOut`/`FocusIn ... NotifyUngrab` on the dummy window (seen headless
+without any helper keyboard grab), so such lines are not gamescope focus changes. The game's own window sees the same pair at each hotkey press (`FocusOut NotifyGrab`, then `FocusIn NotifyUngrab`), in either mode, since the grab is on the root window. Every
+`FocusIn`/`FocusOut` log line ends with `(own keyboard grab: yes|no)`.
+
+**Headless proof** (stand-in overlay library and `steamclient.so`; the "game" is a small Xlib
+window printing the focus and key events it receives; open and close driven only by the
+stub's 331):
+
+| | `grab` | `focus` |
+|---|---|---|
+| game on open | `FocusOut mode NotifyGrab` only | `FocusOut mode NotifyNormal` |
+| game on close | `FocusIn mode NotifyUngrab` | `FocusIn mode NotifyNormal` |
+| keys sent while open | reach the helper, none reach the game | reach the helper, none reach the game |
+| pointer motion while open | reaches the helper, not the game | reaches the helper, not the game |
+| keys after close | reach the game again, not the helper | the same |
+
+The `focus` column confirms the diagnosis (the game sees a plain focus loss); `grab` shows
+no `NotifyNormal` event at all. Without the stand-in overlay library, `grab` mode ignores
+the hotkey exactly as before and takes no grab.
+
+**Unproven until the next real test:**
+- whether the overlay's own hooks accept key events delivered through the helper's active
+  grab (they see them in the helper's Xlib event stream, as for any key, but the stand-in
+  cannot say what the real library does with them);
+- whether a Unity game treats `FocusOut mode NotifyGrab` as a focus loss (SDL ignores it);
+- pointer behaviour for a game holding a pointer lock: the cursor constraint is applied to
+  the **keyboard** focus surface (`wlserver_keyboardfocus` with `bConstrain`,
+  `wlserver.cpp` ~3633), so under mode 2 the game's lock stays active while the pointer
+  focus moves to the overlay window. The cursor image comes from the same Xwayland context
+  (`steamcompmgr.cpp` ~5226), and the cursor is hidden on the focus change (~4788). Whether
+  the overlay's mouse is usable then is unmeasured; `focus` mode is the comparison.
+
+**Reserve: (a) the dummy window on a second Xwayland server.** Needs the helper on another
+`DISPLAY` and gamescope-ritz running two servers (`--xwayland-count 2`, the game on the second:
+reshapes launch, focus selection and `DISPLAY` handling for everything). The passive
+`XGrabKey` only works on the game's own server, so gamescope would have to inject the hotkey
+(`wlserver_process_hotkeys`) into the helper's stream. Largest change, most risk; whether the
+Wayland keyboard moving between two Xwayland surfaces makes the game's Xwayland emit a focus
+loss is unmeasured. Only worth doing if `grab` fails on a real game.
 
 ## Layering (read from the paint code, nothing changed)
 
