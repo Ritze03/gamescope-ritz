@@ -2,7 +2,7 @@ catch2_dep = dependency('catch2-with-main', required: true)
 
 srcdir = '../src'
 unittest_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Config/ProfileExport.cpp', 'Audio/Volume.cpp', 'Audio/Dynamics.cpp', 'Clipboard/ClipboardSync.cpp', 'Utils/TaskbarIcon.cpp', 'Keybinds.cpp', 'SteamFriends.cpp', 'LaunchOptions.cpp', 'FrameGen/FrameGenCapture.cpp']
+foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'Config/AppId.cpp', 'Config/ConfigManager.cpp', 'Config/ProfileExport.cpp', 'Audio/Volume.cpp', 'Audio/Dynamics.cpp', 'Clipboard/ClipboardSync.cpp', 'Utils/TaskbarIcon.cpp', 'Keybinds.cpp', 'LaunchOptions.cpp', 'FrameGen/FrameGenCapture.cpp']
 	unittest_src += srcdir / src
 endforeach
 
@@ -23,7 +23,7 @@ endforeach
 unittest_src += files('test_framegen_stale.cpp')   # frame generation's stale real-frame guard (FrameGen/StaleFrame.h)
 gamescope_tests = executable(
 	'gamescope_tests',
-	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_steam_friends.cpp', 'test_nullbinds.cpp', 'test_truesens.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp', 'test_framegen_reach.cpp', 'test_framegen_v3.cpp', 'test_framegen_capture.cpp', 'test_framegen_pair_span.cpp', 'test_judder.cpp', 'test_framegen_debug.cpp', 'test_vblank_schedule.cpp'],
+	unittest_src + font_headers + [bundled_scripts_header, project_icon_header] + ['test_global_isolation.cpp', 'test_convar.cpp', 'test_process.cpp', 'test_config.cpp', 'test_audio_volume.cpp', 'test_audio_capture.cpp', 'test_audio_dynamics.cpp', 'test_settings_overlay_input.cpp', 'test_overlay_ui.cpp', 'test_overlay_atoms.cpp', 'test_overlay_shell.cpp', 'test_overlay_palette.cpp', 'test_cursor_policy.cpp', 'test_changelog_parse.cpp', 'test_bundled_scripts.cpp', 'test_clipboard_sync.cpp', 'test_crosshair.cpp', 'test_overlay_profiles.cpp', 'test_fps_counter.cpp', 'test_pointer_mapping.cpp', 'test_resolution.cpp', 'test_effects_curve.cpp', 'test_keybinds.cpp', 'test_nullbinds.cpp', 'test_truesens.cpp', 'test_framegen_format.cpp', 'test_framegen_pacing.cpp', 'test_framegen_tearhint.cpp', 'test_limiter_pace.cpp', 'test_diagnostics.cpp', 'test_profile_export.cpp', 'test_taskbar_icon.cpp', 'test_framegen_reach.cpp', 'test_framegen_v3.cpp', 'test_framegen_capture.cpp', 'test_framegen_pair_span.cpp', 'test_judder.cpp', 'test_framegen_debug.cpp', 'test_vblank_schedule.cpp'],
 	include_directories: [srcdir, sol2_include, '../subprojects/FrameGen/gpu'],
 	dependencies: [catch2_dep, stb_dep, luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep, imgui_dep, xkbcommon],
 	cpp_args: gamescope_cpp_args,
@@ -54,7 +54,6 @@ test('pointer_mapping', gamescope_tests, args: ['[pointer_mapping]'])
 test('effects_curve', gamescope_tests, args: ['[effects_curve]'])
 test('resolution', gamescope_tests, args: ['[resolution]'])
 test('keybinds', gamescope_tests, args: ['[keybinds]'])
-test('steam_friends', gamescope_tests, args: ['[steam_friends]'])
 test('nullbinds', gamescope_tests, args: ['[nullbinds]'])
 test('truesens', gamescope_tests, args: ['[truesens]'])
 test('framegen_format', gamescope_tests, args: ['[framegen_format]'])
@@ -67,45 +66,6 @@ test('framegen_hold', gamescope_tests, args: ['[framegen_hold]'])
 test('framegen_tearhint', gamescope_tests, args: ['[framegen_tearhint]'])
 test('framegen_stale', gamescope_tests, args: ['[framegen_stale]'])
 test('framegen_debug', gamescope_tests, args: ['[framegen_debug]'])
-
-# ---------------------------------------------------------------------------
-#  The Steam client stand-ins, for test_steam_friends.cpp
-# ---------------------------------------------------------------------------
-# src/SteamFriends.cpp's loader has to survive five states a HEALTHY Steam is
-# never in (superdoc/planning/steam-friends-join.md §6d), so there is no way to
-# provoke them with the real client -- and the machine this fork is developed on
-# is usually mid-match. These two libraries provoke them instead. Neither is
-# installed, neither is linked into anything; the test dlopens them by path.
-#
-#   libsteamclient_stub.so  -- Steam-shaped: exports CreateInterface AND the
-#                              Steam_* fingerprint symbols. Its behaviour is
-#                              chosen by GS_RITZ_TEST_STEAMCLIENT_MODE.
-#   libnotsteam_stub.so     -- exports CreateInterface and nothing else, which
-#                              is the "that library is not Steam's client" path.
-#
-# They are built into this same directory as gamescope_tests, which is how the
-# test finds them (from /proc/self/exe) with no env plumbing.
-shared_library('steamclient_stub', ['steamclient_stub.cpp'], cpp_args: gamescope_cpp_args)
-shared_library('notsteam_stub', ['steamclient_stub.cpp'], cpp_args: gamescope_cpp_args + ['-DSTUB_NOT_STEAM'])
-
-# The live read check. Built, never registered as a test: it needs a Steam that
-# is installed, running and signed in, so as a test it would fail on every
-# machine without one. A fake built from the same declaration cannot prove the
-# declaration is right -- this can, against the real client, read-only. See the
-# file's own header.
-steam_friends_live_src = []
-foreach src : gamescope_core_src + ['Script/Script.cpp', 'convar_script.cpp', 'SteamFriends.cpp']
-	steam_friends_live_src += srcdir / src
-endforeach
-executable(
-	'steam_friends_live_probe',
-	steam_friends_live_src + [bundled_scripts_header, 'steam_friends_live_probe.cpp'],
-	include_directories: [srcdir, sol2_include],
-	# convar_script.cpp reaches backend.h, which reaches drm_include.h -- hence
-	# the graphics deps on a binary that draws nothing.
-	dependencies: [luajit_dep, cap_dep, drm_dep, glm_dep, wlroots_dep, nlohmann_json_dep],
-	cpp_args: gamescope_cpp_args,
-)
 
 # scripts/pointer-regression.sh's test client -- not a meson test (it needs a
 # running gamescope), just built here so the script has a binary. See the

@@ -1171,7 +1171,6 @@ namespace gamescope::ui
 			case RailGroup::Overlay:  return "OVERLAY";
 			case RailGroup::Input:    return "INPUT";
 			case RailGroup::Audio:    return "AUDIO";
-			case RailGroup::Misc:     return "MISC";
 			case RailGroup::Settings: return "SETTINGS";
 			case RailGroup::Other:    return "OTHER";
 			// RailGroupForId() never returns this -- it is the accordion's
@@ -1228,10 +1227,6 @@ namespace gamescope::ui
 			// used to be a group inside the Mixer. A Visualizer joins later.
 			{ "audio.mixer",           RailGroup::Audio },
 			{ "audio.effects",         RailGroup::Audio },
-			// ---- MISC -- I7: the true leftover once Overlay and Input
-			// took their own concerns out; Friends alone since AUDIO took
-			// the Mixer (2026-10-22).
-			{ "system.friends",        RailGroup::Misc },
 			// ---- SETTINGS -- unchanged by I7 except Cursor's departure.
 			{ "setup.profiles",        RailGroup::Settings },
 			{ "system.general",        RailGroup::Settings },

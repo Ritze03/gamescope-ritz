@@ -26,9 +26,7 @@ present or future, that forgets its own isolation.
 covers only `gamescope_tests`. `scripts/effects-regression.sh` and `scripts/pixel-regression.sh`
 already do this (each launches gamescope with its own `CONFIGHOME` exported as
 `XDG_CONFIG_HOME`); any new script or tool that runs gamescope or links `Config/ConfigManager.cpp`
-needs the same. `tests/steam_friends_live_probe` (built but never registered as a `meson test`,
-per its own header) does not link `ConfigManager.cpp` and touches no config path, so it needs
-no such isolation.
+needs the same.
 
 ## Related
 

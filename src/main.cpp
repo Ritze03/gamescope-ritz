@@ -48,7 +48,6 @@
 #include "Overlay/PanelMotionBlur.h"
 #include "Overlay/PanelLagBuffer.h"
 #include "Overlay/PanelAudio.h"
-#include "Overlay/PanelFriends.h"
 #include "Overlay/PanelSystem.h"
 #include "Overlay/PanelKeybinds.h"
 
@@ -309,7 +308,7 @@ const char usage[] =
 	"  GS_RITZ_PROFILE                use this profile for this session only (same as --profile; the flag wins)\n"
 	"  RITZ_GS_APPID                  app id that picks the game profile (any string; default: detected from Steam's launch environment)\n"
 	"  GAMESCOPE_RITZ_USE_SYSTEM_WSI  1 = use the distro's Vulkan WSI layer instead of gamescope-ritz's own (unset or 0 = off)\n"
-	"  GS_RITZ_STEAMCLIENT            path to steamclient.so for the Friends list (default: searched under ~/.steam and ~/.local/share/Steam)\n"
+	"  GS_RITZ_STEAMCLIENT            path to steamclient.so for the Steam overlay dummy window (default: searched under ~/.steam and ~/.local/share/Steam)\n"
 	"\n"
 	"Keyboard shortcuts:\n"
 	"  Super + F                      toggle fullscreen\n"
@@ -711,10 +710,6 @@ static void ritz_apply_config_live(const gamescope::config::Settings &config, bo
 	// system.clipboard_sync: PanelSystem reloads on the bump, but only when
 	// it next draws; seed the runtime flag now, as at startup.
 	gamescope::PanelSystem_SeedFromConfig();
-	// The friends list's session app id, same shape: the poller reads an
-	// atomic rather than calling config::SessionAppId() from its own thread,
-	// so anything that re-reads the config has to push it.
-	gamescope::PanelFriends_SeedFromConfig();
 }
 
 static void apply_ritz_config_to_startup_state(const gamescope::config::Settings &config)
@@ -1202,10 +1197,6 @@ int main(int argc, char **argv)
 	// EnsureConfigLoaded() shape as PanelDisplay.cpp), neither of which
 	// depends on the registry, wlserver, the backend, or steamcompmgr.
 	gamescope::PanelSystem_SeedFromConfig();
-	// Same reasoning for the friends list's "look game names up online"
-	// switch: it is the one setting that decides whether this process ever
-	// opens a socket, so it must be in force before anything can poll.
-	gamescope::PanelFriends_SeedFromConfig();
 
 	static std::string optstring = build_optstring(gamescope_options);
 	gamescope_optstring = optstring.c_str();

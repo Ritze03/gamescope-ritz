@@ -1,5 +1,7 @@
 # Settings-Overlay Feature Ideas — Practicality Research
 
+*(2026-11-27: the Friends list was built later and removed again; see `meta/TERMINOLOGY.md`.)*
+
 Scope: three feature ideas for the settings overlay — Steam friends list with
 join-game, Spotify/playerctl integration, system load display. **Research only, no
 implementation, no code written outside this file.** Claims verified against this

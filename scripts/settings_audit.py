@@ -115,23 +115,12 @@ NOT_COVERED = {
                       "build-release/verify-shots/keybinds-2026-09-08/",
     "keybinds.shell_alt": "as keybinds.shell",
     "keybinds.launcher": "as keybinds.shell",
-    "keybinds.friends": "as keybinds.shell",
     "keybinds.zoom": "as keybinds.shell",
     "keybinds.autoclicker": "as keybinds.shell",
     # The same two chords again, as their own areas' copy of the row
     # (2026-09-22): one binding, global.json, whichever row wrote it.
     "zoom.bind": "as keybinds.shell (the Zoom area's copy of keybinds.zoom)",
     "autoclicker.bind": "as keybinds.shell (the Autoclicker area's copy of keybinds.autoclicker)",
-    # The friends list (2026-09-08). Bound to an int index, but that index is
-    # not a persisted value: selecting a line ACTS on it (it joins, or says
-    # why it cannot), the list's contents come from the running Steam client
-    # rather than from a config file, and the harness has no Steam. Covered by
-    # tests/test_steam_friends.cpp and, live, by
-    # build-release/verify-shots/steam-friends-phase345-2026-09-08/.
-    "friends.list": "selecting a line asks Steam to join that friend -- it acts, it does not "
-                    "store a value, and the rows come from the Steam client rather than from "
-                    "a config file; tests/test_steam_friends.cpp and "
-                    "build-release/verify-shots/steam-friends-phase345-2026-09-08/ cover it",
 }
 KIND_NOT_COVERED = {
     "facts": "read-only",

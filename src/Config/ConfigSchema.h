@@ -160,7 +160,7 @@ namespace gamescope::config
         // profile is simply not read: Load() asks for the keys it knows and
         // ignores the rest, so the file loads unchanged and the keys drop
         // out the next time it is written -- the same precedent
-        // `friends_lookup_names`, `backdrop_enabled`, `backdrop_rounding`
+        // `backdrop_enabled`, `backdrop_rounding`
         // and `shadow_strength` already set. Covered by test_config.cpp's
         // "a config carrying the removed backdrop keys loads and drops
         // them".
@@ -1408,21 +1408,6 @@ namespace gamescope::config
         // settings changed when you launched a different game -- i.e. the one
         // control you need in order to fix it would move on its own.
         std::map<std::string, std::string> keybinds;
-
-        // ---- The friends list has no settings (2026-09-09) ---------------
-        // `overlay.friends_lookup_names` used to live here: the one switch in
-        // this whole fork that decided whether the compositor opened a socket.
-        // The friends list is now scoped to the game this session is already
-        // running (superdoc/features/steam-friends.md), so every row is that
-        // game and there was nothing left to look a name up FOR -- the lookup,
-        // its disk cache, src/SteamAppNames.h and this switch were all deleted
-        // together. gamescope-ritz makes no outbound network request of any
-        // kind and has no setting that could enable one.
-        //
-        // A stale `"friends_lookup_names"` left in somebody's global.json from
-        // an older build is simply not read: Load() below asks for named keys
-        // and ignores everything else, so the file loads unchanged and the key
-        // disappears the next time that file is rewritten.
     };
 
     // Toast notification system (this fork's own addition, see

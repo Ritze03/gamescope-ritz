@@ -7,6 +7,11 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-27
+
+### Removed
+- **Friends list**: removed the Steam friends list and its keybind.
+
 ## 2026-11-26
 
 ### Fixed

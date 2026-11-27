@@ -592,14 +592,14 @@ Inherited rows draw nothing -- the parent's values are the baseline, and marking
 would bury the deviations the dot exists to show. The words (`inherited from Comp`,
 `overridden` + a neutral **Reset to inherited** chip) live in the Inspector's CONFIGURE page.
 
-### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7; seven since MOTION 2026-10-04; eight since AUDIO 2026-10-22)
+### Rail groups (2026-09-06; regrouped to six 2026-09-27, I7; seven since MOTION 2026-10-04; eight since AUDIO 2026-10-22; seven again since MISC, the Friends list's group, was removed 2026-11-27)
 
-The rail's group headers mark **eight** fixed groups today, in this order: **DISPLAY**
+The rail's group headers mark **seven** fixed groups today (eight until 2026-11-27, when MISC went with the Friends list), in this order: **DISPLAY**
 (General, Resolution, Upscaling, Frame limiter, HDR, Shaders), **MOTION** (Frame generation,
 Motion blur -- added 2026-10-04; Frame generation moved here out of DISPLAY, where it had sat
 below Shaders for a day), **OVERLAY** (HUD, Crosshair,
 Zoom, Cursor), **INPUT** (General, Autoclicker, Null binds), **AUDIO** (Mixer, Effects --
-added 2026-10-22), **MISC** (Friends alone since the Mixer left), **SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
+added 2026-10-22), **SETTINGS** (Profiles, System, Appearance, Keybinds), **OTHER** (Log, Changelog). The
 icon-collapsed rail draws one icon button per group (see "Rail accordion" below) rather than
 a bare divider now, since I2's own accordion rework.
 
@@ -607,18 +607,18 @@ a bare divider now, since I2's own accordion rework.
 (Volume Only) 2. Effects (Compressor Only for now) 3. Visualizer (New, audio direction
 visualizer)"*. Mixer keeps the volume rows; the compressor ("Dynamics") moved out of it into
 the new Effects area; the Visualizer is a later task and has no area yet. AUDIO sits between
-INPUT and MISC (both about the game's I/O, ahead of the leftovers). The group icon is a
+INPUT and the leftovers (both about the game's I/O). The group icon is a
 speaker (`railgroup.audio`), Effects' area icon a waveform squeezed between two lines
 (`audio.effects`).
 
 `Why:` (I7) the user's own table (lightly reflowed from its original bulleted form): *"lets
 reorder some of the categories: Display: General, Resolution, Upscaling. Overlay: HUD,
 Crosshair, Zoom, Cursor. Input: General (Force grab cursor [remove from Display > General],
-Force grab keyboard), Autoclicker, Null binds. Misc: Friends, Mixer."* MISC had grown to seven
+Force grab keyboard), Autoclicker, Null binds. Misc: Friends, Mixer."* MISC (removed 2026-11-27) had grown to seven
 areas spanning three unrelated concerns --
 things drawn over the game (HUD/Crosshair/Zoom/Cursor), things that intercept or rewrite input
 (Autoclicker/Null binds, soon General's own grab toggles), and one unrelated social feature
-(Friends) -- so OVERLAY and INPUT split those two concerns into their own tabs, leaving MISC
+(the Friends list) -- so OVERLAY and INPUT split those two concerns into their own tabs, leaving MISC
 as the true two-item leftover. `input.general` is a NEW area a sibling task adds (this task
 only reserved its rail slot); until it lands, INPUT shows Autoclicker and Null binds only --
 `Registry::RailAreas()` skips a slot whose id `FindArea()` cannot resolve rather than
@@ -660,7 +660,7 @@ how many areas pile up in the *other* three groups.
 **The open group always matches the selection.** Selecting an area -- from anywhere: a rail
 click, a command-palette/launcher jump, `StepArea()` (both Up/Down in the rail and
 Ctrl+Left/Right), the `overlay_e2_select` console command, or wlserver's area-request path
-(the friends binding) -- opens that area's group, closing whatever else was open. Every one of
+(the mixer binding) -- opens that area's group, closing whatever else was open. Every one of
 those call sites now routes through one function, `Shell.cpp`'s `SetSelectedArea()`, so this
 cannot be forgotten at a future seventh call site. On the Shell's own opening edge
 (`ResetTransient()`) the open group is likewise re-derived from the current selection rather
@@ -1059,8 +1059,8 @@ table) mid-grow at 4 of 6 rows while OTHER (closing, at the bottom) still shows 
 row mid-shrink. `e2`/`g2` show both pairs fully settled. 579 test cases / 15,953,365
 assertions pass (`tests/gamescope_tests`), including two new pure state-machine tests for
 `StepRailAccordionAnim()` and all 118 `[overlay_ui]` cases; one run this task also saw 13
-`test_steam_friends.cpp` failures on an unrelated subprocess-capture race (that file is
-untouched by this diff, and a clean re-run passed all 579).
+failures in the since-removed Friends test file on an unrelated subprocess-capture race (a clean
+re-run passed all 579).
 
 ### Rail category headers as tall as the module rows (2026-09-27, I8)
 

@@ -275,8 +275,7 @@ does not bump the config generation, so the hook does not run for it; fixed 2026
   on purpose: a game that starts muted next launch would look broken. Stored in the
   existing `games` map (next to `selected` / `audio_node`) because nothing there treats
   an entry's presence as "this is a game": profile assignment looks up only
-  `SessionAppId()` (the fallback key is never one), the Friends gate asks
-  `ResolveAppId()`, and an entry with an empty `selected` means "never chose". Weakness:
+  `SessionAppId()` (the fallback key is never one), and an entry with an empty `selected` means "never chose". Weakness:
   a command like `wine game.exe` or `env ... game` keys on `wine` / `env`, shared by every
   such game -- set `RITZ_GS_APPID` to separate them. The guessing path is unchanged
   (WirePlumber restores the game's own stream volume per app there, and the saved value

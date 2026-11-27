@@ -1298,8 +1298,8 @@ TEST_CASE( "atoms: listbox selects and activates the row that was clicked", "[ov
 TEST_CASE( "atoms: listbox tells a genuine double-click apart from two lone clicks",
            "[overlay_atoms]" )
 {
-	// 2026-09-14: the Friends list needs "select on one click, join on two"
-	// (superdoc/features/steam-friends.md), and this is the bit Controls.cpp
+	// 2026-09-14: a list can want "select on one click, act on two",
+	// and this is the bit Controls.cpp
 	// grew to make that representable -- ImGui's own
 	// io.MouseClickedLastCount, read at the same a.bPressed site bActivated
 	// already uses. A single, unhurried click must never trip it; two rapid
@@ -1332,7 +1332,7 @@ TEST_CASE( "atoms: listbox tells a genuine double-click apart from two lone clic
 
 	auto Draw = [ & ]
 	{
-		return ui::controls::ListBox( rcBody, "friends", &nSelected,
+		return ui::controls::ListBox( rcBody, "dblclick-list", &nSelected,
 		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
 	};
 
@@ -1376,9 +1376,9 @@ TEST_CASE( "atoms: listbox Enter activates but is never a double-click", "[overl
 {
 	// Requested 2026-09-14: Enter keeps the Profiles convention of selecting
 	// (superdoc/meta/TERMINOLOGY.md's Chord entry aside, this is the plain
-	// list widget) -- it must never masquerade as the double-click that joins
-	// in the Friends list, since a script or a keyboard-only user pressing
-	// Enter repeatedly is not asking to join anything.
+	// list widget) -- it must never masquerade as the double-click that acts
+	// in a list that acts on a double-click, since a script or a keyboard-only user pressing
+	// Enter repeatedly is not asking to act on anything.
 	ScopedScale s( 1.0f );
 	Headless &h = Headless::Get();
 	h.MouseButton( false );
@@ -1389,7 +1389,7 @@ TEST_CASE( "atoms: listbox Enter activates but is never a double-click", "[overl
 
 	auto Draw = [ & ]
 	{
-		return ui::controls::ListBox( rcBody, "friends-enter", &nSelected,
+		return ui::controls::ListBox( rcBody, "dblclick-list-enter", &nSelected,
 		                              kProfileItems, IM_ARRAYSIZE( kProfileItems ) );
 	};
 

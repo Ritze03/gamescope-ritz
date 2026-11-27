@@ -85,8 +85,6 @@ links to its page in the docs.
   on the command line is shown as such and cannot be changed in the overlay.
 - **[Runtime resolution and refresh](superdoc/features/resolution-and-refresh.md)**:
   change a game's resolution and refresh rate live.
-- **[Steam friends list](superdoc/features/steam-friends.md)**: join friends' lobbies in
-  the game you are running.
 - **[Mixer](superdoc/features/audio-mixer.md)**: per-app PipeWire volume for the game.
 - **[Clipboard sync](superdoc/features/clipboard-sync.md)** and an **About** page with
   the changelog and licences.
@@ -309,7 +307,6 @@ OTHER. Each is an accordion tab that opens to its areas.
 | **Zoom, Autoclicker, Null binds** | A magnifier, a paced click train and WASD SOCD cleaning. | [`features/zoom.md`](superdoc/features/zoom.md), [`features/autoclicker.md`](superdoc/features/autoclicker.md), [`features/null-binds.md`](superdoc/features/null-binds.md) |
 | **Clipboard sync** | One `CLIPBOARD` value kept in step across every Xwayland game, gamescope's own Wayland clients, and the host session when nested. | [`features/clipboard-sync.md`](superdoc/features/clipboard-sync.md) |
 | **Runtime nested resolution & refresh** | Change a game's own resolution and paced refresh rate live from the Shell — nothing restarts, not even Xwayland. | [`features/resolution-and-refresh.md`](superdoc/features/resolution-and-refresh.md) |
-| **Steam friends list** | `Ctrl+Shift+Tab` lists friends who are in a game right now, read straight from the Steam client already running — join one marked `[Join]` with a click. | [`features/steam-friends.md`](superdoc/features/steam-friends.md) |
 | **Ritz launcher extension** | A module for the user's own [Ritz](https://ritze03.github.io/ritz/extensions.html) launcher that drives `gamescope-ritz` — profile, resolution, scaler and more — from Ritz's own GUI. | [`features/ritz-extension.md`](superdoc/features/ritz-extension.md) |
 
 ## Keyboard shortcuts
@@ -323,7 +320,6 @@ goes wrong):
 | `Right Shift` (tap) | Open/close the settings Shell |
 | `Ctrl+Shift+O` | Open/close the Shell (alternate — for when Right Shift alone is inconvenient) |
 | `Left Ctrl` + `Right Shift` | Open/close the Launcher (the command palette, alone over the game) |
-| `Ctrl+Shift+Tab` | Open/close the Steam friends list (join a friend marked `[Join]`) |
 | `Ctrl+Shift+M` | Open/close the Mixer |
 | `RMB` (held) | Zoom |
 | `Mouse4` (held) | Autoclicker |

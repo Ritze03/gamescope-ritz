@@ -183,20 +183,8 @@ namespace gamescope::keybinds
 			{ "launcher", "Open launcher", "LCtrl+RShift",
 			  "The chord that opens the command palette alone over the game -- and closes it "
 			  "again when it is already up." },
-			// Ctrl+Shift+Tab is Steam's own overlay chord for the friends
-			// list, and this is a friends list -- so the muscle memory is
-			// already the right one. That is deliberate and is not a conflict:
-			// gamescope swallows the key here, so neither the game nor Steam's
-			// own overlay (which this fork's users have switched off anyway --
-			// see superdoc/planning/steam-friends-window.md §2) ever sees it.
-			{ "friends", "Open friends list", "Ctrl+Shift+Tab",
-			  "The chord that opens the list of friends who are in THIS game and can be joined, "
-			  "over the game -- and closes it again when it is already up. It reads the Steam "
-			  "client already running on this machine, so there is nothing to sign in to. It "
-			  "does nothing when this is not a Steam game, because there is then no Friends "
-			  "page to open at all. See Settings > System > Friends." },
 			// Ctrl+Shift+M: collides with none of the defaults above (RShift,
-			// Ctrl+Shift+O, LCtrl+RShift, Ctrl+Shift+Tab, RMB, Mouse4) nor with
+			// Ctrl+Shift+O, LCtrl+RShift, RMB, Mouse4) nor with
 			// the reserved Ctrl+Alt+Shift+O.
 			{ "mixer", "Open mixer", "Ctrl+Shift+M",
 			  "The chord that opens the settings shell on the Mixer -- and closes it again "

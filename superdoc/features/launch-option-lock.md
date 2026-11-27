@@ -327,8 +327,7 @@ there the same way.
   option"* — pure bookkeeping, no getopt, no compositor.
 
 `tests/meson.build` gained `LaunchOptions.cpp` in the plain-source list
-`test_overlay_ui.cpp`'s target already pulls in (alongside `Keybinds.cpp`,
-`SteamFriends.cpp`, ...).
+`test_overlay_ui.cpp`'s target already pulls in (alongside `Keybinds.cpp`, ...).
 
 ## Known gaps
 

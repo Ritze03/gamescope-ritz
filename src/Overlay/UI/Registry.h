@@ -311,7 +311,7 @@ namespace gamescope::ui
 		// (Controls.h's ListBoxResult::bDoubleClicked), on top of whatever a
 		// single click or Enter already did through the composite's own
 		// binding. At most one verb per list should set this -- added
-		// 2026-09-14 for the Friends list's Join verb, so a list that wants
+		// 2026-09-14 for a list's Join verb, so a list that wants
 		// "double-click acts, single click only selects" can say so without
 		// changing what any other List composite's click already does.
 		bool                         bOnDoubleClick = false;
@@ -1409,16 +1409,16 @@ namespace gamescope::ui
 	// 'reorder SOME of the categories', naming only the first three].
 	// Overlay: HUD, Crosshair, Zoom, Cursor. Input: General [new, added by
 	// a sibling task -- Force grab cursor/keyboard], Autoclicker, Null
-	// binds. Misc: Friends, Mixer. Settings: Profiles, System, Appearance,
+	// binds. Misc: Mixer. Settings: Profiles, System, Appearance,
 	// Keybinds [unchanged except Cursor left for Overlay]." Why a sixth and
 	// seventh group instead of folding into MISC/SETTINGS: MISC had grown
 	// to seven areas (HUD, Mixer, Crosshair, Zoom, Autoclicker, Null
-	// binds, Friends) spanning three unrelated concerns -- things drawn
+	// binds, and one social feature) spanning three unrelated concerns -- things drawn
 	// over the game (HUD/Crosshair/Zoom/Cursor), things that intercept
 	// input (Autoclicker/Null binds, soon General's grab toggles too) and
-	// one unrelated social feature (Friends) -- so OVERLAY and INPUT split
+	// one unrelated social feature -- so OVERLAY and INPUT split
 	// those two concerns out into their own tabs, leaving MISC as the true
-	// leftover (Friends, Mixer -- two areas with nothing else in common).
+	// leftover (since removed, see below).
 	//
 	// Deliberately NOT Section above (see that enum's own comment) and NOT
 	// derived from registration order -- this is its own fixed, hand-
@@ -1458,12 +1458,13 @@ namespace gamescope::ui
 	// kind of separate, but they can all be turned on at the same time"), so they
 	// are one group of their own rather than two more rows in DISPLAY.
 	//
-	// AUDIO (2026-10-22) is the eighth group, between INPUT and MISC: Mixer (volume
+	// AUDIO (2026-10-22) is a group between INPUT and SETTINGS: Mixer (volume
 	// only) and Effects (the compressor/limiter, "Dynamics"). The user: "We should
 	// have a seperate audio category. 1. Mixer (Volume Only) 2. Effects (Compressor
 	// Only for now) 3. Visualizer ..." (the Visualizer is a later task). Mixer left
-	// MISC, which is now Friends alone.
-	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Audio, Misc, Settings, Other, Nothing };
+	// MISC; MISC, left holding only the social feature, was removed together with
+	// it (2026-11-27), so the rail has seven groups.
+	enum class RailGroup : uint8_t { Display, Motion, Overlay, Input, Audio, Settings, Other, Nothing };
 
 	const char *RailGroupName( RailGroup eGroup );
 

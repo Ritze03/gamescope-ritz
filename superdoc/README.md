@@ -155,8 +155,6 @@ indented under it.
 
 ### Steam surfaces
 
-- [Steam friends you can join](features/steam-friends.md) — the joinable-friends list read
-  from the running Steam client, and the privacy rule.
 - [Steam overlay and the dummy window](features/steam-overlay.md) — the helper process that
   carries Steam's overlay out of the game and the compositor; env handling, test switch.
 
@@ -241,9 +239,6 @@ casually. `planning/ui-design-guide.md` is partly behind the code: use
   [2026-09-06](planning/requests-2026-09-06.md),
   [2026-09-07](planning/requests-2026-09-07.md),
   [2026-09-08](planning/requests-2026-09-08.md) — dated user request batches.
-- Steam friends: [window study](planning/steam-friends-window.md),
-  [joining](planning/steam-friends-join.md),
-  [invite and vtable layout](planning/steam-invite-and-vtable-layout.md).
 - Frame generation: [FidelityFX optical flow](planning/fidelityfx-opticalflow-framegen.md),
   [external-layer in-tree port](planning/external-framegen-in-tree-port.md),
   [external-layer integration](planning/external-framegen-layer-integration.md) (the

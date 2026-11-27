@@ -63,9 +63,6 @@ namespace gamescope::ui
 		// fifteenth and sixteenth (2026-09-05, requests item 12): both areas
 		// had shipped drawing the rail's letter fallback (`R`, `C`) and were
 		// drawn freehand here in the set's own style -- see their entries.
-		// system.friends is the seventeenth (2026-09-08), for exactly the
-		// same reason a third time: it shipped on the letter fallback (`F`),
-		// and it is later than the mockup, so it is freehand too.
 		//
 		// THE ACCEPTANCE CRITERION THIS TABLE IS WRITTEN AGAINST is not
 		// "does it look like the thing" -- it is "is it ONE SILHOUETTE at 12
@@ -397,24 +394,6 @@ namespace gamescope::ui
 			Line( { 17.0f, 11.35f }, { 17.0f, 14.0f } ),
 			IconShape{ IconOp::FillPoly, 3, 0.0f, { { 8.5f, 3.5f }, { 15.5f, 3.5f }, { 12.0f, 7.8f } } } } },
 
-		{ "system.friends", 2, {
-			// A PERSON: a head over a pair of shoulders. Freehand
-			// (2026-09-08), like the crosshair and resolution glyphs before
-			// it, and for the same reason -- the friends list is a later
-			// addition than the mockup, so there is nothing to transcribe.
-			//
-			// `Why one person and not two:` two heads at 12 physical px is
-			// two dots and a smear. One circle over one open trapezoid is a
-			// single silhouette that survives the collapse, which is this
-			// table's stated acceptance criterion. Read against its nearest
-			// neighbours: setup.profiles is two offset RECTANGLES, and
-			// setup.cursor is a closed three-point triangle -- no other
-			// glyph pairs a circle with an OPEN flaring path, and none of
-			// the three shares an outline with another.
-			Circ( 12.0f, 8.0f, 4.0f ),
-			IconShape{ IconOp::Polyline, 4, 0.0f, { { 3.5f, 20.5f }, { 6.5f, 14.5f },
-			                                        { 17.5f, 14.5f }, { 20.5f, 20.5f } } } } },
-
 		{ "system.log", 4, {
 			// Four rules of decreasing length: lines of text, ragged right.
 			Line( { 3.5f, 5.5f }, { 20.5f, 5.5f } ),
@@ -512,7 +491,7 @@ namespace gamescope::ui
 		// =================================================================
 		//  RAIL GROUPS (I2, 2026-09-27; redrawn I3; regrouped to six, I7)
 		// =================================================================
-		// Eight glyphs, one per RailGroup (Display/Motion/Overlay/Input/Audio/Misc/
+		// Seven glyphs, one per RailGroup (Display/Motion/Overlay/Input/Audio/
 		// Settings/Other, in that order -- see the switch in
 		// IconForRailGroup() below, which is what actually binds each entry
 		// to its group rather than array position). Freehand, like every
@@ -552,9 +531,8 @@ namespace gamescope::ui
 		//            screen") with a short plain "+" (two crossing lines,
 		//            not a ring) sitting inside it, unconnected to the
 		//            frame's own edges. Read against system.crosshair's own
-		//            AREA icon (a ring with four arms crossing ITS edge)
-		//            and against Misc's asterisk below (three DIAGONAL
-		//            lines with no frame at all): this is the only glyph in
+		//            AREA icon (a ring with four arms crossing ITS edge):
+		//            this is the only glyph in
 		//            either table that draws a rectangle enclosing a
 		//            separate crossing mark -- "something drawn ON TOP of
 		//            the screen" is exactly the Overlay group's own
@@ -566,15 +544,6 @@ namespace gamescope::ui
 		//            system.null_binds' AREA icon (TWO separate square
 		//            keycaps joined by a priority chevron, four shapes): no
 		//            other glyph in either table is a single keycap shape.
-		//   Misc     a six-ray asterisk (three lines crossing through one
-		//            centre point) -- the plain "extras/sparkle" mark. No
-		//            other glyph in either table draws crossing diameters
-		//            with no enclosing frame (Overlay's "+" above always
-		//            sits inside its own rect); three SEPARATE same-size
-		//            dots (the I2 shape) is the standard overflow-menu
-		//            glyph almost everywhere else, which is exactly the
-		//            wrong association for a group that opens INLINE, not
-		//            into a hidden menu.
 		//   Settings a hex-nut: a six-sided outline with a round hole at
 		//            its centre -- the bolt-head/mechanism read "settings"
 		//            already carries elsewhere in this app's own iconography
@@ -625,11 +594,6 @@ namespace gamescope::ui
 					{ 13.0f, 18.5f }, { 8.5f, 14.5f }, { 4.0f, 14.5f } } },
 				Poly( { 16.5f, 8.5f }, { 18.5f, 12.0f }, { 16.5f, 15.5f } ) } },
 
-			{ "railgroup.misc", 3, {
-				Line( { 5.0f, 12.0f }, { 19.0f, 12.0f } ),
-				Line( { 8.5f, 5.9f },  { 15.5f, 18.1f } ),
-				Line( { 15.5f, 5.9f }, { 8.5f, 18.1f } ) } },
-
 			{ "railgroup.settings", 2, {
 				IconShape{ IconOp::Loop, 6, 0.0f, {
 					{ 12.0f, 3.0f }, { 19.8f, 7.5f }, { 19.8f, 16.5f },
@@ -664,9 +628,8 @@ namespace gamescope::ui
 			case RailGroup::Overlay:  return &kGroupIcons[ 2 ];
 			case RailGroup::Input:    return &kGroupIcons[ 3 ];
 			case RailGroup::Audio:    return &kGroupIcons[ 4 ];
-			case RailGroup::Misc:     return &kGroupIcons[ 5 ];
-			case RailGroup::Settings: return &kGroupIcons[ 6 ];
-			case RailGroup::Other:    return &kGroupIcons[ 7 ];
+			case RailGroup::Settings: return &kGroupIcons[ 5 ];
+			case RailGroup::Other:    return &kGroupIcons[ 6 ];
 			case RailGroup::Nothing:     return nullptr;
 		}
 		return nullptr;

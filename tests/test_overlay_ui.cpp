@@ -1926,10 +1926,6 @@ TEST_CASE( "icons: every registered area has one, and no two are the same drawin
 		"audio.mixer", "system.hud", "system.crosshair", "system.log",
 		"system.changelog", "setup.profiles", "setup.appearance",
 		"setup.cursor", "setup.keybinds",
-		// The seventeenth (2026-09-08): the friends list. It had shipped on
-		// the letter fallback (`F`), which is the original bug this whole
-		// file exists to catch.
-		"system.friends",
 		// The eighteenth (2026-09-14): the zoom. See Zoom.cpp and Icons.cpp.
 		"system.zoom",
 		// The nineteenth (2026-09-18): the autoclicker. See Autoclicker.cpp
@@ -2081,10 +2077,10 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 {
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Settings, RailGroup::Other };
 	const size_t nGroups = sizeof( eGroups ) / sizeof( eGroups[ 0 ] );
 
-	const ui::Icon *pIcons[ 8 ];
+	const ui::Icon *pIcons[ 7 ];
 	for ( size_t i = 0; i < nGroups; ++i )
 	{
 		INFO( "group " << ui::RailGroupName( eGroups[ i ] ) );
@@ -2149,7 +2145,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // Changelog)." The user's I7 table, verbatim: "Display: General,
 // Resolution, Upscaling [+ the pre-existing three, kept in order --
 // 'reorder SOME of the categories']. Overlay: HUD, Crosshair, Zoom, Cursor.
-// Input: General [new], Autoclicker, Null binds. Misc: Friends, Mixer.
+// Input: General [new], Autoclicker, Null binds. Misc: Mixer.
 // Settings: Profiles, System, Appearance, Keybinds [Cursor left]." A pinned
 // list, the same shape as the icon census above: written out rather than
 // walked off RegisterAll() (which this test binary does not link -- see
@@ -2165,7 +2161,7 @@ TEST_CASE( "icons: every rail group has its own icon, and no two share a drawing
 // RailGroup enum and Registry::RailAreas() for the "a slot with no
 // registered area is skipped, not a crash" contract that makes landing the
 // table and the area in separate commits safe.
-TEST_CASE( "rail: the eight groups are in the order the request named", "[overlay_ui]" )
+TEST_CASE( "rail: the seven groups are in the order the request named", "[overlay_ui]" )
 {
 	struct Expected { const char *pszId; ui::RailGroup eGroup; };
 	const Expected expected[] = {
@@ -2189,10 +2185,10 @@ TEST_CASE( "rail: the eight groups are in the order the request named", "[overla
 		{ "system.null_binds",     ui::RailGroup::Input },
 		{ "system.true_sens",      ui::RailGroup::Input },
 		// AUDIO (2026-10-22): Mixer (volume only) and Effects (the compressor),
-		// between INPUT and MISC; MISC is Friends alone.
+		// between INPUT and SETTINGS (MISC, the removed Friends list's group, is
+		// gone, 2026-11-27).
 		{ "audio.mixer",           ui::RailGroup::Audio },
 		{ "audio.effects",         ui::RailGroup::Audio },
-		{ "system.friends",        ui::RailGroup::Misc },
 		{ "setup.profiles",        ui::RailGroup::Settings },
 		{ "system.general",        ui::RailGroup::Settings },
 		{ "setup.appearance",      ui::RailGroup::Settings },
@@ -2230,7 +2226,6 @@ TEST_CASE( "rail: the group labels are the request's own words", "[overlay_ui]" 
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Overlay ) )  == "OVERLAY" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Input ) )    == "INPUT" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Audio ) )    == "AUDIO" );
-	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Misc ) )     == "MISC" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Settings ) ) == "SETTINGS" );
 	REQUIRE( std::string( ui::RailGroupName( ui::RailGroup::Other ) )    == "OTHER" );
 }
@@ -2281,12 +2276,12 @@ TEST_CASE( "rail accordion: a header click opens a closed group, closes an open 
 	// A closed group, clicked: opens (nothing else is tracked to "close" --
 	// RailGroup can only ever hold one value, so opening IS closing whatever
 	// else was open).
-	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Nothing, RailGroup::Misc ) == RailGroup::Misc );
-	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Display, RailGroup::Misc ) == RailGroup::Misc );
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Nothing, RailGroup::Audio ) == RailGroup::Audio );
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Display, RailGroup::Audio ) == RailGroup::Audio );
 
 	// The OPEN group's own header, clicked again: collapses to Nothing. All
 	// four groups closed is an explicitly legal state (D2/D6).
-	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Misc, RailGroup::Misc ) == RailGroup::Nothing );
+	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Audio, RailGroup::Audio ) == RailGroup::Nothing );
 	REQUIRE( ui::AccordionOnHeaderClicked( RailGroup::Other, RailGroup::Other ) == RailGroup::Nothing );
 }
 
@@ -2299,15 +2294,14 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	reg.Add( "display.upscaling",  "Upscaling",  ui::Section::Display );
 	reg.Add( "audio.mixer",        "Mixer",      ui::Section::System );
 	reg.Add( "audio.effects",      "Effects",    ui::Section::System );
-	reg.Add( "system.friends",     "Friends",    ui::Section::System );
 	reg.Add( "setup.profiles",     "Profiles",   ui::Section::Setup );
 	reg.Add( "system.log",         "Log",        ui::Section::System );
 
 	const std::vector<const ui::Area *> railAreas = reg.RailAreas();
-	REQUIRE( railAreas.size() == 7 );
+	REQUIRE( railAreas.size() == 6 );
 
 	// Display open: only its two rows, in RailOrder()'s order -- nothing
-	// from Misc, Settings or Other leaks in.
+	// from Settings or Other leaks in.
 	const std::vector<const ui::Area *> display = ui::VisibleRailAreas( railAreas, RailGroup::Display );
 	REQUIRE( display.size() == 2 );
 	REQUIRE( display[ 0 ]->Id() == "display.general" );
@@ -2318,11 +2312,6 @@ TEST_CASE( "rail accordion: VisibleRailAreas lists only the open group's rows", 
 	REQUIRE( audio.size() == 2 );
 	REQUIRE( audio[ 0 ]->Id() == "audio.mixer" );
 	REQUIRE( audio[ 1 ]->Id() == "audio.effects" );
-
-	// Misc open: Friends alone since AUDIO took the Mixer (2026-10-22).
-	const std::vector<const ui::Area *> misc = ui::VisibleRailAreas( railAreas, RailGroup::Misc );
-	REQUIRE( misc.size() == 1 );
-	REQUIRE( misc[ 0 ]->Id() == "system.friends" );
 
 	// RailGroup::Nothing -- every group collapsed -- lists nothing at all.
 	REQUIRE( ui::VisibleRailAreas( railAreas, RailGroup::Nothing ).empty() );
@@ -2351,7 +2340,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 		"image.framegen", "image.motionblur", "image.lagbuffer",
 		"system.hud", "system.crosshair", "system.zoom", "setup.cursor",
 		"input.general", "system.autoclicker", "system.null_binds", "system.true_sens",
-		"audio.mixer", "audio.effects", "system.friends",
+		"audio.mixer", "audio.effects",
 		"setup.profiles", "system.general", "setup.appearance",
 		"setup.keybinds",
 		"system.diagnostics", "system.log", "system.changelog",
@@ -2373,7 +2362,7 @@ TEST_CASE( "rail accordion: the busiest group still fits the full-width rail at 
 
 	using ui::RailGroup;
 	const RailGroup eGroups[] = { RailGroup::Display, RailGroup::Motion, RailGroup::Overlay, RailGroup::Input,
-	                              RailGroup::Audio, RailGroup::Misc, RailGroup::Settings, RailGroup::Other };
+	                              RailGroup::Audio, RailGroup::Settings, RailGroup::Other };
 	for ( RailGroup eGroup : eGroups )
 	{
 		INFO( "group " << ui::RailGroupName( eGroup ) );
@@ -2557,8 +2546,8 @@ TEST_CASE( "rail accordion: opening a group starts it growing from 0 and the old
 	// Display (settled open, 240) -> Misc (target 80): the SAME call that
 	// commands the new group ALSO starts the old one closing, in the same
 	// frame -- no frame where only one of the two is in motion.
-	ui::StepRailAccordionAnim( s, RailGroup::Misc, 80.0f, 0.16f, 0.02f );
-	REQUIRE( s.eOpenGroup == RailGroup::Misc );
+	ui::StepRailAccordionAnim( s, RailGroup::Audio, 80.0f, 0.16f, 0.02f );
+	REQUIRE( s.eOpenGroup == RailGroup::Audio );
 	REQUIRE( s.flOpenH > 0.0f );          // growing from 0 ...
 	REQUIRE( s.flOpenH < 80.0f );         // ... toward its own target
 	REQUIRE( s.eClosingGroup == RailGroup::Display );
@@ -2567,8 +2556,8 @@ TEST_CASE( "rail accordion: opening a group starts it growing from 0 and the old
 
 	// Enough time for both to finish: the opening group lands on its
 	// target and the closing one clears itself back to Nothing/0.
-	ui::StepRailAccordionAnim( s, RailGroup::Misc, 80.0f, 0.16f, 1.0f );
-	REQUIRE( s.eOpenGroup == RailGroup::Misc );
+	ui::StepRailAccordionAnim( s, RailGroup::Audio, 80.0f, 0.16f, 1.0f );
+	REQUIRE( s.eOpenGroup == RailGroup::Audio );
 	REQUIRE( s.flOpenH == 80.0f );
 	REQUIRE( s.eClosingGroup == RailGroup::Nothing );
 	REQUIRE( s.flClosingH == 0.0f );
@@ -2580,12 +2569,12 @@ TEST_CASE( "rail accordion: opening a group starts it growing from 0 and the old
 	// regardless of which one a caller later happens to draw above or below
 	// the other (that positional question is Shell.cpp's alone).
 	RailAccordionAnim t;
-	ui::StepRailAccordionAnim( t, RailGroup::Misc, 80.0f, 0.16f, 1.0f );      // settle Misc open
+	ui::StepRailAccordionAnim( t, RailGroup::Audio, 80.0f, 0.16f, 1.0f );      // settle Audio open
 	ui::StepRailAccordionAnim( t, RailGroup::Display, 240.0f, 0.16f, 0.02f ); // switch to Display
 	REQUIRE( t.eOpenGroup == RailGroup::Display );
 	REQUIRE( t.flOpenH > 0.0f );
 	REQUIRE( t.flOpenH < 240.0f );
-	REQUIRE( t.eClosingGroup == RailGroup::Misc );
+	REQUIRE( t.eClosingGroup == RailGroup::Audio );
 	REQUIRE( t.flClosingH > 0.0f );
 	REQUIRE( t.flClosingH < 80.0f );
 }
@@ -3154,7 +3143,7 @@ TEST_CASE( "list composite: its value steps across its items and its verbs are d
 	// bOnDoubleClick defaults to false for a verb that never asked for it --
 	// Profiles' own Create/Delete, exactly as declared just above, are not
 	// wired to a double-click, and are not meant to be (2026-09-14: added for
-	// the Friends list's Join verb, opt-in per verb, off everywhere else).
+	// a list's Join verb, opt-in per verb, off everywhere else).
 	REQUIRE_FALSE( list.ListActionAt( 0 ).bOnDoubleClick );
 	REQUIRE_FALSE( list.ListActionAt( 1 ).bOnDoubleClick );
 
@@ -3178,17 +3167,16 @@ TEST_CASE( "list composite: its value steps across its items and its verbs are d
 
 TEST_CASE( "list composite: a verb can opt into firing on a double-click too", "[overlay_ui]" )
 {
-	// The Friends list's own shape (2026-09-14): Join is the one verb marked
-	// bOnDoubleClick, Refresh is not -- see superdoc/features/steam-friends.md
-	// and Shell.cpp's CompositeKind::List case, which is what actually reads
+	// A list with Join and Refresh verbs (2026-09-14): Join is the one verb marked
+	// bOnDoubleClick, Refresh is not -- see Shell.cpp's CompositeKind::List case, which is what actually reads
 	// this flag at draw time. This is the declaration half only: that a verb
 	// asking for it gets it, one that does not stays false, and nothing about
 	// an ordinary verb's own fn()/bDanger/fnDisabledReason changes underneath.
 	ui::Registry reg;
-	ui::Area &a = reg.Add( "system.friends", "Friends", ui::Section::System );
+	ui::Area &a = reg.Add( "system.test_list", "Test list", ui::Section::System );
 
 	int nJoin = 0, nRefresh = 0;
-	ui::Entry &list = a.Composite( "friends.list", "Friends", ui::CompositeKind::List, ui::Bind( &nJoin ) )
+	ui::Entry &list = a.Composite( "test.list", "Test list", ui::CompositeKind::List, ui::Bind( &nJoin ) )
 		.Items( []{ return std::vector<ui::ListItem>{ { "atze", "[Join]", "" } }; } )
 		.ListAction( "Join", [ & ]{ ++nJoin; }, /* bDanger */ false, {}, /* bOnDoubleClick */ true )
 		.ListAction( "Refresh", [ & ]{ ++nRefresh; } )

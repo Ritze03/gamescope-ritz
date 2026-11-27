@@ -738,12 +738,6 @@ namespace gamescope::config
                             s.overlay.keybinds[ it.key() ] = it->get<std::string>();
                     }
                 }
-
-                // NOTE (2026-09-09): "friends_lookup_names" used to be read
-                // here. It is gone, and a file that still carries it loads
-                // unchanged -- this reader asks for the keys it knows and
-                // ignores the rest, which is what makes deleting a setting a
-                // safe operation on somebody's existing global.json.
             }
 
             if ( const nlohmann::json *pNotifications = JGetObject( j, "notifications" ) )

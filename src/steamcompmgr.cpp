@@ -102,7 +102,6 @@
 #include "commit.h"
 #include "reshade_effect_manager.hpp"
 #include "SettingsOverlay.h"
-#include "SteamFriends.h"
 #include "Overlay/CursorArt.h"
 #include "Overlay/PanelCursor.h"
 #include "Overlay/FpsDisplay.h"
@@ -7790,10 +7789,6 @@ steamcompmgr_exit(void)
 	// harmless to leave in; remove once the teardown is known clean.
 	LogShutdownSignal();
 	xwm_log.infof( "teardown: steamcompmgr_exit begin" );
-
-	// The friends poller's worker thread. Joined here so it can never
-	// outlive the statics it publishes into -- see SteamFriends.cpp.
-	gamescope::steamfriends::Shutdown();
 
 	g_ImageWaiter.Shutdown();
 

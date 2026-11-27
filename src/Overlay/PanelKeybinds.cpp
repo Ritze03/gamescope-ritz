@@ -125,7 +125,7 @@ namespace gamescope
 
 		// TWO GROUPS (2026-09-22, the user: "one for global hotkeys and one
 		// for game-specific hotkeys"). Global: the chords that open this
-		// fork's own surfaces -- settings, launcher, friends. In-game: the
+		// fork's own surfaces -- settings, launcher, mixer. In-game: the
 		// chords that do something TO the game while you play (zoom,
 		// autoclicker), which also have a copy of their row in their own
 		// area. Both groups are the same global.json section; the split is

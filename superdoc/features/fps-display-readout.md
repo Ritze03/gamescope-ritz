@@ -217,7 +217,7 @@ outline and nothing else.
 an older build still carries `"backdrop_opacity"` and `"backdrop_padding"`;
 neither is read any more, the file loads unchanged, and both keys disappear
 the first time anything writes that profile — the same "just stop reading
-an old key" precedent `friends_lookup_names`, `backdrop_enabled`,
+an old key" precedent `backdrop_enabled`,
 `backdrop_rounding` and `shadow_strength` set. Pinned by `test_config.cpp`'s
 "a config carrying the removed backdrop keys loads and drops them", which
 asserts both halves: the live keys in that same file still load, and the
