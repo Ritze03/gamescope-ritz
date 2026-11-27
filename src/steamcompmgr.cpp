@@ -10721,15 +10721,39 @@ static std::optional<std::string> s_oDummyOverlayStash;
 static pid_t s_nSteamOverlayDummyPid = 0;
 static LogScope s_SteamOverlayLog( "steam_overlay" );
 
+// The helper next to our own executable (an installed gamescope-ritz is a symlink into
+// <clone>/build/, where install.sh puts it; a build tree has it beside src/gamescope), else
+// the bare name, looked up in PATH.
+static std::string FindSteamOverlayHelper()
+{
+	static const char *k_pszDummyExe = "gamescopesteamoverlay";
+	char szExe[PATH_MAX];
+	ssize_t nLen = readlink( "/proc/self/exe", szExe, sizeof( szExe ) - 1 );
+	if ( nLen > 0 )
+	{
+		szExe[nLen] = '\0';
+		std::string sPath( szExe );
+		size_t nSlash = sPath.rfind( '/' );
+		if ( nSlash != std::string::npos )
+		{
+			sPath.resize( nSlash + 1 );
+			sPath += k_pszDummyExe;
+			if ( gamescope::Process::ExecutableExists( sPath ) )
+				return sPath;
+		}
+	}
+	return k_pszDummyExe;
+}
+
 void StartSteamOverlayDummy()
 {
 	if ( !gamescope::Process::SteamOverlayDummyActive() || s_nSteamOverlayDummyPid > 0 )
 		return;
 
-	static const char *k_pszDummyExe = "gamescopesteamoverlay";
-	if ( !gamescope::Process::ExecutableExists( k_pszDummyExe ) )
+	const std::string sDummyExe = FindSteamOverlayHelper();
+	if ( !gamescope::Process::ExecutableExists( sDummyExe ) )
 	{
-		s_SteamOverlayLog.warnf( "\"%s\" not found in PATH, the Steam overlay dummy window is not started.", k_pszDummyExe );
+		s_SteamOverlayLog.warnf( "\"%s\" not found beside the gamescope executable or in PATH, the Steam overlay dummy window is not started.", sDummyExe.c_str() );
 		return;
 	}
 
@@ -10747,7 +10771,7 @@ void StartSteamOverlayDummy()
 	// them into place and re-execs itself once. Our own environment, inherited by the
 	// reaper, stays the game's (no overlay). The fork's WSI layer is not enabled for the
 	// helper: plain Xwayland is the one measured path.
-	char *ppArgv[] = { (char *)k_pszDummyExe, NULL };
+	char *ppArgv[] = { (char *)sDummyExe.c_str(), NULL };
 	s_nSteamOverlayDummyPid = gamescope::Process::SpawnProcessInWatchdog( ppArgv, false, [ env ]()
 	{
 		setenv( "GS_RITZ_STEAM_OVERLAY_HANDOVER", "1", 1 );
@@ -10760,8 +10784,8 @@ void StartSteamOverlayDummy()
 #endif
 		unsetenv( "ENABLE_GAMESCOPE_WSI" );
 	});
-	s_SteamOverlayLog.infof( "Started the Steam overlay dummy window (pid %d, overlay preload %s).",
-		(int)s_nSteamOverlayDummyPid, env.oLdPreload ? env.oLdPreload->c_str() : "none" );
+	s_SteamOverlayLog.infof( "Started the Steam overlay dummy window \"%s\" (pid %d, overlay preload %s).",
+		sDummyExe.c_str(), (int)s_nSteamOverlayDummyPid, env.oLdPreload ? env.oLdPreload->c_str() : "none" );
 }
 
 void StopSteamOverlayDummy()
