@@ -10,8 +10,9 @@ All notable user-facing changes, newest first. Categories:
 ## 2026-11-28
 
 ### Fixed
-- **Steam overlay**: with a game that captures the mouse, the mouse now works in the
-  overlay and goes back to the game when it closes.
+- **Steam overlay**: with a game that captures the mouse, the game now lets go of it
+  while the overlay is open, so the mouse works in the overlay and goes back to the game
+  when it closes.
 
 ## 2026-11-27
 
