@@ -136,6 +136,7 @@ wlserver_wl_surface_info *get_wl_surface_info(struct wlr_surface *wlr_surf);
 static void wlserver_update_cursor_constraint();
 static void handle_pointer_constraint(struct wl_listener *listener, void *data);
 static void wlserver_constrain_cursor( struct wlr_pointer_constraint_v1 *pNewConstraint );
+static void wlserver_sync_constraint_to_mouse_focus();
 struct wlr_surface *wlserver_surface_to_main_surface( struct wlr_surface *pSurface );
 bool wlserver_process_hotkeys( wlr_keyboard *keyboard, uint32_t key, bool press );
 
@@ -3895,6 +3896,8 @@ void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y
 		}
 	}
 
+	wlserver_sync_constraint_to_mouse_focus();
+
 	wlserver_oncursorevent();
 	wlr_seat_pointer_warp( wlserver.wlr.seat, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
 	wlr_seat_pointer_notify_enter( wlserver.wlr.seat, wlrsurface, wlserver.mouse_surface_cursorx, wlserver.mouse_surface_cursory );
@@ -4028,6 +4031,40 @@ static void wlserver_constrain_cursor( struct wlr_pointer_constraint_v1 *pNewCon
 	wlr_pointer_constraint_v1_send_activated( pNewConstraint );
 }
 
+// The constraint is applied to the KEYBOARD focus surface (wlserver_keyboardfocus),
+// but the pointer can be somewhere else: a mode-2 (STEAM_INPUT_FOCUS=2) window, the
+// Steam overlay's dummy window, takes the pointer while the keyboard stays with the
+// game. A lock left active then keeps the cursor hidden and the overlay's mouse
+// relative-only. So while the pointer focus is another surface the constraint is
+// released (deactivated, no warp to the game's hint), and re-applied once the pointer
+// focus is the keyboard surface again. Does nothing when both are the same surface.
+// superdoc/features/steam-overlay.md, "Input modes".
+static void wlserver_sync_constraint_to_mouse_focus()
+{
+	struct wlr_pointer_constraint_v1 *pConstraint = wlserver.GetCursorConstraint();
+
+	if ( pConstraint )
+	{
+		if ( !wlserver.mouse_focus_surface || pConstraint->surface == wlserver.mouse_focus_surface )
+			return;
+
+		wlserver.mouse_constraint_suspended = true;
+		wlr_pointer_constraint_v1_send_deactivated( pConstraint );
+		wlserver.SetMouseConstraint( nullptr );
+		wlserver.bMouseConstraintLocked.store( false, std::memory_order_relaxed );
+		pixman_region32_clear( &wlserver.confine );
+		return;
+	}
+
+	if ( wlserver.mouse_constraint_suspended && wlserver.kb_focus_surface &&
+	     wlserver.mouse_focus_surface == wlserver.kb_focus_surface )
+	{
+		wlserver.mouse_constraint_suspended = false;
+		wlserver_constrain_cursor( wlr_pointer_constraints_v1_constraint_for_surface(
+			wlserver.constraints, wlserver.kb_focus_surface, wlserver.wlr.seat ) );
+	}
+}
+
 static void handle_pointer_constraint_set_region(struct wl_listener *listener, void *data)
 {
 	GamescopePointerConstraint *pGamescopeConstraint = wl_container_of(listener, pGamescopeConstraint, set_region);
@@ -4069,7 +4106,14 @@ static void handle_pointer_constraint(struct wl_listener *listener, void *data)
 	wl_signal_add(&pConstraint->events.destroy, &pGamescopeConstraint->destroy);
 
 	if ( wlserver.kb_focus_surface && wlserver.kb_focus_surface == pConstraint->surface )
-		wlserver_constrain_cursor(pConstraint);
+	{
+		// Pointer focus on another surface (mode-2 overlay): stay released, re-applied
+		// by wlserver_sync_constraint_to_mouse_focus() when the pointer comes back.
+		if ( wlserver.mouse_focus_surface && wlserver.mouse_focus_surface != pConstraint->surface )
+			wlserver.mouse_constraint_suspended = true;
+		else
+			wlserver_constrain_cursor(pConstraint);
+	}
 }
 
 static bool wlserver_apply_constraint( double *dx, double *dy )

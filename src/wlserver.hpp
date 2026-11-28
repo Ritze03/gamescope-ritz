@@ -139,6 +139,9 @@ struct wlserver_t {
 	double mouse_surface_cursorx = 0.0f;
 	double mouse_surface_cursory = 0.0f;
 	bool mouse_constraint_requires_warp = false;
+	// The keyboard surface's constraint is released while the pointer focus is
+	// another surface (a mode-2 overlay window); re-applied when it returns.
+	bool mouse_constraint_suspended = false;
 	pixman_region32_t confine;
 	std::atomic<struct wlr_pointer_constraint_v1 *> mouse_constraint = { nullptr };
 
