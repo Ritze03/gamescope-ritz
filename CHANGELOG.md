@@ -7,6 +7,12 @@ All notable user-facing changes, newest first. Categories:
 **Removed** (things taken out), 
 **Info** (notes worth knowing). 
 
+## 2026-11-28
+
+### Fixed
+- **Steam overlay**: with a game that captures the mouse, the mouse now works in the
+  overlay and goes back to the game when it closes.
+
 ## 2026-11-27
 
 ### Added

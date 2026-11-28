@@ -614,13 +614,27 @@ notifications (toasts) do not take input.
   `input taken PROVISIONALLY` then `provisional input released: no GameOverlayActivated_t
   within 3 s` (fallback, nothing opened); opacity lines `window opacity -> opaque (...)` /
   `-> 0 (nothing to show)`;
-- whether a Unity game treats `FocusOut mode NotifyGrab` as a focus loss (SDL ignores it);
-- pointer behaviour for a game holding a pointer lock: the cursor constraint is applied to
-  the **keyboard** focus surface (`wlserver_keyboardfocus` with `bConstrain`,
-  `wlserver.cpp` ~3633), so under mode 2 the game's lock stays active while the pointer
-  focus moves to the overlay window. The cursor image comes from the same Xwayland context
-  (`steamcompmgr.cpp` ~5226), and the cursor is hidden on the focus change (~4788). Whether
-  the overlay's mouse is usable then is unmeasured; `focus` mode is the comparison.
+- whether a Unity game treats `FocusOut mode NotifyGrab` as a focus loss (SDL ignores it).
+
+**Pointer lock under mode 2 (2026-11-28).** Reported: with the game's mouse captured (hidden
+cursor), the mouse stayed in the game while the overlay was open. Cause: the Wayland pointer
+constraint is applied to the **keyboard** focus surface (`wlserver_keyboardfocus`), which under
+mode 2 stays the game's, while the pointer focus moves to the helper window; the game's lock
+stayed active, so only relative motion was sent and the cursor stayed hidden. Fix
+(`wlserver_sync_constraint_to_mouse_focus()`, called from `wlserver_mousefocus()`): while the
+pointer focus is a surface other than the one owning the constraint, the constraint is
+deactivated (no warp to the game's cursor hint) and remembered as suspended; when the pointer
+focus is the keyboard surface again (overlay closed) the constraint is re-applied and the game
+is sent `activated`. A lock created while suspended waits the same way. Nothing changes when
+both focuses are the same surface. *Why not in the helper:* the compositor owns the lock and
+knows which surface has the pointer. Headless proof (a stand-in game that hides its cursor and
+grabs the pointer; `wlserver_pointer_stats` before, open, after): before the fix `constraint=locked`
+and `motions=0` (no absolute motion) while open; after, `constraint=none` and `motions` rises, the
+helper window receives MotionNotify, and the lock is `locked` again after close. **Limits:** a
+game's own X `XGrabPointer` still takes core motion in Xwayland (a compositor cannot take it
+back); Xwayland's one-shot lock (from the game's cursor warps) is gone after the release and
+comes back with the game's next warp; the headless backend cannot show a host-side lock, so
+"Force grab cursor" was only exercised as the same code path.
 
 **Reserve: (a) the dummy window on a second Xwayland server.** Needs the helper on another
 `DISPLAY` and gamescope-ritz running two servers (`--xwayland-count 2`, the game on the second:
