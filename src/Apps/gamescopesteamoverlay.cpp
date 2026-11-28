@@ -634,7 +634,9 @@ static const char *EventName( int t )
 
 // ---------------------------------------------------------------- input hand-over
 
-// GS_RITZ_STEAM_OVERLAY_INPUT: "grab" (default) or "focus".
+// GS_RITZ_STEAM_OVERLAY_INPUT: "auto" (default), "grab" or "focus".
+//  auto : decided at each open: focus while another client holds an active pointer grab (a game
+//         that captured the mouse), grab otherwise. See ApplyInput.
 //  focus: STEAM_INPUT_FOCUS=1 while open. gamescope then calls XSetInputFocus on THIS window, so
 //         the game gets FocusOut/NotifyNormal and a game that pauses on focus loss pauses.
 //  grab : STEAM_INPUT_FOCUS=2 while open (pointer to this window, X focus and the Wayland
@@ -647,12 +649,15 @@ static const char *EventName( int t )
 // The passive hotkey grab stays as it is; its activation produces FocusOut/NotifyGrab and
 // FocusOut+FocusIn/NotifyUngrab events on this window (observed headless), which are not focus
 // changes by gamescope.
-static bool g_bGrabInput = true;
+static bool g_bGrabInput = true; // forced grab (false: forced focus); ignored while g_bAutoInput
+static bool g_bAutoInput = true;
 static bool g_bKbGrabbed = false;
 static int ( *g_pfnGrabKeyboard )( Display *, Window, Bool, int, int, Time ) = XGrabKeyboard;
 static int ( *g_pfnUngrabKeyboard )( Display *, Time ) = XUngrabKeyboard;
 static const char *g_pszGrabPath = "plain Xlib call (through the overlay's hook if it is loaded)";
 static int ( *g_pfnSelectInput )( Display *, Window, long ) = XSelectInput;
+static int ( *g_pfnGrabPointer )( Display *, Window, Bool, unsigned int, int, int, Window, Cursor, Time ) = XGrabPointer;
+static int ( *g_pfnUngrabPointer )( Display *, Time ) = XUngrabPointer;
 
 static void ResolveRealGrabFunctions()
 {
@@ -667,6 +672,14 @@ static void ResolveRealGrabFunctions()
 			g_pfnGrabKeyboard = pfnGrab;
 			g_pfnUngrabKeyboard = pfnUngrab;
 			g_pszGrabPath = "libX11's own function (past the overlay's hook)";
+		}
+		// Same for the pointer-grab probe of the auto mode.
+		auto pfnGrabP = (int ( * )( Display *, Window, Bool, unsigned int, int, int, Window, Cursor, Time ))dlsym( pX11, "XGrabPointer" );
+		auto pfnUngrabP = (int ( * )( Display *, Time ))dlsym( pX11, "XUngrabPointer" );
+		if ( pfnGrabP && pfnUngrabP )
+		{
+			g_pfnGrabPointer = pfnGrabP;
+			g_pfnUngrabPointer = pfnUngrabP;
 		}
 		// Same reason for XSelectInput on a foreign window: we do not know what the overlay's hook
 		// does with a window that is not ours.
@@ -711,7 +724,23 @@ static void ApplyInput( Display *dpy, Window win, bool bOpen )
 		return;
 	}
 	unsigned long ulMode = 1;
-	if ( g_bGrabInput )
+	bool bGrab = g_bGrabInput;
+	if ( g_bAutoInput )
+	{
+		// Probe: an active pointer grab on our own window fails with AlreadyGrabbed while another
+		// client (the game, mouse captured) holds one. Released again at once. Not seen: a game
+		// that captures by cursor warps or XI2 raw motion without a grab.
+		const int nProbe = g_pfnGrabPointer( dpy, win, False, 0, GrabModeAsync, GrabModeAsync, None, None, CurrentTime );
+		if ( nProbe == GrabSuccess )
+		{
+			g_pfnUngrabPointer( dpy, CurrentTime );
+			XFlush( dpy );
+		}
+		bGrab = nProbe != AlreadyGrabbed;
+		Log( "input mode auto -> %s (%s, probe %s)", bGrab ? "grab" : "focus",
+			bGrab ? "no pointer grab by another client" : "pointer grabbed by another client", GrabStatusName( nProbe ) );
+	}
+	if ( bGrab )
 	{
 		const int nRes = g_pfnGrabKeyboard( dpy, win, False, GrabModeAsync, GrabModeAsync, CurrentTime );
 		Log( "XGrabKeyboard (%s) -> %s (%d)", g_pszGrabPath, GrabStatusName( nRes ), nRes );
@@ -1092,14 +1121,17 @@ int main()
 	if ( const char *p = Env( "GS_RITZ_STEAM_OVERLAY_INPUT" ) )
 	{
 		if ( strcmp( p, "focus" ) == 0 )
-			g_bGrabInput = false;
-		else if ( strcmp( p, "grab" ) != 0 )
-			Log( "unknown GS_RITZ_STEAM_OVERLAY_INPUT=\"%s\", using grab", p );
+			g_bAutoInput = g_bGrabInput = false;
+		else if ( strcmp( p, "grab" ) == 0 )
+			g_bAutoInput = false;
+		else if ( strcmp( p, "auto" ) != 0 )
+			Log( "unknown GS_RITZ_STEAM_OVERLAY_INPUT=\"%s\", using auto", p );
 	}
 	ResolveRealGrabFunctions();
-	Log( "input mode: %s (while open: %s)", g_bGrabInput ? "grab" : "focus",
+	Log( "input mode: %s (while open: %s)", g_bAutoInput ? "auto" : g_bGrabInput ? "grab" : "focus",
+		g_bAutoInput ? "decided at each open: focus if another client holds a pointer grab, else grab" :
 		g_bGrabInput ? "STEAM_INPUT_FOCUS=2 + active keyboard grab" : "STEAM_INPUT_FOCUS=1, the game loses X focus" );
-	if ( g_bGrabInput )
+	if ( g_bGrabInput || g_bAutoInput )
 		Log( "keyboard grab will use: %s", g_pszGrabPath );
 
 	XSetErrorHandler( OnXError );

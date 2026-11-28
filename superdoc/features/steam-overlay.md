@@ -289,7 +289,7 @@ fork's pointer-lock gate in `wlserver_mousewarp` blocks overlay clicks was refut
 | `GS_RITZ_STEAM_OVERLAY_IDLE_FPS` | `1` | presents per second while the overlay needs none |
 | `GS_RITZ_STEAM_OVERLAY_HOTKEY` | Steam's own | e.g. `Ctrl+Shift+Tab`; else `InGameOverlayShortcutKey` from the newest `localconfig.vdf`, else Shift+Tab |
 | `GS_RITZ_STEAM_OVERLAY_NO_CALLBACK` | off | `1`: never load `steamclient.so`; open/closed is the plain hotkey toggle (for comparing) |
-| `GS_RITZ_STEAM_OVERLAY_INPUT` | `grab` | how the helper takes input while the overlay is open: `grab` (`STEAM_INPUT_FOCUS=2` plus an active keyboard grab, the game keeps its X focus) or `focus` (`STEAM_INPUT_FOCUS=1`, the game loses X focus); see "Input modes" |
+| `GS_RITZ_STEAM_OVERLAY_INPUT` | `auto` | how the helper takes input while the overlay is open: `auto` (decided at each open: `focus` while another client holds an active pointer grab, else `grab`), `grab` (`STEAM_INPUT_FOCUS=2` plus an active keyboard grab, the game keeps its X focus) or `focus` (`STEAM_INPUT_FOCUS=1`, the game loses X focus); the last two force one behaviour; see "Input modes" |
 | `GS_RITZ_STEAMCLIENT` | search `<steam root>/linux64/steamclient.so` | full path of the `steamclient.so` the helper loads for the open/closed callback (same override as the main program) |
 | `GS_RITZ_STEAM_OVERLAY_TEST_RECT` | off | `1`: one opaque orange rectangle in the top-left quarter; counts as "something to show", so the window stays opaque the whole time |
 | `GS_RITZ_STEAM_OVERLAY_ACTIVE_POLL_MS` | `1` | main-loop wait in ms while the overlay is active and a frame is pending (4 ms, or this if larger, when none is); `16` reproduces the old ~60 fps limit; see "Overlay frame rate" |
@@ -534,7 +534,28 @@ client selected it. A game that selected key events only on an *ancestor* of the
 would lose them to our selection. In gamescope's Xwayland a client toplevel's only ancestor
 is the root, so it should not happen; `GS_RITZ_STEAM_OVERLAY_MIRROR_KEYS=0` is the way out.
 
-### Input modes: `grab` (default) and `focus`
+### Input modes: `auto` (default), `grab` and `focus`
+
+**`GS_RITZ_STEAM_OVERLAY_INPUT=auto` (default, 2026-11-28).** Decided at each open (and each
+provisional input take, which goes through the same `ApplyInput`): the helper probes with an
+`XGrabPointer` on its own window (libX11's own function, past the overlay's hook; ungrabbed at
+once on success). `AlreadyGrabbed` means another client holds an active pointer grab, i.e. a
+game that captured the mouse: that open behaves as `focus`. Anything else behaves as `grab`.
+The close path already undoes whichever the open used (it ungrabs the keyboard only if it
+grabbed one). The decision is logged at every open: `input mode auto -> focus (pointer grabbed
+by another client, probe AlreadyGrabbed)` / `auto -> grab (no pointer grab by another client,
+probe GrabSuccess)`. *Why:* a real game that captures the mouse (hidden cursor, relative look,
+a native X11 client) kept the mouse in `grab` mode: "When im ingame and the game has my mouse
+captured (no cursor), and i open the dummy overlay, the mouse is still inside of the game". The
+compositor-side pointer-lock release (below) did not help on it ("Nope, still the same"): the
+game holds the pointer at X level and still believes it has focus. `focus` fixed it ("Yes, that
+fixes it"), because the game gets a real `FocusOut` and lets go itself. `focus` cannot be the
+default: games that pause on focus loss would pause on every open ("it works, but it freezes
+the game"). **Covered:** a game with an active `XGrabPointer`. **Not covered:** a game that
+captures only by cursor warps or XI2 raw motion without a grab (it gets `grab` as before; a
+hidden cursor alone is not tested, XFixes is not linked); a game that grabs the pointer
+without capturing (menus, drags) gets `focus` for that open. **Unproven on the real game:**
+that its capture is an active core grab (the probe sees nothing otherwise).
 
 **The problem.** The user's first real test said "it works, but it freezes the game". Besides
 the stuck-open state (fixed by the callback above), a game that pauses on focus loss (Unity
@@ -555,7 +576,7 @@ gamescope does with `STEAM_INPUT_FOCUS=1` (read from `steamcompmgr.cpp`):
   servers, `get_index() != 0` gives the `SteamControlled` strategy ~4629, and
   `XSetInputFocus` is per server connection).
 
-**`GS_RITZ_STEAM_OVERLAY_INPUT=grab` (default).** On open the helper takes an active
+**`GS_RITZ_STEAM_OVERLAY_INPUT=grab`** (forced; what `auto` does without a pointer grab). On open the helper takes an active
 `XGrabKeyboard` on its window (`owner_events` False, `GrabModeAsync` both) and writes
 `STEAM_INPUT_FOCUS=2`. Mode 2 means "pointer to the overlay, keyboard stays with the game"
 (the Deck's quick-access menu uses it; `steamcompmgr.cpp` ~4677, ~5248-5253, ~6441): no
